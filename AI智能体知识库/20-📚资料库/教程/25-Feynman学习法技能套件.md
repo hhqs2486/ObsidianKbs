@@ -1,9 +1,13 @@
 ---
 类型: 教程
-tags: [AI智能体知识库, 教程]
+tags:
+  - AI智能体知识库
+  - 教程
 来源: feynman-learning-skills (GitHub)
 创建: 2026-07-22
 状态: 种子
+task:
+  id: task-msab6m5jk41zng
 ---
 
 # 25-Feynman学习法技能套件

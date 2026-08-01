@@ -1,9 +1,13 @@
 ---
 类型: 教程
-tags: [AI智能体知识库, 教程]
+tags:
+  - AI智能体知识库
+  - 教程
 来源: AIGC-Interview-Book
 创建: 2026-07-23
 状态: 种子
+task:
+  id: task-msab6m4p35j3s0
 ---
 
 # AIGC 图像生成与绘画面试高频考点

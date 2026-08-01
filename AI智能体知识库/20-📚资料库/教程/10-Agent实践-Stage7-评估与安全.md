@@ -1,9 +1,13 @@
 ---
 类型: 教程
-tags: [AI智能体知识库, 教程]
+tags:
+  - AI智能体知识库
+  - 教程
 来源: Agent-Learning-Hub Stage 7
 创建: 2026-07-22
 状态: 种子
+task:
+  id: task-msab6mddkz0af2
 ---
 
 # 10-Agent实践-Stage7-评估与安全

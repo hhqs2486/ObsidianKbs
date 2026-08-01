@@ -1,9 +1,13 @@
 ---
 类型: 教程
 来源: AIEFS Vol.1 Foundations
-tags: [AI智能体知识库, 教程]
+tags:
+  - AI智能体知识库
+  - 教程
 创建: 2026-07-30
 状态: 已读待消化
+task:
+  id: task-msab6lhtshwa97
 ---
 
 # AIEFS Vol.1 — 数学与ML基础

@@ -1,9 +1,13 @@
 ---
 类型: 教程
-tags: [AI智能体知识库, 教程]
+tags:
+  - AI智能体知识库
+  - 教程
 来源: ai-engineering-from-scratch Phase 14
 创建: 2026-07-22
 状态: 种子
+task:
+  id: task-msab6ma5pzymn5
 ---
 
 # AI工程实践-Phase14-Agent工程

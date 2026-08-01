@@ -1,9 +1,16 @@
 ---
 类型: 教程
 来源: AI Agents in Depth 第6-7章
-tags: [AI智能体知识库, 教程]
+tags:
+  - AI智能体知识库
+  - 教程
 创建: 2026-07-22
 状态: 已读待消化
+task:
+  id: task-msab6ml5fuu2gr
+decision-suggestions:
+  - '检测到任务可能存在依赖关系: "教程笔记" 和 "32-AIGC面试-模型部署面试基础" 共享关联笔记: [[06-Agent 评估与模型后训练.md]]'
+decision-generated: 2026-08-01T11:59:05.621Z
 ---
 
 # Agent 评估与模型后训练

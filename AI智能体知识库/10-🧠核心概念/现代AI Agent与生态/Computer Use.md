@@ -1,10 +1,17 @@
 ---
 类型: 概念
 主题: 现代AI Agent与生态
-tags: [AI智能体知识库, 现代AI Agent与生态]
+tags:
+  - AI智能体知识库
+  - 现代AI Agent与生态
 创建: 2026-07-30
-复习: 
+复习:
 状态: 已完成
+task:
+  id: task-msab6ouo18mbob
+decision-suggestions:
+  - "39 篇笔记标签相似但未互链: 建议补充 [[20-📚资料库/教程/49-AIEFS Vol5-智能体.md]] → [[10-🧠核心概念/现代AI Agent与生态/进化式编码.md]] (相似度: 50%)"
+decision-generated: 2026-08-01T13:21:29.138Z
 ---
 
 # Computer Use

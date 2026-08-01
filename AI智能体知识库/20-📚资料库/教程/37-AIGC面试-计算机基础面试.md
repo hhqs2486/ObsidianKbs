@@ -1,9 +1,13 @@
 ---
 类型: 教程
-tags: [AI智能体知识库, 教程]
+tags:
+  - AI智能体知识库
+  - 教程
 来源: AIGC-Interview-Book
 创建: 2026-07-23
 状态: 种子
+task:
+  id: task-msab6lvdaykef0
 ---
 
 # 计算机基础面试高频考点

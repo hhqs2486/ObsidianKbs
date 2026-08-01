@@ -1,8 +1,12 @@
 ---
 graph-exclude: true
 类型: MOC
-tags: [MOC]
-创建: {{date}}
+tags:
+  - MOC
+创建:
+  "{ date }":
+task:
+  id: task-msab6l1gippkrq
 ---
 
 # {{title}}

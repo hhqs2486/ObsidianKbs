@@ -1,10 +1,14 @@
 ---
 类型: 概念
 主题: 强化学习
-tags: [AI智能体知识库, 强化学习]
+tags:
+  - AI智能体知识库
+  - 强化学习
 创建: 2026-07-30
 复习:
 状态: 已完成
+task:
+  id: task-msab6rf3ikkget
 ---
 
 # AlphaZero 与 MuZero

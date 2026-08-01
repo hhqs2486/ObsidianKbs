@@ -1,9 +1,13 @@
 ---
 类型: 教程
 来源: AI Agents in Depth 第10章
-tags: [AI智能体知识库, 教程]
+tags:
+  - AI智能体知识库
+  - 教程
 创建: 2026-07-22
 状态: 已读待消化
+task:
+  id: task-msab6mkcqvgxrt
 ---
 
 # 第10章 多 Agent 协作

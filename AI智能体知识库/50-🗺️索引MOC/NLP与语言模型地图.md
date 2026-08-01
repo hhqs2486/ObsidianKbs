@@ -1,7 +1,11 @@
 ---
 类型: MOC
-tags: [AI智能体知识库, MOC]
+tags:
+  - AI智能体知识库
+  - MOC
 创建: 2026-07-30
+task:
+  id: task-msab6lh0uap8z6
 ---
 
 # NLP与语言模型地图

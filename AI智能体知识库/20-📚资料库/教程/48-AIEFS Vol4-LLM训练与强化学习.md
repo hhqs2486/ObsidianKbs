@@ -1,10 +1,18 @@
 ---
 类型: 教程
 主题: 强化学习
-tags: [AI智能体知识库, 教程, 强化学习, 推理部署与安全对齐, NLP与语言模型, AIEFS]
+tags:
+  - AI智能体知识库
+  - 教程
+  - 强化学习
+  - 推理部署与安全对齐
+  - NLP与语言模型
+  - AIEFS
 来源: AIEFS Vol.4 LLMs
 创建: 2026-07-30
 状态: 已完成
+task:
+  id: task-msab6lk7rlnjvp
 ---
 
 # AIEFS Vol.4 — LLM 训练与强化学习教程笔记

@@ -1,9 +1,13 @@
 ---
 类型: 教程
 来源: AI Agents in Depth 第5章
-tags: [AI智能体知识库, 教程]
+tags:
+  - AI智能体知识库
+  - 教程
 创建: 2026-07-22
 状态: 已读待消化
+task:
+  id: task-msab6mmumfuzcb
 ---
 
 # 05-Coding Agent 与代码生成

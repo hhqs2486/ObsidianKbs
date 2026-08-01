@@ -1,10 +1,14 @@
 ---
 类型: 概念
 主题: 自我进化
-tags: [AI智能体知识库, 自我进化]
+tags:
+  - AI智能体知识库
+  - 自我进化
 创建: 2026-07-30
-复习: 
+复习:
 状态: 已完成
+task:
+  id: task-msab6nhngnm438
 ---
 
 # Tree-of-Thoughts

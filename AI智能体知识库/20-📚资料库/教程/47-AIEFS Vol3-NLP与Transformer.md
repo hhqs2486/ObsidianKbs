@@ -1,10 +1,16 @@
 ---
 类型: 教程
 主题: NLP与语言模型
-tags: [AI智能体知识库, 教程, NLP与语言模型, AIEFS]
+tags:
+  - AI智能体知识库
+  - 教程
+  - NLP与语言模型
+  - AIEFS
 来源: AIEFS Vol.3 Language
 创建: 2026-07-30
 状态: 已完成
+task:
+  id: task-msab6lm71przdb
 ---
 
 # AIEFS Vol.3 — NLP与Transformer教程笔记

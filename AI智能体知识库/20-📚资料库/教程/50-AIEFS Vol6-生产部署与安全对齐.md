@@ -1,8 +1,13 @@
 ---
 类型: 教程
 主题: 推理部署与安全对齐
-tags: [AI智能体知识库, 教程, AIEFS]
+tags:
+  - AI智能体知识库
+  - 教程
+  - AIEFS
 创建: 2026-07-30
+task:
+  id: task-msab6lil3zderv
 ---
 
 # AIEFS Vol.6 — 生产部署与安全对齐

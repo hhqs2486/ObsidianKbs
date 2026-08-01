@@ -1,10 +1,14 @@
 ---
 类型: 概念
 主题: NLP与语言模型
-tags: [AI智能体知识库, NLP与语言模型]
+tags:
+  - AI智能体知识库
+  - NLP与语言模型
 创建: 2026-07-30
-复习: 
+复习:
 状态: 已完成
+task:
+  id: task-msab6t146vy6vf
 ---
 
 # GloVe与FastText（全局共现 / 子词 n-gram 嵌入）

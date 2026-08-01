@@ -1,9 +1,13 @@
 ---
 类型: 教程
 来源: AI Agents in Depth 第1-2章及后记
-tags: [AI智能体知识库, 教程]
+tags:
+  - AI智能体知识库
+  - 教程
 创建: 2026-07-22
 状态: 已读待消化
+task:
+  id: task-msab6m9cw4bof9
 ---
 
 # 01-AI Agent 入门与范式

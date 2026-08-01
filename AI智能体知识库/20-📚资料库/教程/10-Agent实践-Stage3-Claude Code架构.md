@@ -1,9 +1,13 @@
 ---
 类型: 教程
-tags: [AI智能体知识库, 教程]
+tags:
+  - AI智能体知识库
+  - 教程
 来源: Agent-Learning-Hub Stage 3
 创建: 2026-07-22
 状态: 种子
+task:
+  id: task-msab6mgpxzu2is
 ---
 
 # 10-Agent实践-Stage3-Claude Code架构

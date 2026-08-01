@@ -1,9 +1,13 @@
 ---
 类型: 教程
-tags: [AI智能体知识库, 教程]
+tags:
+  - AI智能体知识库
+  - 教程
 来源: AIGC-Interview-Book
 创建: 2026-07-23
 状态: 种子
+task:
+  id: task-msab6ljeaz5mo5
 ---
 
 # 模型部署与推理优化面试高频考点

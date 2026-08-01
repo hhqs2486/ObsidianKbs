@@ -1,10 +1,17 @@
 ---
 类型: 概念
 主题: 基础与入门
-tags: [AI智能体知识库, 基础与入门]
+tags:
+  - AI智能体知识库
+  - 基础与入门
 创建: 2026-07-30
-复习: 
+复习:
 状态: 已完成
+task:
+  id: task-msab6smdrsv3dq
+decision-suggestions:
+  - "14 篇笔记标签相似但未互链: 建议补充 [[10-🧠核心概念/基础与入门/预训练.md]] → [[10-🧠核心概念/基础与入门/缩放定律 Scaling Law.md]] (相似度: 100%)"
+decision-generated: 2026-08-01T13:21:27.911Z
 ---
 
 # Prompt

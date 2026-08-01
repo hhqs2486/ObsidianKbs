@@ -1,9 +1,13 @@
 ---
 类型: 教程
-tags: [AI智能体知识库, 教程]
+tags:
+  - AI智能体知识库
+  - 教程
 来源: AIEFS Vol.2 Deep Learning
 创建: 2026-07-30
 状态: 已完成
+task:
+  id: task-msab6lob33oha5
 ---
 
 # AIEFS Vol.2 — 深度学习与计算机视觉

@@ -1,9 +1,16 @@
 ---
 类型: 教程
-tags: [AI智能体知识库, 教程]
+tags:
+  - AI智能体知识库
+  - 教程
 来源: ai-engineering-from-scratch Phase 17
 创建: 2026-07-22
 状态: 种子
+task:
+  id: task-msab6lyrft0hgl
+decision-suggestions:
+  - '检测到任务可能存在依赖关系: "教程笔记" 和 "50-AIEFS Vol6-生产部署与安全对齐" 共享关联笔记: [[24-AI工程实践-Phase17-基础设施.md]], [[22-AI工程实践-Phase15-自主系统.md]]'
+decision-generated: 2026-08-01T11:59:05.398Z
 ---
 
 # AI工程实践-Phase17-基础设施
