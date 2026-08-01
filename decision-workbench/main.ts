@@ -28,6 +28,7 @@ import { TaskStore } from "./src/core/TaskStore";
 import { NoteExtractor } from "./src/core/NoteExtractor";
 import { TaskLinker } from "./src/core/TaskLinker";
 import { DecisionEngine } from "./src/core/DecisionEngine";
+import { VaultDataCache } from "./src/core/VaultDataCache";
 import { BoardView, BOARD_VIEW_TYPE } from "./src/views/BoardView";
 import { TaskPanel, TASK_PANEL_VIEW_TYPE } from "./src/views/TaskPanel";
 import { DashboardView, DASHBOARD_VIEW_TYPE } from "./src/views/DashboardView";
@@ -40,6 +41,7 @@ export default class DecisionWorkbenchPlugin extends Plugin {
   noteExtractor!: NoteExtractor;
   taskLinker!: TaskLinker;
   decisionEngine!: DecisionEngine;
+  vaultDataCache!: VaultDataCache;
 
   private lastSuggestions: Suggestion[] = [];
   private decisionTimer: number | null = null;
@@ -55,6 +57,7 @@ export default class DecisionWorkbenchPlugin extends Plugin {
     this.noteExtractor = new NoteExtractor(this.app);
     this.taskLinker = new TaskLinker(this.app, this.taskStore, this.noteExtractor);
     this.decisionEngine = new DecisionEngine(this.app, this.taskStore, this.settings);
+    this.vaultDataCache = new VaultDataCache(this.app);
 
     // 注册视图
     this.registerView(BOARD_VIEW_TYPE, (leaf) => new BoardView(leaf, this));
@@ -72,6 +75,9 @@ export default class DecisionWorkbenchPlugin extends Plugin {
       this.registerEvent(
         this.app.metadataCache.on("changed", async (file: TFile) => {
           try {
+            // 更新缓存图谱
+            this.decisionEngine.getCachedGraph().onNoteChanged(file);
+            // 自动提取任务
             await this.taskLinker.processNote(file);
             await this.taskStore.save();
           } catch (e) {
@@ -81,9 +87,17 @@ export default class DecisionWorkbenchPlugin extends Plugin {
       );
     }
 
-    // 注册事件：笔记重命名时更新任务来源
+    // 注册事件：笔记重命名时更新任务来源 + 缓存
     this.registerEvent(
       this.app.vault.on("rename", async (file: TFile, oldPath: string) => {
+        // 更新 VaultDataCache
+        this.vaultDataCache.onFileRenamed(file, oldPath);
+        // 更新缓存图谱（移除旧路径节点 + 添加新路径节点）
+        this.decisionEngine.getCachedGraph().onNoteDeleted(oldPath);
+        if (file instanceof TFile && file.extension === "md") {
+          this.decisionEngine.getCachedGraph().onNoteChanged(file);
+        }
+        // 更新任务来源
         const task = this.taskStore.getTaskByNote(oldPath);
         if (task) {
           this.taskStore.updateTask(task.id, { sourceNote: file.path });
@@ -97,14 +111,40 @@ export default class DecisionWorkbenchPlugin extends Plugin {
       })
     );
 
-    // 注册事件：笔记删除时清理任务
+    // 注册事件：笔记删除时清理任务 + 更新缓存图谱
     this.registerEvent(
       this.app.vault.on("delete", async (file: TFile) => {
+        // 更新 VaultDataCache
+        this.vaultDataCache.onFileDeleted(file);
+        // 更新缓存图谱
+        this.decisionEngine.getCachedGraph().onNoteDeleted(file.path);
+        // 清理任务
         const task = this.taskStore.getTaskByNote(file.path);
         if (task) {
-          // 不删除任务，但标记来源已失效
           this.taskStore.updateTask(task.id, { sourceNote: "" });
           await this.taskStore.save();
+        }
+      })
+    );
+
+    // 注册事件：VaultDataCache + CachedDecisionGraph 增量更新
+    this.registerEvent(
+      this.app.metadataCache.on("changed", (file: TFile) => {
+        this.vaultDataCache.onFileChanged(file);
+        // 注意：cachedGraph.onNoteChanged 已在 autoExtract 的 changed 事件中处理
+        // 如果 autoExtract 关闭，仍需更新图谱
+        if (!this.settings.autoExtract) {
+          this.decisionEngine.getCachedGraph().onNoteChanged(file);
+        }
+      })
+    );
+
+    this.registerEvent(
+      this.app.vault.on("create", (file: TFile) => {
+        this.vaultDataCache.onFileCreated(file);
+        // 新文件加入图谱
+        if (file instanceof TFile && file.extension === "md") {
+          this.decisionEngine.getCachedGraph().onNoteChanged(file);
         }
       })
     );
@@ -119,6 +159,12 @@ export default class DecisionWorkbenchPlugin extends Plugin {
 
     // 首次加载时自动扫描 + 打开仪表板
     this.app.workspace.onLayoutReady(() => {
+      // 初始化 VaultDataCache（全量扫描一次，之后增量更新）
+      this.vaultDataCache.initialize();
+
+      // 初始化 CachedDecisionGraph（全量构建一次，之后增量更新）
+      this.decisionEngine.getCachedGraph().build();
+
       // 打开仪表板作为默认视图
       this.activateDashboardView();
 

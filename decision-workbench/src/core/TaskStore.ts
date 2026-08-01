@@ -22,6 +22,12 @@ export class TaskStore {
   private data: TaskStoreData;
   private listeners: Set<() => void> = new Set();
 
+  // ---- 索引层（O(1) 查询） ----
+  private idIndex = new Map<string, Task>();              // id → Task
+  private noteIndex = new Map<string, Task>();            // sourceNote → Task
+  private statusIndex = new Map<TaskStatus, Set<Task>>(); // status → Set<Task>
+  private tagIndex = new Map<string, Set<Task>>();        // tag(不含#) → Set<Task>
+
   constructor(app: App) {
     this.app = app;
     this.data = { ...DEFAULT_TASK_STORE };
@@ -40,6 +46,8 @@ export class TaskStore {
         this.data = { ...DEFAULT_TASK_STORE };
       }
     }
+    // 加载完成后构建索引
+    this.rebuildIndexes();
   }
 
   /** 持久化到 vault */
@@ -59,31 +67,77 @@ export class TaskStore {
     }
   }
 
-  /** 获取全部任务 */
-  getAllTasks(): Task[] {
+  // ============================================================
+  // 索引维护
+  // ============================================================
+
+  /** 全量重建索引（load 后调用） */
+  private rebuildIndexes(): void {
+    this.idIndex.clear();
+    this.noteIndex.clear();
+    this.statusIndex.clear();
+    this.tagIndex.clear();
+    for (const task of this.data.tasks) {
+      this.indexTask(task);
+    }
+  }
+
+  /** 索引单个任务 */
+  private indexTask(task: Task): void {
+    this.idIndex.set(task.id, task);
+    if (task.sourceNote) this.noteIndex.set(task.sourceNote, task);
+
+    if (!this.statusIndex.has(task.status)) {
+      this.statusIndex.set(task.status, new Set());
+    }
+    this.statusIndex.get(task.status)!.add(task);
+
+    for (const tag of task.tags) {
+      const clean = tag.replace(/^#/, "");
+      if (!this.tagIndex.has(clean)) this.tagIndex.set(clean, new Set());
+      this.tagIndex.get(clean)!.add(task);
+    }
+  }
+
+  /** 从索引中移除单个任务 */
+  private unindexTask(task: Task): void {
+    this.idIndex.delete(task.id);
+    if (task.sourceNote) this.noteIndex.delete(task.sourceNote);
+    this.statusIndex.get(task.status)?.delete(task);
+    for (const tag of task.tags) {
+      const clean = tag.replace(/^#/, "");
+      this.tagIndex.get(clean)?.delete(task);
+    }
+  }
+
+  // ============================================================
+  // 查询（O(1) 索引查找）
+  // ============================================================
+
+  /** 获取全部任务（返回只读引用，防止外部 mutate） */
+  getAllTasks(): readonly Task[] {
     return this.data.tasks;
   }
 
-  /** 按 ID 获取任务 */
+  /** 按 ID 获取任务 — O(1) */
   getTask(id: string): Task | undefined {
-    return this.data.tasks.find((t) => t.id === id);
+    return this.idIndex.get(id);
   }
 
-  /** 按状态获取任务 */
+  /** 按状态获取任务 — O(1) */
   getTasksByStatus(status: TaskStatus): Task[] {
-    return this.data.tasks.filter((t) => t.status === status);
+    return [...(this.statusIndex.get(status) ?? [])];
   }
 
-  /** 按来源笔记获取任务 */
+  /** 按来源笔记获取任务 — O(1) */
   getTaskByNote(notePath: string): Task | undefined {
-    return this.data.tasks.find((t) => t.sourceNote === notePath);
+    return this.noteIndex.get(notePath);
   }
 
-  /** 按标签获取任务 */
+  /** 按标签获取任务 — O(k), k = 匹配标签的任务数 */
   getTasksByTag(tag: string): Task[] {
-    return this.data.tasks.filter(
-      (t) => t.tags.includes(tag) || t.tags.includes(`#${tag}`)
-    );
+    const clean = tag.replace(/^#/, "");
+    return [...(this.tagIndex.get(clean) ?? [])];
   }
 
   /** 创建新任务 */
@@ -107,26 +161,36 @@ export class TaskStore {
       ...options,
     };
     this.data.tasks.push(task);
+    this.indexTask(task);
     return task;
   }
 
   /** 更新任务 */
   updateTask(id: string, updates: Partial<Task>): Task | undefined {
-    const task = this.data.tasks.find((t) => t.id === id);
+    const task = this.idIndex.get(id);
     if (!task) return undefined;
+
+    // 先取消旧索引
+    this.unindexTask(task);
+
     Object.assign(task, updates, { updatedAt: new Date().toISOString() });
     if (task.subtasks.length > 0) {
       const done = task.subtasks.filter((s) => s.done).length;
       task.progress = done / task.subtasks.length;
     }
+
+    // 重新索引
+    this.indexTask(task);
     return task;
   }
 
   /** 删除任务 */
   deleteTask(id: string): boolean {
-    const idx = this.data.tasks.findIndex((t) => t.id === id);
-    if (idx === -1) return false;
-    this.data.tasks.splice(idx, 1);
+    const task = this.idIndex.get(id);
+    if (!task) return false;
+    this.unindexTask(task);
+    const idx = this.data.tasks.indexOf(task);
+    if (idx >= 0) this.data.tasks.splice(idx, 1);
     return true;
   }
 

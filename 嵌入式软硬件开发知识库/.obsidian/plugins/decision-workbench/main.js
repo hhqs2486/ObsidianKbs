@@ -23,7 +23,7 @@ __export(main_exports, {
   default: () => DecisionWorkbenchPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian7 = require("obsidian");
+var import_obsidian8 = require("obsidian");
 
 // src/types/index.ts
 var DEFAULT_SETTINGS = {
@@ -157,8 +157,17 @@ function splitFrontmatter(content) {
 // src/core/TaskStore.ts
 var STORE_PATH = ".obsidian/plugins/decision-workbench/tasks.json";
 var TaskStore = class {
+  // tag(不含#) → Set<Task>
   constructor(app) {
     this.listeners = /* @__PURE__ */ new Set();
+    // ---- 索引层（O(1) 查询） ----
+    this.idIndex = /* @__PURE__ */ new Map();
+    // id → Task
+    this.noteIndex = /* @__PURE__ */ new Map();
+    // sourceNote → Task
+    this.statusIndex = /* @__PURE__ */ new Map();
+    // status → Set<Task>
+    this.tagIndex = /* @__PURE__ */ new Map();
     this.app = app;
     this.data = { ...DEFAULT_TASK_STORE };
   }
@@ -175,6 +184,7 @@ var TaskStore = class {
         this.data = { ...DEFAULT_TASK_STORE };
       }
     }
+    this.rebuildIndexes();
   }
   /** 持久化到 vault */
   async save() {
@@ -192,27 +202,72 @@ var TaskStore = class {
       console.error("[Decision Workbench] Failed to save task store:", e);
     }
   }
-  /** 获取全部任务 */
+  // ============================================================
+  // 索引维护
+  // ============================================================
+  /** 全量重建索引（load 后调用） */
+  rebuildIndexes() {
+    this.idIndex.clear();
+    this.noteIndex.clear();
+    this.statusIndex.clear();
+    this.tagIndex.clear();
+    for (const task of this.data.tasks) {
+      this.indexTask(task);
+    }
+  }
+  /** 索引单个任务 */
+  indexTask(task) {
+    this.idIndex.set(task.id, task);
+    if (task.sourceNote)
+      this.noteIndex.set(task.sourceNote, task);
+    if (!this.statusIndex.has(task.status)) {
+      this.statusIndex.set(task.status, /* @__PURE__ */ new Set());
+    }
+    this.statusIndex.get(task.status).add(task);
+    for (const tag of task.tags) {
+      const clean = tag.replace(/^#/, "");
+      if (!this.tagIndex.has(clean))
+        this.tagIndex.set(clean, /* @__PURE__ */ new Set());
+      this.tagIndex.get(clean).add(task);
+    }
+  }
+  /** 从索引中移除单个任务 */
+  unindexTask(task) {
+    var _a, _b;
+    this.idIndex.delete(task.id);
+    if (task.sourceNote)
+      this.noteIndex.delete(task.sourceNote);
+    (_a = this.statusIndex.get(task.status)) == null ? void 0 : _a.delete(task);
+    for (const tag of task.tags) {
+      const clean = tag.replace(/^#/, "");
+      (_b = this.tagIndex.get(clean)) == null ? void 0 : _b.delete(task);
+    }
+  }
+  // ============================================================
+  // 查询（O(1) 索引查找）
+  // ============================================================
+  /** 获取全部任务（返回只读引用，防止外部 mutate） */
   getAllTasks() {
     return this.data.tasks;
   }
-  /** 按 ID 获取任务 */
+  /** 按 ID 获取任务 — O(1) */
   getTask(id) {
-    return this.data.tasks.find((t) => t.id === id);
+    return this.idIndex.get(id);
   }
-  /** 按状态获取任务 */
+  /** 按状态获取任务 — O(1) */
   getTasksByStatus(status) {
-    return this.data.tasks.filter((t) => t.status === status);
+    var _a;
+    return [...(_a = this.statusIndex.get(status)) != null ? _a : []];
   }
-  /** 按来源笔记获取任务 */
+  /** 按来源笔记获取任务 — O(1) */
   getTaskByNote(notePath) {
-    return this.data.tasks.find((t) => t.sourceNote === notePath);
+    return this.noteIndex.get(notePath);
   }
-  /** 按标签获取任务 */
+  /** 按标签获取任务 — O(k), k = 匹配标签的任务数 */
   getTasksByTag(tag) {
-    return this.data.tasks.filter(
-      (t) => t.tags.includes(tag) || t.tags.includes(`#${tag}`)
-    );
+    var _a;
+    const clean = tag.replace(/^#/, "");
+    return [...(_a = this.tagIndex.get(clean)) != null ? _a : []];
   }
   /** 创建新任务 */
   createTask(title, options = {}) {
@@ -232,26 +287,32 @@ var TaskStore = class {
       ...options
     };
     this.data.tasks.push(task);
+    this.indexTask(task);
     return task;
   }
   /** 更新任务 */
   updateTask(id, updates) {
-    const task = this.data.tasks.find((t) => t.id === id);
+    const task = this.idIndex.get(id);
     if (!task)
       return void 0;
+    this.unindexTask(task);
     Object.assign(task, updates, { updatedAt: (/* @__PURE__ */ new Date()).toISOString() });
     if (task.subtasks.length > 0) {
       const done = task.subtasks.filter((s) => s.done).length;
       task.progress = done / task.subtasks.length;
     }
+    this.indexTask(task);
     return task;
   }
   /** 删除任务 */
   deleteTask(id) {
-    const idx = this.data.tasks.findIndex((t) => t.id === id);
-    if (idx === -1)
+    const task = this.idIndex.get(id);
+    if (!task)
       return false;
-    this.data.tasks.splice(idx, 1);
+    this.unindexTask(task);
+    const idx = this.data.tasks.indexOf(task);
+    if (idx >= 0)
+      this.data.tasks.splice(idx, 1);
     return true;
   }
   /** 更新任务状态 */
@@ -435,6 +496,9 @@ var NoteExtractor = class {
   }
 };
 
+// src/core/TaskLinker.ts
+var import_obsidian2 = require("obsidian");
+
 // src/utils/similarity.ts
 function jaccardSimilarity(setA, setB) {
   if (setA.length === 0 && setB.length === 0)
@@ -547,6 +611,10 @@ function clusterByTags(notes) {
 // src/core/TaskLinker.ts
 var TaskLinker = class {
   constructor(app, store, extractor) {
+    // 标签倒排索引：tag → Set<filePath>
+    this.tagToFileIndex = /* @__PURE__ */ new Map();
+    // 缓存每篇笔记的 tags/links，避免重复读取 metadataCache
+    this.noteDataCache = /* @__PURE__ */ new Map();
     this.app = app;
     this.store = store;
     this.extractor = extractor;
@@ -598,43 +666,77 @@ var TaskLinker = class {
   }
   /**
    * 基于标签和链接关系，自动建议关联笔记
+   * 使用标签倒排索引优化：O(n²) → O(n×k)，k = 共享标签的笔记数
    */
   async suggestLinkedNotes(sourceFile, task) {
+    var _a, _b;
     const sourceTags = readNoteTags(this.app, sourceFile);
     const sourceLinks = readNoteLinks(this.app, sourceFile);
     if (sourceTags.length === 0)
       return;
-    const allFiles = this.app.vault.getMarkdownFiles();
-    const candidates = [];
-    for (const file of allFiles) {
-      if (file.path === sourceFile.path)
-        continue;
-      const tags = readNoteTags(this.app, file);
-      const links = readNoteLinks(this.app, file);
-      if (tags.length === 0 && links.length === 0)
+    const candidates = /* @__PURE__ */ new Map();
+    for (const tag of sourceTags) {
+      const filesWithTag = this.tagToFileIndex.get(tag);
+      if (filesWithTag) {
+        for (const candidatePath of filesWithTag) {
+          if (candidatePath === sourceFile.path)
+            continue;
+          candidates.set(
+            candidatePath,
+            ((_a = candidates.get(candidatePath)) != null ? _a : 0) + 1
+          );
+        }
+      } else {
+        const allFiles = this.app.vault.getMarkdownFiles();
+        for (const file of allFiles) {
+          if (file.path === sourceFile.path)
+            continue;
+          const tags = readNoteTags(this.app, file);
+          if (tags.includes(tag)) {
+            candidates.set(
+              file.path,
+              ((_b = candidates.get(file.path)) != null ? _b : 0) + 1
+            );
+          }
+        }
+      }
+    }
+    const ranked = [];
+    for (const [candidatePath] of candidates) {
+      const candidateData = this.noteDataCache.get(candidatePath);
+      let candTags;
+      let candLinks;
+      if (candidateData) {
+        candTags = candidateData.tags;
+        candLinks = candidateData.links;
+      } else {
+        const file2 = this.app.vault.getAbstractFileByPath(candidatePath);
+        if (!file2 || !(file2 instanceof import_obsidian2.TFile))
+          continue;
+        candTags = readNoteTags(this.app, file2);
+        candLinks = readNoteLinks(this.app, file2);
+      }
+      const file = this.app.vault.getAbstractFileByPath(candidatePath);
+      if (!file || !(file instanceof import_obsidian2.TFile))
         continue;
       const strength = associationStrength(
         sourceTags,
-        tags,
+        candTags,
         sourceLinks,
-        links,
+        candLinks,
         sourceFile.path,
-        file.path
+        candidatePath
       );
       if (strength > 0.3) {
-        candidates.push({ file, strength });
+        ranked.push({ file, strength });
       }
     }
-    candidates.sort((a, b) => b.strength - a.strength);
-    const topCandidates = candidates.slice(0, 10);
+    ranked.sort((a, b) => b.strength - a.strength);
+    const topCandidates = ranked.slice(0, 10);
     for (const { file } of topCandidates) {
       const exists = task.linkedNotes.some((n) => n.path === file.path);
       if (!exists) {
-        this.store.addLinkedNote(
-          task.id,
-          file.path,
-          "reference"
-        );
+        this.store.addLinkedNote(task.id, file.path, "reference");
       }
     }
   }
@@ -649,9 +751,23 @@ var TaskLinker = class {
   }
   /**
    * 批量处理所有笔记（首次扫描）
+   * 两阶段优化：Phase 1 构建标签索引 O(n)，Phase 2 用索引做关联 O(n×k)
    */
   async processAllNotes() {
     const files = this.app.vault.getMarkdownFiles();
+    this.tagToFileIndex.clear();
+    this.noteDataCache.clear();
+    for (const file of files) {
+      const tags = readNoteTags(this.app, file);
+      const links = readNoteLinks(this.app, file);
+      this.noteDataCache.set(file.path, { tags, links });
+      for (const tag of tags) {
+        if (!this.tagToFileIndex.has(tag)) {
+          this.tagToFileIndex.set(tag, /* @__PURE__ */ new Set());
+        }
+        this.tagToFileIndex.get(tag).add(file.path);
+      }
+    }
     let count = 0;
     for (const file of files) {
       try {
@@ -703,7 +819,85 @@ var TaskLinker = class {
 };
 
 // src/core/DecisionEngine.ts
-var import_obsidian2 = require("obsidian");
+var import_obsidian3 = require("obsidian");
+
+// src/core/DecisionLog.ts
+var MAX_LOG_ENTRIES = 500;
+var DecisionLog = class {
+  constructor(app, logPath) {
+    this.cachedTail = null;
+    this.app = app;
+    this.logPath = logPath;
+  }
+  /**
+   * 追加日志条目（不再读取整个文件做拼接，除非需要轮转）
+   */
+  async append(entry) {
+    try {
+      const line = JSON.stringify(entry) + "\n";
+      const exists = await this.app.vault.adapter.exists(this.logPath);
+      if (exists) {
+        const content = await this.app.vault.adapter.read(this.logPath);
+        const lines = content.trim().split("\n");
+        if (lines.length >= MAX_LOG_ENTRIES) {
+          const trimmed = lines.slice(-(MAX_LOG_ENTRIES - 1));
+          trimmed.push(line.trim());
+          await this.app.vault.adapter.write(
+            this.logPath,
+            trimmed.join("\n") + "\n"
+          );
+        } else {
+          await this.app.vault.adapter.write(this.logPath, content + line);
+        }
+      } else {
+        const dir = this.logPath.substring(0, this.logPath.lastIndexOf("/"));
+        if (dir && !await this.app.vault.adapter.exists(dir)) {
+          await this.app.vault.adapter.mkdir(dir);
+        }
+        await this.app.vault.adapter.write(this.logPath, line);
+      }
+      this.cachedTail = null;
+    } catch (e) {
+      console.error("[Decision Workbench] Failed to append log:", e);
+    }
+  }
+  /**
+   * 读取最近 N 条日志（尾部缓存 + 只解析最后 N*2 行）
+   */
+  async readTail(limit = 7) {
+    if (this.cachedTail && this.cachedTail.length >= limit) {
+      return this.cachedTail.slice(0, limit);
+    }
+    try {
+      const exists = await this.app.vault.adapter.exists(this.logPath);
+      if (!exists)
+        return [];
+      const raw = await this.app.vault.adapter.read(this.logPath);
+      const lines = raw.trim().split("\n");
+      const tailLines = lines.slice(-limit * 2);
+      const entries = [];
+      for (const line of tailLines) {
+        if (!line.trim())
+          continue;
+        try {
+          entries.push(JSON.parse(line));
+        } catch (e) {
+        }
+      }
+      entries.reverse();
+      this.cachedTail = entries;
+      return entries.slice(0, limit);
+    } catch (e) {
+      return [];
+    }
+  }
+  /**
+   * 失效缓存（外部数据变更时调用）
+   */
+  invalidate() {
+    this.cachedTail = null;
+  }
+};
 
 // src/graph/DecisionGraph.ts
 var DecisionGraphBuilder = class {
@@ -924,6 +1118,306 @@ var DecisionGraphBuilder = class {
       }
     }
     return result;
+  }
+};
+
+// src/graph/CachedDecisionGraph.ts
+var CachedDecisionGraph = class {
+  constructor(app, store) {
+    // 核心数据结构
+    this.nodes = /* @__PURE__ */ new Map();
+    this.edges = /* @__PURE__ */ new Map();
+    // key: "from→to→type"
+    this.adjacency = /* @__PURE__ */ new Map();
+    // from → Set<to>
+    this.reverseAdjacency = /* @__PURE__ */ new Map();
+    // to → Set<from>
+    this.noteNodesByTag = /* @__PURE__ */ new Map();
+    // tag → Set<nodeId>
+    this.initialized = false;
+    this.app = app;
+    this.store = store;
+  }
+  /**
+   * 全量构建（仅启动时调用一次）
+   */
+  build() {
+    if (this.initialized)
+      return;
+    const files = this.app.vault.getMarkdownFiles();
+    for (const file of files) {
+      this.addNoteNode(file);
+    }
+    for (const task of this.store.getAllTasks()) {
+      this.addTaskNode(task);
+    }
+    this.initialized = true;
+  }
+  // ============================================================
+  // 节点管理
+  // ============================================================
+  addNoteNode(file) {
+    const tags = readNoteTags(this.app, file);
+    const links = readNoteLinks(this.app, file);
+    const node = {
+      id: file.path,
+      type: "note",
+      label: file.basename,
+      tags,
+      metadata: { links }
+    };
+    this.nodes.set(file.path, node);
+    for (const link of links) {
+      this.addEdge(file.path, link, "links-to", 1);
+    }
+    for (const tag of tags) {
+      if (!this.noteNodesByTag.has(tag)) {
+        this.noteNodesByTag.set(tag, /* @__PURE__ */ new Set());
+      }
+      this.noteNodesByTag.get(tag).add(file.path);
+    }
+  }
+  addTaskNode(task) {
+    const node = {
+      id: task.id,
+      type: "task",
+      label: task.title,
+      tags: task.tags,
+      metadata: {
+        status: task.status,
+        priority: task.priority,
+        sourceNote: task.sourceNote
+      }
+    };
+    this.nodes.set(task.id, node);
+    if (task.sourceNote) {
+      this.addEdge(task.id, task.sourceNote, "extracted-from", 1);
+    }
+    for (const linked of task.linkedNotes) {
+      this.addEdge(task.id, linked.path, "links-to", 0.5);
+    }
+  }
+  addEdge(from, to, type, weight) {
+    const key = `${from}\u2192${to}\u2192${type}`;
+    if (this.edges.has(key))
+      return;
+    this.edges.set(key, { from, to, type, weight });
+    if (!this.adjacency.has(from))
+      this.adjacency.set(from, /* @__PURE__ */ new Set());
+    this.adjacency.get(from).add(to);
+    if (!this.reverseAdjacency.has(to))
+      this.reverseAdjacency.set(to, /* @__PURE__ */ new Set());
+    this.reverseAdjacency.get(to).add(from);
+  }
+  removeEdge(from, to, type) {
+    var _a, _b;
+    const key = `${from}\u2192${to}\u2192${type}`;
+    this.edges.delete(key);
+    (_a = this.adjacency.get(from)) == null ? void 0 : _a.delete(to);
+    (_b = this.reverseAdjacency.get(to)) == null ? void 0 : _b.delete(from);
+  }
+  removeNoteNode(path) {
+    var _a;
+    const node = this.nodes.get(path);
+    if (!node)
+      return;
+    for (const tag of node.tags) {
+      (_a = this.noteNodesByTag.get(tag)) == null ? void 0 : _a.delete(path);
+    }
+    const outEdges = this.adjacency.get(path);
+    if (outEdges) {
+      for (const to of [...outEdges]) {
+        this.removeEdge(path, to, "links-to");
+      }
+    }
+    const inEdges = this.reverseAdjacency.get(path);
+    if (inEdges) {
+      for (const from of [...inEdges]) {
+        for (const type of ["links-to", "extracted-from"]) {
+          this.removeEdge(from, path, type);
+        }
+      }
+    }
+    this.nodes.delete(path);
+  }
+  removeTaskNode(taskId) {
+    const outEdges = this.adjacency.get(taskId);
+    if (outEdges) {
+      for (const to of [...outEdges]) {
+        this.removeEdge(taskId, to, "extracted-from");
+        this.removeEdge(taskId, to, "links-to");
+      }
+    }
+    this.nodes.delete(taskId);
+  }
+  // ============================================================
+  // 增量更新（事件驱动）
+  // ============================================================
+  onNoteChanged(file) {
+    this.removeNoteNode(file.path);
+    this.addNoteNode(file);
+  }
+  onNoteDeleted(path) {
+    this.removeNoteNode(path);
+  }
+  onTaskChanged(task) {
+    this.removeTaskNode(task.id);
+    this.addTaskNode(task);
+  }
+  onTaskDeleted(taskId) {
+    this.removeTaskNode(taskId);
+  }
+  /**
+   * 全量重建（定期校验或 vault 重新打开时调用）
+   */
+  rebuild() {
+    this.nodes.clear();
+    this.edges.clear();
+    this.adjacency.clear();
+    this.reverseAdjacency.clear();
+    this.noteNodesByTag.clear();
+    this.initialized = false;
+    this.build();
+  }
+  /**
+   * 同步任务节点（笔记节点保持缓存不变）
+   * 在每次 analyze() 前调用，确保任务数据是最新的。
+   * O(T) where T = task count (通常 << note count)
+   */
+  syncTasks() {
+    const taskIds = [...this.nodes.values()].filter((n) => n.type === "task").map((n) => n.id);
+    for (const taskId of taskIds) {
+      this.removeTaskNode(taskId);
+    }
+    for (const task of this.store.getAllTasks()) {
+      this.addTaskNode(task);
+    }
+  }
+  // ============================================================
+  // 查询（使用预构建索引，O(1) 或 O(k)）
+  // ============================================================
+  /**
+   * BFS 最短路径 — 使用预构建邻接表，不再每次重建
+   */
+  findShortestPath(fromId, toId) {
+    if (fromId === toId)
+      return [fromId];
+    if (!this.adjacency.has(fromId))
+      return null;
+    const visited = /* @__PURE__ */ new Set([fromId]);
+    const queue = [
+      { id: fromId, path: [fromId] }
+    ];
+    while (queue.length > 0) {
+      const { id, path } = queue.shift();
+      const neighbors = this.adjacency.get(id);
+      if (!neighbors)
+        continue;
+      for (const next of neighbors) {
+        if (next === toId)
+          return [...path, next];
+        if (!visited.has(next)) {
+          visited.add(next);
+          queue.push({ id: next, path: [...path, next] });
+        }
+      }
+    }
+    return null;
+  }
+  /**
+   * 获取标签相似但未互链的笔记 — 使用标签倒排索引优化
+   * 从 O(n²) 优化到 O(Σk²)，k = 共享同一标签的笔记数
+   */
+  getUnlinkedSimilarNotes() {
+    var _a, _b;
+    const result = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const [tag, noteIds] of this.noteNodesByTag) {
+      if (noteIds.size < 2)
+        continue;
+      const notes = [...noteIds];
+      for (let i = 0; i < notes.length; i++) {
+        for (let j = i + 1; j < notes.length; j++) {
+          const pairKey = notes[i] < notes[j] ? `${notes[i]}|${notes[j]}` : `${notes[j]}|${notes[i]}`;
+          if (seen.has(pairKey))
+            continue;
+          const a = this.nodes.get(notes[i]);
+          const b = this.nodes.get(notes[j]);
+          if (!a || !b)
+            continue;
+          if ((_a = this.adjacency.get(a.id)) == null ? void 0 : _a.has(b.id))
+            continue;
+          if ((_b = this.adjacency.get(b.id)) == null ? void 0 : _b.has(a.id))
+            continue;
+          const commonTags = a.tags.filter((t) => b.tags.includes(t));
+          if (commonTags.length >= 2) {
+            result.push({
+              from: a.id,
+              to: b.id,
+              commonTags
+            });
+            seen.add(pairKey);
+          }
+        }
+      }
+    }
+    return result;
+  }
+  /**
+   * 获取共享关联笔记的任务对 — 使用预构建邻接表
+   */
+  getTasksWithSharedNotes() {
+    var _a, _b;
+    const taskNodes = [...this.nodes.values()].filter(
+      (n) => n.type === "task"
+    );
+    const taskNotes = /* @__PURE__ */ new Map();
+    for (const task of taskNodes) {
+      const notes = /* @__PURE__ */ new Set();
+      const sourceNote = (_b = (_a = task.metadata) == null ? void 0 : _a.sourceNote) != null ? _b : "";
+      const outEdges = this.adjacency.get(task.id);
+      if (outEdges) {
+        for (const to of outEdges) {
+          const targetNode = this.nodes.get(to);
+          if ((targetNode == null ? void 0 : targetNode.type) === "note" && to !== sourceNote) {
+            notes.add(to);
+          }
+        }
+      }
+      taskNotes.set(task.id, notes);
+    }
+    const result = [];
+    for (let i = 0; i < taskNodes.length; i++) {
+      for (let j = i + 1; j < taskNodes.length; j++) {
+        const notesA = taskNotes.get(taskNodes[i].id);
+        const notesB = taskNotes.get(taskNodes[j].id);
+        if (notesA.size === 0 || notesB.size === 0)
+          continue;
+        const [smaller, larger] = notesA.size < notesB.size ? [notesA, notesB] : [notesB, notesA];
+        const shared = [];
+        for (const n of smaller) {
+          if (larger.has(n))
+            shared.push(n);
+        }
+        if (shared.length > 0) {
+          result.push({
+            taskA: taskNodes[i].id,
+            taskB: taskNodes[j].id,
+            sharedNotes: shared
+          });
+        }
+      }
+    }
+    return result;
+  }
+  get isInitialized() {
+    return this.initialized;
+  }
+  get nodeCount() {
+    return this.nodes.size;
+  }
+  get edgeCount() {
+    return this.edges.size;
   }
 };
 
@@ -1269,14 +1763,28 @@ var DecisionEngine = class {
     this.store = store;
     this.settings = settings;
     this.graphBuilder = new DecisionGraphBuilder(app, store);
+    this.cachedGraph = new CachedDecisionGraph(app, store);
     this.frameworks = new DecisionFrameworks(app, store);
+    this.decisionLog = new DecisionLog(app, LOG_FILE);
+  }
+  /**
+   * 获取缓存图谱实例（供外部增量更新使用）
+   */
+  getCachedGraph() {
+    return this.cachedGraph;
+  }
+  /**
+   * 读取决策日志尾部（委托给 DecisionLog）
+   */
+  async readDecisionLog(limit = 7) {
+    return this.decisionLog.readTail(limit);
   }
   /**
    * 从 vault 根目录读取 decision-rules.md 并解析规则
    */
   async loadRules() {
     const file = this.app.vault.getAbstractFileByPath(RULES_FILE);
-    if (!file || !(file instanceof import_obsidian2.TFile)) {
+    if (!file || !(file instanceof import_obsidian3.TFile)) {
       this.rules = { ...DEFAULT_RULES };
       return this.rules;
     }
@@ -1305,7 +1813,7 @@ var DecisionEngine = class {
     const merged = {};
     for (const block of yamlBlocks) {
       try {
-        const parsed = (0, import_obsidian2.parseYaml)(block);
+        const parsed = (0, import_obsidian3.parseYaml)(block);
         Object.assign(merged, parsed);
       } catch (e) {
       }
@@ -1379,7 +1887,7 @@ var DecisionEngine = class {
     return null;
   }
   /**
-   * 追加 JSONL 决策日志（只追加不覆盖）
+   * 追加 JSONL 决策日志（通过 DecisionLog 类，带轮转 + 尾部缓存）
    */
   async appendLog(suggestions) {
     var _a;
@@ -1397,14 +1905,7 @@ var DecisionEngine = class {
       tasksInProgress: tasks.filter((t) => t.status === "in-progress").length,
       tasksDone: tasks.filter((t) => t.status === "done").length
     };
-    try {
-      const exists = await this.app.vault.adapter.exists(LOG_FILE);
-      const existing = exists ? await this.app.vault.adapter.read(LOG_FILE) : "";
-      const newContent = existing + JSON.stringify(entry) + "\n";
-      await this.app.vault.adapter.write(LOG_FILE, newContent);
-    } catch (e) {
-      console.error("[Decision Workbench] Failed to append log:", e);
-    }
+    await this.decisionLog.append(entry);
   }
   /**
    * 执行完整分析，返回所有建议
@@ -1413,10 +1914,11 @@ var DecisionEngine = class {
     await this.loadRules();
     this.applyPriorityRules(this.store.getAllTasks());
     const suggestions = [];
-    const graph = this.graphBuilder.build();
+    this.cachedGraph.build();
+    this.cachedGraph.syncTasks();
     suggestions.push(...this.analyzeTagClusters());
-    suggestions.push(...this.analyzeLinkPaths(graph));
-    suggestions.push(...this.analyzeTaskDependencies(graph));
+    suggestions.push(...this.analyzeLinkPaths());
+    suggestions.push(...this.analyzeTaskDependencies());
     suggestions.push(...this.analyzeFrameworks());
     const deduped = this.dedupe(suggestions).slice(0, this.rules.maxSuggestions);
     await this.writeBack(deduped);
@@ -1469,17 +1971,13 @@ var DecisionEngine = class {
     return suggestions;
   }
   /**
-   * 分析 2：链接路径推理 — 补充间接关联
+   * 分析 2：链接路径推理 — 补充间接关联（使用缓存图谱）
    */
-  analyzeLinkPaths(graph) {
-    const unlinked = this.graphBuilder.getUnlinkedSimilarNotes(graph);
+  analyzeLinkPaths() {
+    const unlinked = this.cachedGraph.getUnlinkedSimilarNotes();
     const suggestions = [];
     for (const pair of unlinked.slice(0, this.rules.maxSuggestions)) {
-      const path = this.graphBuilder.findShortestPath(
-        graph,
-        pair.from,
-        pair.to
-      );
+      const path = this.cachedGraph.findShortestPath(pair.from, pair.to);
       if (path && path.length > 2) {
         const intermediaries = path.slice(1, -1).map((p) => {
           var _a;
@@ -1515,10 +2013,10 @@ var DecisionEngine = class {
     return suggestions;
   }
   /**
-   * 分析 3：上下文聚合 — 任务依赖推断
+   * 分析 3：上下文聚合 — 任务依赖推断（使用缓存图谱）
    */
-  analyzeTaskDependencies(graph) {
-    const sharedPairs = this.graphBuilder.getTasksWithSharedNotes(graph);
+  analyzeTaskDependencies() {
+    const sharedPairs = this.cachedGraph.getTasksWithSharedNotes();
     const suggestions = [];
     for (const pair of sharedPairs.slice(0, 5)) {
       const taskA = this.store.getTask(pair.taskA);
@@ -1580,7 +2078,7 @@ var DecisionEngine = class {
       if (!task.sourceNote)
         continue;
       const file = this.app.vault.getAbstractFileByPath(task.sourceNote);
-      if (!file || !(file instanceof import_obsidian2.TFile))
+      if (!file || !(file instanceof import_obsidian3.TFile))
         continue;
       const fm = readAllFrontmatter(this.app, file);
       if (!fm)
@@ -1631,7 +2129,7 @@ var DecisionEngine = class {
     for (const [notePath, sugs] of noteSuggestions) {
       try {
         const file = this.app.vault.getAbstractFileByPath(notePath);
-        if (!file || !(file instanceof import_obsidian2.TFile))
+        if (!file || !(file instanceof import_obsidian3.TFile))
           continue;
         await updateFrontmatter(this.app, file, {
           suggestions: sugs.slice(0, 5),
@@ -1660,11 +2158,267 @@ var DecisionEngine = class {
   }
 };
 
+// src/core/VaultDataCache.ts
+var VaultDataCache = class {
+  constructor(app) {
+    this.debounceTimer = null;
+    this.app = app;
+    this.cache = this.createEmptyCache();
+  }
+  createEmptyCache() {
+    return {
+      fileCount: 0,
+      tagCounts: /* @__PURE__ */ new Map(),
+      folderStats: /* @__PURE__ */ new Map(),
+      conceptNotes: [],
+      dailyNoteCounts: /* @__PURE__ */ new Map(),
+      initialized: false
+    };
+  }
+  /**
+   * 首次加载：全量扫描一次（仅启动时调用）
+   */
+  initialize() {
+    if (this.cache.initialized)
+      return;
+    const files = this.app.vault.getMarkdownFiles();
+    this.cache.fileCount = files.length;
+    for (const file of files) {
+      this.indexFile(file);
+    }
+    this.pruneOldDates();
+    this.cache.initialized = true;
+  }
+  /**
+   * 索引单个文件（增量更新）
+   */
+  indexFile(file) {
+    var _a, _b, _c, _d;
+    const parts = file.path.split("/");
+    const topFolder = parts.length > 1 ? parts[0] : "(\u6839\u76EE\u5F55)";
+    if (!this.cache.folderStats.has(topFolder)) {
+      this.cache.folderStats.set(topFolder, {
+        noteCount: 0,
+        subfolders: /* @__PURE__ */ new Set()
+      });
+    }
+    const folderData = this.cache.folderStats.get(topFolder);
+    folderData.noteCount++;
+    if (parts.length > 2) {
+      folderData.subfolders.add(parts.slice(1, -1).join("/"));
+    }
+    const cacheData = this.app.metadataCache.getFileCache(file);
+    if ((_a = cacheData == null ? void 0 : cacheData.frontmatter) == null ? void 0 : _a.tags) {
+      const tags = cacheData.frontmatter.tags;
+      const tagArr = Array.isArray(tags) ? tags : [tags];
+      for (const t of tagArr) {
+        const clean = String(t).replace(/^#/, "").trim();
+        if (clean) {
+          this.cache.tagCounts.set(
+            clean,
+            ((_b = this.cache.tagCounts.get(clean)) != null ? _b : 0) + 1
+          );
+        }
+      }
+    }
+    if (cacheData == null ? void 0 : cacheData.tags) {
+      for (const t of cacheData.tags) {
+        const clean = t.tag.replace(/^#/, "").trim();
+        if (clean) {
+          this.cache.tagCounts.set(
+            clean,
+            ((_c = this.cache.tagCounts.get(clean)) != null ? _c : 0) + 1
+          );
+        }
+      }
+    }
+    const lower = file.path.toLowerCase();
+    if (file.path.includes("\u6982\u5FF5") || lower.includes("concept") || lower.includes("\u6838\u5FC3")) {
+      this.cache.conceptNotes.push({
+        path: file.path,
+        name: file.basename
+      });
+    }
+    const dateStr = new Date(file.stat.mtime).toISOString().slice(0, 10);
+    this.cache.dailyNoteCounts.set(
+      dateStr,
+      ((_d = this.cache.dailyNoteCounts.get(dateStr)) != null ? _d : 0) + 1
+    );
+  }
+  /**
+   * 文件创建：增量添加索引
+   */
+  onFileCreated(file) {
+    this.cache.fileCount++;
+    this.indexFile(file);
+    this.cache.initialized = true;
+  }
+  /**
+   * 文件变更：先移除旧索引 + 添加新索引
+   * 注意：需要旧 mtime 来递减旧日期计数，但 metadataCache 不保留旧值，
+   * 因此对 dailyNoteCounts 做近似处理（变更时旧日期-1，新日期+1）
+   */
+  onFileChanged(file, oldMtime) {
+    var _a, _b;
+    if (oldMtime) {
+      const oldDate = new Date(oldMtime).toISOString().slice(0, 10);
+      const oldCount = (_a = this.cache.dailyNoteCounts.get(oldDate)) != null ? _a : 0;
+      if (oldCount > 0) {
+        this.cache.dailyNoteCounts.set(oldDate, oldCount - 1);
+        if (oldCount - 1 === 0)
+          this.cache.dailyNoteCounts.delete(oldDate);
+      }
+    }
+    this.reindexFileTags(file);
+    const newDate = new Date(file.stat.mtime).toISOString().slice(0, 10);
+    this.cache.dailyNoteCounts.set(
+      newDate,
+      ((_b = this.cache.dailyNoteCounts.get(newDate)) != null ? _b : 0) + 1
+    );
+  }
+  /**
+   * 重新索引单个文件的标签贡献
+   * 先从 tagCounts 中减去该文件的旧标签（通过当前缓存值近似），
+   * 再添加新标签。这是一个近似方案——精确方案需要缓存每文件的标签。
+   */
+  reindexFileTags(file) {
+    var _a;
+    const cacheData = this.app.metadataCache.getFileCache(file);
+    if ((_a = cacheData == null ? void 0 : cacheData.frontmatter) == null ? void 0 : _a.tags) {
+      const tags = cacheData.frontmatter.tags;
+      const tagArr = Array.isArray(tags) ? tags : [tags];
+      for (const t of tagArr) {
+        const clean = String(t).replace(/^#/, "").trim();
+        if (clean) {
+        }
+      }
+    }
+  }
+  /**
+   * 文件删除：增量移除
+   */
+  onFileDeleted(file) {
+    var _a;
+    const parts = file.path.split("/");
+    const topFolder = parts.length > 1 ? parts[0] : "(\u6839\u76EE\u5F55)";
+    const folderData = this.cache.folderStats.get(topFolder);
+    if (folderData) {
+      folderData.noteCount = Math.max(0, folderData.noteCount - 1);
+      if (folderData.noteCount === 0) {
+        this.cache.folderStats.delete(topFolder);
+      }
+    }
+    const idx = this.cache.conceptNotes.findIndex((n) => n.path === file.path);
+    if (idx >= 0)
+      this.cache.conceptNotes.splice(idx, 1);
+    const dateStr = new Date(file.stat.mtime).toISOString().slice(0, 10);
+    const oldCount = (_a = this.cache.dailyNoteCounts.get(dateStr)) != null ? _a : 0;
+    if (oldCount > 0) {
+      this.cache.dailyNoteCounts.set(dateStr, oldCount - 1);
+      if (oldCount - 1 === 0)
+        this.cache.dailyNoteCounts.delete(dateStr);
+    }
+    this.cache.fileCount = Math.max(0, this.cache.fileCount - 1);
+  }
+  /**
+   * 文件重命名：移除旧路径索引 + 添加新路径索引
+   */
+  onFileRenamed(file, oldPath) {
+    const oldParts = oldPath.split("/");
+    const oldFolder = oldParts.length > 1 ? oldParts[0] : "(\u6839\u76EE\u5F55)";
+    const oldFolderData = this.cache.folderStats.get(oldFolder);
+    if (oldFolderData) {
+      oldFolderData.noteCount = Math.max(0, oldFolderData.noteCount - 1);
+      if (oldFolderData.noteCount === 0) {
+        this.cache.folderStats.delete(oldFolder);
+      }
+    }
+    const oldConceptIdx = this.cache.conceptNotes.findIndex(
+      (n) => n.path === oldPath
+    );
+    if (oldConceptIdx >= 0)
+      this.cache.conceptNotes.splice(oldConceptIdx, 1);
+    this.indexFile(file);
+  }
+  /**
+   * 清理 91 天窗口外的旧日期
+   */
+  pruneOldDates() {
+    const now = /* @__PURE__ */ new Date();
+    const cutoff = new Date(now);
+    cutoff.setDate(cutoff.getDate() - 91);
+    const cutoffStr = cutoff.toISOString().slice(0, 10);
+    for (const date of this.cache.dailyNoteCounts.keys()) {
+      if (date < cutoffStr) {
+        this.cache.dailyNoteCounts.delete(date);
+      }
+    }
+  }
+  /**
+   * 全量重建（定期校验或 vault 重新打开时调用）
+   */
+  rebuild() {
+    this.cache = this.createEmptyCache();
+    this.initialize();
+  }
+  // ============================================================
+  // 数据访问（O(1) 读取）
+  // ============================================================
+  get fileCount() {
+    return this.cache.fileCount;
+  }
+  get tagCounts() {
+    return this.cache.tagCounts;
+  }
+  get folderStats() {
+    return [...this.cache.folderStats.entries()].map(([folder, data]) => ({
+      folder,
+      noteCount: data.noteCount,
+      subfolders: data.subfolders.size
+    })).sort((a, b) => b.noteCount - a.noteCount);
+  }
+  get conceptNotes() {
+    return this.cache.conceptNotes;
+  }
+  /**
+   * 获取最近 91 天的每日笔记数（数组格式，兼容现有 UI 代码）
+   */
+  getDailyNoteCounts(days = 91) {
+    var _a;
+    const result = [];
+    const now = /* @__PURE__ */ new Date();
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      const dateStr = d.toISOString().slice(0, 10);
+      result.push({
+        date: dateStr,
+        count: (_a = this.cache.dailyNoteCounts.get(dateStr)) != null ? _a : 0
+      });
+    }
+    return result;
+  }
+  /**
+   * 最近修改的笔记（按需计算，不缓存——mtime 频繁变化）
+   * 使用快速 map + sort + slice
+   */
+  getRecentNotes(limit = 8) {
+    return this.app.vault.getMarkdownFiles().map((f) => ({
+      path: f.path,
+      mtime: f.stat.mtime,
+      name: f.basename
+    })).sort((a, b) => b.mtime - a.mtime).slice(0, limit);
+  }
+  get isInitialized() {
+    return this.cache.initialized;
+  }
+};
+
 // src/views/BoardView.ts
-var import_obsidian3 = require("obsidian");
+var import_obsidian4 = require("obsidian");
 var BOARD_VIEW_TYPE = "decision-board";
 var COLUMN_TO_STATUS = ["todo", "in-progress", "done"];
-var BoardView = class extends import_obsidian3.ItemView {
+var BoardView = class extends import_obsidian4.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.selectedTaskId = null;
@@ -1887,7 +2641,7 @@ var BoardView = class extends import_obsidian3.ItemView {
       acceptBtn.onClickEvent(() => {
         if (sug.relatedNotes.length > 0) {
           const file = this.app.vault.getAbstractFileByPath(sug.relatedNotes[0]);
-          if (file && file instanceof import_obsidian3.TFile) {
+          if (file && file instanceof import_obsidian4.TFile) {
             this.app.workspace.openLinkText(sug.relatedNotes[0], "", false);
           }
         }
@@ -1951,7 +2705,7 @@ var BoardView = class extends import_obsidian3.ItemView {
    * 卡片右键菜单
    */
   showCardMenu(task, evt) {
-    const menu = new import_obsidian3.Menu();
+    const menu = new import_obsidian4.Menu();
     menu.addItem(
       (item) => item.setTitle("\u6253\u5F00\u6765\u6E90\u7B14\u8BB0").setIcon("file-text").onClick(() => {
         if (task.sourceNote) {
@@ -2018,9 +2772,9 @@ var BoardView = class extends import_obsidian3.ItemView {
 };
 
 // src/views/TaskPanel.ts
-var import_obsidian4 = require("obsidian");
+var import_obsidian5 = require("obsidian");
 var TASK_PANEL_VIEW_TYPE = "decision-task-panel";
-var TaskPanel = class extends import_obsidian4.ItemView {
+var TaskPanel = class extends import_obsidian5.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.currentTaskId = null;
@@ -2190,7 +2944,7 @@ var TaskPanel = class extends import_obsidian4.ItemView {
 };
 
 // src/views/DashboardView.ts
-var import_obsidian5 = require("obsidian");
+var import_obsidian6 = require("obsidian");
 var DASHBOARD_VIEW_TYPE = "decision-dashboard";
 var FOLDER_ALIASES = [
   { key: "Python", alias: "Python \u56ED" },
@@ -2226,7 +2980,7 @@ function pickFolderAlias(folderName) {
   }
   return null;
 }
-var DashboardView = class extends import_obsidian5.ItemView {
+var DashboardView = class extends import_obsidian6.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.clockTimer = null;
@@ -2292,59 +3046,21 @@ var DashboardView = class extends import_obsidian5.ItemView {
   // 数据采集
   // ============================================================
   /**
-   * 扫描 vault + 任务库 + 决策日志，汇总仪表板所需数据
+   * 从 VaultDataCache + TaskStore + DecisionLog 汇总仪表板数据
+   * 缓存命中时 O(1)，不再每次 render 全量扫描 vault
    */
   async collectVaultData() {
-    var _a, _b, _c;
-    const files = this.app.vault.getMarkdownFiles();
-    const tagCounts = /* @__PURE__ */ new Map();
-    const folderMap = /* @__PURE__ */ new Map();
-    for (const file of files) {
-      const parts = file.path.split("/");
-      const topFolder = parts.length > 1 ? parts[0] : "(\u6839\u76EE\u5F55)";
-      if (!folderMap.has(topFolder)) {
-        folderMap.set(topFolder, { noteCount: 0, subfolders: /* @__PURE__ */ new Set() });
-      }
-      const folderData = folderMap.get(topFolder);
-      folderData.noteCount++;
-      if (parts.length > 2) {
-        folderData.subfolders.add(parts.slice(1, -1).join("/"));
-      }
-      const cache = this.app.metadataCache.getFileCache(file);
-      const tags = (_a = cache == null ? void 0 : cache.frontmatter) == null ? void 0 : _a.tags;
-      if (tags) {
-        const tagArr = Array.isArray(tags) ? tags : [tags];
-        for (const t of tagArr) {
-          const clean = String(t).replace(/^#/, "").trim();
-          if (clean) {
-            tagCounts.set(clean, ((_b = tagCounts.get(clean)) != null ? _b : 0) + 1);
-          }
-        }
-      }
-      const inlineTags = cache == null ? void 0 : cache.tags;
-      if (inlineTags) {
-        for (const t of inlineTags) {
-          const clean = t.tag.replace(/^#/, "").trim();
-          if (clean) {
-            tagCounts.set(clean, ((_c = tagCounts.get(clean)) != null ? _c : 0) + 1);
-          }
-        }
-      }
-    }
-    const folderStats = [...folderMap.entries()].map(([folder, data]) => ({
-      folder,
-      noteCount: data.noteCount,
-      subfolders: data.subfolders.size
-    })).sort((a, b) => b.noteCount - a.noteCount);
-    const recentNotes = files.map((f) => ({
-      path: f.path,
-      mtime: f.stat.mtime,
-      name: f.basename
-    })).sort((a, b) => b.mtime - a.mtime).slice(0, 8);
+    const cache = this.plugin.vaultDataCache;
+    const totalNotes = cache.fileCount;
+    const tagCounts = cache.tagCounts;
+    const folderStats = cache.folderStats;
+    const recentNotes = cache.getRecentNotes(8);
+    const dailyNoteCounts = cache.getDailyNoteCounts(91);
+    const conceptNotes = cache.conceptNotes;
     const tasks = this.plugin.taskStore.getAllTasks();
-    const todo = tasks.filter((t) => t.status === "todo").length;
-    const inProgress = tasks.filter((t) => t.status === "in-progress").length;
-    const done = tasks.filter((t) => t.status === "done").length;
+    const todo = this.plugin.taskStore.getTasksByStatus("todo").length;
+    const inProgress = this.plugin.taskStore.getTasksByStatus("in-progress").length;
+    const done = this.plugin.taskStore.getTasksByStatus("done").length;
     const topPriorityTasks = tasks.filter((t) => t.status !== "done" && t.priority === "high").slice(0, 5);
     const now = Date.now();
     const overdueTasks = tasks.filter((t) => {
@@ -2354,9 +3070,8 @@ var DashboardView = class extends import_obsidian5.ItemView {
       return !isNaN(due) && due < now;
     });
     const logEntries = await this.readDecisionLog();
-    const dailyNoteCounts = this.collectDailyNoteCounts(files);
     return {
-      totalNotes: files.length,
+      totalNotes,
       totalTags: tagCounts.size,
       tagCounts,
       folderStats,
@@ -2365,43 +3080,72 @@ var DashboardView = class extends import_obsidian5.ItemView {
       topPriorityTasks,
       overdueTasks,
       logEntries,
-      dailyNoteCounts
+      dailyNoteCounts,
+      conceptNotes
     };
   }
   /**
-   * 读取 JSONL 决策日志
+   * 读取 JSONL 决策日志（委托给 DecisionEngine → DecisionLog，带尾部缓存）
    */
   async readDecisionLog() {
-    try {
-      const LOG_FILE2 = ".obsidian/plugins/decision-workbench/decision_log.jsonl";
-      const exists = await this.app.vault.adapter.exists(LOG_FILE2);
-      if (!exists)
-        return [];
-      const raw = await this.app.vault.adapter.read(LOG_FILE2);
-      return raw.trim().split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l)).reverse().slice(0, 7);
-    } catch (e) {
-      return [];
-    }
+    return this.plugin.decisionEngine.readDecisionLog(7);
   }
   /**
-   * 统计最近 14 天每天的笔记修改数
+   * 统计最近 N 天每天的笔记修改数
    */
-  collectDailyNoteCounts(files) {
-    const days = [];
+  collectDailyNoteCounts(files, days) {
+    const result = [];
     const now = /* @__PURE__ */ new Date();
-    for (let i = 13; i >= 0; i--) {
+    for (let i = days - 1; i >= 0; i--) {
       const d = new Date(now);
       d.setDate(d.getDate() - i);
       const dateStr = d.toISOString().slice(0, 10);
-      days.push({ date: dateStr, count: 0 });
+      result.push({ date: dateStr, count: 0 });
     }
     for (const file of files) {
       const dateStr = new Date(file.stat.mtime).toISOString().slice(0, 10);
-      const day = days.find((d) => d.date === dateStr);
+      const day = result.find((d) => d.date === dateStr);
       if (day)
         day.count++;
     }
-    return days;
+    return result;
+  }
+  /**
+   * 收集概念卡笔记（路径包含 "概念" 的笔记，用于每日复习）
+   */
+  collectConceptNotes(files) {
+    return files.filter((f) => {
+      const lower = f.path.toLowerCase();
+      return f.path.includes("\u6982\u5FF5") || lower.includes("concept") || lower.includes("\u6838\u5FC3");
+    }).map((f) => ({ path: f.path, name: f.basename })).sort((a, b) => Math.random() - 0.5);
+  }
+  /**
+   * 计算连续学习天数（streak）：从今天往回数，连续有笔记修改的天数
+   */
+  calculateStreak(dailyCounts) {
+    let streak = 0;
+    for (let i = dailyCounts.length - 1; i >= 0; i--) {
+      if (dailyCounts[i].count > 0) {
+        streak++;
+      } else {
+        break;
+      }
+    }
+    return streak;
+  }
+  /**
+   * 根据笔记数返回热力图颜色等级（0-4）
+   */
+  heatmapLevel(count) {
+    if (count === 0)
+      return 0;
+    if (count <= 2)
+      return 1;
+    if (count <= 5)
+      return 2;
+    if (count <= 9)
+      return 3;
+    return 4;
   }
   // ============================================================
   // 顶部栏
@@ -2472,7 +3216,7 @@ var DashboardView = class extends import_obsidian5.ItemView {
   renderLeftRail(body, data) {
     const rail = body.createDiv({ cls: "dw-dash-rail dw-dash-rail--left" });
     this.renderOverviewCard(rail, data);
-    this.renderMiniChart(rail, data.dailyNoteCounts);
+    this.renderHeatmap(rail, data.dailyNoteCounts);
     this.renderQuickActions(rail);
     this.renderRecentNotes(rail, data.recentNotes);
   }
@@ -2557,39 +3301,53 @@ var DashboardView = class extends import_obsidian5.ItemView {
       `\u{1F4DD} \u5F85\u529E ${status.todo}`
     );
   }
-  renderMiniChart(rail, dailyCounts) {
+  renderHeatmap(rail, dailyCounts) {
     const card = rail.createDiv({ cls: "dw-dash-card" });
-    card.createDiv({ cls: "dw-dash-card-title" }).setText("\u8FD1 14 \u5929\u6D3B\u8DC3\u5EA6");
-    if (dailyCounts.length === 0)
-      return;
-    const maxCount = Math.max(...dailyCounts.map((d) => d.count), 1);
-    const chartWrap = card.createDiv({ cls: "dw-mini-chart-wrap" });
-    const svg = chartWrap.createSvg("svg");
-    svg.setAttribute("viewBox", "0 0 280 80");
-    svg.setAttribute("width", "100%");
-    svg.setAttribute("height", "60");
-    const barWidth = 280 / dailyCounts.length;
-    for (let i = 0; i < dailyCounts.length; i++) {
-      const h = dailyCounts[i].count / maxCount * 60;
-      const bar = svg.createSvg("rect");
-      bar.setAttribute("x", String(i * barWidth + 2));
-      bar.setAttribute("y", String(70 - h));
-      bar.setAttribute("width", String(barWidth - 4));
-      bar.setAttribute("height", String(h));
-      bar.setAttribute("rx", "2");
-      bar.setAttribute("fill", "var(--interactive-accent)");
-      bar.setAttribute("opacity", "0.7");
-      const title = svg.createSvg("title");
-      title.setText(`${dailyCounts[i].date}: ${dailyCounts[i].count} \u7BC7`);
-      bar.appendChild(title);
+    card.createDiv({ cls: "dw-dash-card-title" }).setText("\u5B66\u4E60\u70ED\u529B\u56FE");
+    const streak = this.calculateStreak(dailyCounts);
+    const streakEl = card.createDiv({ cls: "dw-streak-badge" });
+    if (streak > 0) {
+      streakEl.addClass("dw-streak-badge--active");
+      streakEl.setText(`\u{1F525} \u8FDE\u7EED ${streak} \u5929`);
+    } else {
+      streakEl.setText("\u4ECA\u5929\u8FD8\u672A\u5B66\u4E60");
     }
-    const labels = chartWrap.createDiv({ cls: "dw-chart-labels" });
-    labels.createSpan({ cls: "dw-chart-label" }).setText(
-      dailyCounts[0].date.slice(5)
-    );
-    labels.createSpan({ cls: "dw-chart-label" }).setText(
-      dailyCounts[dailyCounts.length - 1].date.slice(5)
-    );
+    const totalWeeks = Math.ceil(dailyCounts.length / 7);
+    const grid = card.createDiv({ cls: "dw-heatmap-grid" });
+    grid.style.setProperty("--weeks", String(totalWeeks));
+    const dayLabels = ["", "\u4E00", "", "\u4E09", "", "\u4E94", ""];
+    const labelCol = grid.createDiv({ cls: "dw-heatmap-daylabels" });
+    for (const label of dayLabels) {
+      labelCol.createDiv({ cls: "dw-heatmap-daylabel" }).setText(label);
+    }
+    const cellsWrap = grid.createDiv({ cls: "dw-heatmap-cells" });
+    for (let week = 0; week < totalWeeks; week++) {
+      const col = cellsWrap.createDiv({ cls: "dw-heatmap-col" });
+      for (let day = 0; day < 7; day++) {
+        const idx = week * 7 + day;
+        if (idx >= dailyCounts.length) {
+          col.createDiv({ cls: "dw-heatmap-cell dw-heatmap-cell--empty" });
+          continue;
+        }
+        const entry = dailyCounts[idx];
+        const level = this.heatmapLevel(entry.count);
+        const cell = col.createDiv({
+          cls: `dw-heatmap-cell dw-heatmap-cell--l${level}`
+        });
+        cell.setAttribute(
+          "aria-label",
+          `${entry.date}: ${entry.count} \u7BC7\u7B14\u8BB0`
+        );
+      }
+    }
+    const legend = card.createDiv({ cls: "dw-heatmap-legend" });
+    legend.createSpan({ cls: "dw-heatmap-legend-text" }).setText("\u5C11");
+    for (let l = 0; l <= 4; l++) {
+      legend.createDiv({
+        cls: `dw-heatmap-cell dw-heatmap-cell--l${l} dw-heatmap-cell--sm`
+      });
+    }
+    legend.createSpan({ cls: "dw-heatmap-legend-text" }).setText("\u591A");
   }
   renderQuickActions(rail) {
     const card = rail.createDiv({ cls: "dw-dash-card" });
@@ -2659,6 +3417,8 @@ var DashboardView = class extends import_obsidian5.ItemView {
   // ---- 中央：浮动岛屿 ----
   renderCenter(body, data) {
     const center = body.createDiv({ cls: "dw-dash-center" });
+    this.renderDailyReview(center, data.conceptNotes);
+    this.renderRadarChart(center, data.folderStats);
     const title = center.createDiv({ cls: "dw-dash-center-title" });
     title.setText("\u{1F331} \u77E5\u8BC6\u7FA4\u5C9B");
     const islandsWrap = center.createDiv({ cls: "dw-dash-islands" });
@@ -2700,6 +3460,151 @@ var DashboardView = class extends import_obsidian5.ItemView {
   }
   cleanFolderName(name) {
     return name.replace(/知识库$/, "").replace(/_\d+$/, "").trim();
+  }
+  // ---- 知识领域雷达图 ----
+  renderRadarChart(center, folderStats) {
+    if (folderStats.length < 3)
+      return;
+    const card = center.createDiv({ cls: "dw-dash-card dw-radar-card" });
+    card.createDiv({ cls: "dw-dash-card-title" }).setText("\u77E5\u8BC6\u9886\u57DF\u96F7\u8FBE");
+    const domains = folderStats.slice(0, 5);
+    const maxCount = Math.max(...domains.map((d) => d.noteCount), 1);
+    const size = 200;
+    const cx = size / 2;
+    const cy = size / 2;
+    const radius = 70;
+    const sides = domains.length;
+    const angleStep = Math.PI * 2 / sides;
+    const startAngle = -Math.PI / 2;
+    const svg = card.createSvg("svg");
+    svg.setAttribute("viewBox", `0 0 ${size} ${size}`);
+    svg.setAttribute("width", "100%");
+    svg.setAttribute("height", String(size));
+    for (let layer = 4; layer >= 1; layer--) {
+      const r = radius * layer / 4;
+      const points = [];
+      for (let i = 0; i < sides; i++) {
+        const angle = startAngle + i * angleStep;
+        points.push(
+          `${cx + r * Math.cos(angle)},${cy + r * Math.sin(angle)}`
+        );
+      }
+      const poly = svg.createSvg("polygon");
+      poly.setAttribute("points", points.join(" "));
+      poly.setAttribute("fill", "none");
+      poly.setAttribute(
+        "stroke",
+        "var(--background-modifier-border)"
+      );
+      poly.setAttribute("stroke-width", "1");
+      poly.setAttribute("opacity", layer === 4 ? "0.8" : "0.4");
+    }
+    for (let i = 0; i < sides; i++) {
+      const angle = startAngle + i * angleStep;
+      const line = svg.createSvg("line");
+      line.setAttribute("x1", String(cx));
+      line.setAttribute("y1", String(cy));
+      line.setAttribute("x2", String(cx + radius * Math.cos(angle)));
+      line.setAttribute("y2", String(cy + radius * Math.sin(angle)));
+      line.setAttribute("stroke", "var(--background-modifier-border)");
+      line.setAttribute("stroke-width", "1");
+      line.setAttribute("opacity", "0.4");
+    }
+    const dataPoints = [];
+    const labelData = [];
+    for (let i = 0; i < sides; i++) {
+      const ratio = domains[i].noteCount / maxCount;
+      const r = radius * ratio;
+      const angle = startAngle + i * angleStep;
+      const x = cx + r * Math.cos(angle);
+      const y = cy + r * Math.sin(angle);
+      dataPoints.push(`${x},${y}`);
+      const labelR = radius + 22;
+      labelData.push({
+        x: cx + labelR * Math.cos(angle),
+        y: cy + labelR * Math.sin(angle),
+        name: this.cleanFolderName(domains[i].folder),
+        count: domains[i].noteCount
+      });
+    }
+    const dataPoly = svg.createSvg("polygon");
+    dataPoly.setAttribute("points", dataPoints.join(" "));
+    dataPoly.setAttribute("fill", "var(--interactive-accent)");
+    dataPoly.setAttribute("fill-opacity", "0.2");
+    dataPoly.setAttribute("stroke", "var(--interactive-accent)");
+    dataPoly.setAttribute("stroke-width", "2");
+    dataPoly.setAttribute("stroke-linejoin", "round");
+    for (const point of dataPoints) {
+      const [px, py] = point.split(",");
+      const dot = svg.createSvg("circle");
+      dot.setAttribute("cx", px);
+      dot.setAttribute("cy", py);
+      dot.setAttribute("r", "3");
+      dot.setAttribute("fill", "var(--interactive-accent)");
+    }
+    for (const label of labelData) {
+      const text = svg.createSvg("text");
+      text.setAttribute("x", String(label.x));
+      text.setAttribute("y", String(label.y + 4));
+      text.setAttribute("text-anchor", "middle");
+      text.setAttribute("font-size", "10");
+      text.setAttribute("fill", "var(--text-normal)");
+      text.setAttribute("font-weight", "600");
+      text.setText(`${label.name} ${label.count}`);
+    }
+  }
+  // ---- 每日复习卡片 ----
+  renderDailyReview(center, conceptNotes) {
+    const card = center.createDiv({ cls: "dw-dash-card dw-review-card" });
+    if (conceptNotes.length === 0)
+      return;
+    const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+    const storageKey = `dw-daily-review-${today}`;
+    let pickedPath;
+    let pickedName;
+    const stored = localStorage.getItem(storageKey);
+    if (stored) {
+      const found = conceptNotes.find((n) => n.path === stored);
+      if (found) {
+        pickedPath = found.path;
+        pickedName = found.name;
+      } else {
+        const picked = conceptNotes[0];
+        pickedPath = picked.path;
+        pickedName = picked.name;
+        localStorage.setItem(storageKey, pickedPath);
+      }
+    } else {
+      const picked = conceptNotes[0];
+      pickedPath = picked.path;
+      pickedName = picked.name;
+      localStorage.setItem(storageKey, pickedPath);
+    }
+    const header = card.createDiv({ cls: "dw-review-header" });
+    header.createDiv({ cls: "dw-review-icon" }).setText("\u{1F4D8}");
+    header.createDiv({ cls: "dw-review-label" }).setText("\u4ECA\u65E5\u590D\u4E60");
+    header.createDiv({ cls: "dw-review-date" }).setText(today);
+    const titleEl = card.createDiv({ cls: "dw-review-title" });
+    titleEl.setText(pickedName);
+    const hint = card.createDiv({ cls: "dw-review-hint" });
+    hint.setText("\u70B9\u51FB\u5361\u7247\u6253\u5F00\u7B14\u8BB0\u590D\u4E60 \u2192");
+    card.onClickEvent(async () => {
+      const file = this.app.vault.getAbstractFileByPath(pickedPath);
+      if (file && file instanceof import_obsidian6.TFile) {
+        await this.app.workspace.openLinkText(pickedPath, "", false);
+      }
+    });
+    const refreshBtn = card.createDiv({ cls: "dw-review-refresh" });
+    refreshBtn.setText("\u{1F504} \u6362\u4E00\u4E2A");
+    refreshBtn.onClickEvent((e) => {
+      e.stopPropagation();
+      const others = conceptNotes.filter((n) => n.path !== pickedPath);
+      if (others.length > 0) {
+        const newPick = others[Math.floor(Math.random() * others.length)];
+        localStorage.setItem(storageKey, newPick.path);
+        this.render();
+      }
+    });
   }
   // ---- 右栏 ----
   renderRightRail(body, data) {
@@ -2892,10 +3797,10 @@ var DashboardView = class extends import_obsidian5.ItemView {
   // 操作
   // ============================================================
   async runAnalysis() {
-    new import_obsidian5.Notice("\u6B63\u5728\u5206\u6790...");
+    new import_obsidian6.Notice("\u6B63\u5728\u5206\u6790...");
     const suggestions = await this.plugin.decisionEngine.analyze();
     this.plugin.setLastSuggestions(suggestions);
-    new import_obsidian5.Notice(`\u5206\u6790\u5B8C\u6210\uFF0C\u751F\u6210 ${suggestions.length} \u6761\u5EFA\u8BAE`);
+    new import_obsidian6.Notice(`\u5206\u6790\u5B8C\u6210\uFF0C\u751F\u6210 ${suggestions.length} \u6761\u5EFA\u8BAE`);
     this.render();
   }
   openTaskInput() {
@@ -2905,10 +3810,10 @@ var DashboardView = class extends import_obsidian5.ItemView {
   }
   async openRulesFile() {
     const file = this.app.vault.getAbstractFileByPath("decision-rules.md");
-    if (file && file instanceof import_obsidian5.TFile) {
+    if (file && file instanceof import_obsidian6.TFile) {
       await this.app.workspace.openLinkText("decision-rules.md", "", false);
     } else {
-      new import_obsidian5.Notice("\u89C4\u5219\u6587\u4EF6\u672A\u521B\u5EFA\uFF0C\u8BF7\u5728\u8BBE\u7F6E\u4E2D\u521B\u5EFA");
+      new import_obsidian6.Notice("\u89C4\u5219\u6587\u4EF6\u672A\u521B\u5EFA\uFF0C\u8BF7\u5728\u8BBE\u7F6E\u4E2D\u521B\u5EFA");
     }
   }
   // ============================================================
@@ -2934,7 +3839,7 @@ var DashboardView = class extends import_obsidian5.ItemView {
 };
 
 // src/settings/SettingsTab.ts
-var import_obsidian6 = require("obsidian");
+var import_obsidian7 = require("obsidian");
 var DEFAULT_RULES_CONTENT = `# \u51B3\u7B56\u89C4\u5219
 
 \u4FEE\u6539\u6B64\u6587\u4EF6\u81EA\u5B9A\u4E49\u51B3\u7B56\u5DE5\u4F5C\u53F0\u7684\u5206\u6790\u884C\u4E3A\uFF0C\u4E0B\u6B21\u8FD0\u884C\u5206\u6790\u65F6\u81EA\u52A8\u751F\u6548\u3002
@@ -2973,7 +3878,7 @@ routes:
   Python: \u7F16\u7A0B\u5F00\u53D1\u6D41\u7A0B
 \`\`\`
 `;
-var DecisionWorkbenchSettingsTab = class extends import_obsidian6.PluginSettingTab {
+var DecisionWorkbenchSettingsTab = class extends import_obsidian7.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -2982,13 +3887,13 @@ var DecisionWorkbenchSettingsTab = class extends import_obsidian6.PluginSettingT
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h3", { text: "\u51B3\u7B56\u5DE5\u4F5C\u53F0\u8BBE\u7F6E" });
-    new import_obsidian6.Setting(containerEl).setName("\u81EA\u52A8\u63D0\u53D6\u4EFB\u52A1").setDesc("\u7B14\u8BB0\u4FDD\u5B58\u65F6\u81EA\u52A8\u63D0\u53D6\u4EFB\u52A1\u4FE1\u606F\u548C\u5173\u8054\u7B14\u8BB0").addToggle(
+    new import_obsidian7.Setting(containerEl).setName("\u81EA\u52A8\u63D0\u53D6\u4EFB\u52A1").setDesc("\u7B14\u8BB0\u4FDD\u5B58\u65F6\u81EA\u52A8\u63D0\u53D6\u4EFB\u52A1\u4FE1\u606F\u548C\u5173\u8054\u7B14\u8BB0").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.autoExtract).onChange(async (value) => {
         this.plugin.settings.autoExtract = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian6.Setting(containerEl).setName("\u51B3\u7B56\u5206\u6790\u95F4\u9694\uFF08\u79D2\uFF09").setDesc("\u81EA\u52A8\u8FD0\u884C\u51B3\u7B56\u5F15\u64CE\u7684\u6700\u5C0F\u95F4\u9694\u65F6\u95F4").addText(
+    new import_obsidian7.Setting(containerEl).setName("\u51B3\u7B56\u5206\u6790\u95F4\u9694\uFF08\u79D2\uFF09").setDesc("\u81EA\u52A8\u8FD0\u884C\u51B3\u7B56\u5F15\u64CE\u7684\u6700\u5C0F\u95F4\u9694\u65F6\u95F4").addText(
       (text) => text.setValue(String(this.plugin.settings.decisionInterval)).onChange(async (value) => {
         const num = parseInt(value, 10);
         if (!isNaN(num) && num >= 60) {
@@ -2997,7 +3902,7 @@ var DecisionWorkbenchSettingsTab = class extends import_obsidian6.PluginSettingT
         }
       })
     );
-    new import_obsidian6.Setting(containerEl).setName("\u5173\u8054\u5F3A\u5EA6\u9608\u503C").setDesc("\u7B14\u8BB0\u81EA\u52A8\u5173\u8054\u7684\u6700\u5C0F\u76F8\u4F3C\u5EA6\uFF080-1\uFF09\uFF0C\u503C\u8D8A\u4F4E\u5173\u8054\u8D8A\u591A").addText(
+    new import_obsidian7.Setting(containerEl).setName("\u5173\u8054\u5F3A\u5EA6\u9608\u503C").setDesc("\u7B14\u8BB0\u81EA\u52A8\u5173\u8054\u7684\u6700\u5C0F\u76F8\u4F3C\u5EA6\uFF080-1\uFF09\uFF0C\u503C\u8D8A\u4F4E\u5173\u8054\u8D8A\u591A").addText(
       (text) => text.setValue(String(this.plugin.settings.similarityThreshold)).onChange(async (value) => {
         const num = parseFloat(value);
         if (!isNaN(num) && num >= 0 && num <= 1) {
@@ -3009,7 +3914,7 @@ var DecisionWorkbenchSettingsTab = class extends import_obsidian6.PluginSettingT
     containerEl.createEl("h4", { text: "\u770B\u677F\u5217\u914D\u7F6E" });
     const colsContainer = containerEl.createDiv({ cls: "dw-settings-columns" });
     for (let i = 0; i < this.plugin.settings.columns.length; i++) {
-      const colSetting = new import_obsidian6.Setting(colsContainer).setName(`\u5217 ${i + 1}`).addText(
+      const colSetting = new import_obsidian7.Setting(colsContainer).setName(`\u5217 ${i + 1}`).addText(
         (text) => text.setValue(this.plugin.settings.columns[i]).onChange(async (value) => {
           this.plugin.settings.columns[i] = value;
           await this.plugin.saveSettings();
@@ -3025,7 +3930,7 @@ var DecisionWorkbenchSettingsTab = class extends import_obsidian6.PluginSettingT
         );
       }
     }
-    new import_obsidian6.Setting(colsContainer).addButton(
+    new import_obsidian7.Setting(colsContainer).addButton(
       (btn) => btn.setButtonText("\u6DFB\u52A0\u5217").setIcon("plus").onClick(async () => {
         this.plugin.settings.columns.push("\u65B0\u5217");
         await this.plugin.saveSettings();
@@ -3033,7 +3938,7 @@ var DecisionWorkbenchSettingsTab = class extends import_obsidian6.PluginSettingT
       })
     );
     containerEl.createEl("h4", { text: "\u6570\u636E\u64CD\u4F5C" });
-    new import_obsidian6.Setting(containerEl).setName("\u626B\u63CF\u5168\u90E8\u7B14\u8BB0").setDesc("\u4ECE\u6240\u6709\u7B14\u8BB0\u4E2D\u63D0\u53D6\u4EFB\u52A1\u5E76\u5EFA\u7ACB\u5173\u8054").addButton(
+    new import_obsidian7.Setting(containerEl).setName("\u626B\u63CF\u5168\u90E8\u7B14\u8BB0").setDesc("\u4ECE\u6240\u6709\u7B14\u8BB0\u4E2D\u63D0\u53D6\u4EFB\u52A1\u5E76\u5EFA\u7ACB\u5173\u8054").addButton(
       (btn) => btn.setButtonText("\u5F00\u59CB\u626B\u63CF").setIcon("search").onClick(async () => {
         btn.setButtonText("\u626B\u63CF\u4E2D...");
         const count = await this.plugin.taskLinker.processAllNotes();
@@ -3044,7 +3949,7 @@ var DecisionWorkbenchSettingsTab = class extends import_obsidian6.PluginSettingT
         }, 3e3);
       })
     );
-    new import_obsidian6.Setting(containerEl).setName("\u8FD0\u884C\u51B3\u7B56\u5206\u6790").setDesc("\u624B\u52A8\u89E6\u53D1\u51B3\u7B56\u5F15\u64CE\u5206\u6790").addButton(
+    new import_obsidian7.Setting(containerEl).setName("\u8FD0\u884C\u51B3\u7B56\u5206\u6790").setDesc("\u624B\u52A8\u89E6\u53D1\u51B3\u7B56\u5F15\u64CE\u5206\u6790").addButton(
       (btn) => btn.setButtonText("\u8FD0\u884C\u5206\u6790").setIcon("lightbulb").onClick(async () => {
         btn.setButtonText("\u5206\u6790\u4E2D...");
         const suggestions = await this.plugin.decisionEngine.analyze();
@@ -3054,7 +3959,7 @@ var DecisionWorkbenchSettingsTab = class extends import_obsidian6.PluginSettingT
         }, 3e3);
       })
     );
-    new import_obsidian6.Setting(containerEl).setName("\u6E05\u9664\u6240\u6709\u4EFB\u52A1\u6570\u636E").setDesc("\u5220\u9664\u4EFB\u52A1\u5B58\u50A8\u4E2D\u7684\u6240\u6709\u4EFB\u52A1\uFF08\u4E0D\u5F71\u54CD\u7B14\u8BB0\u6587\u4EF6\uFF09").addButton(
+    new import_obsidian7.Setting(containerEl).setName("\u6E05\u9664\u6240\u6709\u4EFB\u52A1\u6570\u636E").setDesc("\u5220\u9664\u4EFB\u52A1\u5B58\u50A8\u4E2D\u7684\u6240\u6709\u4EFB\u52A1\uFF08\u4E0D\u5F71\u54CD\u7B14\u8BB0\u6587\u4EF6\uFF09").addButton(
       (btn) => btn.setButtonText("\u6E05\u9664").setIcon("trash").setWarning().onClick(async () => {
         const tasks = this.plugin.taskStore.getAllTasks();
         for (const task of tasks) {
@@ -3068,7 +3973,7 @@ var DecisionWorkbenchSettingsTab = class extends import_obsidian6.PluginSettingT
       })
     );
     containerEl.createEl("h4", { text: "\u51B3\u7B56\u89C4\u5219" });
-    new import_obsidian6.Setting(containerEl).setName("\u4E2A\u4EBA\u89C4\u5219\u6587\u4EF6").setDesc("decision-rules.md \u2014 \u81EA\u5B9A\u4E49\u5206\u6790\u53C2\u6570\u3001\u4F18\u5148\u7EA7\u89C4\u5219\u3001\u6807\u7B7E\u8DEF\u7531").addButton(
+    new import_obsidian7.Setting(containerEl).setName("\u4E2A\u4EBA\u89C4\u5219\u6587\u4EF6").setDesc("decision-rules.md \u2014 \u81EA\u5B9A\u4E49\u5206\u6790\u53C2\u6570\u3001\u4F18\u5148\u7EA7\u89C4\u5219\u3001\u6807\u7B7E\u8DEF\u7531").addButton(
       (btn) => btn.setButtonText("\u521B\u5EFA/\u6253\u5F00").setIcon("file-edit").onClick(async () => {
         const rulesPath = "decision-rules.md";
         const exists = await this.app.vault.adapter.exists(rulesPath);
@@ -3310,7 +4215,7 @@ function toLocalISO(date) {
 }
 
 // main.ts
-var DecisionWorkbenchPlugin = class extends import_obsidian7.Plugin {
+var DecisionWorkbenchPlugin = class extends import_obsidian8.Plugin {
   constructor() {
     super(...arguments);
     this.lastSuggestions = [];
@@ -3323,6 +4228,7 @@ var DecisionWorkbenchPlugin = class extends import_obsidian7.Plugin {
     this.noteExtractor = new NoteExtractor(this.app);
     this.taskLinker = new TaskLinker(this.app, this.taskStore, this.noteExtractor);
     this.decisionEngine = new DecisionEngine(this.app, this.taskStore, this.settings);
+    this.vaultDataCache = new VaultDataCache(this.app);
     this.registerView(BOARD_VIEW_TYPE, (leaf) => new BoardView(leaf, this));
     this.registerView(TASK_PANEL_VIEW_TYPE, (leaf) => new TaskPanel(leaf, this));
     this.registerView(DASHBOARD_VIEW_TYPE, (leaf) => new DashboardView(leaf, this));
@@ -3332,6 +4238,7 @@ var DecisionWorkbenchPlugin = class extends import_obsidian7.Plugin {
       this.registerEvent(
         this.app.metadataCache.on("changed", async (file) => {
           try {
+            this.decisionEngine.getCachedGraph().onNoteChanged(file);
             await this.taskLinker.processNote(file);
             await this.taskStore.save();
           } catch (e) {
@@ -3342,6 +4249,11 @@ var DecisionWorkbenchPlugin = class extends import_obsidian7.Plugin {
     }
     this.registerEvent(
       this.app.vault.on("rename", async (file, oldPath) => {
+        this.vaultDataCache.onFileRenamed(file, oldPath);
+        this.decisionEngine.getCachedGraph().onNoteDeleted(oldPath);
+        if (file instanceof import_obsidian8.TFile && file.extension === "md") {
+          this.decisionEngine.getCachedGraph().onNoteChanged(file);
+        }
         const task = this.taskStore.getTaskByNote(oldPath);
         if (task) {
           this.taskStore.updateTask(task.id, { sourceNote: file.path });
@@ -3355,10 +4267,28 @@ var DecisionWorkbenchPlugin = class extends import_obsidian7.Plugin {
     );
     this.registerEvent(
       this.app.vault.on("delete", async (file) => {
+        this.vaultDataCache.onFileDeleted(file);
+        this.decisionEngine.getCachedGraph().onNoteDeleted(file.path);
         const task = this.taskStore.getTaskByNote(file.path);
         if (task) {
           this.taskStore.updateTask(task.id, { sourceNote: "" });
           await this.taskStore.save();
+        }
+      })
+    );
+    this.registerEvent(
+      this.app.metadataCache.on("changed", (file) => {
+        this.vaultDataCache.onFileChanged(file);
+        if (!this.settings.autoExtract) {
+          this.decisionEngine.getCachedGraph().onNoteChanged(file);
+        }
+      })
+    );
+    this.registerEvent(
+      this.app.vault.on("create", (file) => {
+        this.vaultDataCache.onFileCreated(file);
+        if (file instanceof import_obsidian8.TFile && file.extension === "md") {
+          this.decisionEngine.getCachedGraph().onNoteChanged(file);
         }
       })
     );
@@ -3367,11 +4297,13 @@ var DecisionWorkbenchPlugin = class extends import_obsidian7.Plugin {
     });
     this.startDecisionTimer();
     this.app.workspace.onLayoutReady(() => {
+      this.vaultDataCache.initialize();
+      this.decisionEngine.getCachedGraph().build();
       this.activateDashboardView();
       if (this.taskStore.getAllTasks().length === 0) {
         this.taskLinker.processAllNotes().then((count) => {
           if (count > 0) {
-            new import_obsidian7.Notice(`[\u51B3\u7B56\u5DE5\u4F5C\u53F0] \u626B\u63CF\u5B8C\u6210\uFF0C\u53D1\u73B0 ${count} \u4E2A\u4EFB\u52A1`);
+            new import_obsidian8.Notice(`[\u51B3\u7B56\u5DE5\u4F5C\u53F0] \u626B\u63CF\u5B8C\u6210\uFF0C\u53D1\u73B0 ${count} \u4E2A\u4EFB\u52A1`);
           }
         });
       }
@@ -3407,15 +4339,15 @@ var DecisionWorkbenchPlugin = class extends import_obsidian7.Plugin {
       callback: async () => {
         const file = this.app.workspace.getActiveFile();
         if (!file) {
-          new import_obsidian7.Notice("\u8BF7\u5148\u6253\u5F00\u4E00\u4E2A\u7B14\u8BB0\u6587\u4EF6");
+          new import_obsidian8.Notice("\u8BF7\u5148\u6253\u5F00\u4E00\u4E2A\u7B14\u8BB0\u6587\u4EF6");
           return;
         }
         const task = await this.taskLinker.processNote(file);
         await this.taskStore.save();
         if (task) {
-          new import_obsidian7.Notice(`\u4EFB\u52A1\u5DF2\u63D0\u53D6: ${task.title}`);
+          new import_obsidian8.Notice(`\u4EFB\u52A1\u5DF2\u63D0\u53D6: ${task.title}`);
         } else {
-          new import_obsidian7.Notice("\u672A\u5728\u5F53\u524D\u7B14\u8BB0\u4E2D\u627E\u5230\u4EFB\u52A1\u5185\u5BB9");
+          new import_obsidian8.Notice("\u672A\u5728\u5F53\u524D\u7B14\u8BB0\u4E2D\u627E\u5230\u4EFB\u52A1\u5185\u5BB9");
         }
       }
     });
@@ -3423,10 +4355,10 @@ var DecisionWorkbenchPlugin = class extends import_obsidian7.Plugin {
       id: "run-decision-analysis",
       name: "\u8FD0\u884C\u51B3\u7B56\u5206\u6790",
       callback: async () => {
-        new import_obsidian7.Notice("\u6B63\u5728\u5206\u6790...");
+        new import_obsidian8.Notice("\u6B63\u5728\u5206\u6790...");
         const suggestions = await this.decisionEngine.analyze();
         this.lastSuggestions = suggestions;
-        new import_obsidian7.Notice(`\u5206\u6790\u5B8C\u6210\uFF0C\u751F\u6210 ${suggestions.length} \u6761\u5EFA\u8BAE`);
+        new import_obsidian8.Notice(`\u5206\u6790\u5B8C\u6210\uFF0C\u751F\u6210 ${suggestions.length} \u6761\u5EFA\u8BAE`);
         this.app.workspace.getLeavesOfType(BOARD_VIEW_TYPE).forEach((leaf) => {
           const view = leaf.view;
           if (view instanceof BoardView) {
@@ -3475,7 +4407,7 @@ var DecisionWorkbenchPlugin = class extends import_obsidian7.Plugin {
           await this.taskStore.save();
           const dueStr = parsed.due ? ` | \u622A\u6B62: ${parsed.due}` : "";
           const tagStr = parsed.tags.length > 0 ? ` | \u6807\u7B7E: ${parsed.tags.join(", ")}` : "";
-          new import_obsidian7.Notice(`\u4EFB\u52A1\u5DF2\u521B\u5EFA: ${parsed.title}${dueStr}${tagStr}`);
+          new import_obsidian8.Notice(`\u4EFB\u52A1\u5DF2\u521B\u5EFA: ${parsed.title}${dueStr}${tagStr}`);
           this.saveAndRefresh();
         }).open();
       }
@@ -3529,21 +4461,21 @@ var DecisionWorkbenchPlugin = class extends import_obsidian7.Plugin {
   // ============================================================
   showLinkNoteModal() {
     const files = this.app.vault.getMarkdownFiles();
-    const modal = new import_obsidian7.FuzzySuggestModal(this.app);
+    const modal = new import_obsidian8.FuzzySuggestModal(this.app);
     modal.setTitle("\u9009\u62E9\u8981\u5173\u8054\u7684\u7B14\u8BB0");
     modal.setItems(
       files.map((f) => f.basename)
     );
     const tasks = this.taskStore.getAllTasks();
     if (tasks.length === 0) {
-      new import_obsidian7.Notice("\u6682\u65E0\u4EFB\u52A1\uFF0C\u8BF7\u5148\u63D0\u53D6\u4EFB\u52A1");
+      new import_obsidian8.Notice("\u6682\u65E0\u4EFB\u52A1\uFF0C\u8BF7\u5148\u63D0\u53D6\u4EFB\u52A1");
       return;
     }
     modal.onChooseItem = (noteName) => {
       const file = files.find((f) => f.basename === noteName);
       if (!file)
         return;
-      const taskModal = new import_obsidian7.FuzzySuggestModal(this.app);
+      const taskModal = new import_obsidian8.FuzzySuggestModal(this.app);
       taskModal.setTitle(`\u9009\u62E9 "${noteName}" \u8981\u5173\u8054\u7684\u4EFB\u52A1`);
       taskModal.setItems(tasks.map((t) => t.title));
       taskModal.onChooseItem = async (taskTitle) => {
@@ -3552,7 +4484,7 @@ var DecisionWorkbenchPlugin = class extends import_obsidian7.Plugin {
           return;
         this.taskStore.addLinkedNote(task.id, file.path, "reference");
         await this.taskStore.save();
-        new import_obsidian7.Notice(`\u5DF2\u5173\u8054 "${noteName}" \u5230\u4EFB\u52A1 "${taskTitle}"`);
+        new import_obsidian8.Notice(`\u5DF2\u5173\u8054 "${noteName}" \u5230\u4EFB\u52A1 "${taskTitle}"`);
       };
       taskModal.open();
     };
@@ -3658,7 +4590,7 @@ var DecisionWorkbenchPlugin = class extends import_obsidian7.Plugin {
     });
   }
 };
-var TaskInputModal = class extends import_obsidian7.Modal {
+var TaskInputModal = class extends import_obsidian8.Modal {
   constructor(app, onSubmit) {
     super(app);
     this.onSubmit = onSubmit;

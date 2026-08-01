@@ -20,9 +20,12 @@ import {
   PriorityRule,
   Task,
   Priority,
+  DecisionLogEntry,
 } from "../types";
 import { TaskStore } from "./TaskStore";
+import { DecisionLog } from "./DecisionLog";
 import { DecisionGraphBuilder } from "../graph/DecisionGraph";
+import { CachedDecisionGraph } from "../graph/CachedDecisionGraph";
 import { DecisionFrameworks } from "./DecisionFrameworks";
 import { updateFrontmatter, readNoteTags, readNoteLinks, readAllFrontmatter } from "../utils/frontmatter";
 import { clusterByTags } from "../utils/similarity";
@@ -34,10 +37,12 @@ export class DecisionEngine {
   private app: App;
   private store: TaskStore;
   private graphBuilder: DecisionGraphBuilder;
+  private cachedGraph: CachedDecisionGraph;
   private frameworks: DecisionFrameworks;
   private settings: DecisionWorkbenchSettings;
   private rules: DecisionRules = { ...DEFAULT_RULES };
   private lastRunTime: number = 0;
+  private decisionLog: DecisionLog;
 
   constructor(
     app: App,
@@ -48,7 +53,23 @@ export class DecisionEngine {
     this.store = store;
     this.settings = settings;
     this.graphBuilder = new DecisionGraphBuilder(app, store);
+    this.cachedGraph = new CachedDecisionGraph(app, store);
     this.frameworks = new DecisionFrameworks(app, store);
+    this.decisionLog = new DecisionLog(app, LOG_FILE);
+  }
+
+  /**
+   * 获取缓存图谱实例（供外部增量更新使用）
+   */
+  getCachedGraph(): CachedDecisionGraph {
+    return this.cachedGraph;
+  }
+
+  /**
+   * 读取决策日志尾部（委托给 DecisionLog）
+   */
+  async readDecisionLog(limit: number = 7): Promise<DecisionLogEntry[]> {
+    return this.decisionLog.readTail(limit);
   }
 
   /**
@@ -168,7 +189,7 @@ export class DecisionEngine {
   }
 
   /**
-   * 追加 JSONL 决策日志（只追加不覆盖）
+   * 追加 JSONL 决策日志（通过 DecisionLog 类，带轮转 + 尾部缓存）
    */
   private async appendLog(suggestions: Suggestion[]): Promise<void> {
     const tasks = this.store.getAllTasks();
@@ -177,7 +198,7 @@ export class DecisionEngine {
       byType[sug.type] = (byType[sug.type] ?? 0) + 1;
     }
 
-    const entry = {
+    const entry: DecisionLogEntry = {
       ts: new Date().toISOString(),
       suggestions: suggestions.length,
       byType,
@@ -187,14 +208,7 @@ export class DecisionEngine {
       tasksDone: tasks.filter((t) => t.status === "done").length,
     };
 
-    try {
-      const exists = await this.app.vault.adapter.exists(LOG_FILE);
-      const existing = exists ? await this.app.vault.adapter.read(LOG_FILE) : "";
-      const newContent = existing + JSON.stringify(entry) + "\n";
-      await this.app.vault.adapter.write(LOG_FILE, newContent);
-    } catch (e) {
-      console.error("[Decision Workbench] Failed to append log:", e);
-    }
+    await this.decisionLog.append(entry);
   }
 
   /**
@@ -209,17 +223,19 @@ export class DecisionEngine {
 
     const suggestions: Suggestion[] = [];
 
-    // 构建决策图谱
-    const graph = this.graphBuilder.build();
+    // 构建决策图谱（缓存命中时 O(1)，首次构建 O(n)）
+    this.cachedGraph.build();
+    // 同步任务节点（任务数据可能已更新，笔记节点保持缓存）
+    this.cachedGraph.syncTasks();
 
     // 1. 标签聚类分析
     suggestions.push(...this.analyzeTagClusters());
 
-    // 2. 链接路径推理
-    suggestions.push(...this.analyzeLinkPaths(graph));
+    // 2. 链接路径推理（使用缓存图谱，不再传 graph 参数）
+    suggestions.push(...this.analyzeLinkPaths());
 
     // 3. 上下文聚合（任务依赖）
-    suggestions.push(...this.analyzeTaskDependencies(graph));
+    suggestions.push(...this.analyzeTaskDependencies());
 
     // 4. 逻辑卡片框架分析
     suggestions.push(...this.analyzeFrameworks());
@@ -291,19 +307,15 @@ export class DecisionEngine {
   }
 
   /**
-   * 分析 2：链接路径推理 — 补充间接关联
+   * 分析 2：链接路径推理 — 补充间接关联（使用缓存图谱）
    */
-  private analyzeLinkPaths(graph: ReturnType<DecisionGraphBuilder["build"]>): Suggestion[] {
-    const unlinked = this.graphBuilder.getUnlinkedSimilarNotes(graph);
+  private analyzeLinkPaths(): Suggestion[] {
+    const unlinked = this.cachedGraph.getUnlinkedSimilarNotes();
     const suggestions: Suggestion[] = [];
 
     for (const pair of unlinked.slice(0, this.rules.maxSuggestions)) {
-      // 检查是否存在间接路径
-      const path = this.graphBuilder.findShortestPath(
-        graph,
-        pair.from,
-        pair.to
-      );
+      // 检查是否存在间接路径（使用预构建邻接表，不再重建）
+      const path = this.cachedGraph.findShortestPath(pair.from, pair.to);
 
       if (path && path.length > 2) {
         const intermediaries = path
@@ -344,10 +356,10 @@ export class DecisionEngine {
   }
 
   /**
-   * 分析 3：上下文聚合 — 任务依赖推断
+   * 分析 3：上下文聚合 — 任务依赖推断（使用缓存图谱）
    */
-  private analyzeTaskDependencies(graph: ReturnType<DecisionGraphBuilder["build"]>): Suggestion[] {
-    const sharedPairs = this.graphBuilder.getTasksWithSharedNotes(graph);
+  private analyzeTaskDependencies(): Suggestion[] {
+    const sharedPairs = this.cachedGraph.getTasksWithSharedNotes();
     const suggestions: Suggestion[] = [];
 
     for (const pair of sharedPairs.slice(0, 5)) {

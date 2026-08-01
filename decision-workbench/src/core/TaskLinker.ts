@@ -25,6 +25,11 @@ export class TaskLinker {
   private store: TaskStore;
   private extractor: NoteExtractor;
 
+  // 标签倒排索引：tag → Set<filePath>
+  private tagToFileIndex = new Map<string, Set<string>>();
+  // 缓存每篇笔记的 tags/links，避免重复读取 metadataCache
+  private noteDataCache = new Map<string, { tags: string[]; links: string[] }>();
+
   constructor(app: App, store: TaskStore, extractor: NoteExtractor) {
     this.app = app;
     this.store = store;
@@ -95,6 +100,7 @@ export class TaskLinker {
 
   /**
    * 基于标签和链接关系，自动建议关联笔记
+   * 使用标签倒排索引优化：O(n²) → O(n×k)，k = 共享标签的笔记数
    */
   private async suggestLinkedNotes(
     sourceFile: TFile,
@@ -105,45 +111,79 @@ export class TaskLinker {
 
     if (sourceTags.length === 0) return;
 
-    // 获取所有 markdown 文件
-    const allFiles = this.app.vault.getMarkdownFiles();
-    const candidates: { file: TFile; strength: number }[] = [];
+    // 用标签倒排索引收集候选（只看共享标签的文件）
+    const candidates = new Map<string, number>(); // path → overlap count
 
-    for (const file of allFiles) {
-      if (file.path === sourceFile.path) continue;
+    for (const tag of sourceTags) {
+      // 先尝试从索引获取
+      const filesWithTag = this.tagToFileIndex.get(tag);
+      if (filesWithTag) {
+        for (const candidatePath of filesWithTag) {
+          if (candidatePath === sourceFile.path) continue;
+          candidates.set(
+            candidatePath,
+            (candidates.get(candidatePath) ?? 0) + 1
+          );
+        }
+      } else {
+        // 索引未构建（单笔记变更场景），全量扫描
+        const allFiles = this.app.vault.getMarkdownFiles();
+        for (const file of allFiles) {
+          if (file.path === sourceFile.path) continue;
+          const tags = readNoteTags(this.app, file);
+          if (tags.includes(tag)) {
+            candidates.set(
+              file.path,
+              (candidates.get(file.path) ?? 0) + 1
+            );
+          }
+        }
+      }
+    }
 
-      const tags = readNoteTags(this.app, file);
-      const links = readNoteLinks(this.app, file);
+    // 对候选计算精确关联强度
+    const ranked: { file: TFile; strength: number }[] = [];
+    for (const [candidatePath] of candidates) {
+      const candidateData = this.noteDataCache.get(candidatePath);
+      let candTags: string[];
+      let candLinks: string[];
 
-      if (tags.length === 0 && links.length === 0) continue;
+      if (candidateData) {
+        candTags = candidateData.tags;
+        candLinks = candidateData.links;
+      } else {
+        const file = this.app.vault.getAbstractFileByPath(candidatePath);
+        if (!file || !(file instanceof TFile)) continue;
+        candTags = readNoteTags(this.app, file);
+        candLinks = readNoteLinks(this.app, file);
+      }
+
+      const file = this.app.vault.getAbstractFileByPath(candidatePath);
+      if (!file || !(file instanceof TFile)) continue;
 
       const strength = associationStrength(
         sourceTags,
-        tags,
+        candTags,
         sourceLinks,
-        links,
+        candLinks,
         sourceFile.path,
-        file.path
+        candidatePath
       );
 
       if (strength > 0.3) {
-        candidates.push({ file, strength });
+        ranked.push({ file, strength });
       }
     }
 
     // 按关联强度排序，取 Top 10
-    candidates.sort((a, b) => b.strength - a.strength);
-    const topCandidates = candidates.slice(0, 10);
+    ranked.sort((a, b) => b.strength - a.strength);
+    const topCandidates = ranked.slice(0, 10);
 
     // 添加到任务的 linkedNotes（去重）
     for (const { file } of topCandidates) {
       const exists = task.linkedNotes.some((n) => n.path === file.path);
       if (!exists) {
-        this.store.addLinkedNote(
-          task.id,
-          file.path,
-          "reference"
-        );
+        this.store.addLinkedNote(task.id, file.path, "reference");
       }
     }
   }
@@ -166,11 +206,30 @@ export class TaskLinker {
 
   /**
    * 批量处理所有笔记（首次扫描）
+   * 两阶段优化：Phase 1 构建标签索引 O(n)，Phase 2 用索引做关联 O(n×k)
    */
   async processAllNotes(): Promise<number> {
     const files = this.app.vault.getMarkdownFiles();
-    let count = 0;
 
+    // Phase 1: 构建标签倒排索引 + 缓存笔记数据（O(n)）
+    this.tagToFileIndex.clear();
+    this.noteDataCache.clear();
+
+    for (const file of files) {
+      const tags = readNoteTags(this.app, file);
+      const links = readNoteLinks(this.app, file);
+      this.noteDataCache.set(file.path, { tags, links });
+
+      for (const tag of tags) {
+        if (!this.tagToFileIndex.has(tag)) {
+          this.tagToFileIndex.set(tag, new Set());
+        }
+        this.tagToFileIndex.get(tag)!.add(file.path);
+      }
+    }
+
+    // Phase 2: 用索引做关联（O(n×k)，k = 共享标签的笔记数）
+    let count = 0;
     for (const file of files) {
       try {
         const task = await this.processNote(file);

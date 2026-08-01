@@ -70,6 +70,7 @@ interface VaultData {
   overdueTasks: Task[];
   logEntries: DecisionLogEntry[];
   dailyNoteCounts: { date: string; count: number }[];
+  conceptNotes: { path: string; name: string }[];
 }
 
 export class DashboardView extends ItemView {
@@ -158,78 +159,25 @@ export class DashboardView extends ItemView {
   // ============================================================
 
   /**
-   * 扫描 vault + 任务库 + 决策日志，汇总仪表板所需数据
+   * 从 VaultDataCache + TaskStore + DecisionLog 汇总仪表板数据
+   * 缓存命中时 O(1)，不再每次 render 全量扫描 vault
    */
   private async collectVaultData(): Promise<VaultData> {
-    const files = this.app.vault.getMarkdownFiles();
+    const cache = this.plugin.vaultDataCache;
 
-    // 标签统计
-    const tagCounts = new Map<string, number>();
-    const folderMap = new Map<string, { noteCount: number; subfolders: Set<string> }>();
+    // vault 数据从缓存读取（O(1)）
+    const totalNotes = cache.fileCount;
+    const tagCounts = cache.tagCounts;
+    const folderStats = cache.folderStats;
+    const recentNotes = cache.getRecentNotes(8);
+    const dailyNoteCounts = cache.getDailyNoteCounts(91);
+    const conceptNotes = cache.conceptNotes;
 
-    for (const file of files) {
-      // 文件夹归类
-      const parts = file.path.split("/");
-      const topFolder = parts.length > 1 ? parts[0] : "(根目录)";
-
-      if (!folderMap.has(topFolder)) {
-        folderMap.set(topFolder, { noteCount: 0, subfolders: new Set() });
-      }
-      const folderData = folderMap.get(topFolder)!;
-      folderData.noteCount++;
-
-      if (parts.length > 2) {
-        folderData.subfolders.add(parts.slice(1, -1).join("/"));
-      }
-
-      // 标签
-      const cache = this.app.metadataCache.getFileCache(file);
-      const tags = cache?.frontmatter?.tags;
-      if (tags) {
-        const tagArr = Array.isArray(tags) ? tags : [tags];
-        for (const t of tagArr) {
-          const clean = String(t).replace(/^#/, "").trim();
-          if (clean) {
-            tagCounts.set(clean, (tagCounts.get(clean) ?? 0) + 1);
-          }
-        }
-      }
-      // 也收集 inline tags
-      const inlineTags = cache?.tags;
-      if (inlineTags) {
-        for (const t of inlineTags) {
-          const clean = t.tag.replace(/^#/, "").trim();
-          if (clean) {
-            tagCounts.set(clean, (tagCounts.get(clean) ?? 0) + 1);
-          }
-        }
-      }
-    }
-
-    // 文件夹统计 → 排序
-    const folderStats = [...folderMap.entries()]
-      .map(([folder, data]) => ({
-        folder,
-        noteCount: data.noteCount,
-        subfolders: data.subfolders.size,
-      }))
-      .sort((a, b) => b.noteCount - a.noteCount);
-
-    // 最近修改的笔记
-    const recentNotes = files
-      .map((f) => ({
-        path: f.path,
-        mtime: f.stat.mtime,
-        name: f.basename,
-      }))
-      .sort((a, b) => b.mtime - a.mtime)
-      .slice(0, 8);
-
-    // 任务统计
+    // 任务数据从 TaskStore 索引读取（O(1)）
     const tasks = this.plugin.taskStore.getAllTasks();
-    const todo = tasks.filter((t) => t.status === "todo").length;
-    const inProgress = tasks.filter((t) => t.status === "in-progress").length;
-    const done = tasks.filter((t) => t.status === "done").length;
+    const todo = this.plugin.taskStore.getTasksByStatus("todo").length;
+    const inProgress = this.plugin.taskStore.getTasksByStatus("in-progress").length;
+    const done = this.plugin.taskStore.getTasksByStatus("done").length;
 
     // 高优先级 + 超期任务
     const topPriorityTasks = tasks
@@ -243,14 +191,11 @@ export class DashboardView extends ItemView {
       return !isNaN(due) && due < now;
     });
 
-    // 决策日志（最后 7 条）
+    // 决策日志（尾部缓存，O(1)）
     const logEntries = await this.readDecisionLog();
 
-    // 每日笔记数（最近 14 天）
-    const dailyNoteCounts = this.collectDailyNoteCounts(files);
-
     return {
-      totalNotes: files.length,
+      totalNotes,
       totalTags: tagCounts.size,
       tagCounts,
       folderStats,
@@ -260,52 +205,88 @@ export class DashboardView extends ItemView {
       overdueTasks,
       logEntries,
       dailyNoteCounts,
+      conceptNotes,
     };
   }
 
   /**
-   * 读取 JSONL 决策日志
+   * 读取 JSONL 决策日志（委托给 DecisionEngine → DecisionLog，带尾部缓存）
    */
   private async readDecisionLog(): Promise<DecisionLogEntry[]> {
-    try {
-      const LOG_FILE = ".obsidian/plugins/decision-workbench/decision_log.jsonl";
-      const exists = await this.app.vault.adapter.exists(LOG_FILE);
-      if (!exists) return [];
-      const raw = await this.app.vault.adapter.read(LOG_FILE);
-      return raw
-        .trim()
-        .split("\n")
-        .filter((l) => l.trim())
-        .map((l) => JSON.parse(l) as DecisionLogEntry)
-        .reverse()
-        .slice(0, 7);
-    } catch {
-      return [];
-    }
+    return this.plugin.decisionEngine.readDecisionLog(7);
   }
 
   /**
-   * 统计最近 14 天每天的笔记修改数
+   * 统计最近 N 天每天的笔记修改数
    */
   private collectDailyNoteCounts(
-    files: TFile[]
+    files: TFile[],
+    days: number
   ): { date: string; count: number }[] {
-    const days: { date: string; count: number }[] = [];
+    const result: { date: string; count: number }[] = [];
     const now = new Date();
-    for (let i = 13; i >= 0; i--) {
+    for (let i = days - 1; i >= 0; i--) {
       const d = new Date(now);
       d.setDate(d.getDate() - i);
       const dateStr = d.toISOString().slice(0, 10);
-      days.push({ date: dateStr, count: 0 });
+      result.push({ date: dateStr, count: 0 });
     }
 
     for (const file of files) {
       const dateStr = new Date(file.stat.mtime).toISOString().slice(0, 10);
-      const day = days.find((d) => d.date === dateStr);
+      const day = result.find((d) => d.date === dateStr);
       if (day) day.count++;
     }
 
-    return days;
+    return result;
+  }
+
+  /**
+   * 收集概念卡笔记（路径包含 "概念" 的笔记，用于每日复习）
+   */
+  private collectConceptNotes(
+    files: TFile[]
+  ): { path: string; name: string }[] {
+    return files
+      .filter((f) => {
+        const lower = f.path.toLowerCase();
+        return (
+          f.path.includes("概念") ||
+          lower.includes("concept") ||
+          lower.includes("核心")
+        );
+      })
+      .map((f) => ({ path: f.path, name: f.basename }))
+      .sort((a, b) => Math.random() - 0.5); // 随机打乱
+  }
+
+  /**
+   * 计算连续学习天数（streak）：从今天往回数，连续有笔记修改的天数
+   */
+  private calculateStreak(
+    dailyCounts: { date: string; count: number }[]
+  ): number {
+    let streak = 0;
+    // 从最后一天（今天）开始往回数
+    for (let i = dailyCounts.length - 1; i >= 0; i--) {
+      if (dailyCounts[i].count > 0) {
+        streak++;
+      } else {
+        break; // 遇到空天就断
+      }
+    }
+    return streak;
+  }
+
+  /**
+   * 根据笔记数返回热力图颜色等级（0-4）
+   */
+  private heatmapLevel(count: number): number {
+    if (count === 0) return 0;
+    if (count <= 2) return 1;
+    if (count <= 5) return 2;
+    if (count <= 9) return 3;
+    return 4;
   }
 
   // ============================================================
@@ -393,8 +374,8 @@ export class DashboardView extends ItemView {
     // 今日概览
     this.renderOverviewCard(rail, data);
 
-    // 迷你折线图
-    this.renderMiniChart(rail, data.dailyNoteCounts);
+    // 学习连击热力图
+    this.renderHeatmap(rail, data.dailyNoteCounts);
 
     // 快捷入口
     this.renderQuickActions(rail);
@@ -522,50 +503,68 @@ export class DashboardView extends ItemView {
     );
   }
 
-  private renderMiniChart(
+  private renderHeatmap(
     rail: HTMLElement,
     dailyCounts: { date: string; count: number }[]
   ) {
     const card = rail.createDiv({ cls: "dw-dash-card" });
-    card.createDiv({ cls: "dw-dash-card-title" }).setText("近 14 天活跃度");
+    card.createDiv({ cls: "dw-dash-card-title" }).setText("学习热力图");
 
-    if (dailyCounts.length === 0) return;
-
-    const maxCount = Math.max(...dailyCounts.map((d) => d.count), 1);
-    const chartWrap = card.createDiv({ cls: "dw-mini-chart-wrap" });
-
-    const svg = chartWrap.createSvg("svg");
-    svg.setAttribute("viewBox", "0 0 280 80");
-    svg.setAttribute("width", "100%");
-    svg.setAttribute("height", "60");
-
-    const barWidth = 280 / dailyCounts.length;
-
-    for (let i = 0; i < dailyCounts.length; i++) {
-      const h = (dailyCounts[i].count / maxCount) * 60;
-      const bar = svg.createSvg("rect");
-      bar.setAttribute("x", String(i * barWidth + 2));
-      bar.setAttribute("y", String(70 - h));
-      bar.setAttribute("width", String(barWidth - 4));
-      bar.setAttribute("height", String(h));
-      bar.setAttribute("rx", "2");
-      bar.setAttribute("fill", "var(--interactive-accent)");
-      bar.setAttribute("opacity", "0.7");
-
-      // tooltip via title
-      const title = svg.createSvg("title");
-      title.setText(`${dailyCounts[i].date}: ${dailyCounts[i].count} 篇`);
-      bar.appendChild(title);
+    // 计算连续学习天数
+    const streak = this.calculateStreak(dailyCounts);
+    const streakEl = card.createDiv({ cls: "dw-streak-badge" });
+    if (streak > 0) {
+      streakEl.addClass("dw-streak-badge--active");
+      streakEl.setText(`\u{1F525} 连续 ${streak} 天`);
+    } else {
+      streakEl.setText("今天还未学习");
     }
 
-    // 底部标签
-    const labels = chartWrap.createDiv({ cls: "dw-chart-labels" });
-    labels.createSpan({ cls: "dw-chart-label" }).setText(
-      dailyCounts[0].date.slice(5)
-    );
-    labels.createSpan({ cls: "dw-chart-label" }).setText(
-      dailyCounts[dailyCounts.length - 1].date.slice(5)
-    );
+    // 热力图网格：7 行（周一到周日）× 13 列（周）
+    const totalWeeks = Math.ceil(dailyCounts.length / 7);
+    const grid = card.createDiv({ cls: "dw-heatmap-grid" });
+    grid.style.setProperty("--weeks", String(totalWeeks));
+
+    // 星期标签
+    const dayLabels = ["", "一", "", "三", "", "五", ""];
+    const labelCol = grid.createDiv({ cls: "dw-heatmap-daylabels" });
+    for (const label of dayLabels) {
+      labelCol.createDiv({ cls: "dw-heatmap-daylabel" }).setText(label);
+    }
+
+    // 热力图单元格容器
+    const cellsWrap = grid.createDiv({ cls: "dw-heatmap-cells" });
+
+    for (let week = 0; week < totalWeeks; week++) {
+      const col = cellsWrap.createDiv({ cls: "dw-heatmap-col" });
+      for (let day = 0; day < 7; day++) {
+        const idx = week * 7 + day;
+        if (idx >= dailyCounts.length) {
+          col.createDiv({ cls: "dw-heatmap-cell dw-heatmap-cell--empty" });
+          continue;
+        }
+        const entry = dailyCounts[idx];
+        const level = this.heatmapLevel(entry.count);
+        const cell = col.createDiv({
+          cls: `dw-heatmap-cell dw-heatmap-cell--l${level}`,
+        });
+        // tooltip
+        cell.setAttribute(
+          "aria-label",
+          `${entry.date}: ${entry.count} 篇笔记`
+        );
+      }
+    }
+
+    // 底部图例
+    const legend = card.createDiv({ cls: "dw-heatmap-legend" });
+    legend.createSpan({ cls: "dw-heatmap-legend-text" }).setText("少");
+    for (let l = 0; l <= 4; l++) {
+      legend.createDiv({
+        cls: `dw-heatmap-cell dw-heatmap-cell--l${l} dw-heatmap-cell--sm`,
+      });
+    }
+    legend.createSpan({ cls: "dw-heatmap-legend-text" }).setText("多");
   }
 
   private renderQuickActions(rail: HTMLElement) {
@@ -647,6 +646,13 @@ export class DashboardView extends ItemView {
   private renderCenter(body: HTMLElement, data: VaultData) {
     const center = body.createDiv({ cls: "dw-dash-center" });
 
+    // 每日复习卡片
+    this.renderDailyReview(center, data.conceptNotes);
+
+    // 知识领域雷达图
+    this.renderRadarChart(center, data.folderStats);
+
+    // 浮动知识岛屿
     const title = center.createDiv({ cls: "dw-dash-center-title" });
     title.setText("\u{1F331} 知识群岛");
 
@@ -707,6 +713,198 @@ export class DashboardView extends ItemView {
       .replace(/知识库$/, "")
       .replace(/_\d+$/, "")
       .trim();
+  }
+
+  // ---- 知识领域雷达图 ----
+
+  private renderRadarChart(
+    center: HTMLElement,
+    folderStats: { folder: string; noteCount: number; subfolders: number }[]
+  ) {
+    if (folderStats.length < 3) return; // 至少 3 个领域才有意义
+
+    const card = center.createDiv({ cls: "dw-dash-card dw-radar-card" });
+    card.createDiv({ cls: "dw-dash-card-title" }).setText("知识领域雷达");
+
+    // 取前 5 个领域（5 边形雷达图）
+    const domains = folderStats.slice(0, 5);
+    const maxCount = Math.max(...domains.map((d) => d.noteCount), 1);
+
+    const size = 200;
+    const cx = size / 2;
+    const cy = size / 2;
+    const radius = 70;
+    const sides = domains.length;
+    const angleStep = (Math.PI * 2) / sides;
+    const startAngle = -Math.PI / 2; // 从正上方开始
+
+    const svg = card.createSvg("svg");
+    svg.setAttribute("viewBox", `0 0 ${size} ${size}`);
+    svg.setAttribute("width", "100%");
+    svg.setAttribute("height", String(size));
+
+    // 背景多边形网格（4 层）
+    for (let layer = 4; layer >= 1; layer--) {
+      const r = (radius * layer) / 4;
+      const points: string[] = [];
+      for (let i = 0; i < sides; i++) {
+        const angle = startAngle + i * angleStep;
+        points.push(
+          `${cx + r * Math.cos(angle)},${cy + r * Math.sin(angle)}`
+        );
+      }
+      const poly = svg.createSvg("polygon");
+      poly.setAttribute("points", points.join(" "));
+      poly.setAttribute("fill", "none");
+      poly.setAttribute(
+        "stroke",
+        "var(--background-modifier-border)"
+      );
+      poly.setAttribute("stroke-width", "1");
+      poly.setAttribute("opacity", layer === 4 ? "0.8" : "0.4");
+    }
+
+    // 轴线（从中心到顶点）
+    for (let i = 0; i < sides; i++) {
+      const angle = startAngle + i * angleStep;
+      const line = svg.createSvg("line");
+      line.setAttribute("x1", String(cx));
+      line.setAttribute("y1", String(cy));
+      line.setAttribute("x2", String(cx + radius * Math.cos(angle)));
+      line.setAttribute("y2", String(cy + radius * Math.sin(angle)));
+      line.setAttribute("stroke", "var(--background-modifier-border)");
+      line.setAttribute("stroke-width", "1");
+      line.setAttribute("opacity", "0.4");
+    }
+
+    // 数据多边形
+    const dataPoints: string[] = [];
+    const labelData: {
+      x: number;
+      y: number;
+      name: string;
+      count: number;
+    }[] = [];
+    for (let i = 0; i < sides; i++) {
+      const ratio = domains[i].noteCount / maxCount;
+      const r = radius * ratio;
+      const angle = startAngle + i * angleStep;
+      const x = cx + r * Math.cos(angle);
+      const y = cy + r * Math.sin(angle);
+      dataPoints.push(`${x},${y}`);
+
+      // 标签位置（在顶点外侧）
+      const labelR = radius + 22;
+      labelData.push({
+        x: cx + labelR * Math.cos(angle),
+        y: cy + labelR * Math.sin(angle),
+        name: this.cleanFolderName(domains[i].folder),
+        count: domains[i].noteCount,
+      });
+    }
+
+    const dataPoly = svg.createSvg("polygon");
+    dataPoly.setAttribute("points", dataPoints.join(" "));
+    dataPoly.setAttribute("fill", "var(--interactive-accent)");
+    dataPoly.setAttribute("fill-opacity", "0.2");
+    dataPoly.setAttribute("stroke", "var(--interactive-accent)");
+    dataPoly.setAttribute("stroke-width", "2");
+    dataPoly.setAttribute("stroke-linejoin", "round");
+
+    // 数据点
+    for (const point of dataPoints) {
+      const [px, py] = point.split(",");
+      const dot = svg.createSvg("circle");
+      dot.setAttribute("cx", px);
+      dot.setAttribute("cy", py);
+      dot.setAttribute("r", "3");
+      dot.setAttribute("fill", "var(--interactive-accent)");
+    }
+
+    // 标签
+    for (const label of labelData) {
+      const text = svg.createSvg("text");
+      text.setAttribute("x", String(label.x));
+      text.setAttribute("y", String(label.y + 4));
+      text.setAttribute("text-anchor", "middle");
+      text.setAttribute("font-size", "10");
+      text.setAttribute("fill", "var(--text-normal)");
+      text.setAttribute("font-weight", "600");
+      text.setText(`${label.name} ${label.count}`);
+    }
+  }
+
+  // ---- 每日复习卡片 ----
+
+  private renderDailyReview(
+    center: HTMLElement,
+    conceptNotes: { path: string; name: string }[]
+  ) {
+    const card = center.createDiv({ cls: "dw-dash-card dw-review-card" });
+
+    if (conceptNotes.length === 0) return;
+
+    // 用 localStorage 锁定当天的选择
+    const today = new Date().toISOString().slice(0, 10);
+    const storageKey = `dw-daily-review-${today}`;
+
+    let pickedPath: string;
+    let pickedName: string;
+
+    const stored = localStorage.getItem(storageKey);
+    if (stored) {
+      // 找到对应的笔记
+      const found = conceptNotes.find((n) => n.path === stored);
+      if (found) {
+        pickedPath = found.path;
+        pickedName = found.name;
+      } else {
+        // 存储的笔记可能已删除，重新选择
+        const picked = conceptNotes[0];
+        pickedPath = picked.path;
+        pickedName = picked.name;
+        localStorage.setItem(storageKey, pickedPath);
+      }
+    } else {
+      // 当天第一次：取列表第一项（已随机打乱）
+      const picked = conceptNotes[0];
+      pickedPath = picked.path;
+      pickedName = picked.name;
+      localStorage.setItem(storageKey, pickedPath);
+    }
+
+    // 渲染卡片
+    const header = card.createDiv({ cls: "dw-review-header" });
+    header.createDiv({ cls: "dw-review-icon" }).setText("\u{1F4D8}");
+    header.createDiv({ cls: "dw-review-label" }).setText("今日复习");
+    header.createDiv({ cls: "dw-review-date" }).setText(today);
+
+    const titleEl = card.createDiv({ cls: "dw-review-title" });
+    titleEl.setText(pickedName);
+
+    const hint = card.createDiv({ cls: "dw-review-hint" });
+    hint.setText("点击卡片打开笔记复习 \u2192");
+
+    card.onClickEvent(async () => {
+      const file = this.app.vault.getAbstractFileByPath(pickedPath);
+      if (file && file instanceof TFile) {
+        await this.app.workspace.openLinkText(pickedPath, "", false);
+      }
+    });
+
+    // 换一个按钮
+    const refreshBtn = card.createDiv({ cls: "dw-review-refresh" });
+    refreshBtn.setText("\u{1F504} 换一个");
+    refreshBtn.onClickEvent((e: MouseEvent) => {
+      e.stopPropagation();
+      // 随机选一个不同的
+      const others = conceptNotes.filter((n) => n.path !== pickedPath);
+      if (others.length > 0) {
+        const newPick = others[Math.floor(Math.random() * others.length)];
+        localStorage.setItem(storageKey, newPick.path);
+        this.render();
+      }
+    });
   }
 
   // ---- 右栏 ----
