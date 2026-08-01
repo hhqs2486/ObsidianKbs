@@ -1,0 +1,282 @@
+94 第4 章使用逻辑回归预测IPO 市场 
+上述代码生成图4-18 的输出
+①。 
+图4-18 
+所以，我们可以看到，如果2015 年投资每一个IPO，我们将会忙于投资147 家IPO，
+大约一半使我们挣钱，而另一半使我们损失了钱。整体上还是有利润的，因为盈利IPO 的
+收益最终弥补了损失的钱。当然，这里假设没有交易差额或佣金成本，在现实世界中这些
+都是不可避免的。然而，这显然不是发家致富的法宝，因为平均回报率低于1%。 
+交易差额是指对于目标股票，你尝试买入或卖出的价
+格和订单实际执行价格之间的差异。
+让我们看看是否可以使用机器学习来帮助改善这个最基本的方法。一个合理的策略似
+乎是瞄准图4-14 中那长长的右尾，所以我们将聚焦于此。 
+4.2 特征工程 
+在交易开始后，什么会影响股票的表现？最近整体市场的表现，或者是承销商的威望
+都可能会影响它。也许交易日的星期几或月份很重要。在模型中考虑和囊括这些因素被称
+为特征工程，而且特征的建模几乎和用于构建模型的数据一样重要。如果你的特征没有信
+息含量，那么模型根本不会有价值。
+让我们开始这个过程，添加一些我们觉得可能会影响IPO 表现的特征。 
+先从获取标普500 指数的数据开始。这可能是普通美国市场最好的代表。我们可以从
+Yahoo! 
+Finance
+下
+载
+，
+网
+址
+是
+https://finance.yahoo.com/q/hp?s=%5EGSPC&a=00&b=1&c=2000&d=11&e=1
+7&f=2015&g=d。然后，我们可以使用pandas 导入数据。
+ 
+①译者注：该图中的min 和图4-15 中的min 应该一致，可能是笔误。
+
+4.2 特征工程 95 
+sp = pd.read_csv(r'/Users/alexcombs/Downloads/spy.csv') 
+sp.sort_values('Date', inplace=True)  
+sp.reset_index(drop=True, inplace=True)  
+sp 
+上述代码生成图4-19 的输出。 
+图4-19 
+因为整体市场在过去一周的表现会在逻辑上影响某个股票，因此让我们将其添加到这里
+的DataFrame 中。我们将计算标普500 昨日收盘价相对于其七天前收盘价的变化百分比。
+ 
+def get_week_chg(ipo_dt):  
+try:  
+day_ago_idx = sp[sp['Date']==str(ipo_dt.date())].index[0] - 1  
+week_ago_idx = sp[sp['Date']==str(ipo_dt.date())].index[0] - 8  
+chg = (sp.iloc[day_ago_idx]['Close'] - \  
+sp.iloc[week_ago_idx]['Close'])/(sp.iloc[week_ago_idx]['Close']) 
+return chg * 100  
+except:  
+print('error', ipo_dt.date())  
+ipos['SP Week Change'] = ipos['Date'].map(get_week_chg) 
+上述代码生成图4-20 的输出。 
+运行代码后，系统提示我们有几个日期对应的数据执行失
+败了，这表明IPO 的日期可能存在一些错误。检查这些日期相
+关的IPO 发现它们当天是关闭的状态。这里是纠正错误的一
+个示例和代码。
+ipos[ipos['Date']=='2009-08-01'] 
+上述代码生成图4-21 的输出。 
+图4-20 
+
+96 第4 章使用逻辑回归预测IPO 市场 
+图4-21 
+EM 的实际IPO 日期是2009 年的8 月12 日，所以将其纠正，此外，经过一番研究，
+我们也发现了其他错误数据的真正发行日期并做了修正。
+ipos.loc[1175, 'Date'] = pd.to_datetime('2009-08-12') 
+ipos.loc[1660, 'Date'] = pd.to_datetime('2012-11-20') 
+ipos.loc[2251, 'Date'] = pd.to_datetime('2015-05-21') 
+ipos.loc[2252, 'Date'] = pd.to_datetime('2015-05-21') 
+再次运行该函数，它将正确地添加所有发行股票的一周变化情况。
+ipos['SP Week Change'] = ipos['Date'].map(get_week_chg) 
+现在，让我们添加一项新的指标，即标准普尔500 指数在IPO 前一天收盘时到IPO 首
+日开盘时这个期间内，变化的百分比。
+def get_cto_chg(ipo_dt):  
+try:  
+today_open_idx = sp[sp['Date']==str(ipo_dt.date())].index[0]  
+yday_close_idx = sp[sp['Date']==str(ipo_dt.date())].index[0] - 1  
+chg = (sp.iloc[today_open_idx]['Open'] - \  
+sp.iloc[yday_close_idx]['Close'])/(sp.iloc[yday_close_idx]['Close']) 
+return chg * 100  
+except:  
+print('error', ipo_dt)  
+ipos['SP Close to Open Chg Pct'] = ipos['Date'].map(get_cto_chg) 
+上述代码生成图4-22 的输出。 
+图4-22 
+
+4.2 特征工程 97 
+现在，让我们来整理承销商的数据。这需要一些工作量。我们将执行一系列的步骤。
+首先，为主承销商添加一列。接下来，会对数据进行标准化。最后，我们将添加一列，表
+示参与承销商的总数。
+首先，我们通过数据中字符串的拆分和空格的删除，解析出主承销商。
+ipos['Lead Mgr'] = ipos['Lead/Joint-Lead Mangager'].map(lambda x: 
+x.split('/')[0])
+ipos['Lead Mgr'] = ipos['Lead Mgr'].map(lambda x: x.strip()) 
+接下来，打印出不同的主承销商，这样可以看出为了规范银行的名称，需要进行多少
+清理工作。
+for n in pd.DataFrame(ipos['Lead Mgr'].unique(), 
+columns=['Name']).sort('Name')['Name']:  
+print(n) 
+上述代码生成图4-23 的输出。 
+图4-23 
+有两种方法可以做到这一点。第一种方法，毫无疑问是两个方法中更容易的那个，就
+是相信我们为你所做的工作，只是复制和粘贴下面的代码。另一种方法是执行大量迭代的
+字符串部分匹配，并且由你自己来纠正。强烈建议使用第一种选项。
+ipos.loc[ipos['Lead Mgr'].str.contains('Hambrecht'),'Lead Mgr'] = 'WR 
+Hambrecht+Co.' 
+ipos.loc[ipos['Lead Mgr'].str.contains('Edwards'), 'Lead Mgr'] = 'AG  
+Edwards'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Edwrads'), 'Lead Mgr'] = 'AG  
+
+98 第4 章使用逻辑回归预测IPO 市场 
+Edwards'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Barclay'), 'Lead Mgr'] = 'Barclays' 
+ipos.loc[ipos['Lead Mgr'].str.contains('Aegis'), 'Lead Mgr'] = 'Aegis  
+Capital'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Deutsche'), 'Lead Mgr'] = 'Deutsche 
+Bank'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Suisse'), 'Lead Mgr'] = 'CSFB'  
+ipos.loc[ipos['Lead Mgr'].str.contains('CS.?F'), 'Lead Mgr'] = 'CSFB'  
+ipos.loc[ipos['Lead Mgr'].str.contains('^Early'), 'Lead Mgr'] =  
+'EarlyBirdCapital'  
+ipos.loc[325,'Lead Mgr'] = 'Maximum Captial'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Keefe'), 'Lead Mgr'] = 'Keefe,  
+Bruyette & Woods'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Stan'), 'Lead Mgr'] = 'Morgan  
+Stanley'  
+ipos.loc[ipos['Lead Mgr'].str.contains('P. Morg'), 'Lead Mgr'] = 'JP Morgan' 
+ipos.loc[ipos['Lead Mgr'].str.contains('PM'), 'Lead Mgr'] = 'JP Morgan'  
+ipos.loc[ipos['Lead Mgr'].str.contains('J\.P\.'), 'Lead Mgr'] = 'JP Morgan' 
+ipos.loc[ipos['Lead Mgr'].str.contains('Banc of'), 'Lead Mgr'] = 'Banc of 
+America'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Lych'), 'Lead Mgr'] = 'BofA Merrill 
+Lynch'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Merrill$'), 'Lead Mgr'] = 'Merrill 
+Lynch'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Lymch'), 'Lead Mgr'] = 'Merrill  
+Lynch'  
+ipos.loc[ipos['Lead Mgr'].str.contains('A Merril Lynch'), 'Lead Mgr'] =  
+'BofA Merrill Lynch'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Merril '), 'Lead Mgr'] = 'Merrill 
+Lynch'  
+ipos.loc[ipos['Lead Mgr'].str.contains('BofA$'), 'Lead Mgr'] = 'BofA  
+Merrill Lynch'  
+ipos.loc[ipos['Lead Mgr'].str.contains('SANDLER'), 'Lead Mgr'] = 'Sandler 
+O'neil + Partners'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Sandler'), 'Lead Mgr'] = 'Sandler 
+O'Neil + Partners'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Renshaw'), 'Lead Mgr'] = 'Rodman & 
+Renshaw'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Baird'), 'Lead Mgr'] = 'RW Baird' 
+ipos.loc[ipos['Lead Mgr'].str.contains('Cantor'), 'Lead Mgr'] = 'Cantor  
+Fitzgerald'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Goldman'), 'Lead Mgr'] = 'Goldman 
+Sachs'  
+
+4.2 特征工程 99 
+ipos.loc[ipos['Lead Mgr'].str.contains('Bear'), 'Lead Mgr'] = 'Bear  
+Stearns'  
+ipos.loc[ipos['Lead Mgr'].str.contains('BoA'), 'Lead Mgr'] = 'BofA Merrill 
+Lynch'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Broadband'), 'Lead Mgr'] =  
+'Broadband Capital'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Davidson'), 'Lead Mgr'] = 'DA  
+Davidson'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Feltl'), 'Lead Mgr'] = 'Feltl & Co.' 
+ipos.loc[ipos['Lead Mgr'].str.contains('China'), 'Lead Mgr'] = 'China  
+International'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Cit'), 'Lead Mgr'] = 'Citigroup' 
+ipos.loc[ipos['Lead Mgr'].str.contains('Ferris'), 'Lead Mgr'] = 'Ferris  
+Baker Watts'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Friedman|Freidman|FBR'), 'Lead  
+Mgr'] = 'Friedman Billings Ramsey'  
+ipos.loc[ipos['Lead Mgr'].str.contains('^I-'), 'Lead Mgr'] = 'I-Bankers' 
+ipos.loc[ipos['Lead Mgr'].str.contains('Gunn'), 'Lead Mgr'] = 'Gunn Allen' 
+ipos.loc[ipos['Lead Mgr'].str.contains('Jeffer'), 'Lead Mgr'] = 'Jefferies' 
+ipos.loc[ipos['Lead Mgr'].str.contains('Oppen'), 'Lead Mgr'] =  
+'Oppenheimer'  
+ipos.loc[ipos['Lead Mgr'].str.contains('JMP'), 'Lead Mgr'] = 'JMP  
+Securities'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Rice'), 'Lead Mgr'] = 'Johnson  
+Rice'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Ladenburg'), 'Lead Mgr'] =  
+'Ladenburg Thalmann'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Piper'), 'Lead Mgr'] = 'Piper  
+Jaffray'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Pali'), 'Lead Mgr'] = 'Pali  
+Capital'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Paulson'), 'Lead Mgr'] = 'Paulson 
+Investment Co.'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Roth'), 'Lead Mgr'] = 'Roth  
+Capital'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Stifel'), 'Lead Mgr'] = 'Stifel  
+Nicolaus'  
+ipos.loc[ipos['Lead Mgr'].str.contains('SunTrust'), 'Lead Mgr'] = 'SunTrust 
+Robinson'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Wachovia'), 'Lead Mgr'] =  
+'Wachovia'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Wedbush'), 'Lead Mgr'] = 'Wedbush 
+Morgan'  
+
+100 第4 章使用逻辑回归预测IPO 市场 
+ipos.loc[ipos['Lead Mgr'].str.contains('Blair'), 'Lead Mgr'] = 'William  
+Blair'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Wunderlich'), 'Lead Mgr'] =  
+'Wunderlich'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Max'), 'Lead Mgr'] = 'Maxim Group' 
+ipos.loc[ipos['Lead Mgr'].str.contains('CIBC'), 'Lead Mgr'] = 'CIBC'  
+ipos.loc[ipos['Lead Mgr'].str.contains('CRT'), 'Lead Mgr'] = 'CRT Capital' 
+ipos.loc[ipos['Lead Mgr'].str.contains('HCF'),'Lead Mgr'] = 'HCFP Brenner' 
+ipos.loc[ipos['Lead Mgr'].str.contains('Cohen'), 'Lead Mgr'] = 'Cohen & Co.' 
+ipos.loc[ipos['Lead Mgr'].str.contains('Cowen'), 'Lead Mgr'] = 'Cowen & Co.' 
+ipos.loc[ipos['Lead Mgr'].str.contains('Leerink'), 'Lead Mgr'] = 'Leerink 
+Partners'  
+ipos.loc[ipos['Lead Mgr'].str.contains('Lynch\xca'), 'Lead Mgr'] = 'Merrill 
+Lynch' 
+此过程完成之后，你可以再次运行以下代码来查看更新后的列表。
+for n in pd.DataFrame(ipos['Lead Mgr'].unique(), 
+columns=['Name']).sort_values('Name')['Name']:  
+ print(n) 
+上述代码生成图4-24 的输出。 
+图4-24 
+我们可以看到，列表现在是整齐划一的了。这点完成后，我们将增加承销商的数量。
+ipos['Total Underwriters'] = ipos['Lead/Joint-Lead Mangager'].map(lambda x: 
+len(x.split('/'))) 
+
+4.2 特征工程 101 
+接下来，我们将添加几个日期相关的特征。这里加入星期几和月份。
+ipos['Week Day'] = ipos['Date'].dt.dayofweek.map({0:'Mon', 1:'Tues',  
+2:'Wed',\  
+3:'Thurs', 4:'Fri', 5:'Sat', 6:'Sun'})  
+ipos['Month'] = ipos['Date'].map(lambda x: x.month)  
+ipos['Month'] = ipos['Month'].map({1:'Jan', 2:'Feb', 3:'Mar', 4:'Apr', 
+5:'May', 6:'Jun',7:'Jul',\  
+8:'Aug', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dec'})  
+ipos 
+上述代码生成图4-25 的输出。 
+图4-25 
+如果所有的事情都是按预期进行，我们的DataFrame 应该看起来像图4-25 那样。我
+们现在补充几个最终的特征，涉及发行价和开盘价之间的变化，以及发行价和收盘价之间
+的变化。
+ipos['Gap Open Pct'] = (ipos['$ Chg Opening'].astype('float')/ipos['Opening 
+Price'].astype('float')) * 100  
+ipos['Open to Close Pct'] = (ipos['$ Chg Close'].astype('float') -\  
+ipos['$ Chg Opening'].astype('float'))/\  
+ipos['Opening Price'].astype('float') * 100  
+现在，特征准备就绪了。如果遇到我们认为有用的、可能会改善模型的数据，我们总
+是可以加入更多的特征。不过，在这里让我们以这些特征开始。
+将这些特征提供给模型之前，我们需要考虑选择哪些特征。我们必须非常小心，不要
+在添加时特征时“泄露”了信息。这是一个常见的错误，当向模型提供信息的时候，所用
+的数据在当时其实是无法获得的，这时候就会发生信息“泄露”。例如，将收盘价添加到我
+们的模型将使结果完全无效。如果这样做，实际上我们是为模型提供了它试图预测的答案。
+
+102 第4 章使用逻辑回归预测IPO 市场 
+通常，泄露的错误比这个例子更微妙一些，但无论如何，我们需要注意这点。
+我们将添加以下特征。
+•月份（Month）。
+•星期几（Week Day）。
+•主要承销商（Lead Mgr）。
+•承销商总数（Total Underwriters）。
+•发行价到开盘价的差距百分比（Gap Open Pct）。
+•发行价到开盘价的美元变化量（$ Chg Opening）。
+•发行价（Offer Price）。
+•开盘价（Opening Price）。
+•标准普尔指数从收盘到开盘的变化百分比（SP Close to Open Chg Pct）。
+•标准普尔指数前一周的变化（SP Week Change）。
+完善模型所需的全部特征后，我们将其准备好以供模型使用。我们将使用Patsy 库。
+如果需要，可以使用pip 安装Patsy。Patsy 以原始的形式获取数据，并将其转换为适用
+于统计模型构建的矩阵。
+from patsy import dmatrix  
+X = dmatrix('Month + Q("Week Day") + Q("Total Underwriters") + Q("Gap Open 
+Pct") + Q("$ Chg Opening") +\  
+Q("Lead Mgr") + Q("Offer Price") + Q("Opening Price") +\ 
+Q("SP Close to Open Chg Pct") + Q("SP Week Change")', data=ipos,  
+return_type='dataframe')  
+X 
+上述代码生成图4-26 的输出。 
+我们可以看到Patsy 已经将分类型数据重新配置为多列，而将连续的数据保存在单个
+列中。这种操作被称为虚构编码。在这种格式中，每个月都会得到属于自己的列。对于每
+个代理而言同样如此。例如，如果特定的IPO 样例（某一行）在May 这个月发行，那么它
+在May 这个列的值就为1，而该行所有其他月份的列值都为0。对于分类型的特征，总是
+有n-1 个特征列。被排除的列成为了基线，而其他的将和这个基线进行比较。 
+最后，Patsy 还添加了一个截距列。这是回归模型正常运行所需的第一个列。

@@ -1,0 +1,256 @@
+Basic QML tutorial examples
+This section should give you a short overview with code examples on how to do 
+simple things with PySide and QML. More examples can be found on the 
+homepage of this tutorial on http://thp.io/2010/meego-python/ 
+Hello World
+This example shows you how to create a minimalistic Hello world QML 
+application with Python. We already subclass QObject here and provide a 
+simple property ('greeting') that we can then access from QML. Let's dive right 
+into the source code.
+The Python source (HelloMeeGo.py)
+For our first hello world program, we want to generate a greeting in Python and 
+show it in a QML UI. We do this by subclassing QObject, giving our subclass a 
+property called “greeting” and exposing an instance of that object to the QML 
+root context, where we can access it from the QML file.
+# -*- coding: utf-8 -*-
+import sys
+from PySide.QtCore import *
+from PySide.QtGui import *
+from PySide.QtDeclarative import *
+
+We need the “sys” module (a Python standard module) to access the command 
+line arguments (we need to pass them to the constructor of QApplication). From 
+PySide, we need QtCore (which contains core objects, like QObject in our 
+example) and QtGui (which contains Qapplication, which we need for the Qt 
+main loop). The QML view is provided by the QtDeclarative module – it provides 
+QDeclarativeView.
+class Hello(QObject):
+    def get_greeting(self):
+        return u'Hello, Meego!'
+    greeting = Property(unicode, get_greeting)
+This is the definition of our “Hello” class – we provide a getter method for the 
+greeting, and return a unicode string “Hello, MeeGo!” in it – if you want, you 
+can also customize this greeting, i.e. add the time and date using the 
+“datetime” Python module. In order for QML to be able to access this property, 
+we have to declare it as such by using “Property” (which is in QtCore). The first 
+parameter of Property is the type (unicode means unicode string) and the 
+second one is the getter method – if you want the property to be modifyable, 
+you need to add a setter method, and if you want it to be dynamically updated, 
+you also need a notifyable property.
+app = QApplication(sys.argv)
+hello = Hello()
+view = QDeclarativeView()
+Here we create instances of the classes we need:
+•
+QApplication is needed by every Qt application and handles command-
+line arguments, sets up the graphics system and does other 
+initializations. It also provides the main loop through the “exec_” method.
+•
+Hello is our class defined above. We create an instance of it that we later 
+pass to QML using context properties.
+•
+QDeclarativeView is the window / view in which we can load QML content 
+and display it on the screen.
+context = view.rootContext()
+context.setContextProperty('hello', hello)
+For QML to be able to access our “hello” object, we need to expose it as a 
+context property to the view's root context – this is done using 
+setContextProperty. As property name we use “hello”, so we can access the 
+greeting of that object later using “hello.greeting” in QML.
+view.setSource(__file__.replace('.py', '.qml'))
+Here the QML file is loaded and displayed in the view. As the QML file has the 
+same name as our Python script (just a different file extension), we can use 
+__file__.replace('.py', '.qml') to always get the correct file name – this also 
+allows you to easily rename both files and still have them work together as 
+expected (for example, if you want to try to create different variants of this 
+example).
+view.show()
+app.exec_()
+
+And finally, here our application starts: We always have to call the show() 
+method on the view, or otherwise it won't be shown on the screen. If you want 
+to show the window in fullscreen mode, use “showFullScreen” here – try it out!
+In order to start the Qt main loop and process events, we have to call 
+app.exec_(), so the application does not quit. This is very important.
+The QML UI file (HelloMeeGo.qml)
+The UI definition is placed in “.qml” files – these have JavaScript-like syntax, 
+and describe the appearance of your application. In our case, we simply want 
+to have a red rectangle in which we place the greeting in a white font.
+import Qt 4.7
+In order to use the built-in QML components like “Rectangle” and “Text”, we 
+need to import the Qt 4.7 module into our QML file. In future versions of Qt 
+(4.7.1 and newer), this will be called QtQuick 1.0, but for now, it's called Qt 4.7, 
+and this is what you have to use.
+Rectangle {
+    color: "red"
+    width: 500
+    height: 500
+    Text {
+        anchors.centerIn: parent
+        font.pointSize: 32
+        color: "white"
+        text: hello.greeting
+    }
+}
+The root object is a 400x400 pixel, red rectangle, which contains a child Text 
+component that is centered into its parent (i.e. the red rectangle). The text is 
+32pt in size and has a white color. Its text is taken from the “hello” object (our 
+Python object instance) as the “greeting” property (which we have defined in 
+the Python source code).
+Save these two files and start the example using  “python HelloMeeGo.py”. You 
+should see a window like the one in the screenshot above. Try it out, and 
+experiment with changing some properties.
+
+Displaying HTML content in a QML WebView
+This short tutorial shows you how to combine the powers of Python, QML, HTML 
+and JavaScript to create good-looking, rich web applications or 
+netbook/handset applications that can display web content. This application 
+consists of three files: The Python source, the HTML content and the QML view 
+(but as most of the interaction takes place in Python and HTML, the QML is 
+really short). This example has been ported from my other PySide/QML 
+examples to MeeGo, and the transition was very easy, as PySide code is very 
+portable across devices.
+The Python source code (WebKitView.py)
+What we need in the Python world is a way to send data to the HTML view, and 
+also a way to receive the data – this is done by evaluating JavaScript code 
+inside the WebView and by listening to “alert()” calls from the web view. 
+Communication happens by using JSON to encode data structures, as alert() 
+does not allow to send arbitrary data.
+# -*- coding: utf-8 -*-
+import sys
+import time
+try:
+    import simplejson as json
+except ImportError:
+    import json
+from PySide import QtCore, QtGui, QtDeclarative
+
+We need the standard Python modules “sys” and “time”, and the Python json 
+module (included in the Python version shipped with MeeGo Netbook 1.1) to 
+encode and decode JSON data in Python. From PySide, we need our “usual 
+suspect” modules – QtCore, QtGui and QtDeclarative. These three modules are 
+always needed when you want to do something with PySide and QML.
+def sendData(data):
+    global rootObject
+    print 'Sending data:', data
+    json_str = json.dumps(data).replace('"', '\\"')
+    rootObject.evaluateJavaScript('receiveJSON("%s")' % json_str)
+In order to send data to the WebView, we need to get a reference to the root 
+object of our QML (the root object is the web view) and then evaluate some 
+javascript inside it. The assumption here is that our HTML file has a 
+“receiveJSON” function declared in its JavaScript code which receives the data 
+and handles it. See below for what the receiveJSON function does in the HTML 
+code.
+def receiveData(json_str):
+    global rootObject
+    data = json.loads(json_str)
+    print 'Received data:', data
+    if len(data) == 2 and data[0] == 'setRotation':
+        animation = QtCore.QPropertyAnimation(rootObject, 'rotation', rootObject)
+        animation.setDuration(3000)
+        animation.setEasingCurve(QtCore.QEasingCurve.InOutElastic)
+        animation.setEndValue(data[1])
+        animation.start(QtCore.QAbstractAnimation.DeleteWhenStopped)
+    else:
+        sendData({'Hello': 'from PySide', 'itsNow': int(time.time())})
+The receiving of data from HTML is done by the receiveData function – it will be 
+connected to the “alert” signal of the WebView, which gets sent when “alert()” 
+is called from somewhere inside the WebView. What this does is decode the 
+received string from JSON to a Python data structure and then check the 
+contents of the received data – if it's a two-item list, and the first item is a 
+string “setRotation”, we interpret the second value as the target rotation value, 
+and use a QPropertyAnimation on the root object to rotate the QML component 
+inside the QML view – because all QML components have standard Qt 
+properties that can be animated! If it's not a request for rotation, we simply 
+send an arbitrary data structure to the HTML view as a “reply”.
+app = QtGui.QApplication(sys.argv)
+view = QtDeclarative.QDeclarativeView()
+view.setRenderHints(QtGui.QPainter.SmoothPixmapTransform)
+view.setSource(__file__.replace('.py', '.qml'))
+rootObject = view.rootObject()
+rootObject.setProperty('url', __file__.replace('.py', '.html'))
+rootObject.alert.connect(receiveData)
+view.show()
+app.exec_()
+This code creates instances of the QApplication and the QDeclarativeView. The 
+SmoothPixmapTransform render hint makes the rotated web view look 
+smoother and not so pixellated. We then load the QML file and set the “url” 
+property of our root object (a WebView) to point to the HTML file in the same 
+directory. We also need to hook up the “alert” signal of the root object to our 
+custom callback “receiveData” to handle data sent from the HTML.
+
+As always, we need to show the view (so it gets displayed on the screen) and 
+finally call “exec_” on the QApplication instance in order to start the Qt main 
+loop.
+The QML content (WebKitView.qml)
+This is very, very short and shows just how easy it is to create a WebView in 
+QML – first, you need to import QtWebKit 1.0, as the WebView component is not 
+included in the default Qt QML module. Then, we create a WebView component 
+as our root object, enable javascript for it (otherwise we won't be able to run 
+any JavaScript inside it – it's disabled by default) and resize it to 400x280. We 
+do not yet set the “url” property of it to load the HTML, but instead we do that 
+directly from our Python code (see above) to show you how to modify 
+properties in QML components directly from Python code.
+import QtWebKit 1.0
+WebView { settings.javascriptEnabled: true; width: 400; height: 280 }
+The HTML page (WebKitView.html)
+This is the HTML content that gets rendered in the WebView QML component. 
+We need to have some JavaScript in its head (which is the most interesting part 
+here) that is capable of sending and receiving data to and from our Python 
+code, so we can connect both worlds and send commands and data back and 
+forth.
+<html>
+    <head>
+        <script type="text/javascript">
+            function sendJSON(data) {
+                alert(JSON.stringify(data));
+            }
+The sendJSON function accepts arbitrary JavaScript data structures (e.g. arrays) 
+and encodes them with JSON and then uses “alert()” to send it to Python.
+            function receiveJSON(data) {
+                element = document.getElementById('received');
+                element.innerHTML += "\n" + data;
+            }
+The receiveJSON function gets called from the Python code directly and 
+receives one string (already in JavaScript data format, not encoded in JSON) 
+and adds it to our HTML document. We could do more sophisticated processing 
+of the data here if need be.
+            function setRotation() {
+                element = document.getElementById('rotate');
+                angle = parseInt(element.value);
+                message = ['setRotation', angle];
+                sendJSON(message);
+            }
+This is a convenience function used by the HTML below to create a “set 
+rotation” command message to be sent to the Python code. It's a simple two-
+element list with “setRotation” as first element and the angle as second 
+
+element. The angle is taken from the input element on the web page.
+            function sendStuff() {
+                sendJSON([42, 'PySide', 1.23, true, {'a':1,'b':2}]);
+            }
+This is similar to the setRotation function ,and simply sends some arbitrary 
+data to the Python side (where it gets printed and answered to with a reply 
+message, which is received using receiveJSON above).
+        </script>
+    </head>
+    <body style="background-color: white;">
+        <h2>PySide, QML and WebKit on MeeGo</h2>
+        <p>
+        Set rotation:
+        <input type="text" size="5" id="rotate" value="10"/>
+        <button onclick="setRotation();">Click me now!</button>
+        </p>
+        <p>
+        Send arbitrary data structures:
+        <button onclick="sendStuff();">No, click me!</button>
+        </p>
+        <p>Received stuff:</p>
+        <pre id="received"></pre>
+    </body>
+</html>
+And finally, here is the HTML content of the web page (the part that gets 
+displayed on the screen – we have a heading, two paragraphs and some form 
+elements like a text entry box and buttons, which carry out the requested 
+actions when clicked. These fields make use of the JavaScript functions defined 
+above.

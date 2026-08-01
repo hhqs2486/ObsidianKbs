@@ -1,0 +1,1640 @@
+第       章 
+体渲染 
+MRI 和CT 扫描这样的诊断过程会创建体数据，它由一组二维图
+像来表示通过三维物体的截面。体绘制是一种计算机图形技术，
+利用这种类型的体数据来构造三维图像。虽然体绘制通常用于分
+析医学扫描，但也可以用于地质、考古和分子生物学等学科，生
+成三维科学可视化效果。
+由MRI 和CT 扫描记录的数据通常采取Nx×Ny×Nz 的三维
+网格形式，或Nz 个二维“切片”，其中每个切片是大小为Nx×Ny 的图像。体绘制
+算法采用某种类型的透明度，来展示采集切片数据，并采用各种技术来强调被渲染
+物体中关注的部分。
+本项目将探讨名为“体光线投射（volume ray casting）”的体绘制算法，它充
+分利用图形处理单元（GPU），用OpenGL 着色语言（GLSL）的着色器来进行计
+算。代码针对屏幕上的每个像素执行，并利用了GPU，其目的是有效地进行并行
+计算。利用二维图像文件夹中包含的三维数据集切片，用体光线投射算法，构建
+体渲染图像。我们还会实现一种方法，显示在x、y、z 方向上的二维切片数据，
+以便用户可以通过箭头键来滚动切片。键盘命令让用户在三维渲染和二维切片之
+间切换。
+11 
+
+174 Python 极客项目编程 
+下面是本项目涉及的一些主题：
+•
+用GLSL 进行GPU 计算；
+•
+创建顶点和片段着色器；
+•
+表示三维立体数据，并使用体光线投射算法；
+•
+用numpy 数组表示三维变换矩阵。
+11.1  工作原理 
+有许多方式来渲染三维数据集。本项目将使用体光线投射的方法，它是基于图
+像的渲染技术，从二维切片逐个像素地生成最终图像的。与此形成对比的是，典型
+的三维渲染方法是基于对象的：它们开始用三维对象表示，然后应用变换来生成投
+射的二维图像中的像素。
+在本项目用到的体光线投射方法中，对于输出图像中的每个像素，一束光线射
+入离散的三维体数据集，其通常表示为一个长方体。随着光线穿过物体，数据以一
+定的间隔采样，样本被组合（或“合成”）来计算最终图像的颜色值或强度（你可
+以认为这个过程类似于堆叠一些透明胶片，将它们放在强光下，看到所有的胶片组
+合的效果）。
+体光线投射渲染的实现通常使用一些技术，如采用梯度改进最终渲染的外观，
+用过滤来分离三维特征，用空间优化技术以提高速度，但我们只实现基本的光线投
+射算法，通过x射线投射合成最终图像（我的实现，主要基于2003 年Kruger和
+Westermann在该主题上的开创性论文
+①
+11.1.1  数据格式 
+）。 
+本项目将使用来自斯坦福体数据档案（Stanford Volume Data Archive）的三维扫
+描医学数据
+②
+①J. Kruger and R. Westermann, “Acceleration Techniques for GPU-based Volume Rendering,” IEEE Visualization, 2003. 
+②http://graphics.stanford.edu/data/voldata/ 
+。该档案提供了一些极好的三维医学数据集的TIFF图像（包括CT和
+MRI），每张图像表示该物体的每个二维横截面。我们将读入文件夹中的这些图像，
+作为OpenGL三维纹理。这有点像堆叠一系列二维图像，形成一个长方体，如图11-1
+所示。
+回顾第9 章，OpenGL 中的二维纹理是由一个二维坐标（s，t）定位的。类似
+地，三维纹理用三维纹理坐标定位，形如（s，t，p）。如你所见，将体数据保存为
+三维纹理，可以让你快速访问数据，并提供光线投射方案所需的插值。
+
+第11 章  体渲染 175 
+图11-1  从二维切片建立三维立体数据 
+11.1.2  生成光线 
+该项目的目标是生成三维体数据的透视投影，如图11-2 所示。 
+图11-2 展示了OpenGL 视锥，这在第9 章讨论过。具体来说，它展示了来自眼
+睛的光线如何从近裁剪平面进入此锥体，通过立方状的物体（其中包含体数据），
+并从后面的远裁剪平面出去。
+图11-2  三维体数据透视投影 
+
+176 Python 极客项目编程 
+为了实现光线投射，需要生成进入物体的光线。对于图11-2 所示的输出窗口中的
+每个像素，生成一个向量R，它进入我们作为单位立方体的物体中（我称之为彩色立
+方体），该立方体在坐标（0，0，0）和（1，1，1）之间。这个立方体中的每个点的颜
+色，其RGB 值等于它的三维坐标。原点颜色为（0，0，0），即黑色。（1，0，0）角是
+红色，与原点相对的顶点颜色为（1，1，1），即白色。图11-3 展示了这个立方体。 
+图11-3  彩色立方体 
+注意
+在OpenGL 中，颜色可以表示为一串8 位无符号值(r, g, b)，其中r、g 和b
+的范围是[0，255]。它也可以表示为32 位的浮点值(r, g, b)，其中r、g 和b 的范
+围是[0.0，1.0]。这些表示是等效的。例如，前一种的红色（255，0，0）等同于
+后一种的（1.0，0.0，0.0）。 
+要绘制立方体，先用OpenGL 图元GL_TRIANGLES 绘制它的6 个面。然后确
+定每个顶点的颜色，并在多边形光栅化、生成顶点之间的颜色时，利用OpenGL 提
+供的插值。例如，如图11-4（A）展示了立方体的三个正面。图11-4（B）将OpenGL
+设置为剔除正面，绘制了立方体的背面。
+如果从图11-4（B）中减去图11-4（A）中的颜色，即从(r, g, b)back 减去(r, g, 
+b)front，实际上计算了一组向量，从立方体的正面指向背面，因为该立方体上每
+点的颜色(r, g, b)与三维坐标相同。图11-4（C）展示了结果（为了展示，负值已
+经翻转为正，因为负数不能直接显示为颜色）。读取一个像素的颜色值(r, g, b)，
+如图11-4（C）所示，得到（rx, ry, rz）坐标，即在这一点穿透物体的光线。 
+有了投射光线后，将它们渲染成一张图或二维纹理，稍后与OpenGL 的帧缓冲
+对象（FBO）功能一起使用。产生这个纹理之后，可以在实现光线投射算法的着色
+器内访问它。
+
+第11 章  体渲染 177 
+图11-4  用于计算光线的颜色立方体 
+GPU 中的光线投射 
+为了实现光线投射算法，首先将彩色立方体的背面绘制到FBO。接着，将正面
+绘制在屏幕上。光线投射算法的主要部分发生在片段着色器中，进行这种二次渲染，
+针对输出的每个像素进行。光线的计算是用颜色立方体的背面颜色减去传入片段的
+正面颜色，背面颜色是从纹理中读取的。然后将计算好的光线累加，并利用着色器
+中可用的三维体纹理数据，计算最终的像素值。
+背面剔除
+在OpenGL 中，如果要画四边形这样的图元，指定顶点的顺序很重要。默认情
+况下，OpenGL 假定用GL_CCW（逆时针）的顺序。对于逆时针顺序的图元，法矢
+量将指向多边形的“外面”。如果试图绘制封闭区域的几何图形，如立方体，这就有
+关系了。为了优化渲染，你不用绘制看不见的面，只要打开OpenGL 的“背面剔除
+（back-face culling）”，计算观看方向向量与多边形法向量的点积。对于朝向背面的多
+边形，点积是负的，这些面可以丢弃。OpenGL 也提供了一种简单的方法来做相反
+的事，即正面剔除，这就是我们在算法要用到的。
+显示二维切片 
+除了三维渲染，也可以显示数据的二维切片，做法是从三维数据中提取垂直于
+x 轴、y 轴或z 轴的二维横截面，并将它作为一个四边形的纹理。因为我们将物体
+保存为三维纹理，所以很容易通过指定纹理坐标（s, t, p）得到所需的数据。OpenGL
+内置的纹理插值可以给出三维纹理内任意位置的纹理值。
+11.1.3  显示OpenGL 窗口 
+像其他OpenGL 项目一样，本项目用GLFW 库来显示OpenGL 窗口。我们用处
+理程序来绘制，响应调整窗口大小和键盘事件。我们将利用键盘事件在体渲染和切
+片渲染之间切换，以及实现穿过三维数据的旋转和切片。
+
+178 Python 极客项目编程 
+11.2  所需模块 
+我们用PyOpenGL 进行渲染，它是流行的OpenGL 的Python 绑定。我们还用
+numpy 数组来表示三维坐标和变换矩阵。 
+11.3  项目代码概述 
+我们首先从体数据生成三维纹理，数据是从文件读入的。接下来，我们分析颜
+色立方体技术，用于生成从眼睛指向物体的光线，这是实现体光线投射算法的关键
+概念。我们将分析如何定义立方体的几体形状，如何绘制该立方体的背面和正面。
+然后，我们将探索体积光线投射算法，以及相关的顶点和片段着色器。最后，我们
+将学习如何实现体数据的二维切片。
+该项目有7 个Python 文件： 
+glutils.py 包含针对OpenGL 着色器、转换和其他相关工具方法； 
+makedata.py 包含创建测试体数据的工具方法； 
+raycast.py 实现了RayCastRender 类，用于光线投射； 
+raycube.py 实现了RayCastRender 中使用的RayCube 类； 
+slicerender.py 实现了SliceRender 类，用于体数据的二维切片； 
+volreader.py 包含一个工具方法，读取体数据作为OpenGL 的三维纹理； 
+volrender.py 包含用于创建GLFW 窗口和渲染器的主要方法。 
+除了两个文件之外，本章将介绍所有这些文件。文件makedata.py 和本章中的
+其他项目文件一起放在https://github.com/electronut/pp/tree/master/volrender/。文件
+glutils.py 可以从https://github.com/electronut/pp/tree/master/common/下载。 
+11.4  生成三维纹理 
+第一步是从包含图像的文件夹中读取体数据，如下面代码所示。要查看
+volreader.py 的完整代码，请直接跳到11.5 节。 
+def loadVolume(dirName): 
+ """read volume from directory as a 3D texture""" 
+ # list images in directory 
+ 
+ files = sorted(os.listdir(dirName)) 
+ print('loading images from: %s' % dirName) 
+ imgDataList = [] 
+ count = 0 
+ width, height = 0, 0 
+ for file in files: 
+ 
+ file_path = os.path.abspath(os.path.join(dirName, file)) 
+ try: 
+
+第11 章  体渲染 179 
+ # read image 
+ 
+ img = Image.open(file_path) 
+ imgData = np.array(img.getdata(), np.uint8) 
+ # check if all images are of the same size 
+ 
+ if count is 0: 
+ width, height = img.size[0], img.size[1] 
+   imgDataList.append(imgData) 
+ else: 
+ 
+ if (width, height) == (img.size[0], img.size[1]): 
+ imgDataList.append(imgData) 
+ else: 
+ print('mismatch') 
+   raise RunTimeError("image size mismatch") 
+ count += 1 
+   #print img.size 
+ except: 
+ # skip 
+ print('Invalid image: %s' % file_path) 
+ # load image data into single array 
+ depth = count 
+ 
+ data = np.concatenate(imgDataList) 
+ print('volume data dims: %d %d %d' % (width, height, depth)) 
+ # load data into 3D texture 
+ 
+ texture = glGenTextures(1) 
+ glPixelStorei(GL_UNPACK_ALIGNMENT, 1) 
+ glBindTexture(GL_TEXTURE_3D, texture) 
+ glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE) 
+ glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE) 
+ glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE) 
+ glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR) 
+ glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR) 
+ 
+ glTexImage3D(GL_TEXTURE_3D, 0, GL_RED, 
+ width, height, depth, 0, 
+   GL_RED, GL_UNSIGNED_BYTE, data) 
+ # return texture 
+ 
+ return (texture, width, height, depth) 
+loadVolume()方法先用os 模块中的listdir()方法，列出了给定目录中的文
+件。然后加载图像文件本身。在行，利用os.path.abspath()和os.path.join()，
+将文件名添加到目录，从而不必处理相对文件路径和操作系统（OS）特定的
+路径约定（Python 代码中经常可以看到这个有用的习惯用法，用于遍历文件
+和目录）。
+在行，利用Python 图像库（PIL）中的Image 类，将图像加载到8 位的numpy
+数组。如果指定的文件不是图像或图像加载失败，则抛出一个异常，我们捕获它并
+打印错误。
+因为要将这些图像加载成为三维纹理，所以需要确保它们都具有相同的尺寸
+（宽×高），这在和行确认。保存第一张图像的尺寸，并与新传入的图像进行比
+较。所有图像加载为单独的数组后，利用numpy 的concatenate()方法，将这些数组
+连接起来，创建包含三维数据的最终数组。 
+
+180 Python 极客项目编程 
+在行和接下来几行中，创建了OpenGL 纹理，并针对过滤和拆包设置了参数。
+然后，在行，将三维数据数组加载为OpenGL 纹理。这里使用的格式是GL_RED，
+数据格式是GL_UNSIGNED_BYTE，因为在数据中，我们只有一个8 位值与每个像
+素相关联。
+最后，在行，返回了OpenGL 纹理ID 和三维纹理的尺寸。 
+11.5  完整的三维纹理代码 
+下面是完整的代码清单。可以在https:// github.com/electronut/pp/tree/master/ 
+volrender/找到volreader.py 文件。 
+import os 
+import numpy as np 
+from PIL import Image 
+import OpenGL 
+from OpenGL.GL import * 
+from scipy import misc 
+def loadVolume(dirName): 
+ """read volume from directory as a 3D texture""" 
+ # list images in directory 
+ files = sorted(os.listdir(dirName)) 
+ print('loading images from: %s' % dirName) 
+ imgDataList = [] 
+ count = 0 
+ width, height = 0, 0 
+ for file in files: 
+ file_path = os.path.abspath(os.path.join(dirName, file)) 
+ try: 
+ # read image 
+ img = Image.open(file_path) 
+ imgData = np.array(img.getdata(), np.uint8) 
+ # check if all are of the same size 
+ if count is 0: 
+ width, height = img.size[0], img.size[1] 
+   imgDataList.append(imgData) 
+ else: 
+ if (width, height) == (img.size[0], img.size[1]): 
+ imgDataList.append(imgData) 
+ else: 
+ print('mismatch') 
+   raise RunTimeError("image size mismatch") 
+ count += 1 
+   #print img.size 
+ except: 
+ # skip 
+ print('Invalid image: %s' % file_path) 
+ # load image data into single array 
+ depth = count 
+ data = np.concatenate(imgDataList) 
+
+第11 章  体渲染 181 
+ print('volume data dims: %d %d %d' % (width, height, depth)) 
+ # load data into 3D texture 
+ texture = glGenTextures(1) 
+ glPixelStorei(GL_UNPACK_ALIGNMENT, 1) 
+ glBindTexture(GL_TEXTURE_3D, texture) 
+ glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE) 
+ glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE) 
+ glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE) 
+ glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR) 
+ glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR) 
+ glTexImage3D(GL_TEXTURE_3D, 0, GL_RED, 
+ width, height, depth, 0, 
+   GL_RED, GL_UNSIGNED_BYTE, data) 
+ #return texture 
+ return (texture, width, height, depth) 
+# load texture 
+def loadTexture(filename): 
+ img = Image.open(filename) 
+ img_data = np.array(list(img.getdata()), 'B') 
+ texture = glGenTextures(1) 
+ glPixelStorei(GL_UNPACK_ALIGNMENT,1) 
+ glBindTexture(GL_TEXTURE_2D, texture) 
+ glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE) 
+ glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE) 
+ glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR) 
+ glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR) 
+ glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img.size[0], img.size[1], 
+   0, GL_RGBA, GL_UNSIGNED_BYTE, img_data) 
+ return texture 
+11.6  生成光线 
+生成光线的代码封装在RayCube 类中。该类负责绘制彩色立方体，它有一些方
+法将立方体的背面绘制到FBO 或纹理中，并将立方体的正面绘制到屏幕上。要查
+看完整的raycube.py 代码，请直接跳到11.7 节。 
+首先，定义这个类使用的着色器：
+ strVS = """ 
+#version 330 core 
+layout(location = 1) in vec3 cubePos; 
+layout(location = 2) in vec3 cubeCol; 
+uniform mat4 uMVMatrix; 
+uniform mat4 uPMatrix; 
+out vec4 vColor; 
+void main() 
+{ 
+ // set back-face color 
+ vColor = vec4(cubeCol.rgb, 1.0); 
+
+182 Python 极客项目编程 
+ // transformed position 
+ vec4 newPos = vec4(cubePos.xyz, 1.0); 
+ // set position 
+ gl_Position = uPMatrix * uMVMatrix * newPos; 
+} 
+""" 
+ strFS = """ 
+#version 330 core 
+in vec4 vColor; 
+out vec4 fragColor; 
+void main() 
+{ 
+ fragColor = vColor; 
+} 
+""" 
+ 
+在行，定义了RayCube 类使用的顶点着色器。该着色器有两个输入属性：
+cubePos 和cubeCol，它们分别用于访问顶点的位置和颜色的值。模型视图和投影矩
+阵分别通过uniform 变量uMVMatrix 和pMatrix 传入。vColor 变量声明为输出，因
+为它需要传入片段着色器，在那里进行插值。在行实现的片段着色器，将片段颜
+色设置为传入的vColor（插值后的）值，vColor 在顶点着色器中设置。 
+11.6.1  定义颜色立方体的几何形状 
+现在，看看颜色立方体的几何形状，它在RayCube 类中定义： 
+ # cube vertices 
+ 
+ vertices = numpy.array([ 
+ 0.0, 0.0, 0.0, 
+ 1.0, 0.0, 0.0, 
+ 1.0, 1.0, 0.0, 
+ 0.0, 1.0, 0.0, 
+ 0.0, 0.0, 1.0, 
+ 1.0, 0.0, 1.0, 
+ 1.0, 1.0, 1.0, 
+ 0.0, 1.0, 1.0 
+   ], numpy.float32) 
+ # cube colors 
+ 
+ colors = numpy.array([ 
+ 0.0, 0.0, 0.0, 
+ 1.0, 0.0, 0.0, 
+ 1.0, 1.0, 0.0, 
+ 0.0, 1.0, 0.0, 
+ 0.0, 0.0, 1.0, 
+ 1.0, 0.0, 1.0, 
+ 1.0, 1.0, 1.0, 
+ 0.0, 1.0, 1.0 
+   ], numpy.float32) 
+ # individual triangles 
+ 
+ indices = numpy.array([ 
+
+第11 章  体渲染 183 
+ 4, 5, 7, 
+ 7, 5, 6, 
+ 5, 1, 6, 
+ 6, 1, 2, 
+ 1, 0, 2, 
+ 2, 0, 3, 
+ 0, 4, 3, 
+ 3, 4, 7, 
+ 6, 2, 7, 
+ 7, 2, 3, 
+ 4, 0, 5, 
+ 5, 0, 1 
+ ], numpy.int16) 
+在RayCube 的构造函数中，汇集了着色器，并创建了program 对象。在行定
+义了立方体的几何形状，行定义了颜色。 
+颜色立方体有6 个面，每个面可以绘制成两个三角形，总共有6×6（36）个顶
+点。但是，我们不是指定所有36 个顶点，而是指定立方体的8 个顶点，然后用一
+个indices 数组定义一些三角形，如行和图11-5 所示。 
+图11-5  利用索引，一个立方体可以表示为三角形的集合，每个面由两个三角形组成 
+接下来，需要将顶点信息放入缓冲区。
+ # set up vertex array object (VAO) 
+ self.vao = glGenVertexArrays(1) 
+ glBindVertexArray(self.vao) 
+ # vertex buffer 
+ self.vertexBuffer = glGenBuffers(1) 
+
+184 Python 极客项目编程 
+ glBindBuffer(GL_ARRAY_BUFFER, self.vertexBuffer) 
+ glBufferData(GL_ARRAY_BUFFER, 4*len(vertices), vertices, GL_STATIC_DRAW) 
+ # vertex buffer – cube vertex colors 
+ self.colorBuffer = glGenBuffers(1) 
+ glBindBuffer(GL_ARRAY_BUFFER, self.colorBuffer) 
+ glBufferData(GL_ARRAY_BUFFER, 4*len(colors), colors, GL_STATIC_DRAW) 
+ # index buffer 
+ self.indexBuffer = glGenBuffers(1) 
+ 
+ glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, self.indexBuffer); 
+ glBufferData(GL_ELEMENT_ARRAY_BUFFER, 2*len(indices), indices, 
+ GL_STATIC_DRAW) 
+像以往的项目一样，我们可以创建并绑定到一个顶点数组对象（VAO），然后定
+义它管理的缓冲区。这里有一个区别：在行，indices 数组设定为GL_ELEMENT_ 
+ARRAY_BUFFER，这意味着它的缓冲器中的元素将用来索引和访问颜色和顶点缓
+冲器中的数据。
+11.6.2  创建帧缓冲区对象 
+现在，让我们跳到创建帧缓冲区对象的方法，在该方法中将进行渲染。
+ def initFBO(self): 
+ # create frame buffer object 
+ self.fboHandle = glGenFramebuffers(1) 
+ # create texture 
+ self.texHandle = glGenTextures(1) 
+ # create depth buffer 
+ self.depthHandle = glGenRenderbuffers(1) 
+ # bind 
+ glBindFramebuffer(GL_FRAMEBUFFER, self.fboHandle) 
+ glActiveTexture(GL_TEXTURE0) 
+ glBindTexture(GL_TEXTURE_2D, self.texHandle) 
+ # set parameters to draw the image at different sizes 
+ 
+ glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR) 
+ glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR) 
+ glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE) 
+ glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE) 
+ # set up texture 
+ glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, self.width, self.height, 
+ 0, GL_RGBA, GL_UNSIGNED_BYTE, None) 
+ # bind texture to FBO 
+ 
+ glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, 
+ GL_TEXTURE_2D, self.texHandle, 0) 
+ # bind 
+ 
+ glBindRenderbuffer(GL_RENDERBUFFER, self.depthHandle) 
+ glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, 
+ self.width, self.height) 
+ # bind depth buffer to FBO 
+ glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, 
+
+第11 章  体渲染 185 
+ GL_RENDERBUFFER, self.depthHandle) 
+ # check status 
+ 
+ status = glCheckFramebufferStatus(GL_FRAMEBUFFER) 
+ if status == GL_FRAMEBUFFER_COMPLETE: 
+ pass 
+   #print "fbo %d complete" % self.fboHandle 
+ elif status == GL_FRAMEBUFFER_UNSUPPORTED: 
+ print "fbo %d unsupported" % self.fboHandle 
+ else: 
+ print "fbo %d Error" % self.fboHandle 
+这里，我们创建帧缓冲区对象、二维纹理和渲染缓冲区对象。然后在行，建
+立了纹理参数。在行，纹理绑定到帧缓冲区对象。在行和随后的几行中，渲染
+缓冲区设置了一个24 位的深度缓冲区，并连接到帧缓冲区对象。在行，检查帧缓
+冲区的状态，如果出现错误则打印状态信息。现在，只要帧缓冲区和渲染缓冲区绑
+定正确，所有的渲染将进入纹理。
+11.6.3  渲染立方体的背面 
+下面的代码渲染了颜色立方体的背面：
+ def renderBackFace(self, pMatrix, mvMatrix): 
+ """renders back-face of ray-cube to a texture and returns it""" 
+ # render to FBO 
+ 
+ glBindFramebuffer(GL_FRAMEBUFFER, self.fboHandle) 
+ # set active texture 
+ glActiveTexture(GL_TEXTURE0) 
+ # bind to FBO texture 
+ glBindTexture(GL_TEXTURE_2D, self.texHandle) 
+ # render cube with face culling enabled 
+ 
+ self.renderCube(pMatrix, mvMatrix, self.program, True) 
+ # unbind texture 
+ 
+ glBindTexture(GL_TEXTURE_2D, 0) 
+ glBindFramebuffer(GL_FRAMEBUFFER, 0) 
+ glBindRenderbuffer(GL_RENDERBUFFER, 0) 
+ # return texture ID 
+ 
+ return self.texHandle 
+在行，绑定FBO，设置活动纹理单元，并绑定到纹理处理程序，这样就可以
+渲染到FBO。在行，调用RayCube 的renderCube()方法，以一个面剔除标志为参
+数，以便用同样的代码来绘制立方体的正面或背面。该标志设置为true，让背面出
+现在FBO 纹理中。在行，进行必要的调用，解除FBO 绑定，这样其他渲染代码
+将不受影响。在行返回FBO 纹理ID，用于算法的下一阶段。 
+11.6.4  渲染立方体的正面 
+以下代码在光线投射算法的第二遍渲染时，绘制颜色立方体的正面。它就调用
+了11.6.3 小节中讨论的renderCube()方法，只是面剔除标志设置为False。 
+
+186 Python 极客项目编程 
+ def renderFrontFace(self, pMatrix, mvMatrix, program): 
+ """render front-face of ray-cube""" 
+ # no face culling 
+ self.renderCube(pMatrix, mvMatrix, program, False) 
+11.6.5  渲染整个立方体 
+现在看一下renderCube()方法，它绘制前面讨论过的彩色立方体： 
+ def renderCube(self, pMatrix, mvMatrix, program, cullFace): 
+ """renderCube uses face culling if flag set""" 
+ glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT) 
+ # set shader program 
+ glUseProgram(program) 
+ # set projection matrix 
+ glUniformMatrix4fv(glGetUniformLocation(program, b'uPMatrix'), 
+ 1, GL_FALSE, pMatrix) 
+ # set modelview matrix 
+ glUniformMatrix4fv(glGetUniformLocation(program, b'uMVMatrix'), 
+ 1, GL_FALSE, mvMatrix) 
+ # enable face culling 
+ glDisable(GL_CULL_FACE) 
+ 
+ if cullFace: 
+ glFrontFace(GL_CCW) 
+ glCullFace(GL_FRONT) 
+ glEnable(GL_CULL_FACE) 
+ # bind VAO 
+ glBindVertexArray(self.vao) 
+ # animated slice 
+ 
+ glDrawElements(GL_TRIANGLES, self.nIndices, GL_UNSIGNED_SHORT, None) 
+ # unbind VAO 
+ glBindVertexArray(0) 
+ # reset cull face 
+ if cullFace: 
+ # disable face culling 
+ glDisable(GL_CULL_FACE) 
+在这个列表中可以看到，我们清除了颜色和深度缓冲区，然后选择着色器程序，
+设置了变换矩阵。在行，设置了一个标志，控制面剔除，这就决定了绘制立方体
+的正面或背面。而且，我们使用了glDrawElements()，因为要用一个索引数组来
+渲染立方体，而不是一个顶点数组。
+
+第11 章  体渲染 187 
+11.6.6  调整大小处理程序 
+由于FBO 是针对特定窗口大小创建的，所以窗口大小发生变化时，需要重新
+创建它。要做到这一点，可以为RayCube 类创建调整大小的处理程序，如下所示： 
+ 
+ def reshape(self, width, height): 
+ self.width = width 
+ self.height = height 
+ self.aspect = width/float(height) 
+ # re-create FBO 
+ self.clearFBO() 
+ self.initFBO() 
+调整OpenGL 窗口的大小时，调用了reshape()函数。 
+11.7  完整的光线生成代码 
+以下是完整的代码清单。也可以https://github.com/electronut/pp/tree/master/ 
+volrender/找到raycube.py 文件。 
+import OpenGL 
+from OpenGL.GL import * 
+from OpenGL.GL.shaders import * 
+import numpy, math, sys 
+import volreader, glutils 
+strVS = """ 
+#version 330 core 
+layout(location = 1) in vec3 cubePos; 
+layout(location = 2) in vec3 cubeCol; 
+uniform mat4 uMVMatrix; 
+uniform mat4 uPMatrix; 
+out vec4 vColor; 
+void main() 
+{ 
+ // set back face color 
+ vColor = vec4(cubeCol.rgb, 1.0); 
+ // transformed position 
+ vec4 newPos = vec4(cubePos.xyz, 1.0); 
+ // set position 
+ gl_Position = uPMatrix * uMVMatrix * newPos; 
+} 
+""" 
+strFS = """ 
+#version 330 core 
+in vec4 vColor; 
+
+188 Python 极客项目编程 
+out vec4 fragColor; 
+void main() 
+{ 
+ fragColor = vColor; 
+} 
+""" 
+class RayCube: 
+ """class used to generate rays used in ray casting""" 
+ def __init__(self, width, height): 
+ """RayCube constructor""" 
+ # set dims 
+ self.width, self.height = width, height 
+ # create shader 
+ self.program = glutils.loadShaders(strVS, strFS) 
+ # cube vertices 
+ vertices = numpy.array([ 
+ 0.0, 0.0, 0.0, 
+ 1.0, 0.0, 0.0, 
+ 1.0, 1.0, 0.0, 
+ 0.0, 1.0, 0.0, 
+ 0.0, 0.0, 1.0, 
+ 1.0, 0.0, 1.0, 
+ 1.0, 1.0, 1.0, 
+ 0.0, 1.0, 1.0 
+ ], numpy.float32) 
+ # cube colors 
+ colors = numpy.array([ 
+ 0.0, 0.0, 0.0, 
+ 1.0, 0.0, 0.0, 
+ 1.0, 1.0, 0.0, 
+ 0.0, 1.0, 0.0, 
+ 0.0, 0.0, 1.0, 
+ 1.0, 0.0, 1.0, 
+ 1.0, 1.0, 1.0, 
+ 0.0, 1.0, 1.0 
+ ], numpy.float32) 
+ # individual triangles 
+ indices = numpy.array([ 
+ 4, 5, 7, 
+ 7, 5, 6, 
+ 5, 1, 6, 
+ 6, 1, 2, 
+ 1, 0, 2, 
+ 2, 0, 3, 
+ 0, 4, 3, 
+ 3, 4, 7, 
+ 6, 2, 7, 
+ 7, 2, 3, 
+ 4, 0, 5, 
+ 5, 0, 1 
+
+第11 章  体渲染 189 
+ ], numpy.int16) 
+ self.nIndices = indices.size 
+ # set up vertex array object (VAO) 
+ self.vao = glGenVertexArrays(1) 
+ glBindVertexArray(self.vao) 
+ #vertex buffer 
+ self.vertexBuffer = glGenBuffers(1) 
+ glBindBuffer(GL_ARRAY_BUFFER, self.vertexBuffer) 
+ glBufferData(GL_ARRAY_BUFFER, 4*len(vertices), vertices, GL_STATIC_DRAW) 
+ # vertex buffer - cube vertex colors 
+ self.colorBuffer = glGenBuffers(1) 
+ glBindBuffer(GL_ARRAY_BUFFER, self.colorBuffer) 
+ glBufferData(GL_ARRAY_BUFFER, 4*len(colors), colors, GL_STATIC_DRAW); 
+ # index buffer 
+ self.indexBuffer = glGenBuffers(1) 
+ glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, self.indexBuffer); 
+ glBufferData(GL_ELEMENT_ARRAY_BUFFER, 2*len(indices), indices, 
+ GL_STATIC_DRAW) 
+ # enable attrs using the layout indices in shader 
+ aPosLoc = 1 
+ aColorLoc = 2 
+ # bind buffers: 
+ glEnableVertexAttribArray(1) 
+ glEnableVertexAttribArray(2) 
+ # vertex 
+ glBindBuffer(GL_ARRAY_BUFFER, self.vertexBuffer) 
+ glVertexAttribPointer(aPosLoc, 3, GL_FLOAT, GL_FALSE, 0, None) 
+ # color 
+ glBindBuffer(GL_ARRAY_BUFFER, self.colorBuffer) 
+ glVertexAttribPointer(aColorLoc, 3, GL_FLOAT, GL_FALSE, 0, None) 
+ # index 
+ glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, self.indexBuffer) 
+ # unbind VAO 
+ glBindVertexArray(0) 
+ # FBO 
+ self.initFBO() 
+ def renderBackFace(self, pMatrix, mvMatrix): 
+ """renders back-face of ray-cube to a texture and returns it""" 
+ # render to FBO 
+ glBindFramebuffer(GL_FRAMEBUFFER, self.fboHandle) 
+ # set active texture 
+ glActiveTexture(GL_TEXTURE0) 
+ # bind to FBO texture 
+ glBindTexture(GL_TEXTURE_2D, self.texHandle) 
+ # render cube with face culling enabled 
+ self.renderCube(pMatrix, mvMatrix, self.program, True) 
+
+190 Python 极客项目编程 
+ # unbind texture 
+ glBindTexture(GL_TEXTURE_2D, 0) 
+ glBindFramebuffer(GL_FRAMEBUFFER, 0) 
+ glBindRenderbuffer(GL_RENDERBUFFER, 0) 
+ # return texture ID 
+ return self.texHandle 
+ def renderFrontFace(self, pMatrix, mvMatrix, program): 
+ """render front face of ray-cube""" 
+ # no face culling 
+ self.renderCube(pMatrix, mvMatrix, program, False) 
+ def renderCube(self, pMatrix, mvMatrix, program, cullFace): 
+ """render cube use face culling if flag set""" 
+ glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT) 
+ # set shader program 
+ glUseProgram(program) 
+ # set projection matrix 
+ glUniformMatrix4fv(glGetUniformLocation(program, b'uPMatrix'), 
+ 1, GL_FALSE, pMatrix) 
+ # set modelview matrix 
+ glUniformMatrix4fv(glGetUniformLocation(program, b'uMVMatrix'), 
+ 1, GL_FALSE, mvMatrix) 
+ # enable face culling 
+ glDisable(GL_CULL_FACE) 
+ if cullFace: 
+ glFrontFace(GL_CCW) 
+ glCullFace(GL_FRONT) 
+ glEnable(GL_CULL_FACE) 
+ # bind VAO 
+ glBindVertexArray(self.vao) 
+ # animated slice 
+ glDrawElements(GL_TRIANGLES, self.nIndices, GL_UNSIGNED_SHORT, None) 
+ # unbind VAO 
+ glBindVertexArray(0) 
+ # reset cull face 
+ if cullFace: 
+ # disable face culling 
+ glDisable(GL_CULL_FACE) 
+ def reshape(self, width, height): 
+ self.width = width 
+ self.height = height 
+ self.aspect = width/float(height) 
+ # re-create FBO 
+ self.clearFBO() 
+ self.initFBO() 
+ def initFBO(self): 
+
+第11 章  体渲染 191 
+ # create frame buffer object 
+ self.fboHandle = glGenFramebuffers(1) 
+ # create texture 
+ self.texHandle = glGenTextures(1) 
+ # create depth buffer 
+ self.depthHandle = glGenRenderbuffers(1) 
+ # bind 
+ glBindFramebuffer(GL_FRAMEBUFFER, self.fboHandle) 
+ glActiveTexture(GL_TEXTURE0) 
+ glBindTexture(GL_TEXTURE_2D, self.texHandle) 
+ # set parameters to draw the image at different sizes 
+ glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR) 
+ glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR) 
+ glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE) 
+ glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE) 
+ # set up texture 
+ glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, self.width, self.height, 
+ 0, GL_RGBA, GL_UNSIGNED_BYTE, None) 
+ # bind texture to FBO 
+ glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, 
+ GL_TEXTURE_2D, self.texHandle, 0) 
+ # bind 
+ glBindRenderbuffer(GL_RENDERBUFFER, self.depthHandle) 
+ glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, 
+ self.width, self.height) 
+ # bind depth buffer to FBO 
+ glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, 
+ GL_RENDERBUFFER, self.depthHandle) 
+ # check status 
+ status = glCheckFramebufferStatus(GL_FRAMEBUFFER) 
+ if status == GL_FRAMEBUFFER_COMPLETE: 
+ pass 
+   #print "fbo %d complete" % self.fboHandle 
+ elif status == GL_FRAMEBUFFER_UNSUPPORTED: 
+ print("fbo %d unsupported" % self.fboHandle) 
+ else: 
+ print("fbo %d Error" % self.fboHandle) 
+ glBindTexture(GL_TEXTURE_2D, 0) 
+ glBindFramebuffer(GL_FRAMEBUFFER, 0) 
+ glBindRenderbuffer(GL_RENDERBUFFER, 0) 
+ return 
+ def clearFBO(self): 
+ """clears old FBO""" 
+ # delete FBO 
+ if glIsFramebuffer(self.fboHandle): 
+ glDeleteFramebuffers(int(self.fboHandle)) 
+ # delete texture 
+
+192 Python 极客项目编程 
+ if glIsTexture(self.texHandle): 
+ glDeleteTextures(int(self.texHandle)) 
+ def close(self): 
+ """call this to free up OpenGL resources""" 
+ glBindTexture(GL_TEXTURE_2D, 0) 
+ glBindFramebuffer(GL_FRAMEBUFFER, 0) 
+ glBindRenderbuffer(GL_RENDERBUFFER, 0) 
+ # delete FBO 
+ if glIsFramebuffer(self.fboHandle): 
+ glDeleteFramebuffers(int(self.fboHandle)) 
+ # delete texture 
+ if glIsTexture(self.texHandle): 
+ glDeleteTextures(int(self.texHandle)) 
+ # delete render buffer 
+ """ 
+ if glIsRenderbuffer(self.depthHandle): 
+ glDeleteRenderbuffers(1, int(self.depthHandle)) 
+   """ 
+ # delete buffers 
+ """ 
+ glDeleteBuffers(1, self._vertexBuffer) 
+ glDeleteBuffers(1, &_indexBuffer) 
+ glDeleteBuffers(1, &_colorBuffer) 
+ """ 
+11.8  体光线投射 
+接下来，在RayCastRender 类中实现光线投射算法。算法的核心发生在该类使
+用的片段着色器内，该类也使用RayCube 类来帮助生成光线。要查看raycast.py 的
+完整代码，请直接跳到11.9 节。 
+开始先创建一个RayCube 对象，并在其构造函数中加载着色器。 
+ def __init__(self, width, height, volume): 
+ """RayCastRender construction""" 
+ # create RayCube object 
+ 
+ self.raycube = raycube.RayCube(width, height) 
+ # set dimensions 
+ self.width = width 
+ self.height = height 
+ self.aspect = width/float(height) 
+ # create shader 
+ 
+ self.program = glutils.loadShaders(strVS, strFS) 
+ # texture 
+ 
+ self.texVolume, self.Nx, self.Ny, self.Nz = volume 
+ # initialize camera 
+ 
+ self.camera = Camera() 
+
+第11 章  体渲染 193 
+在行，构造函数创建了一个RayCube 对象，用于生成光线。在行，加载
+光线投射使用的着色器。然后在行，设置OpenGL 的三维纹理和尺寸，它们作
+为一个元组传入RayCastRender 的构造函数。在行，创建一个Camera 类实例，
+它将用于设置OpenGL 透视转换，从而进行三维渲染（这个类与第10 章中使用的
+基本相同）。
+下面是RayCastRender 的渲染方法： 
+ def draw(self): 
+ # build projection matrix 
+ 
+ pMatrix = glutils.perspective(45.0, self.aspect, 0.1, 100.0) 
+ # modelview matrix 
+ 
+ mvMatrix = glutils.lookAt(self.camera.eye, self.camera.center, 
+ self.camera.up) 
+ # render 
+ # generate ray-cube back-face texture 
+ 
+ texture = self.raycube.renderBackFace(pMatrix, mvMatrix) 
+ # set shader program 
+ 
+ glUseProgram(self.program) 
+ # set window dimensions 
+ glUniform2f(glGetUniformLocation(self.program, b"uWinDims"), 
+ float(self.width), float(self.height)) 
+ # bind to texture unit 0, which represents back-faces of cube 
+ 
+ glActiveTexture(GL_TEXTURE0) 
+ glBindTexture(GL_TEXTURE_2D, texture) 
+ glUniform1i(glGetUniformLocation(self.program, b"texBackFaces"), 0) 
+ # texture unit 1: 3D volume texture 
+ 
+ glActiveTexture(GL_TEXTURE1) 
+ glBindTexture(GL_TEXTURE_3D, self.texVolume) 
+ glUniform1i(glGetUniformLocation(self.program, b"texVolume"), 1) 
+ # draw front-face of cubes 
+ 
+ self.raycube.renderFrontFace(pMatrix, mvMatrix, self.program) 
+在行，利用glutils.perspective()工具方法，建立一个用于渲染的透视投影矩阵。
+然后，在行，将当前摄像机参数设置给glutils.lookAt()方法。在行，完成第一遍
+渲染，即利用RayCube 的renderBackFace()方法，将彩色立方体的背面绘制成一个
+纹理（该方法也返回生成的纹理的ID）。 
+在行，为光线投射算法启用着色器。然后在行，设置行返回的纹理，准
+备将它用于着色器程序中，作为纹理单元0。在行，设置从读入的体数据中创建
+的三维纹理，作为纹理单元1，这样在着色器中就可以用这两个纹理。最后，在
+行，用RayCube 的renderFrontFace()方法渲染立方体的正面。执行这段代码后，
+RayCastRender 着色器将作用于顶点和片段。 
+
+194 Python 极客项目编程 
+11.8.1  顶点着色器 
+接下来是RayCastRender 使用的着色器。先看看顶点着色器： 
+#version 330 core 
+ layout(location = 1) in vec3 cubePos; 
+layout(location = 2) in vec3 cubeCol; 
+ uniform mat4 uMVMatrix; 
+uniform mat4 uPMatrix; 
+ out vec4 vColor; 
+void main() 
+{ 
+ // set position 
+ 
+ gl_Position = uPMatrix * uMVMatrix * vec4(cubePos.xyz, 1.0); 
+ // set color 
+ 
+ vColor = vec4(cubeCol.rgb, 1.0); 
+} 
+ 
+从行开始，设置位置和颜色的输入变量。布局使用的索引与RayCube 顶点着
+色器中定义相同，因为RayCastRender 使用该类中定义的VBO 来绘制几何形状，着
+色器中的位置必须相匹配。在行和随后一行中，定义输入变换矩阵。然后，在
+行设置颜色值，作为着色器的输出。行是常用变换，计算了内建的gl_Position 输
+出。在行，将输出设置为立方体顶点的当前颜色，顶点之间将进行插值，从而在
+片段着色器中给出正确的颜色。
+11.8.2  片段着色器 
+片段着色器是重头戏。它实现了光线投射算法的核心。
+#version 330 core 
+in vec4 vColor; 
+uniform sampler2D texBackFaces; 
+uniform sampler3D texVolume; 
+uniform vec2 uWinDims; 
+out vec4 fragColor; 
+void main() 
+{ 
+ // start of ray 
+ 
+ vec3 start = vColor.rgb; 
+ // calculate texture coordinates at fragment, 
+ // which is a fraction of window coordinates 
+ 
+ vec2 texc = gl_FragCoord.xy/uWinDims.xy; 
+
+第11 章  体渲染 195 
+ // get end of ray by looking up back-face color 
+ 
+ vec3 end = texture(texBackFaces, texc).rgb; 
+ // calculate ray direction 
+ 
+ vec3 dir = end – start; 
+ // normalized ray direction 
+ vec3 norm_dir = normalize(dir); 
+ // the length from front to back is calculated and 
+ // used to terminate the ray 
+ float len = length(dir.xyz); 
+ // ray step size 
+ float stepSize = 0.01; 
+ // x-ray projection 
+ vec4 dst = vec4(0.0); 
+ // step through the ray 
+ 
+ for(float t = 0.0; t < len; t += stepSize) { 
+ // set position to end point of ray 
+ 
+ vec3 samplePos = start + t*norm_dir; 
+ // get texture value at position 
+ 
+ float val = texture(texVolume, samplePos).r; 
+ vec4 src = vec4(val); 
+ // set opacity 
+ 
+ src.a *= 0.1; 
+ src.rgb *= src.a; 
+ // blend with previous value 
+ 
+ dst = (1.0 - dst.a)*src + dst; 
+ // exit loop when alpha exceeds threshold 
+ 
+ if(dst.a >= 0.95) 
+ break; 
+ } 
+ // set fragment color 
+ fragColor = dst; 
+} 
+ 
+片段着色器的输入是立方体顶点的颜色。片段着色器也能获取通过渲染颜色立
+方体生成的二维纹理，包含数据的三维纹理，以及OpenGL 窗口的尺寸。 
+在片段着色器执行时，我们传入立方体的正面，这样通过在行查找传入的颜
+色值，会得到进入这个立方体的光线的起点（回想一下11.1.2 小节中关于立方体中
+的颜色与光线方向的联系的讨论）。
+在行，计算屏幕上的传入片段的纹理坐标。用片段在窗口坐标中的位置除以
+窗口尺寸，得到范围在[0,1]的值。在行，利用该纹理坐标来查找立方体的背面颜
+色，获得光线的终点。
+
+196 Python 极客项目编程 
+在行，计算光线方向，然后计算光线的法向和长度，它们将用于光线投射计
+算。然后在行，利用光线的起点和方向，直到光线的终点，我们循环通过该物体。
+在行，计算光线在体数据中当前的位置，在行，查找这一点上的数据值。 
+混合公式给出X 射线效果，在和行执行。我们结合dst 值和当前的强度值
+（它利用alpha 值衰减），该过程沿光线继续（alpha 值不断增加）。 
+在行，检查这个alpha 值，直到它等于最大阈值0.95，就退出循环。最后的
+结果是某种平均的透明度，穿透物体的每个像素，产生“透视”或x 射线效果（请
+尝试改变阈值和alpha 衰减，产生不同的效果）。 
+11.9  完整的体光线投射代码 
+以下是完整的代码清单。也可以在https:// github.com/electronut/pp/tree/master/ 
+volrender/找到raycast.py 文件。 
+import OpenGL 
+from OpenGL.GL import * 
+from OpenGL.GL.shaders import * 
+import numpy as np 
+import math, sys 
+import raycube, glutils, volreader 
+strVS = """ 
+#version 330 core 
+layout(location = 1) in vec3 cubePos; 
+layout(location = 2) in vec3 cubeCol; 
+uniform mat4 uMVMatrix; 
+uniform mat4 uPMatrix; 
+out vec4 vColor; 
+void main() 
+{ 
+ // set position 
+ gl_Position = uPMatrix * uMVMatrix * vec4(cubePos.xyz, 1.0); 
+ // set color 
+ vColor = vec4(cubeCol.rgb, 1.0); 
+} 
+""" 
+strFS = """ 
+#version 330 core 
+in vec4 vColor; 
+uniform sampler2D texBackFaces; 
+uniform sampler3D texVolume; 
+uniform vec2 uWinDims; 
+
+第11 章  体渲染 197 
+out vec4 fragColor; 
+void main() 
+{ 
+ // start of ray 
+ vec3 start = vColor.rgb; 
+ // calculate texture coords at fragment, 
+ // which is a fraction of window coords 
+ vec2 texc = gl_FragCoord.xy/uWinDims.xy; 
+ // get end of ray by looking up back-face color 
+ vec3 end = texture(texBackFaces, texc).rgb; 
+ // calculate ray direction 
+ vec3 dir = end - start; 
+ // normalized ray direction 
+ vec3 norm_dir = normalize(dir); 
+ // the length from front to back is calculated and 
+ // used to terminate the ray 
+ float len = length(dir.xyz); 
+ // ray step size 
+ float stepSize = 0.01; 
+ // x-ray projection 
+ vec4 dst = vec4(0.0); 
+ // step through the ray 
+ for(float t = 0.0; t < len; t += stepSize) { 
+ // set position to end point of ray 
+ vec3 samplePos = start + t*norm_dir; 
+ // get texture value at position 
+ float val = texture(texVolume, samplePos).r; 
+ vec4 src = vec4(val); 
+ // set opacity 
+ src.a *= 0.1; 
+ src.rgb *= src.a; 
+ // blend with previous value 
+ dst = (1.0 - dst.a)*src + dst; 
+ // exit loop when alpha exceeds threshold 
+ if(dst.a >= 0.95) 
+ break; 
+ } 
+ // set fragment color 
+ fragColor = dst; 
+} 
+""" 
+class Camera: 
+ """helper class for viewing""" 
+ def __init__(self): 
+
+198 Python 极客项目编程 
+ self.r = 1.5 
+ self.theta = 0 
+ self.center = [0.5, 0.5, 0.5] 
+ self.eye = [0.5 + self.r, 0.5, 0.5] 
+ self.up = [0.0, 0.0, 1.0] 
+ def rotate(self, clockWise): 
+ """rotate eye by one step""" 
+ if clockWise: 
+   self.theta = (self.theta + 5) % 360 
+ else: 
+   self.theta = (self.theta - 5) % 360 
+ # recalculate eye 
+ self.eye = [0.5 + self.r*math.cos(math.radians(self.theta)), 
+ 0.5 + self.r*math.sin(math.radians(self.theta)), 
+ 0.5] 
+class RayCastRender: 
+ """class that does Ray Casting""" 
+ def __init__(self, width, height, volume): 
+ """RayCastRender constr""" 
+ # create RayCube object 
+ self.raycube = raycube.RayCube(width, height) 
+ # set dimensions 
+ self.width = width 
+ self.height = height 
+ self.aspect = width/float(height) 
+ # create shader 
+ self.program = glutils.loadShaders(strVS, strFS) 
+ # texture 
+ self.texVolume, self.Nx, self.Ny, self.Nz = volume 
+ # initialize camera 
+ self.camera = Camera() 
+ def draw(self): 
+ # build projection matrix 
+ pMatrix = glutils.perspective(45.0, self.aspect, 0.1, 100.0) 
+ # modelview matrix 
+ mvMatrix = glutils.lookAt(self.camera.eye, self.camera.center, 
+ self.camera.up) 
+ # render 
+ # generate ray-cube back-face texture 
+ texture = self.raycube.renderBackFace(pMatrix, mvMatrix) 
+ # set shader program 
+ glUseProgram(self.program) 
+ # set window dimensions 
+ glUniform2f(glGetUniformLocation(self.program, b"uWinDims"), 
+ float(self.width), float(self.height)) 
+ # texture unit 0, which represents back-faces of cube 
+ glActiveTexture(GL_TEXTURE0) 
+
+第11 章  体渲染 199 
+ glBindTexture(GL_TEXTURE_2D, texture) 
+ glUniform1i(glGetUniformLocation(self.program, b"texBackFaces"), 0) 
+ # texture unit 1: 3D volume texture 
+ glActiveTexture(GL_TEXTURE1) 
+ glBindTexture(GL_TEXTURE_3D, self.texVolume) 
+ glUniform1i(glGetUniformLocation(self.program, b"texVolume"), 1) 
+ # draw front face of cubes 
+ self.raycube.renderFrontFace(pMatrix, mvMatrix, self.program) 
+ #self.render(pMatrix, mvMatrix) 
+ def keyPressed(self, key): 
+ if key == 'l': 
+   self.camera.rotate(True) 
+ elif key == 'r': 
+ self.camera.rotate(False) 
+ def reshape(self, width, height): 
+ self.width = width 
+ self.height = height 
+ self.aspect = width/float(height) 
+ self.raycube.reshape(width, height) 
+ def close(self): 
+ self.raycube.close() 
+11.10  二维切片 
+除了显示体数据的三维视图，我们也想在屏幕上显示x、y 和z 方向上的数据
+的二维切片。这段代码封装在SliceRender 类中，它创建二维体切片。要查看
+slicerender.py 的完整代码，请直接跳到11.11 节。 
+下面的初始化代码为切片建立了几何形状：
+ # set up vertex array object (VAO) 
+ self.vao = glGenVertexArrays(1) 
+ glBindVertexArray(self.vao) 
+ # define quad vertices 
+ 
+ vertexData = numpy.array([ 0.0, 1.0, 0.0, 
+ 0.0, 0.0, 0.0, 
+ 1.0, 1.0, 0.0, 
+ 1.0, 0.0, 0.0], numpy.float32) 
+ # vertex buffer 
+ self.vertexBuffer = glGenBuffers(1) 
+ glBindBuffer(GL_ARRAY_BUFFER, self.vertexBuffer) 
+ glBufferData(GL_ARRAY_BUFFER, 4*len(vertexData), vertexData, 
+   GL_STATIC_DRAW) 
+ # enable arrays 
+ glEnableVertexAttribArray(self.vertIndex) 
+ # set buffers 
+ glBindBuffer(GL_ARRAY_BUFFER, self.vertexBuffer) 
+
+200 Python 极客项目编程 
+ glVertexAttribPointer(self.vertIndex, 3, GL_FLOAT, GL_FALSE, 0, None) 
+ # unbind VAO 
+ glBindVertexArray(0) 
+这段代码设置了一个VAO 来管理VBO，像前几个例子一样。在行定义的几
+何形状是在xy 平面上的正方形（顶点顺序是GL_TRIANGLE_STRIP 的顺序，第9
+章介绍过），所以无论是否显示垂直于x、y 或z 的切片，都使用相同的几何形状。
+这些情况的不同之处在于，从三维纹理中选择显示的数据平面。讨论顶点着色器时，
+会回过头来探讨这一点。
+接下来，利用SliceRender 渲染二维切片： 
+ def draw(self): 
+ # clear buffers 
+ glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT) 
+ # build projection matrix 
+ 
+ pMatrix = glutils.ortho(-0.6, 0.6, -0.6, 0.6, 0.1, 100.0) 
+ # modelview matrix 
+ 
+ mvMatrix = numpy.array([1.0, 0.0, 0.0, 0.0, 
+ 0.0, 1.0, 0.0, 0.0, 
+ 0.0, 0.0, 1.0, 0.0, 
+ -0.5, -0.5, -1.0, 1.0], numpy.float32) 
+ # use shader 
+ glUseProgram(self.program) 
+ # set projection matrix 
+ glUniformMatrix4fv(self.pMatrixUniform, 1, GL_FALSE, pMatrix) 
+ # set modelview matrix 
+ glUniformMatrix4fv(self.mvMatrixUniform, 1, GL_FALSE, mvMatrix) 
+ # set current slice fraction 
+ 
+ glUniform1f(glGetUniformLocation(self.program, b"uSliceFrac"), 
+   float(self.currSliceIndex)/float(self.currSliceMax)) 
+ # set current slice mode 
+ 
+ glUniform1i(glGetUniformLocation(self.program, b"uSliceMode"), 
+ self.mode) 
+ # enable texture 
+ glActiveTexture(GL_TEXTURE0) 
+ glBindTexture(GL_TEXTURE_3D, self.texture) 
+ glUniform1i(glGetUniformLocation(self.program, b"tex"), 0) 
+ # bind VAO 
+ glBindVertexArray(self.vao) 
+ # draw 
+ glDrawArrays(GL_TRIANGLE_STRIP, 0, 4) 
+ # unbind VAO 
+ glBindVertexArray(0) 
+每个二维切片都是一个正方形，是用OpenGL 的三角形带图元建立的。这段代
+码完成了三角形带的渲染设置。请注意，我们用glutils.ortho()方法实现了正投影。
+在行，建立了一个投影，在表示切片的单位正方形边上增加0.1 的缓冲区。用
+OpenGL 绘制时，默认视图（不应用任何转换）将眼睛放在（0，0，0），沿着z 轴
+
+第11 章  体渲染 201 
+向下看而y 轴朝上。在行，对几何形状应用转换（-0.5，-0.5，-1.0），让它围绕z
+轴居中。在行设置当前切片的分数（例如，100 个切片中的第10 个将是0.1），在
+行设置切片模式（在x，y 或z 方向上观看切片，分别由整数0、1 和2 表示），并
+将这两个值设置给着色器。
+11.10.1  顶点着色器 
+现在来看看SliceRender 的顶点着色器： 
+# version 330 core 
+in vec3 aVert; 
+uniform mat4 uMVMatrix; 
+uniform mat4 uPMatrix; 
+uniform float uSliceFrac; 
+uniform int uSliceMode; 
+out vec3 texcoord; 
+void main() { 
+ // x slice 
+ if (uSliceMode == 0) { 
+ 
+ texcoord = vec3(uSliceFrac, aVert.x, 1.0-aVert.y); 
+ } 
+ // y slice 
+ else if (uSliceMode == 1) { 
+ 
+ texcoord = vec3(aVert.x, uSliceFrac, 1.0-aVert.y); 
+ } 
+ // z slice 
+ else { 
+ 
+ texcoord = vec3(aVert.x, 1.0-aVert.y, uSliceFrac); 
+ } 
+ // calculate transformed vertex 
+ gl_Position = uPMatrix * uMVMatrix * vec4(aVert, 1.0); 
+} 
+ 
+顶点着色器用三角形带顶点数组作为输入，并设置一个纹理坐标作为输出。当
+前切片分数和切片模式作为uniform 变量传入。 
+在行，计算x 切片的纹理坐标。因为要垂直于x 方向切片，所以希望切片平
+行于yz 平面。传入顶点着色器的三维顶点也兼作三维纹理坐标，因为它们在[0，1]
+的范围内，所以纹理坐标由（f, Vx, Vy）给出，其中f 是x 轴方向上切片编号的分
+数，Vx 和Vy 是顶点坐标。遗憾的是，由此产生的图像是倒的，因为OpenGL 坐标
+系统的原点在左下角，y 方向朝上。这和我们希望的相反。为了解决这个问题，将
+纹理坐标t 改为（1 - t），采用（f, Vx, 1 - Vy），如行所示。在行和行，利用类
+似的逻辑来计算y 和z 方向上切片的纹理坐标。 
+
+202 Python 极客项目编程 
+11.10.2  片段着色器 
+下面是片段着色器：
+# version 330 core 
+ in vec3 texcoord; 
+ uniform sampler3D texture; 
+out vec4 fragColor; 
+void main() { 
+ // look up color in texture 
+ 
+ vec4 col = texture(tex, texcoord); 
+ 
+ fragColor = col.rrra; 
+} 
+ 
+在行，片段着色器声明texcoord 作为输入，它在顶点着色器中设为输出。在
+行，该纹理采样器声明为uniform。在行，用texcoord 查找纹理的颜色，在行，
+设置fragColor 作为输出（因为读入纹理时只作为红色通道，所以使用col.rrra）。 
+11.10.3  针对二维切片的用户界面 
+现在需要为用户提供一种方法，让切片经过这些数据。用SliceRender 的键盘处
+理程序来实现。
+ def keyPressed(self, key): 
+ """keypress handler""" 
+ if key == 'x': 
+ 
+ self.mode = SliceRender.XSLICE 
+ # reset slice index 
+ self.currSliceIndex = int(self.Nx/2) 
+ self.currSliceMax = self.Nx 
+ elif key == 'y': 
+ self.mode = SliceRender.YSLICE 
+ # reset slice index 
+ self.currSliceIndex = int(self.Ny/2) 
+ self.currSliceMax = self.Ny 
+ elif key == 'z': 
+ self.mode = SliceRender.ZSLICE 
+ # reset slice index 
+ self.currSliceIndex = int(self.Nz/2) 
+ self.currSliceMax = self.Nz 
+ elif key == 'l': 
+ 
+   self.currSliceIndex = (self.currSliceIndex + 1) % self.currSliceMax 
+ elif key == 'r': 
+ self.currSliceIndex = (self.currSliceIndex - 1) % self.currSliceMax 
+
+第11 章  体渲染 203 
+在键盘上按下X、Y 或Z 键时，SliceRender 切换到的x、y 或z 切片模式。在
+行，可以看到x 切片的效果，随后将当前切片索引设置为数据的中间位置，并更
+新最大切片数。按下键盘上的左、右箭头键，就实现了切片翻页。在行，按下右
+箭头时切片索引递增。取模运算符（%）确保在超过最大值时索引“翻转”为0。 
+11.11  完整的二维切片代码 
+以下是完整的代码清单。也可以在https://github.com/electronut/pp/tree/master/ 
+volrender/找到slicerender.py 文件。 
+import OpenGL 
+from OpenGL.GL import * 
+from OpenGL.GL.shaders import * 
+import numpy, math, sys 
+import volreader, glutils 
+strVS = """ 
+# version 330 core 
+in vec3 aVert; 
+uniform mat4 uMVMatrix; 
+uniform mat4 uPMatrix; 
+uniform float uSliceFrac; 
+uniform int uSliceMode; 
+out vec3 texcoord; 
+void main() { 
+ // x slice 
+ if (uSliceMode == 0) { 
+ texcoord = vec3(uSliceFrac, aVert.x, 1.0-aVert.y); 
+ } 
+ // y slice 
+ else if (uSliceMode == 1) { 
+ texcoord = vec3(aVert.x, uSliceFrac, 1.0-aVert.y); 
+ } 
+ // z slice 
+ else { 
+ texcoord = vec3(aVert.x, 1.0-aVert.y, uSliceFrac); 
+ } 
+ // calculate transformed vertex 
+ gl_Position = uPMatrix * uMVMatrix * vec4(aVert, 1.0); 
+} 
+ """ 
+ strFS = """ 
+ # version 330 core 
+ in vec3 texcoord; 
+
+204 Python 极客项目编程 
+ uniform sampler3D tex; 
+ out vec4 fragColor; 
+ void main() { 
+ // look up color in texture 
+ vec4 col = texture(tex, texcoord); 
+ fragColor = col.rrra; 
+ } 
+ """ 
+ class SliceRender: 
+ # slice modes 
+ XSLICE, YSLICE, ZSLICE = 0, 1, 2 
+ def __init__(self, width, height, volume): 
+ """SliceRender constructor""" 
+ self.width = width 
+ self.height = height 
+ self.aspect = width/float(height) 
+ # slice mode 
+ self.mode = SliceRender.ZSLICE 
+ # create shader 
+ self.program = glutils.loadShaders(strVS, strFS) 
+ glUseProgram(self.program) 
+ self.pMatrixUniform = glGetUniformLocation(self.program, b'uPMatrix') 
+ self.mvMatrixUniform = glGetUniformLocation(self.program, 
+ b"uMVMatrix") 
+ # attributes 
+ self.vertIndex = glGetAttribLocation(self.program, b"aVert") 
+ # set up vertex array object (VAO) 
+ self.vao = glGenVertexArrays(1) 
+ glBindVertexArray(self.vao) 
+ # define quad vertices 
+ vertexData = numpy.array([ 0.0, 1.0, 0.0, 
+ 0.0, 0.0, 0.0, 
+ 1.0, 1.0, 0.0, 
+ 1.0, 0.0, 0.0], numpy.float32) 
+ # vertex buffer 
+ self.vertexBuffer = glGenBuffers(1) 
+ glBindBuffer(GL_ARRAY_BUFFER, self.vertexBuffer) 
+ glBufferData(GL_ARRAY_BUFFER, 4*len(vertexData), vertexData, 
+   GL_STATIC_DRAW) 
+ # enable arrays 
+ glEnableVertexAttribArray(self.vertIndex) 
+ # set buffers 
+ glBindBuffer(GL_ARRAY_BUFFER, self.vertexBuffer) 
+ glVertexAttribPointer(self.vertIndex, 3, GL_FLOAT, GL_FALSE, 0, None) 
+ # unbind VAO 
+ glBindVertexArray(0) 
+
+第11 章  体渲染 205 
+ # load texture 
+ self.texture, self.Nx, self.Ny, self.Nz = volume 
+ # current slice index 
+ self.currSliceIndex = int(self.Nz/2); 
+ self.currSliceMax = self.Nz; 
+ def reshape(self, width, height): 
+ self.width = width 
+ self.height = height 
+ self.aspect = width/float(height) 
+ def draw(self): 
+ # clear buffers 
+ glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT) 
+ # build projection matrix 
+ pMatrix = glutils.ortho(-0.6, 0.6, -0.6, 0.6, 0.1, 100.0) 
+ # modelview matrix 
+ mvMatrix = numpy.array([1.0, 0.0, 0.0, 0.0, 
+ 0.0, 1.0, 0.0, 0.0, 
+ 0.0, 0.0, 1.0, 0.0, 
+ -0.5, -0.5, -1.0, 1.0], numpy.float32) 
+ # use shader 
+ glUseProgram(self.program) 
+ # set projection matrix 
+ glUniformMatrix4fv(self.pMatrixUniform, 1, GL_FALSE, pMatrix) 
+ # set modelview matrix 
+ glUniformMatrix4fv(self.mvMatrixUniform, 1, GL_FALSE, mvMatrix) 
+ # set current slice fraction 
+ glUniform1f(glGetUniformLocation(self.program, b"uSliceFrac"), 
+   float(self.currSliceIndex)/float(self.currSliceMax)) 
+ # set current slice mode 
+ glUniform1i(glGetUniformLocation(self.program, b"uSliceMode"), 
+ self.mode) 
+ # enable texture 
+ glActiveTexture(GL_TEXTURE0) 
+ glBindTexture(GL_TEXTURE_3D, self.texture) 
+ glUniform1i(glGetUniformLocation(self.program, b"tex"), 0) 
+ # bind VAO 
+ glBindVertexArray(self.vao) 
+ # draw 
+ glDrawArrays(GL_TRIANGLE_STRIP, 0, 4) 
+ # unbind VAO 
+ glBindVertexArray(0) 
+ def keyPressed(self, key): 
+ """keypress handler""" 
+ if key == 'x': 
+ self.mode = SliceRender.XSLICE 
+ # reset slice index 
+ self.currSliceIndex = int(self.Nx/2) 
+ self.currSliceMax = self.Nx 
+ elif key == 'y': 
+
+206 Python 极客项目编程 
+ self.mode = SliceRender.YSLICE 
+ # reset slice index 
+ self.currSliceIndex = int(self.Ny/2) 
+ self.currSliceMax = self.Ny 
+ elif key == 'z': 
+ self.mode = SliceRender.ZSLICE 
+ # reset slice index 
+ self.currSliceIndex = int(self.Nz/2) 
+ self.currSliceMax = self.Nz 
+ elif key == 'l': 
+   self.currSliceIndex = (self.currSliceIndex + 1) % self.currSliceMax 
+ elif key == 'r': 
+ self.currSliceIndex = (self.currSliceIndex - 1) % self.currSliceMax 
+ def close(self): 
+ pass 
+11.12  代码整合 
+让我们快速看看项目的主文件volrender.py。该文件用到RenderWin 类，它创建
+并管理GLFW 的OpenGL 窗口（这里不会详细介绍该类，因为它类似于第9 章和第
+10 章中使用的类）。要查看volrender.py 的完整代码，请直接跳到11.13 节。 
+在这个类的初始化代码中，创建了渲染器，如下所示：
+ # load volume data 
+ 
+ self.volume = volreader.loadVolume(imageDir) 
+ # create renderer 
+ 
+ self.renderer = RayCastRender(self.width, self.height, self.volume) 
+在行，读入三维数据作为OpenGL 纹理。在行，创建RayCastRender 类型
+的对象来显示数据。
+键盘上按下V 键，在体渲染和切片渲染之间切换。下面是RenderWindow 的键
+盘处理程序：
+ def onKeyboard(self, win, key, scancode, action, mods): 
+ # print 'keyboard: ', win, key, scancode, action, mods 
+ # ESC to quit 
+ if key is glfw.GLFW_KEY_ESCAPE: 
+ self.renderer.close() 
+   self.exitNow = True 
+ else: 
+ 
+ if action is glfw.GLFW_PRESS or action is glfw.GLFW_REPEAT: 
+ if key == glfw.GLFW_KEY_V: 
+ # toggle render mode 
+ 
+ if isinstance(self.renderer, RayCastRender): 
+ self.renderer = SliceRender(self.width, self.height, 
+ self.volume) 
+ else: 
+ self.renderer = RayCastRender(self.width, self.height, 
+ self.volume) 
+ # call reshape on renderer 
+
+第11 章  体渲染 207 
+   self.renderer.reshape(self.width, self.height) 
+ else: 
+ # send keypress to renderer 
+ 
+ keyDict = {glfw.GLFW_KEY_X: 'x', glfw.GLFW_KEY_Y: 'y', 
+ glfw.GLFW_KEY_Z: 'z', glfw.GLFW_KEY_LEFT: 'l', 
+ glfw.GLFW_KEY_RIGHT: 'r'} 
+ try: 
+   self.renderer.keyPressed(keyDict[key]) 
+ except: 
+ pass 
+按ESC 键退出程序。其他按键（V、X、Y、Z 等）在行处理（无论刚刚按下
+该键，或者保持按下状态，代码都有效）。在行，如果按下V 键，在体渲染和切
+片渲染之间切换，利用Python 的isinstance()方法来确定当前类的类型。 
+要处理除ESC 之外的按键事件，我们使用一个字典，将按下的键传入渲染器
+的keyPressed()处理程序。 
+注意
+我没有直接传入glfw.KEY 值，而是利用字典将它们转换为字符值，因为
+这是很好的做法，目的是减少源文件中的依赖关系。目前，项目中依赖GLFW
+的唯一文件是volrender.py。如果将GLFW 相关的类型传入其他代码，它们就
+需要导入并依赖GLFW 库，但如果切换到另一个OpenGL 窗口工具包，代码
+就乱了。
+11.13  完整的主文件代码 
+以下是完整的代码清单。也可以在https://github.com/electronut/pp/tree/master/ 
+volrender/找到volrender.py 文件。 
+import sys, argparse, os 
+from slicerender import * 
+from raycast import * 
+import glfw 
+class RenderWin: 
+ """GLFW Rendering window class""" 
+ def __init__(self, imageDir): 
+ # save current working directory 
+ cwd = os.getcwd() 
+ # initialize glfw; this changes cwd 
+ glfw.glfwInit() 
+ # restore cwd 
+ os.chdir(cwd) 
+ # version hints 
+
+208 Python 极客项目编程 
+ glfw.glfwWindowHint(glfw.GLFW_CONTEXT_VERSION_MAJOR, 3) 
+ glfw.glfwWindowHint(glfw.GLFW_CONTEXT_VERSION_MINOR, 3) 
+ glfw.glfwWindowHint(glfw.GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE) 
+ glfw.glfwWindowHint(glfw.GLFW_OPENGL_PROFILE, 
+ glfw.GLFW_OPENGL_CORE_PROFILE) 
+ # make a window 
+ self.width, self.height = 512, 512 
+ self.aspect = self.width/float(self.height) 
+ self.win = glfw.glfwCreateWindow(self.width, self.height, b"volrender") 
+ # make context current 
+ glfw.glfwMakeContextCurrent(self.win) 
+ # initialize GL 
+ glViewport(0, 0, self.width, self.height) 
+ glEnable(GL_DEPTH_TEST) 
+ glClearColor(0.0, 0.0, 0.0, 0.0) 
+ # set window callbacks 
+ glfw.glfwSetMouseButtonCallback(self.win, self.onMouseButton) 
+ glfw.glfwSetKeyCallback(self.win, self.onKeyboard) 
+ glfw.glfwSetWindowSizeCallback(self.win, self.onSize) 
+ # load volume data 
+ self.volume = volreader.loadVolume(imageDir) 
+ # create renderer 
+ self.renderer = RayCastRender(self.width, self.height, self.volume) 
+ # exit flag 
+ self.exitNow = False 
+ def onMouseButton(self, win, button, action, mods): 
+ # print 'mouse button: ', win, button, action, mods 
+ pass 
+ def onKeyboard(self, win, key, scancode, action, mods): 
+ # print 'keyboard: ', win, key, scancode, action, mods 
+ # ESC to quit 
+ if key is glfw.GLFW_KEY_ESCAPE: 
+ self.renderer.close() 
+   self.exitNow = True 
+ else: 
+ if action is glfw.GLFW_PRESS or action is glfw.GLFW_REPEAT: 
+ if key == glfw.GLFW_KEY_V: 
+ # toggle render mode 
+ if isinstance(self.renderer, RayCastRender): 
+ self.renderer = SliceRender(self.width, self.height, 
+ self.volume) 
+ else: 
+ self.renderer = RayCastRender(self.width, self.height, 
+ self.volume) 
+ # call reshape on renderer 
+   self.renderer.reshape(self.width, self.height) 
+ else: 
+ # send keypress to renderer 
+ keyDict = {glfw.GLFW_KEY_X: 'x', glfw.GLFW_KEY_Y: 'y', 
+ glfw.GLFW_KEY_Z: 'z', glfw.GLFW_KEY_LEFT: 'l', 
+
+第11 章  体渲染 209 
+ glfw.GLFW_KEY_RIGHT: 'r'} 
+ try: 
+   self.renderer.keyPressed(keyDict[key]) 
+ except: 
+ pass 
+ def onSize(self, win, width, height): 
+ #print 'onsize: ', win, width, height 
+ self.width = width 
+ self.height = height 
+ self.aspect = width/float(height) 
+ glViewport(0, 0, self.width, self.height) 
+ self.renderer.reshape(width, height) 
+ def run(self): 
+ # start loop 
+ while not glfw.glfwWindowShouldClose(self.win) and not self.exitNow: 
+ # render 
+ self.renderer.draw() 
+ # swap buffers 
+ glfw.glfwSwapBuffers(self.win) 
+ # wait for events 
+ glfw.glfwWaitEvents() 
+ # end 
+ glfw.glfwTerminate() 
+# main() function 
+def main(): 
+ print('starting volrender...') 
+ # create parser 
+ parser = argparse.ArgumentParser(description="Volume Rendering...") 
+ # add expected arguments 
+ parser.add_argument('--dir', dest='imageDir', required=True) 
+ # parse args 
+ args = parser.parse_args() 
+ # create render window 
+ rwin = RenderWin(args.imageDir) 
+ rwin.run() 
+# call main 
+if __name__ == '__main__': 
+ main() 
+11.14  运行程序 
+下面是用斯坦福体数据档案（Stanford Volume Data Archive）
+①
+①http://graphics.stanford.edu/data/voldata/ 
+的数据来运行应
+用程序的示例。
+$ python volrender.py --dir mrbrain-8bit/ 
+应该看到如图11-6 所示的画面。 
+
+210 Python 极客项目编程 
+图11-6  virender.by 运行示例。左侧的图像是体渲染，右侧的图像是二维切片 
+11.15  小结 
+本章用Python 和OpenGL 实现了体光线投射算法。我们学习了如何用GLSL 着
+色器有效地实现这个算法，以及如何从体数据创建二维切片。
+11.16  实验 
+这里有一些方法，让你继续完善体光线投射程序。
+1．目前，在光线投射模式下，很难看到的体数据“立方体”的边界。请实现
+一个WireFrame 类，围绕该立方体绘制一个盒子。分别用红、绿、蓝色绘制x、y
+和z 轴，让它们每个都有自己的着色器。在RayCastRender 类中使用WireFrame。 
+2．实现数据刻度。在当前的实现中，针对物体绘制了一个正方体，针对二维
+切片了一个正方形，这假定数据集是对称（即切片的数目在每个方向上相同），但
+大多数实际数据具有不同数目的切片。特别是医疗数据，常常在z 方向的切片较少，
+例如，维度是256×256×99。要正确显示这些数据，必须在计算中引入刻度。一种
+做法是将刻度应用于立方体的顶点（三维物体）和正方形的顶点（二维切片）。然
+后用户可以输入刻度参数作为命令行参数。
+3．我们的体光线投射实现使用了x 射线投射来计算像素的最终颜色或强度。另
+一种流行的实现方式是用最大强度投影（maximum intensity projection，MIP），在每
+个像素上设置最大强度。在代码中实现这一点（提示：在RayCastRender 的片段着色
+器中，修改逐步穿透光线的代码，沿着光线检查并设置最大值，代替混合值）。
+
+第11 章  体渲染 211 
+4．目前，唯一实现的用户界面是围绕x 轴、y 轴和z 轴旋转。请实现缩放功能，
+按I 键或O 键来放大或缩小体渲染图像。可以在glutils.lookAt()方法中设置适当的
+相机参数来实现，有一点需要注意：如果将观察位置移动到立方体内部，光线投射
+将失败，因为OpenGL 会裁剪立方体的正面。光线投射所需的光线计算，同时需要
+彩色立方体的正面和背面才能正确渲染。作为替代方案，通过在glutils.projecton()
+方法中调节视场来实现缩放。

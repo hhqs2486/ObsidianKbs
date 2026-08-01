@@ -1,0 +1,478 @@
+第19 章 
+TensorFlow 移动端应用 
+深度学习在声频、图像、视频处理上已经取得了令人印象深刻的进步，但它通常运行在功
+能强大的计算机上，如果需要运行在手机等移动设备或者树莓派等嵌入式平台上呢？
+TensorFlow 目前是最有竞争力成为未来主流的深度学习框架，谷歌公司不仅为自己研发的操作
+系统—Android 提供了TensorFlow 移动端支持，而且对iOS 和树莓派也提供了移动端支持。 
+19.1  移动端应用原理 
+在移动端或者嵌入式设备上应用深度学习，有两种方式：一是将模型运行在云端服务器上，
+向服务器发送请求，接收服务器响应；二是在本地运行模型。一般来说，采用后者的方式，也
+就是在PC 上训练好一个模型，然后将其放在移动端上进行预测。 
+使用本地运行模型原因在于，首先，向服务端请求数据的方式可行性差。移动端的资源（如网
+络、CPU、内存资源）是很稀缺的。例如，在网络连接不良或者丢失的情况下，向服务端发送连续
+的数据的代价就变得非常高昂。其次，运行在本地的实时性更好。但问题是，一个模型大小动辄几
+百兆，且不说把它安装到移动端需要多少网络资源，就是每次预测时需要的内存资源也是很多的。
+那么，要在性能相对较弱的移动/嵌入式设备（如没有加速器的ARM CPU）上高效运行一个CNN，
+应该怎么做呢？这就衍生出了很多加速计算的方向，其中重要的两个方向是对内存空间和速度的优
+化。采用的方式一是精简模型，既可以节省内存空间，也可以加快计算速度；二是加快框架的执行
+速度，影响框架执行速度主要有两方面的因素，即模型的复杂度和每一步的计算速度。
+精简模型主要是使用更低的权重精度，如量化（quantization）或权重剪枝（weight pruning）。
+剪枝是指剪小权重的连接，把所有权值连接低于一个阈值的连接从网络里移除。
+而加速框架的执行速度一般不会影响模型的参数，是试图优化矩阵之间的通用乘法（GEMM）
+运算，因此会同时影响卷积层（卷积层的计算是先对数据进行im2col
+①运算，再进行GEMM 运算）
+①
+im2col 的主要功能是对索引的图像块重排列为矩阵列。它是先将一个大矩阵，重叠地划分为多个子矩阵，对每个
+子矩阵序列化成向量，最后得到另一个矩阵。 
+
+第19 章 TensorFlow 移动端应用 ee 263 
+和全连接层。
+下面我们就分别来介绍。
+19.1.1  量化①
+量化（quantitative），这里不是指金融上的量化交易，而是指离散化。量化是一个总括
+术语，是用比32 位浮点数更少的空间来存储和运行模型，并且TensorFlow 量化的实现屏
+蔽了存储和运行细节。
+神经网络训练时要求速度和准确率，训练通常在GPU 上进行，所以使用浮点数影响不大。
+但是在预测阶段，使用浮点数会影响速度。量化可以在加快速度的同时，保持较高的精度。
+量化网络的动机主要有两个。最初的动机是减小模型文件的大小。模型文件往往占据很大
+的磁盘空间，例如，6.6 节中介绍的模型，每个模型都接近200 MB，模型中存储的是分布在大
+量层中的权值。在存储模型的时候用8 位整数，模型大小可以缩小为原来32 位的25%左右。
+在加载模型后运算时转换回32 位浮点数，这样已有的浮点计算代码无需改动即可正常运行。 
+量化的另一个动机是降低预测过程需要的计算资源。这在嵌入式和移动端非常有意义，
+能够更快地运行模型，功耗更低。从体系架构的角度来说，8 位的访问次数要比32 位多，
+在读取8 位整数时只需要32 位浮点数的1/4 的内存带宽，例如，在32 位内存带宽的情况
+下，8 位整数可以一次访问4 个，32 位浮点数只能1 次访问1 个。而且使用SIMD 指令（19.2
+节会加速介绍该指令集），可以在一个时钟周期里实现更多的计算。另一方面，8 位对嵌入
+式设备的利用更充分，因为很多嵌入式芯片都是8 位、16 位的，如单片机、数字信号处理
+器（DSP 芯片），8 位可以充分利用这些。 
+此外，神经网络对于噪声的健壮性很强，因为量化会带来精度损失（这种损失可以认
+为是一种噪声），并不会危害到整体结果的准确度。
+那能否用低精度格式来直接训练呢？答案是，大多数情况下是不能的。因为在训练时，尽管
+前向传播能够顺利进行，但往往反向传播中需要计算梯度。例如，梯度是0.2，使用浮点数可以
+很好地表示，而整数就不能很好地表示，这会导致梯度消失。因此需要使用高于8 位的值来计算
+梯度。因此，正如在本节一开始介绍的那样，在移动端训练模型的思路往往是，在PC 上正常训
+练好浮点数模型，然后直接将模型转换成8 位，移动端是使用8 位的模型来执行预测的过程。 
+下面我们就以8 位精度的存储和计算来说明。 
+1．量化示例 
+我们举个将GoogleNet 模型转换成8 位模型的例子，看看模型的大小减小多少，以及用它
+①
+本节参本自本方网本《How to Quantize Neural Networks with TensorFlow》：https://www.tensorflow.org/performance/quantization。 
+
+264 ff 第三篇 提高篇 
+预测的结果怎么样。
+从本方网本上下载
+①训练好的GoogleNet 模型，解压后，放在/tmp 目录下，然后执行： 
+bazel build tensorflow/tools/quantization:quantize_graph 
+bazel-bin/tensorflow/tools/quantization/quantize_graph \ 
+--input=/tmp/classify_image_graph_def.pb \ 
+--output_node_names="softmax" --output=/tmp/quantized_graph.pb \ 
+--mode=eightbit 
+生成量化后的模型quantized_graph.pb 大小只有23 MB，是原来模型classify_image_graph_ 
+def.pb（91 MB）的1/4。它的预测效果怎么样呢？执行： 
+bazel build tensorflow/examples/label_image:label_image
+bazel-bin/tensorflow/examples/label_image/label_image \
+--image=/tmp/cropped_panda.jpg \
+--graph=/tmp/quantized_graph.pb \
+--labels=/tmp/imagenet_synset_to_human_label_map.txt \
+--input_width=299 \
+--input_height=299 \
+--input_mean=128 \
+--input_std=128 \
+--input_layer="Mul:0" \
+--output_layer="softmax:0"
+运行结果如图19-1 所示，可以看出8 位模型预测的结果也很好。 
+图19-1 
+2．量化过程的实现 
+TensorFlow 的量化是通过将预测的操作转换成等价的8 位版本的操作来实现的。量化操作
+过程如图19-2 所示。 
+图19-2 中左侧是原始的Relu 操作，输入和输出均是浮点数。右侧是量化后的Relu 操作，
+先根据输入的浮点数计算最大值和最小值，然后进入量化（Quantize）操作将输入数据转换成8
+位。一般来讲，在进入量化的Relu（QuantizedRelu）处理后，为了保证输出层的输入数据的准
+确性，还需要进行反量化（Dequantize）的操作，将权重再转回32 位精度，来保证预测的准确
+性。也就是整个模型的前向传播采用8 位整数运行，在最后一层之前加上一个反量化层，把8
+位转回32 位作为输出层的输入。 
+实际上，我们会在每个量化操作（如QuantizedMatMul、QuantizedRelu 等）的后面执行反
+①
+下载路下http://download.tensorflow.org/models/image/imagenet/inception-2015-12-05.tgz。 
+
+第19 章 TensorFlow 移动端应用 ee 265 
+量化操作（Dequantize），如图19-3 左侧所示，在QuantizedMatMul 后执行反量化和量化操作可
+以相互抵消。因此，如图19-3 右侧所示，在输出层之前做一次反量化操作就可以了。 
+图19-2 
+图19-3 
+3．量化数据的表示 
+将浮点数转换为8 位的表示实际上是一个压缩问题。实际上，权重和经过激活函数处理过
+的上一层的输出（也就是下一层的输入）实际上是分布在一个范围内的值。量化的过程一般是
+找出最大值和最小值后，将分布在其中的浮点数认为是线性分布，做线性扩展。因此，假设最
+
+266 ff 第三篇 提高篇 
+小值是-10.0f，最大值是30.0f，那量化后的结果如表19-1 所示。 
+表19-1 
+量化后的值
+原始的浮点数
+0 去 
+-10.0 
+255 去 
+30.0 
+128
+10.0 
+19.1.2  优化矩阵乘法运算 
+谷歌公司开源了一个小型独立的低精度通用矩阵乘法（General Matrix to Matrix Multiplication，
+GEMM）库——gemmlowp
+①。 
+19.2  iOS 系统实践 
+本节先带领读者编译完成在iOS 系统上需要的TensorFlow 程序，然后真实地编译一个能在Xcode
+模拟器中运行的图片识别模型，随后讲解使用自己的数据，如何在PC 端训练好一个模型，经过3 道
+工序的模型优化后，编译成iOS 支持的模型，并生成iOS 工程文件安装在iPhone 上运行。 
+19.2.1  环境准备 
+需要运行在操作系统Mac OS X 上的集成开发工具Xcode，7.3（含）以上版本即可。图19-4
+是笔者所用的版本。
+图19-4 
+随后，需要编译包含TensorFlow 核心的静态库，在tensorflow-1.1.0 目录下运行： 
+①
+库地库为https://github.com/google/gemmlowp。
+
+第19 章 TensorFlow 移动端应用 ee 267 
+tensorflow/contrib/makefile/download_dependencies.sh 
+运行时会把相应的依赖库下载到tensorflow/contrib/makefile/downloads/目录下： 
+├─── eigen        # C++开源矩阵计算工具 
+├─── gemmlowp    # 小型独立的低精度通用矩阵乘法（GEMM）库 
+├─── googletest # 谷歌开源的C++测试框架 
+├─── protobuf    # 谷歌开源的数据交换格式协议 
+└─── re2          # 谷歌开源的正则表达式库
+19.2.2  编译演示程序并运行 
+在tensorflow-1.1.0 目录下运行： 
+tensorflow/contrib/makefile/build_all_ios.sh
+经过编译后会生成一个静态库，位于tensorflow/contrib/makefile/gen/lib 下，如下： 
+├─── ios_ARM64 
+├─── ios_ARMV7 
+├─── ios_ARMV7S 
+├─── ios_I386 
+├─── ios_X86_64 
+└─── libtensorflow-core.a 
+这时就可以在Xcode 的模拟器上以及iOS 设备上运行App 的预测示例了。 
+在TensorFlow 的iOS 示例
+①中，共有3 个目录，代表3 个示例，其中benchmark 目录是预
+测的基准示例，simple 目录是图片的预测示例，camera 目录是视频流实时预测示例。 
+从本方网本
+②上下载Inception V1 模型，这是在ImageNet 上训练好的能识别1000 类图片的
+识别模型。
+把解压后的Inception V1 模型分别复制到benchmark、simple、camera 下的data 目录中，分别进
+入这3 个目录，运行目录下后缀名为xcodeproj 的文件。如图19-5 所示，进入simple 目录中运行。 
+图19-5 
+①
+代码位于https://github.com/tensorflow/tensorflow/tree/master/tensorflow/contrib/ios_examples/。
+② 模型的下载地库为https://storage.googleapis.com/download.tensorflow.org/models/inception5h.zip。 
+
+268 ff 第三篇 提高篇 
+这个程序识别的图像是我的一张书包照片（如图19-6 所示），将它放在tensorflow/contrib/ 
+ios_examples/simple/data 目录下，并命名为grace_hopper.jpg。 
+图19-6 
+如图19-7 所示，选择iPhone 7 Plus 模拟器，并点击左上角运行标志，编译完成后，模拟器
+的页面会出现一个“Run Model”按钮，每单击一次按钮就进行一次预测，预测结果见Xcode
+的控制台。
+图19-7 
+可以看出，识别结果背包（backpack）的概率是0.754，第二个预测结果是邮袋（mailbag），
+概率是0.191。 
+
+第19 章 TensorFlow 移动端应用 ee 269 
+19.2.3  自定义模型的编译及运行 
+如果我们想要训练自己的模型在手机端做预测，该如何做呢？这里我们假设想在手机上有一个
+实时花卉识别模型，当打开App 时，摄像头对准某束花，App 立刻告诉我这束花的品种。
+① 
+我们从本方网本下载花卉数据
+②。解压放在/tmp 下后，可以看到郁金香（tulips）、玫瑰（roses）、
+蒲公英（dandelion）、向日葵（sunflowers）、雏菊（daisy）5 种花卉的文件目录，每个目录中存
+放着近800 张该花卉品种的图片，如下： 
+├──── LICENSE.txt 
+├──── daisy 
+├──── dandelion 
+├──── roses 
+├──── sunflowers 
+└──── tulips 
+1．训练原始模型 
+我们使用TensorFlow本方网本提供的预训练好的Inception V3模型
+③在此花卉数据集上进行
+训练。在项目根目录tensorflow-1.1.0 下执行： 
+python tensorflow/examples/image_retraining/retrain.py \
+--bottleneck_dir=/tmp/bottlenecks/ \
+--how_many_training_steps 10 \
+--model_dir=/tmp/inception \
+--output_graph=/tmp/retrained_graph.pb \
+--output_labels=/tmp/retrained_labels.txt \
+--image_dir /tmp/flower_photos
+训练完成后，可以在/tmp 下看到生成的模型文件retrained_graph.pb（大小为83 MB）和标
+签文件retrained_labels.txt。 
+我们看到，上述命令行中存储和使用了“瓶颈”（bottlenecks）文件。瓶颈是用于描述实际
+进行分类的最终输出层之前的层（倒数第二层）的非正式术语。倒数第二层已经被训练得很好，
+因此瓶颈值会是一个有意义且紧凑的图像摘要，并且包含足够的信息使分类器做出选择。因此，
+在第一次训练的过程中，retrain.py 文件的代码会先分析所有的图片，计算每张图片的瓶颈值并
+存储下来。因为每张图片在训练的过程中会被使用多次，因此在下一次使用的过程中，可以不
+必重复计算。这里用tulips/9976515506_d496c5e72c.jpg 为例，生成的瓶颈文件为tulips/ 
+9976515506_d496c5e72c.jpg.txt，内容如图19-8 所示。 
+①
+本节讲解的内容本分参本本方网本https://www.tensorflow.org/tutorials/image_retraining。 
+② http://download.tensorflow.org/example_images/flower_photos.tgz
+③ 模型地库为http://download.tensorflow.org/models/image/imagenet/inception-2015-12-05.tgz。 
+
+270 ff 第三篇 提高篇 
+图19-8 
+2．编译成iOS 支持的模型
+① 
+这里，从原始模型到iOS 支持的模型将经过3 个阶段的处理。首先是去掉iOS 系统不支持
+的操作，并优化模型；然后将模型进行量化，权重变为8 位的常数，缩小模型；最后对模型做
+一个内存映射。我们接下来分步骤细讲。
+（1）去掉iOS 不支持的操作并优化模型。 
+因为移动设备的内存资源稀缺，并且还需要下载应用程序，所以默认情况下，iOS 版本的
+TensorFlow 仅支持在预测阶段中常见的且没有很大的外本依赖关系的操作。本方网本维护了一
+份支持的操作列表
+②。 
+目前有个操作DecodeJpeg 不被支持，这个操作是用来对JPEG 格式的图片进行解码的，但
+是它的实现依赖于libjpeg，libjpeg 在iOS 上的支持非常麻烦，并且还会增加二进制的占用空间。
+同时，对于本次的应用来说，我们希望从摄像头中实时识别出花卉的种类，直接处理相机的图
+像缓冲区，不需要先存成JPEG 文件，然后再解码。 
+而恰好我们基于预训练模型Inception v3 是从图片数据集中训练而得，模型是包含了DecodeJpeg
+操作。所以需要把输入数据直接供给（feed）发生在Decode 后的Mul 操作来绕过Decode 操作。 
+而恰好我们基于预训练模型Inception V3 训练的模型包含了DecodeJpeg 操作，所以把输入
+数据直接填充（feed）到发生在解码后的Mul 操作来绕过解码操作。 
+这个步骤也会做一些优化来加速预测，例如，将显式批处理规范化（explicit batch 
+normalization）操作合并到卷积权重中，以减少计算次数。命令如下： 
+bazel build tensorflow/python/tools:optimize_for_inference
+bazel-bin/tensorflow/python/tools/optimize_for_inference \
+--input=/tmp/retrained_graph.pb \
+--output=/tmp/optimized_graph.pb \
+--input_names=Mul \
+--output_names=final_result
+在/tmp/生成模型optimized_graph.pb（大小为83 MB），可以通过label_image 命令来预测，
+验证模型的有效性，如下：
+bazel-bin/tensorflow/examples/label_image/label_image \
+--output_layer=final_result \
+①
+本小节内容参本https://petewarden.com/2016/09/27/tensorflow-for-mobile-poets/。 
+②
+支持的操作列表参见https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/makefile/tf_op_files.txt。 
+
+第19 章 TensorFlow 移动端应用 ee 271 
+--labels=/tmp/retrained_labels.txt \
+--image=/tmp/flower_photos/daisy/5547758_eea9edfd54_n.jpg \
+--graph=/tmp/optimized_graph.pb
+--input_layer=Mul
+结果如图19-9 所示，模型还是有效的。 
+图19-9 
+（2）量化模型。 
+尽管苹果系统在.ipa 包中分发应用程序，所有应用程序中的资源都会使用zip 压缩。 但通
+常模型不能很好地压缩，因此将模型权重从浮点数转化为整数（范围为0～255），会损失一些
+准确度，但通常小于1%。运行命令如下： 
+bazel build tensorflow/tools/quantization:quantize_graph
+bazel-bin/tensorflow/tools/quantization/quantize_graph \
+--input=/tmp/optimized_graph.pb \
+--output=/tmp/rounded_graph.pb \
+--output_node_names=final_result \
+--mode=weights_rounded 
+在/tmp 下生成模型rounded_graph.pb，大小为83MB，但是经过zip 命令压缩能达到23 MB。 
+（3）内存映射。 
+我们需要处理的最后一个步骤是内存映射
+①（memory mapping）。如果App 把83 MB 的模型全
+本一次性加载到内存缓冲区，光加载这一步就会对iOS 的RAM 上施加很大的压力，同时，操作系
+统会不可预知地杀死使用内存过多的应用程序。我们需要使用的模型权值缓冲区是只读的，因此可
+以把它映射到内存中。当有内存压力时，操作系统可以直接释放些内存，来避免系统直接崩溃。
+如何来做呢？需要重新排列模型，使权重能够分本分逐块地从主GraphDef 加载到内存中。
+运行命令如下：
+bazel build tensorflow/contrib/util:convert_graphdef_memmapped_format
+bazel-bin/tensorflow/contrib/util/convert_graphdef_memmapped_format \
+--in_graph=/tmp/rounded_graph.pb \
+--out_graph=/tmp/mmapped_graph.pb 
+这时会在/tmp 下生成模型mmapped_graph.pb（大小为83 MB）。 
+3．生成iOS 工程文件并运行 
+我们使用19.2.2 节中粗略介绍过的视频流实时预测的演示程序的例子
+②，将模型文件和标
+①
+内存映射是指把内理内存映射到进程的地库空间之内，随后应用程序就可以直接使用输入/输出的地库空间，从而
+提高读写的效率。 
+② 地库为https://github.com/tensorflow/tensorflow/tree/master/tensorflow/contrib/ios_examples/camera。
+
+272 ff 第三篇 提高篇 
+记文件复制到tensorflow-1.1.0/tensorflow/contrib/ios_examples/camera/data 目录下。 
+然后修改tensorflow-1.1.0/tensorflow/contrib/ios_examples/camera 下的文件CameraExample 
+ViewController.mm，更改要加载的模型文件名称、输入图片的尺寸、操作节点的名字以及缩放
+像素大小等。如下：
+static NSString* model_file_name = @"mmapped_graph";
+static NSString* model_file_type = @"pb";
+const bool model_uses_memory_mapping = true;
+static NSString* labels_file_name = @"retrained_labels";
+static NSString* labels_file_type = @"txt";
+// 以下尺寸需要和模型训练时相匹配
+const int wanted_input_width = 299;
+const int wanted_input_height = 299;
+const int wanted_input_channels = 3;
+const float input_mean = 128.0f;
+const float input_std = 128.0f;
+const std::string input_layer_name = "Mul";
+const std::string output_layer_name = "final_result"; 
+最后连上iPhone 手机，就可以双击tensorflow-1.1.0/tensorflow/contrib/ios_examples/camera/ 
+camera_example.xcodeproj 编译并运行了。运行后，会在手机上安装好App，打开App 并找到玫
+瑰花来识别，识别结果如图19-10 所示。 
+图19-10 
+
+第19 章 TensorFlow 移动端应用 ee 273 
+这里概率并不是很高，原因是我在训练的时候迭代次数只设置了10 次，设置10 000 次后，
+可以使识别概率达到99%以上。 
+那么，这个安装到iOS 系统上的工程文件里面究竟包含了什么，才达到用摄像头实时识别
+的目的呢?生成的打包好的工程文件位于/Users/lijiaxuan/Library/Developer/Xcode/DerivedData/ 
+camera_example-dwwvzqamrwtfblfprxmxpvwasgin/Build/Products/Debug-iphoneos 下，如图19-11
+所示。
+图19-11 
+我们打开CameraExample.app 文件一探究竟。里面就包含了安装在iPhone 上的可执行文件
+CameraExample 以及以资源文件方式存储的模型文件mmapped_graph.pb 和标记文件retrained_ 
+labels.txt，如图19-12 所示。 
+图19-12 
+19.3  Android 系统实践
+① 
+本节先带领读者准备好Android 系统的编译环境，然后再真实地编译一个能在Android
+手机上运行的图片识别模型，随后讲解使用自己的数据，如何在PC 端训练好一个模型，经
+过模型优化后，编译成Android 支持的模型，并生成Android apk 文件安装在Android 手机上
+运行。
+①
+本节有本分参本本方网本https://github.com/tensorflow/tensorflow/tree/master/tensorflow/examples/android/。
+
+274 ff 第三篇 提高篇 
+19.3.1  环境准备 
+下面就一步一步地介绍如何在有摄像头的Android 设备上运行TensorFlow 的图片分类器。
+我们先来搭建环境，需要依赖Java、Android SDK、Android NDK、Bazel。这里仍然使用Mac Pro
+笔记本进行演示，其他操作系统的搭建环境与此类似。
+1．搭建Java 环境 
+从Oracle 本方网本下载JDK 1.8 版本
+①，得到jdk-8u111-macosx-x64.dmg 文件，双击进行安
+装，如图19-13 所示。 
+图19-13 
+安装完毕后，设置Java 的环境变量，如下： 
+JAVA_HOME=`/usr/libexec/java_home`   
+export JAVA_HOME 
+2．搭建Android SDK 环境 
+从Android 本方网本
+②下载Android SDK，这里使用的是25.0.2 版本，得到文件android- 
+sdk_r25.0.2-macosx.zip，然后直接解压，放在~/Library/Android/sdk 目录下。解压后里面的目录
+如下：
+├──── build-tools
+├──── extras
+├──── patcher
+├──── platform-tools    # 各版本SDK。有根据API Level 划分的SDK 版本 
+├──── platforms
+├──── sources
+├──── system-images
+├──── temp
+# 临时文件夹，一般在SDK 更新安装时用到 
+└──── tools
+# 各版本通用的SDK 工具。含有adb、aapt、aidl、dx 等文件 
+①
+http://www.oracle.com/technetwork/java/javase/downloads/jdk8-downloads-2133151.html
+② https://developer.android.com 
+
+第19 章 TensorFlow 移动端应用 ee 275 
+3．搭建Android NDK 环境 
+从Android 本方网本
+①下载Android NDK 的Mac OS X 版本，得到android-ndk-r13b-darwin-x86_ 
+64.zip 文件，直接解压即可。解压后得到的目录如下：
+├──── CHANGELOG.md
+├──── build
+├──── ndk-build
+├──── ndk-depends
+├──── ndk-gdb
+├──── ndk-stack
+├──── ndk-which
+├──── platforms
+├──── prebuilt
+├──── python-packages
+├──── shader-tools
+├──── simpleperf
+├──── source.properties
+├──── sources
+└──── toolchains
+4．搭建Bazel 
+直接使用brew 安装bazel，如下： 
+brew install bazel 
+若已安装，用如下方式更新：
+brew upgrade bazel 
+19.3.2  编译演示程序并运行 
+至此，编译Android 手机的apk 文件需要用的环境都已经搭建好了。下面就来编译一个
+TensorFlow 的图片分类演示程序，并在Android 手机上运行。相关演示程序在https://github.com/ 
+tensorflow/tensorflow/tree/master/tensorflow/examples/android。 
+1．编译演示程序 
+首先，修改tensorflow-1.1.0 的根目录中的WORKSPACE 文件。将android_sdk_repository
+和android_ndk_repository 的配置改为用户自己的安装目录及版本。具体如下： 
+①
+https://developer.android.com/ndk/downloads/index.html
+
+276 ff 第三篇 提高篇 
+android_sdk_repository( 
+   name = "androidsdk", 
+   api_level = 25, 
+   build_tools_version = "25.0.2", 
+ # Replace with path to Android SDK on your system 
+   path = "~/Library/Android/sdk", 
+) 
+android_ndk_repository( 
+   name="androidndk", 
+   path="~/Downloads/android-ndk-r13b", 
+   api_level=23) 
+修改完毕后，在根目录用bazel 构建： 
+bazel build //tensorflow/examples/android:tensorflow_demo 
+运行结果如下：
+Target //tensorflow/examples/android:tensorflow_demo up-to-date: 
+  bazel-bin/tensorflow/examples/android/tensorflow_demo_deploy.jar 
+  bazel-bin/tensorflow/examples/android/tensorflow_demo_unsigned.apk 
+  bazel-bin/tensorflow/examples/android/tensorflow_demo.apk 
+INFO: Elapsed time: 39.357s, Critical Path: 15.21s 
+在编译成功之后，默认会在tensorflow-1.1.0/bazel-bin/tensorflow/examples/android 目录下面
+生成我们想要的TensorFlow 演示程序，如图19-14 所示。 
+图19-14 
+下面我们就把生成的apk 文件安装到Android 手机上并运行。 
+2．运行 
+将生成的apk 文件传输到手机上，利用手机摄像头看看效果。这里采用的是小米Note 手机，
+
+第19 章 TensorFlow 移动端应用 ee 277 
+搭载Android 6.0.1 版本，并且需要开启“开发者模式”。将手机用数据线与计算机相连，进入
+SDK 所在的目录下，进入platform-tools 文件夹，找到adb 命令，并执行： 
+./adb install tensorflow-0.12/bazel-bin/tensorflow/examples/android/tensorflow_demo.apk 
+这样就将tensorflow_demo.apk 自动安装到手机上了，在手机上会生成图19-15 所示的两个
+App 图标。 
+打开TF Detect 的App，App 会调起手机摄像头，对摄像头返回的数据流进行实时监测，监
+测结果如图19-16 所示。 
+图19-15                                   图19-16 
+看起来精度并不是很高，与手机摄像头的像素有关系。读者可以定制自己的图片分类器，
+训练好模型后，重新编译apk 即可。 
+19.3.3  自定义模型的编译及运行 
+本节和19.2.3 节中的步骤基本相同，仍然分为3 步：训练原始模型、编译成Android 系统
+支持的模型，以及生成Andriod apk 文件并运行。 
+其中，训练原始模型和编译成Android 系统支持的模型的过程都是相同的，因为都是使用
+项目根目录下的tensorflow/python/tools/optimize_for_inference.py、tensorflow/tools/quantization/ 
+quantize_graph.py、tensorflow/contrib/util/convert_graphdef_memmapped_format.cc 分别对模型进
+行优化。这里，我们直接将第一步生成的原始模型文件retrained_graph.pb 和标记文件
+retrained_labels.txt 放在tensorflow/examples/android/assets 目录下。 
+需要修改tensorflow/examples/android/src/org/tensorflow/demo/TensorFlowImageClassifier.java 中
+要加载的模型文件名称，输入图片的尺寸、操作节点的名字和如何缩放像素大小等，这和19.2.3
+
+278 ff 第三篇 提高篇 
+节非常类似，只是是用Java 语言实现的。方法如下： 
+private static final int INPUT_SIZE = 299;
+private static final int IMAGE_MEAN = 128;
+private static final float IMAGE_STD = 128;
+private static final String INPUT_NAME = "Mul:0";
+private static final String OUTPUT_NAME = "final_result:0";
+private static final String MODEL_FILE = "file:///android_asset/retrained_graph.pb";
+private static final String LABEL_FILE = "file:///android_asset/retrained_labels.txt";
+然后重新编译apk，连接上Android 手机后，安装apk，方法如下： 
+bazel build //tensorflow/examples/android:tensorflow_demo
+adb install -r -g bazel-bin/tensorflow/examples/android/tensorflow_demo.apk
+运行结果仍如图19-10 所示。 
+19.4  树莓派实践 
+TensorFlow 还可以在树莓派（Raspberry Pi）上运行，树莓派是只有信用卡大小的微型电脑，
+系统基于Linux，它也有音频和视频功能。现在有很多树莓派的应用，例如，输入1 万张自己
+的面本图片，在树莓派上训练人脸识别的模型，教会它认识你后，可以在你进入家门后，帮你
+开灯、播放音乐等各种功能。树莓派上的编译方法和直接在Linux 环境上使用十分相似，读者
+可以自己参本文档。
+ 19.5  小结 
+本章讲解了移动端模型的应用原理，重点讲解了量化这一重要思想，介绍了TensorFlow 在
+iOS 和Android 移动端的应用，并采用TensorFlow 的工具对生成的原始模型进行优化、量化和
+内存映射。其原理都是借助有摄像头的手机来做分类和内体识别。随着移动端手机性能的提高，
+在移动端做深度学习会有很大前景。

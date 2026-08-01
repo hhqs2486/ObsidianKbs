@@ -1,0 +1,650 @@
+:…………· 
+. .......... 
+:…… 
+：翩醺
+... 
+醺罐
+. 
+... 
+.... 
+.. 
+. 
+ιhγ，扩忡，~ ~ 第12 章
+……··.................................· 
+安全及多租户配额管理
+Kubernetes 通过一系列安全机制来实现集群安全，包括API 服务器的认证、授权、准
+入控制机制，以及敏感信息的保护机制等，如图12-1 所示。集群的安全性必须考虑以下几
+个目标：
+1 ）保证容器与其所在宿主机的隔离。
+2 ）限制容器给基础设施及其他容器带来的消极影响。
+3 ）最小权限原则，合理限制所有组件权限，确保组件只执行它被授权的行为，通过限
+制单个组件的能力来限制它所能达到的权限范围。
+4 ）明确组件间边界的划分。
+5 ）划分普通用户和管理员角色。
+6 ）在必要的时候允许将管理员权限赋给普通用户。
+7 ）允许拥有Secret 数据（K巳ys 、
+Certs 、
+Passwords ）的应用在集群中运行。
+用户
+Authentication 
+Authorization 
+Admission Control 
+POD 
+( K8s Serv i ce 账号）
+图12-1
+认证鉴权
+下面分别从Authentication 、Authorization 、
+Admission Control 、
+Secret 和Service Account 
+等方面来说明集群的安全机制。
+
+12.1 
+API 服务器认证
+第12 章安全及多租户配额管理
+·：·
+151 
+Kubernetes 集群中所有资源的访问和变更都是通过Kubernetes API 服务器的Rest API 
+来实现的，所以集群安全的关键点在于识别认证客户端身份（Authentication ）以及访问权限
+的授权（Authorization ）。
+Kubernetes 提供管理三种级别的客户端身份认证方式：
+1 ）最严格的HTTPS 证书认证：基于CA 根证书签名的双向数字证书认证方式。
+2 ) HTTP Token 认证：通过一个Token 来识别合法用户。
+3) HTTP Base 认证：通过“用户名＋密码”的方式认证。
+SSL 双向认证步骤：
+1) HTTPS 通信双方的服务器端向CA 机构申请证书。
+CA 机构是可信的第三方机构，
+它可以是一个公认的权威的企业，也可以是企业自身。企业内部系统一般都使用企业自身
+的认证系统。
+CA 机构下发根证书、服务端证书及私钥给申请者。
+2 ) HTTPS 通信双方的客户端向CA 机构申请证书，
+CA 机构下发根证书、客户端证书
+及私钥给申请者。
+3 ）客户端向服务器端发起请求，服务器端下发服务器端证书给客户端。客户端接收到
+证书后，通过私钥解密证书，并利用服务器端证书中的公钥认证证书信息比较证书里的消
+息。例如域名、公钥与服务器刚刚发送的相关消息是否一致，如果一致，则客户端认为这
+个服务器的合法身份。
+4 ）客户端发送客户端证书给服务器端，服务器端接收到证书后，通过私钥解密证书，
+获得客户端的证书公钥，井用该公钥认证证书信息，确认客户端是否合法。
+5 ）客户端通过随机密钥加密信息，并发送加密后的信息给服务器端。服务器端和客户
+端协商好加密方案后，客户端会产生一个随机的密钥，客户端通过协商好的加密方案加密
+该随机密钥，并发送该随机密钥到服务器端。服务器端接收这个密钥后，双方通信的所有
+内容都通过该随机密钥加密。
+图
+12 -2 所示为SSL 双向认证的流
+程图。
+双向SSL 协议的具体通信过程要求
+服务器和用户双方都有证书。单向认证
+SSL 协议不需要客户拥有CA 证书，对
+应上面的步骤，只需将服务器端验证客
+户端证书的过程去掉，以及在协商对称
+密码方案和对称通话密钥时，服务器端
+发送给客户端的是没有加过密的（这并
+不影响SSL 过程的安全性）密码方案。
+CA 机构
+)
+- 
+书
+一
+证
+一
+｜
+证
+一
+认
+一
+湖
+(
+-(
+-E 
+证
+－
+证
+一
+机
+认
+一
+认
+一
+随
+八
+刀
+－
+八
+万
+＝
+＝
+n
+i
+{-{ 
+身
+一
+身
+一
+能
+3-4-5 
+图
+12-2
+SSL 认证流程图
+
+152 
+·：·
+墓于Kubernetes 的窑器云平台实战
+HTTP Token 原理：
+HTTP Token 的认证是用一种特殊编码方式编成的难以被模仿的字
+符串一一Token 来表明客户身份的－种方式。
+Token 是一个复杂的字符串，比如我们用私钥
+签名－个字符串的数据就可以作为一个Token ，此外每个Token 对应一个用户名，存储在
+API 服务器能访问的一个文件中。当客户端发起API 调用请求时，需要在HTTP Header 里
+放入Token ，这样一来API 服务器就能够识别合法用户和非法用户了。
+HTTP Base ：这是一种常见的客户端账号登录认证方式，它是把“用户名＋冒号＋密码”
+用Base64 算法进行编码后的字符串放在HTTP Request 中的Header Authorization 域里发送给
+服务器端，服务器端收到后进行解码，获取用户名及密码，然后进行用户身份的鉴权过程。
+12.2 
+API 服务器授权
+对合法用户进行授权（Authorization ）并且随后在用户访问时进行鉴权，是权限与安全
+系统的重要一环。授权就是授予不同用户不同访问权限，
+API 服务器目前支持以下集中授权
+策略：
+1 ) AlwaysDeny ：拒绝所有请求，通常该配置一般用于测试。
+2 ) AlwaysAllow ：所有请求都接受，如果集群不需要授权流程，可以采用该策略。这
+是Kubernetes 的默认策略。
+3) ABAC (Attribute-Base Access Control ）：为基于属性的访问控制，表示使用用户配
+置的授权规则去匹配用户的请求。
+当API 服务器启用ABAC 模式时－，需要指定授权文件的路径和名字（… authorization
+policy_file=SOME_FILENAME ），授权策略文件里的每一行都是一个Map 类型的JOSN 对
+象，被称为访问策略对象。我们可以通过设置“访问策略对象”中的如下属性来确定具体
+的授权行为：
+1 ) user ：字符串类型，来源于Token 文件或基本认证文件中的用户名字段的值。
+2 ) readonly: true 时表示该策略允许GET 请求通过。
+3 ) resource ：来自于URL 的资源，例如“ Pod ” 。
+4 ) namespace ：表明该策略允许访问某个namespace 的资源。
+例如：
+1 ) ｛”user川＇alice ”｝
+2) ｛’’ us 巳r’’
+3 ) ｛飞s巳r’’．？’kubelet”，’ ’ r巳source
+4) ｛”us巳r『’bob ’’ ，
+t’r巳sourc巳”．’’Pods ＇’，’’ readonly ’’：true ，”ns ＇’：’’myNamespace 『’｝
+12.3 
+Admission Control 
+通过认证和鉴权之后，客户端并不能得到API 服务器的正确晌应，这个请求还需通过
+
+第12 章安全及多租户配额管理
+•！•
+153 
+Admission Control 所控制的“准入控制器”的层层检查。Admission Control 配备有一个“准
+入控制器”的列表，发送给API 服务器的每个请求都需要通过列表中的每个准入控制器的
+检查，如果检查不通过，
+API 服务器将拒绝该调用请求。此外，准入控制器还能够修改请求
+参数以完成一些自动化任务。如Service Account 控制器当前可配置的准入控制如下：
+1 ) AlwaysDeny ：禁止所有请求，一般用于测试。
+2 ) AlwaysAdmit ：允许所有请求。
+3 ) AlwaysPullmages ：在启动容器之前，首先下载镜像，相当于在每个容器的配置项
+imagePullPolicy=Always 。
+4 ) DenyExecOnPrivileged ：它会拦截所有想在Privileged Container 上执行命令的请求，
+如果集群支持Privileged Container ，又希望限制用户在这些Privileged Container 上执行命
+令，强烈推荐使用它。
+5 ) Service Account ：这个插件将S 巳rvice Account 实现了自动化，默认启用。如果想使
+用Service Account 对象，那么强烈推荐使用它。
+6 ) SecurityContextDeny ：这个插件将使SecurityContext 的Pod 中的定义全部失效。
+SecurityContext 在Container 中定义了操作系统级别的安全设定（UID 、
+GID 、
+capabilityes 、
+SELinux 等）。
+7 ) ResourceQuota ：作用于Nam巳space 上，用于配额管理，它会检查所有请求，确保
+在Namespace 上的配额不会超标。推荐在Admission Control 参数列表中将这个插件放最后
+一个
+8 ) LimitRanger ：作用于Pod 与Container ，用于配额管理，确保Pod 与Container 上的
+配额不超标。
+9) NamespaceLifecycle ：如果尝试在一个不存在的Namespace 中创建资源对象，则该
+创建请求将被拒绝。当删除一个Namespace 时，系统将会删除该Nam巳space 中所有对象，
+包括Pod 、
+Service 等。
+10 ）在API 服务器上设置一admission - control 参数，即可定制我们需要的准入控制链。
+如果要启用多种准入控制选项，则建议的设置如下：
+--admission-control=NamespaceLif ecycle, Limi tRanger, Secur i tyContextDeny, 
+ServiceAccount, ResourceQuota 
+下面着重介绍三个准入控制器：
+1 ) ResourceQuota : ResourceQuota 不仅能够限制某个Namespace 中创建资源的数
+量，而且能够限制某个Namespace 中被Pod 所请求的资源总量。该准入控制器和资源对象
+ResourceQuota 一起实现了资掘的配额管理。
+2 ) LimitRanger ：准入控制器LimitRanger 的作用类似于上面的ResourceQuota 控制器，
+针对Namespace 资源的每个个体的资源配额。该插件和资源对象LimitRange 一起实现资源
+限制管理。
+
+154
+令
+基于K1加rnetes 的窑器云平台实战
+3 ) SecurityContextDeny : Security Context 运用于容器的操作系统安全设置（UID 、
+GID 、
+capabilities 、
+SELinux role 等），Admission Control 的SecurityContextDeny 插件的作
+用是“禁止创建设置了Security Context 的Pod ”，例如包含以下配置项的Pod:
+spec.containers.securityContext.seLinuxOptions 
+spec .containers.securityContext.runAsUser 
+12.4 
+Service Account 
+Service Account 是一种账号但它并不是为Kubernetes 集群的系统管理员、运维人员、
+租户用户等使用，而是给运行在Pod 里的应用使用的，它为Pod 里的应用提供必要的身份
+证明。
+Kubernetes 之所以要创建两套独立的账号系统，原因如下：
+•User 账号是给人用的，
+Service Account 是给Pod 里的进程使用的，面向对象不同。
+•User 账号是全局性的，
+Service Account 则属于某个具体的Namespace 。
+通常来说，
+User 账号是与后端的用户数据库同步的，创建一个新用户通常要经过一套
+复杂的业务流程才能实现，
+Serv ice Account 的创建则需要极轻量级实现方式，集群管理员
+可以很容易为某些特定任务组创建一个Service Account 。对于这两种不同的账户，其审计
+要求通常也不同。
+对于一个复杂的系统来说，多个组件通常拥有各种账号的配置信息，
+Service Account 
+是Names pace 隔离的，可以针对组件进行一对一的定义，同时具备很好的“便携性” 。
+当我们在A Pl 服务器的鉴权过程中启用了Service Account 类型的准入控制器，即在
+kube - apiserver 的启动参数中包括下面的内容时：
+--admission control=ServiceAccount 
+则针对Pod 新增或修改的请求，
+Se rvice Account 准入控制器会验证Pod 里Service Account 
+是否合法。
+·如果spec.servic巳Account 域没有被设置，则Kubernetes 默认为其制定名字为default
+的Serviceaccount 。
+·如果Pod 的spec.servic巳Account 域指定了default 以外的Service Account ，而该
+S巳rvice Account 没有事先被创建，则该Pod 操作失败。
+·如果在Pod 中没有指定“ ImagePullS 巳crets ”，那么该s巳c . serviceAccount 域指定的
+Service Account 的“ ImageP ullSe crets ”会被加入该Pod 。
+·给Pod 添加一个新的Volum巳，在该Volum巳中包含Service Account Secret 中
+的Token ，并将Volume 挂载到Pod 中所有容器的指定目录下（／v ar/run/s ecrets /
+kubernetes.io/servic巳account ）。
+
+第12 章安全及多租户配额管理
+•！•
+155 
+综上所述，
+Service Account 正常运行需要以下几个控制器：
+Admission Controller 、
+Token Controller 、
+Service Account Controller 。
+12.5 
+配额管理
+虚拟化技术是云计算平台的基础，其目标是对计算资源进行整合或划分，这是云计算
+管理平台中的关键技术。虚拟化技术为云计算管理平台的资源管理提供了资源调配上的灵
+活性，从而使得云计算管理平台可以通过虚拟化层整合或划分计算资源。
+相比于虚拟机，新出现的容器技术使用了一系列系统级别的机制，诸如利用Linux
+Namespace 进行空间隔离，通过文件系统的挂载点决定容器可以访问哪些文件，通过
+CGroup 确定每个容器可以利用多少资源。此外，容器之间共享同一个系统内核，这样当同
+一个内核被多个容器使用时，内存的使用效率会得到提升。
+对于容器和虚拟机这两大虚拟化技术，虽然实现方式完全不同，但是它们的资源需求
+和模型其实是类似的。容器像虚拟机一样需要内存、
+CPU 、硬盘空间和网络带宽，宿主机
+系统可以将虚拟机和容器都视作一个整体，为这个整体分配其所需的资源并进行管理。
+当
+然，虚拟机提供了专用操作系统的安全性和更牢固的逻辑边界，而容器在资源边界上比较
+松散，这带来了灵活性以及不确定性。
+Kubernetes 是一个容器集群管理平台，它会统计整体的资源使用情况，合理地将资源
+分配给容器使用，并且要保证容器生命周期内有足够的资源来保证其运行。更进一步，如
+果资源发放是独占的，即资源若已发放给了某个容器，同样的资源不会发放给另外一个容
+器，对于空闲的容器来说占用没有使用的资源比如CPU 是非常浪费的，
+Kubernetes 需要考
+虑如何在优先度和公平性的前提下提高资源的利用率。
+12.5.1 
+资源请求与限制
+创建Pod 的时候，可以指定计算资源（目前支持的资源类型有CPU 和内存），即指定每
+个容器的资源请求（Request ）和资源限制（Lim i t ），资源请求是容器所需的最小资源需求，
+资源限制则是容器不能超过的资源上限。它们的大小关系是：
+0 运request
+:o:三limit
+:o:三infinity
+Pod 的资源请求就是Pod 中容器资源请求之和。
+Kubernetes 在调度Pod 时会根据Node
+中的资源总量（通过cAdvisor 接口获得），以及该Node 上已使用的计算资源，来判断该
+Node 是否满足需求。
+资源请求能够保证Pod 有足够的资源、来运行，而资源、限制则是防止某个Pod 无限制地
+使用资源，导致其他Pod 崩溃。特别是在公有云场景，往往会有恶意软件通过抢占内存来
+攻击平台。
+基本原理：
+Docker 通过使用Linux CGroup 来实现对容器资源的控制，具体到启动参数
+
+156
+令
+基于Kubernetes 的窑器云平台实战
+上是一memory 和一cpu-shares 。
+Kubernetes 中是通过控制这两个参数来实现对容器资源的
+控制。
+以下给出某个Pod 申请内存及CPU 的示例：
+# cat test-limit.yam! 
+apiVersion:vl 
+kind:Pod 
+metadata: 
+labels: 
+name:test- limit 
+role:master 
+name :test-limit 
+spec: 
+containers: 
+- name:test-limit 
+image:registry : 5000 / back demon:l.O 
+resources : 
+requests: 
+memory : ” 256Mi ” 
+cpu:” SO Om” 
+limits: 
+memory :”512Mi" 
+cpu:"lOOOm" 
+command: 
+-
+/ run.sh 
+12.5.2 
+全局默认配额
+除了可以直接在容器（或RC ）的定义文件中指定容器增加资源配额参数，还可以通过
+创建LimitRang巳对象来定义一个全局默认配额模板。这个默认配额模板会加载到集群中的
+每个Pod 及容器上，这样就不用手工为每个Pod 和容器重复设置了。
+LimitRange 设计的初衷是为了满足以下场景：
+·能够约束租户的资源需求。
+·能够约束容器的资源请求范围。
+·能够约束Pod 的资源请求范围。
+·能够指定容器的默认资源限制。
+· 能够指定Pod 的默认资源限制。
+·能够约束资源请求和限制之间的比例。
+LimitRange 对象可以同时在Pod 和Container 两个级别上进行对资源配额的设置。
+当
+LimitRange 创建生效后，之后创建的Pod 都将使用LimitRange 设置的资源配额进行约束。
+下面为创建pod-container-limitRnage.yaml 文件的代码：
+apiVersion:vl 
+
+kind:LimitRange 
+metadata: 
+name:limit-range-test 
+spec: 
+limits: 
+- type:Pod 
+max: 
+cpu:l 
+memory :lGi 
+min: 
+cpu:0.5 
+memory:216Mi 
+- type:Container 
+max: 
+cpu:l 
+memory: lGi 
+min: 
+cpu:0.5 
+memory: 216Mi 
+default: 
+cpu:0.5 
+memory:5 12Mi 
+上述设置表明：
+第12 章安全及多租户配额管理
+•！•
+157 
+1 ）任意Pod 内的所有容器的CPU 使用都限制在0 . 5 ～
+1 ，
+内存使用限制在
+216Mi ～lGi 。
+2 ）任意容器的CPU 使用都限制在0.5 ～
+l ，默认0.5 ，内存使用限制在216Mi ～lGi,
+默认5 12Mi 。
+此外，如果在Pod 或RC 定义文件中指定配额参数，则可遵循局部覆盖全局的原则。
+当然，如果配额超过了全局设定的最大值，那执行kubectl ceate 的时候就会拒绝。
+LimitRange 也是与Namespace 捆绑的，如果定义文件中未指定，则默认是default ，执
+行kubectl describe limitrange limit-range-test 的时候，也会看到Namespace:
+default 信息。
+12.5.3 
+多租户资源配额管理
+多租户在Kubernetes 中是以Names pace 来体现的，这里的多租户可以是多个用户、多
+个业务系统或者相互隔离的多种作业环境。一个集群中的资源总是有限的，当这个集群被
+多个租户的应用同时使用时，为了更好地使用这种有限的共有资源并防止租户的资源抢占，
+我们需要将资源配额的管理单元提升到租户级别，这只需要在不同组合对应的Namespace
+上加载对应的Resource Quota 配置即可达到目的。如Kubernetes 系统共有20 核CPU 和
+32GB 内存，分配给A 租户5 核CPU 和16GB ，分配给B 租户5 核CPU 和8GB ，预留
+10
+核CPU 和8GB 内存。这样，租户中所使用的CPU 和内存的总和不能超过指定的资源配额，
+促使其更合理地使用资源。
+
+158 
+•！•
+基于Kubernetes 的窑器云平台实战
+Kubemetes 提供API 对象Resource Quota （资源配额）来实现资源配额，
+Resource
+Quota 不仅可以作用于CPU 和内存，另外还可以限制创建Pod 的总数目、
+Service 总数目、
+RC 总数目等。
+创建Development Namespace 的代码如下：
+1- 
+m 
+vd 
+v 
+e 
+d 
+e 
+ce 
+alc 
+pva 
+s
+--
+P
+‘ 
+ens 
+moe 
+在
+l
+m
+nsa 
+rN 
+te
+-- 
+avd 
+cln 
+pl 
+#
+ak 
+metadata: 
++
+lv 
+n 
+e 
+m 
+tp 
+no 
+e
+-- 
+me 
+D
+‘
+v 
+oe 
+τ
+4
+·
+d
+ 
+e
+-- 
+ve 
+e
+--
+m 
+dsa 
+--ln 
+ee 
+m
+-b 
+aa 
+n
+、
+本
+上面创建了Development Namespace ，再用describe 查看，会发现它对资源配额没有任
+何限制。
+ti kubectl describe namespace development 
+Name: development 
+Labels: name=development 
+Status: Active 
+No resource quota. 
+No resource limits. 
+现有两台Node 服务器，总共2 个CPU,
+2Gi 内存，给Development Namespace 配额
+l
+个CPU,
+lGi 内存。
+创建dev -resourcequota.yam！，不但可以对CPU 、内存做限制，还可以对pods/
+services/rep Ii ca ti oncon tro 11 ers/resourcequotas/ secrets/ configmaps/pers is ten tvo 1 umec lai ms/ 
+services. nodep arts/services. loadb alancers/requests. cpu/ requests. m 巳mory /limits .cpu/li mits .
+memory/cpu/memory/storage 等资源做出限制。
+注意定义文件中Namespace 不能漏
+掉，否则默认是由fault （文件中如果未指明T、Jamespace ，则通过kubect l create -f xxFile 
+…namespace=development 设置也行）。
+apiVersion:vl 
+kind:ResourceQuota 
+metadata: 
+name:quota- development 
+namespace:development 
+spec: 
+hard: 
+cpu:l 
+memory: lGi 
+persistentvolumeclaims:lO 
+pods:SO 
+replicationcontrollers:20 
+resourcequotas:l 
+secrets:20 
+
+<·
+安全及多租户配额管理
+第12 章
+159 
+services:20 
+# kubectl create -f dev-resourcequota.yaml 
+resourcequota
+” quota-development ” created 
+# kubectl get resourcequotas --namespace=development 
+NAME 
+AGE 
+quota-development 
+lm 
+查看使用情况：
+# kubectl describe resourcequota quota-development --namespace=development 
+Name: 
+quota-development 
+Namespace: 
+development 
+Resource 
+Used 
+Hard 
+1 
+lGi 
+10 
+so 
+20 
+1 
+20 
+20 
+－
+n
+U
+《
+U
+n
+U
+《
+U
+n
+U
+咱
+4
+n
+u
+n
+u
+cpu 
+memory 
+persistentvolumeclaims 
+pods 
+replicationcontrollers 
+resourcequotas 
+secrets 
+services 
+还可查看这时Namespace 的信息：
+quota-development 
+Used 
+Hard 
+# kubectl describe namespace development 
+Name:development 
+Labels:name=development 
+Status:Active 
+Resource Quotas 
+Name: 
+Resource 
+1 
+lGi 
+10 
+so 
+20 
+1 
+20 
+20 
+n
+u
+n
+u
+n
+u
+n
+u
+n
+U
+叮
+4
+n
+u
+n
+υ
+cpu 
+memory 
+persistentvolumeclaims 
+pods 
+replicationcontrollers 
+resourcequotas 
+secrets 
+services 
+No resource limits. 
+看到Resource Quoata 已经做出了限制，至于Resource Limit ，只要按照上面的全局默
+认配额操作就行了（定义文件中要指明Namespace ，文件中如果未指明Namespace ，则通过
+kubectl create -f xxFile --namesp ace=development 设置也行）。
+Resource Limit 限制的是Pod 和Container 的CPU／内存，而Resource Quota 是对Namespace
+的限制，也就是说所有的Pod/Container 的总额不能超过Quota 的限制。
+
+160 
+•！•
+基于Kubernetes 的窑器云平台实战
+创建完Resource Quota 之后，对于所有需要创建的Pod 都必须指定具体的资源配额设
+置，否则创建Pod 会失败。
+apiVersion:vl 
+kind:Pod 
+rnetadata: 
+spec: 
+narne:php-test 
+labels: 
+narne:php-test 
+n缸nespace:developrnent
+containers: 
+-
+narne:php-test 
+image: 192 .168 .17 4 .131 : 5000 / php-base: 1. 0 
+env: 
+-
+narne:ENV TEST 1 
+value:env test 1 
+-
+narne:ENV TEST 2 
+value:env test 2 
+ports: 
+- containerPort:80 
+hostPort:80 
+# kubectl create -f php- pod.yarnl 
+Error from server: error when creating
+” php-pod . yarnl ”: pods
+” php-tes t ”
+l s 
+forbidden: Failed quota: quota-dev e loprnent: mus t 
+specify cpu, 1 irni ts. cpu, lirni t s . 
+rnernory,rnernory 

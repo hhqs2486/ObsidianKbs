@@ -1,0 +1,772 @@
+第12章　Kubernetes开发中的新功能
+本章对Kubernetes开发中的一些新功能进行介绍，包括对Windows
+容器的支持、对GPU的支持、Pod的垂直扩缩容，并讲解Kubernetes的演
+进路线（Roadmap）和开发模式。
+12.1　对Windows容器的支持
+Kubernetes从1.5版本开始就引入了管理基于Windows Server 2016操
+作系统的Windows容器的功能。随着Windows Server version 1709版本的
+发布，Kubernetes 
+1.9版本对Windows容器的支持提升为Beta版本。在
+Windows Server 2019版本发布之后，Kubernetes 1.14版本对Windows容
+器的支持提升为GA稳定版本，使得Linux应用和Windows应用在
+Kubernetes中统一混合编排成为可能，进一步屏蔽了操作系统的差异，
+提高了应用管理效率。
+随着Windows 
+Server版本的快速更新，目前Kubernetes唯一支持的
+版本是Windows Server 2019，可参考官方文档完成操作系统的安装和配
+置。本节对如何在Windows Server 2019上安装Docker、部署Kubernetes
+Node、部署服务等操作步骤和发展趋势进行详细说明。
+将一台Windows Server服务器部署为Kubernetes Node，需要的组件
+包括Docker、Node组件（kubelet和kube-proxy）和CNI网络插件。本例
+以Flannel CNI插件部署容器Overlay网络，要求在Linux Kubernetes集群
+中已经部署好Flannel组件。注意：Windows 
+Server仅能作为Node加入
+Kubernetes集群中，集群的Master仍需在Linux环境中运行。
+12.1.1　在Windows Server上安装Docker
+这里推荐使用Docker EE 18.09及以上版本，通过如下Powershell脚
+本完成安装：
+
+12.1.2　在Windows Server上部署Kubernetes Node
+组件
+在Windows Server上部署的Kubernetes Node组件包括kubelet和kube-
+proxy，本节对其安装部署、配置修改、CNI插件部署进行说明。
+1）下载和安装Kubernetes Node所需的服务
+从Kubernetes的版本发布页面下载Windows 
+Node相关文件
+kubernetes-node-windows-amd64.tar.gz（在压缩包内包含kubelet.exe、
+kube-proxy.exe、kubectl.exe和kubeadm.exe），如图12.1所示。
+
+图12.1　Kubernetes Windows Node二进制文件下载页面
+将kubernetes-node-windows-amd64.tar.gz的内容解压缩到 c：\k目录
+下，主要需要kubelet.exe、kube-proxy.exe、kubectl.exe，即可完成Node
+组件的安装。
+2）下载pause镜像
+从Kubernetes 1.14 版本开始，微软提供了运行Pod所需的pause镜像
+mcr.microsoft.com/k8s/core/pause：1.2.0，我们通过docker 
+pull命令将其
+下载到Windows Server上：
+
+3）从Linux Node上复制kubeconfig配置文件和客户端CA证书
+将kubeconfig文件从已存在的Linux 
+Node复制到Windows 
+Node的
+C：\k目录下，并将文件名改为config。将客户端CA证书client.crt、
+client.key、ca.crt复制到相应的目录下，例如C：/k/ssl_keys/。
+config的内容示例如下：
+
+使用kubectl.exe config命令验证能否正常访问Master，例如：
+
+4）下载Windows Node所需的脚本和配置文件
+从官方GitHub代码库下载Windows 
+Node所需的脚本和配置文件，
+如图12.2所示。
+
+图12.2　Windows Node所需的脚本和配置文件下载页面
+
+下载后，将全部文件都复制到C：\k目录下。
+5）下载CNI相关的脚本和配置文件
+这里以Flannel为例进行CNI网络配置，从GitHub下载相关文件，如
+图12.3所示。
+图12.3　Flannel脚本和配置文件下载页面
+下载后，将全部文件都复制到C：\k目录下，覆盖同名的其他文
+件。
+6）修改Powershell脚本中的配置参数
+下面对Powershell脚本中需要修改的关键参数进行说明。
+（1）start.ps1脚本。修改以下启动参数的值，也可以在运行
+start.ps1时通过命令行参数指定：
+
+参数说明如下。
+◎　clusterCIDR：Flannel容器网络的IP地址范围设置，与Master设
+置保持一致。
+◎　KubeDnsServiceIP：使用Kubernetes集群DNS服务的ClusterIP地
+址，例如169.169.0.100。
+◎　serviceCIDR：使用Master设置的集群Service的ClusterIP地址范
+围，例如169.169.0.0/16。
+◎　InterfaceName：Windows主机的网卡名，例如Ethernet。
+◎　LogDir：日志目录，例如C：\k\logs。
+◎　KubeletFeatureGates：kubelet的feature gates可选参数设置。
+（2）通过环境变量设置Node名称。在脚本中会将环境变量
+NODE_NAME的值作为Node名称，建议将其设置为Windows Server的IP
+地址：
+
+（3）helper.psm1脚本。helper.psm1脚本为start-kubelet.ps1（启动
+kubelet的脚本）使用的辅助脚本，其中通过许多函数进行了系统设置，
+关键的修改点如下。
+◎　将--hostname-override的值设置为Windows Server的IP地址，例
+如：
+
+◎　在Update-CNIConfig函数内设置Nameservers（DNS服务器）的
+IP地址，例如169.169.0.100：
+
+
+◎　在Update-NetConfig函数内设置Flannel容器网络IP地址池，例
+如10.244.0.0/16：
+
+（4）register-svc.ps1脚本。register-svc.ps1脚本通过nssm.exe将
+flanneld.exe、kubelet.exe和kube-proxy.exe注册为Windows Server的系统
+服务，关键的修改点如下：
+参数说明如下。
+◎　clusterCIDR：Flannel容器网络IP地址范围设置，与Master设置
+保持一致。
+◎　KubeDnsServiceIP：使用Kubernetes集群DNS服务的ClusterIP地
+址，例如169.169.0.100。
+
+◎　LogDir：日志目录，例如C：\k\logs。
+◎　Hostname：Node名称，建议将其设置为Windows Server的IP地
+址。
+（5）start-kubeproxy.ps1脚本。将--hostname-override的值设置为
+Windows Server的IP地址，例如：
+7）启动Node
+在配置修改完毕后运行start.ps1脚本，启动Windows 
+Node（加入
+Kubernetes集群）：
+将启动参数-ManagementIP的值设置为Windows 
+Node的主机IP地
+址。
+该脚本的启动过程如下。
+（1）启动flanneld，设置CNI网络，如图12.4所示。
+
+图12.4　启动flanneld，设置CNI网络
+（2）打开一个新的powershell窗口来启动kubelet，如图12.5所示。
+
+图12.5　kubelet的启动日志
+（3）打开一个新的powershell窗口来启动kube-proxy，如图12.6所
+示。
+
+图12.6　kube-proxy的启动日志
+（4）在服务启动成功之后，在Master上查看新加入的Windows
+Node：
+查看这个Node的Label，可以看到其包
+
+含“kubernetes.io/os=windows”的标签，与Linux 
+Node进行区分（Linux
+Node的标签为“kubernetes.io/os=linux”）：
+12.1.3　在Windows Server上部署容器应用和服务
+在Windows 
+Node启动成功且状态为Ready之后，就可以像在Linux
+Node上部署容器应用一样，在Windows 
+Node上部署Windows容器应用
+了。
+1）部署win-server容器应用和服务
+以下为win-server服务示例，包括一个Deployment和一个Service的
+定义。
+其中容器镜像的版本需要与Windows Server 2019的版本匹配，例如
+mcr.microsoft.com/windows/servercore：1809-amd64，版本信息详见
+Docker Hub官网的说明。
+在Deployment的配置中需要设置nodeSelector为“kubernetes.io/os：
+windows”，以将Windows容器调度到Windows Node上。另外设置Service
+为NodePort类型，验证能否通过Windows 
+Server主机IP地址和NodePort
+端口号访问服务。
+win-server.yaml配置文件的内容如下：
+
+
+
+通过kubectl create命令完成部署：
+在Pod创建成功后，查看Pod的状态：
+
+查看Service的信息：
+2）在Linux环境中访问Windows容器服务
+（1）在Linux容器内访问Windows容器服务，通过Windows Pod IP
+访问成功：
+（2）在Linux容器内访问Windows容器服务，通过Windows容器
+Service IP访问成功：
+
+（3）在Linux容器内访问Windows容器服务，通过Windows Server
+的IP和NodePort访问成功：
+3）在Windows Server主机上访问Windows容器服务
+（1）在Windows 
+Server主机上访问Windows容器服务，通过
+Windows Pod IP访问成功：
+
+（2）在Windows 
+Server主机上访问Windows容器服务，通过
+Windows容器Service IP访问成功：
+
+（3）在Windows 
+Server主机上访问Windows容器服务，通过
+Windows 
+Server的IP和NodePort无法访问（这是Windows网络模型的一
+个限制）：
+
+4）在Windows容器内访问Linux容器服务（示例中Web服务已部
+署）
+（1）在Windows容器内访问Linux容器服务，通过Linux Pod IP访问
+成功：
+
+
+（2）在Windows容器内访问Linux容器服务，通过Linux服务IP访问
+成功：
+
+
+（3）在Windows容器内访问Linux容器服务，通过Linux服务名称访
+问成功：
+
+
+12.1.4　Kubernetes支持的Windows容器特性、限
+制和发展趋势
+本节从Kubernetes管理功能、容器运行时、持久化存储、网络、已
+知的功能限制和计划增强的功能几个方面，对Kubernetes支持的
+Windows容器特性、限制和发展趋势进行说明。
+1）Kubernetes管理功能
+（1）Pod：
+◎　支持一个Pod内的多个容器设置进程隔离和Volume共享；
+◎　支持显示Pod详细状态信息；
+◎　支持Liveness和Readiness健康检查机制；
+◎　支持postStart和preStop命令设置；
+◎　支持ConfigMap、Secret以环境变量或Volume设置到容器内；
+◎　支持EmptyDir类型的Volume存储卷；
+◎　支持挂载主机上的命名管道（named pipe）；
+◎　支持资源限制的设置；
+◎　支持在Pod或容器级别配置GMSA（基于组管理的AD服务帐
+户），支持基于AD的身份验证，从Kubernetes 
+1.14版本开始引入，在
+1.18版本时达到Stable阶段。需要预先配置CRD“GMSACredentialSpec”、
+配置GMSA Webhook、将Windows Node配置到AD中、创建GMSA凭据
+规约、为GMSA账户设置正确的RBAC策略等，然后在Pod或Container级
+别设置securityContext.windowsOptions.gmsaCredentialSpecName为
+GMSACredentialSpec名称，这样就可以为Pod或容器设置正确的AD身份
+了。
+（2）支持的控制器类型包括ReplicaSet、ReplicationController、
+Deployments、StatefulSets、DaemonSet、Job和CronJob。
+（3）服务：
+
+◎　支持ClusterIP、NodePort、LoadBalancer等服务类型；
+◎　支持Headless服务；
+◎　支持服务外部名称ExternalName。
+（4）其他：
+◎　支持Pod和容器级别的性能指标；
+◎　支持自动水平扩缩容HPA；
+◎　支持kubectl exec登录容器；
+◎　支持Resource Quota资源配额设置；
+◎　支持Preemption调度策略。
+2）容器运行时
+（1）Docker EE版本：从Kubernetes 1.14版本开始支持Docker EE
+18.09及以上版本。
+（2）CRI-ContainerD：从Kubernetes 1.18开始增加在Windows上运
+行ContainerD的支持，目前为Alpha阶段。
+3）持久化存储
+（1）内置支持的持久化存储类型包括awsElasticBlockStore、
+azureDisk、azureFile、gcePersistentDisk、vsphereVolume。
+（2）FlexVolume插件：FlexVolume插件以二进制可执行文件提
+供，需要将其部署在Windows主机上，支持的插件类型包括SMB和
+iSCSI。
+（3）CSI插件：CSI插件需要以特权模式运行，在Windows上通过
+csi-proxy进行代理，需要预先将csi-proxy二进制文件部署在Windows主
+机上。
+4）网络
+Windows容器通过CNI插件设置网络。在Windows上，容器网络与
+虚拟机网络相似，每个容器都将被设置一个虚拟网卡（Virtual Network
+Adapter，vNIC），并连接至一个Hyper-V虚拟交换机（vSwitch）。
+
+Windows通过HNS（Host 
+Networking 
+Service）服务和HCS（Host
+Compute 
+Service）服务完成容器的虚拟网卡vNIC设置和网络连通性设
+置。
+目前Windows支持5种网络驱动或网络模式：L2bridge、L2tunnel、
+Overlay、Transparent和NAT，对各种模式的详细说明参见官方文档。
+另外，Flannel CNI插件的VXLAN模式支持目前为Alpha阶段。
+目前支持的Pod、Service、Node之间的网络访问方式如下：
+◎　Pod→Pod (IP)
+◎　Pod→Pod (Name)
+◎　Pod→Service (ClusterIP)
+◎　Pod→Service （PQDN，不包含"."的相对域名）
+◎　Pod→Service (FQDN)
+◎　Pod→External (IP)
+◎　Pod→External (DNS)
+◎　Node→Pod
+◎　Pod→Node
+目前支持的IPAM选项包括Host-local、HNS 
+IPAM、Azure-vnet-
+ipam。
+5）已知的功能限制
+（1）控制平面：Windows Server仅能作为Node加入Kubernetes集群
+中，集群的Master仍需在Linux环境中运行。
+（2）计算资源管理：
+◎　Windows没有类似于Linux cgroups的管理功能；
+◎　Windows容器镜像的版本需要与宿主机的操作系统版本匹配，
+未来计划基于Hyper-V隔离机制实现向后版本兼容。
+（3）暂不支持的特性：
+
+◎　TerminationGracePeriod；
+◎　单文件映射，将在CRI-ContainerD中实现；
+◎　Termination message，将在CRI-ContainerD中实现；
+◎　特权模式；
+◎　巨页（HugePage）；
+◎　节点问题检测器（node problem detector）；
+◎　部分共享命名空间的特性。
+（4）存储资源管理：
+◎　存储卷仅支持以目录形式挂载到容器中，不支持以文件形式挂
+载；
+◎　不支持只读文件系统；
+◎　不支持user-mask、permissions等Linux文件系统设置；
+◎　不支持subpath挂载；
+◎　不支持块设备；
+◎　不支持挂载内存为存储介质；
+◎　不支持基于NFS的存储卷。
+（5）网络资源管理：Windows网络与Linux网络在许多方面都不
+同，关于Windows容器网络的概念，可以参考官网的说明。由于
+Windows网络技术的特点，以下Kubernetes容器网络特性暂不支持：
+◎　hostnetwork模式；
+◎　从Windows Server宿主机通过NodePort访问服务；
+◎　未来的版本支持从Windows 
+Server宿主机访问服务的虚拟
+ClusterIP地址；
+◎　kube-proxy对overlay网络的支持目前为Alpha阶段，要求在
+Windows Server 2019上安装KB4482887；
+◎　本地流量策略和DSR模式；
+
+◎　l2bridge、l2tunnel和overlay几种网络模式不支持IPv6；
+◎　win-overlay、win-bridge和Azure-CNI几种网络插件不支持ICMP
+协议出站Outbound访问。
+Kubernetes从1.15版本开始，支持通过kubectl port-forward命令实现
+服务端口转发功能。
+Flannel CNI插件的限制包括：
+◎　无法实现Node到Pod网络通信；
+◎　限制使用VNI端口号4096和UDP端口号4789，将在未来的版本
+中解决。
+DNS域名解析的限制包括：
+◎　ClusterFirstWithHostNet设置；
+◎　可用查询DNS后缀仅有一个，即namespace.svc.cluster.local；
+◎　在Windows上有多个DNS域名解析器，推荐使用Resolve-
+DNSName。
+安全相关的限制包括：
+◎　不支持RunAsUser，未来考虑增加RunAsUsername设置；
+◎　不支持Linux上的SELinux、AppArmor、Seccomp、Capabilities
+等设置。
+另外，还包括一些API的限制。
+6）计划增强的功能
+◎　通过kubeadm完成Windows 
+Node的部署，目前为持续更新阶
+段。
+◎　支持基于Hyper-V虚拟化技术在1个Pod中包含多个容器（目前
+在1个Pod中只能包含1个容器）。
+◎　支持Service Accounts中的组管理，目前为Beta阶段。
+◎　支持更多的CNI插件。
+
+◎　支持更多的存储插件。
+12.2　对GPU的支持
+随着人工智能和机器学习的迅速发展，基于GPU的大数据运算越来
+越普及。在Kubernetes的发展规划中，GPU资源有着非常重要的地位。
+用户应该能够为其工作任务请求GPU资源，就像请求CPU或内存一样，
+而Kubernetes将负责调度容器到具有GPU资源的节点上。
+目前Kubernetes对NVIDIA和AMD两个厂商的GPU进行了实验性的
+支持。Kubernetes对NVIDIA 
+GPU的支持是从1.6版本开始的，对AMD
+GPU的支持是从1.9版本开始的，到1.10版本时达到Beta阶段，并且仍在
+快速发展。
+Kubernetes从1.8版本开始，引入了Device 
+Plugin（设备插件）模
+型，为设备提供商提供了一种基于插件的、无须修改kubelet核心代码的
+外部设备启用方式，设备提供商只需在计算节点上以DaemonSet方式启
+动一个设备插件容器供kubelet调用，即可使用外部设备。目前支持的设
+备类型包括GPU、高性能NIC卡、FPGA、InfiniBand等，关于设备插件
+的说明详见官方文档。
+下面对如何在Kubernetes中使用GPU资源进行说明。
+12.2.1　环境准备
+（1）在Kubernetes的1.8和1.9版本中需要在每个工作节点上都为
+kubelet服务开启--feature-gates="DevicePlugins=true"特性开关。该特性开
+关从Kubernetes 1.10版本开始默认启用，无须手动设置。
+（2）在每个工作节点上都安装NVIDIA GPU或AMD GPU驱动程
+序，如下所述。
+使用NVIDIA GPU的系统要求包括：
+◎　NVIDIA驱动程序的版本为384.81及以上；
+
+◎　nvidia-docker的版本为2.0及以上；
+◎　kubelet配置的容器运行时（Container 
+Runtime）必须为
+Docker；
+◎　Docker配置的默认运行时（Default 
+Runtime）必须为nvidia-
+container-runtime，而不能用runc；
+◎　Kubernetes版本为1.11及以上。
+Docker使用NVIDIA运行时的配置示例（通常配置文件
+为/etc/docker/daemon.json）如下：
+NVIDIA设备驱动的部署YAML文件可以从NVIDIA的GitHub代码库
+获取，示例如下：
+
+
+使用AMD GPU的系统要求包括：
+◎　服务器支持ROCm（Radeon Open Computing platform）；
+◎　ROCm kernel驱动程序或AMD GPU Linux驱动程序为最新版
+本；
+◎　Kubernetes的版本为1.10及以上。
+AMD设备驱动的部署YAML文件可以从AMD的GitHub代码库中获
+取，示例如下：
+
+
+完成上述配置后，容器应用就能使用GPU资源了。
+12.2.2　在容器中使用GPU资源
+GPU资源在Kubernetes中的名称为nvidia.com/gpu（NVIDIA类型）
+或amd.com/gpu（AMD类型），可以对容器进行GPU资源请求的设置。
+在下面的例子中为容器申请1个GPU资源：
+
+目前对GPU资源的使用配置有如下限制：
+◎　GPU资源请求只能在limits字段进行设置，系统将默认设置
+requests字段的值等于limits字段的值，不支持只设置requests而不设置
+limits；
+◎　在多个容器之间或者在多个Pod之间不能共享GPU资源，也不
+能像CPU一样超量使用（Overcommitting）；
+◎　每个容器只能请求整数个（1个或多个）GPU资源，不能请求1
+个GPU的部分资源。
+如果在集群中运行着不同类型的GPU，则Kubernetes支持通过使用
+Node Label（节点标签）和Node Selector（节点选择器）将Pod调度到合
+适的GPU所属的节点。
+1.为Node设置合适的Label标签
+对于NVIDIA类型的GPU，可以使用kubectl label命令为Node设置不
+同的标签：
+对于AMD类型的GPU，可以使用AMD开发的Node Labeller工具自
+动为Node设置合适的标签。Node Labeller以DaemonSet的方式部署，可
+以AMD的GitHub代码库下载YAML文件。在Node Labeller的启动参数中
+可以设置不同的标签以表示不同的GPU信息。目前支持的标签如下。
+（1）Device ID，启动参数为-device-id。
+（2）VRAM Size，启动参数为-vram。
+（3）Number of SIMD，启动参数为-simd-count。
+（4）Number of Compute Unit，启动参数为-cu-count。
+（5）Firmware and Feature Versions，启动参数为-firmware。
+（6）GPU Family，in two letters acronym，启动参数为-family，
+
+family类型以两个字母缩写表示，完整的启动参数为family.SI、
+family.CI等。其中，SI的全称为Southern 
+Islands；CI的全称为Sea
+Islands；KV的全称为Kaveri；VI的全称为Volcanic Islands；CZ的全称为
+Carrizo；AI的全称为Arctic Islands；RV的全称为Raven。
+通过Node Labeller工具自动为Node设置标签的示例如下：
+2.设置Node Selector指定调度Pod到目标Node上
+以NVIDIA GPU为例：
+
+上面的配置可确保将Pod调度到含有accelerator=nvidia-tesla-k80标签
+的节点上运行。
+12.2.3　发展趋势
+发展趋势如下。
+◎　GPU和其他设备将像CPU那样成为Kubernetes系统的原生计算
+资源类型，以Device Plugin的方式供kubelet调用。
+◎　目前的API限制较多，Kubernetes未来会有功能更丰富的API，
+能支持以可扩展的形式进行GPU等硬件加速器资源的供给、调度和使
+
+用。
+◎　Kubernetes将能自动确保使用GPU的应用程序达到最佳性能。
+12.3　Pod的垂直扩缩容
+除了HPA（Pod水平扩展功能），Kubernetes仍在继续开发一些新的
+互补的Pod自动扩缩容功能，将其统一放在Kubernetes 
+Autoscaler的
+GitHub代码库进行维护。目前有以下几个正在开发的项目。
+◎　ClusterAutoScaler：主要用于公有云上的Kubernetes集群，目前
+已经覆盖常见的公有云，包括GCP、AWS、Azure、阿里云、华为云
+等，其核心功能是自动扩容Kubernetes集群的节点，以应对集群资源不
+足或者节点故障等情况。
+◎　Vertical Pod Autoscaler：简称VPA，目前仍在快速演进，主要
+与HPA互补，提供Pod垂直扩缩容的能力，这也是本节讲解的主要内
+容。
+◎　Addon Resizer：是VPA的简化版，可方便我们体验VPA的新特
+性。
+12.3.1　VPA详解
+若更深入地理解VPA，则可以从HPA开始。为了实施HPA，我们需
+要提前做很多准备工作，包括：
+◎　运行、观测并正确设定目标Pod的资源请求，包括CPU和内存
+的初始值，满负荷情况下单一Pod的CPU和内存上限值；
+◎　测试Pod的副本数量与请求负载之间的关系，用来设定HPA情
+况下Pod的合理副本数的范围；
+◎　观察HPA的实际效果，并继续调整相关参数。
+如果要实施HPA并发挥它的真正效果，则首先需要大量的配置和运
+维管理工作；此外，在现实情况下，我们手动设置一个Pod资源配额基
+
+本靠猜，导致集群资源的无谓浪费。那么，有没有一种工具或手段，可
+以自动化并且精确完成该工作呢？如果能实现，整个集群的资源利用率
+就可以得到更好的提升，这就是VPA的目的所在。下面是VPA要实现的
+目标：
+◎　通过自动配置Pod的资源请求（CPU/Memory Request &Limit）
+来降低运维的复杂度和人工成本；
+◎　在努力提高集群资源利用率的同时避免出现容器资源不足的风
+险，例如出现内存不足或CPU饥饿。
+简单来说，VPA主要是想办法找出目标Pod在运行期间所需的最少
+资源，并且将目标Pod的资源请求改为它所建议的数值，这样一来，容
+器既不会有资源不足的风险，又最大程度地提升了资源利用率。其设计
+思路也不难理解，如下所述。
+（1）VPA会通过Metrics Server获取目标Pod运行期间的实时资源度
+量指标，主要是CPU和内存使用指标。
+（2）将这些数据汇聚处理后存放在History Storage组件中。
+（3）History Storage组件中的历史数据与Metrics Server里的实时数
+据会一起被VPA的Recommender组件使用。Recommender组件会结合推
+荐模型Recommendation 
+model推导出目标Pod资源请求的合理建议值。
+目前实现的推荐模型比较简单：假设内存和CPU使用率是独立的随机变
+量，其分布等于在过去N天中观察到的分布（推荐N=8，以捕获每周峰
+值）。未来更先进的模型可能会尝试检测趋势、周期性及其他与时间相
+关的模式。
+（4）一旦Recommender计算出目标Pod的新推荐值，若这个推荐值
+与Pod当前实际配置的资源请求明显不同，VPA Updater组件就可以决定
+更新Pod。Pod的更新有以下两种方式。
+◎　通过Pod驱逐（Pod 
+Eviction），让Pod控制器如Deployment、
+ReplicaSet等来决定如何销毁目标Pod并重建Pod副本。
+◎　原地更新Pod实例（In-place updates），目标Pod并不销毁，而
+是直接修改目标Pod的资源配置数据并立即生效。这也是VPA的一个亮
+点特性。
+
+为了追踪目标Pod并实施垂直伸缩功能，VPA定义了一个全新的
+CRD“VerticalPodAutoscaler”，它的定义包括一个匹配目标Pod的选择
+器、计算资源的资源策略（Resources 
+policy）、Pod的更新策略
+（Update policy）等。下面给出一个示例：
+这里对其中的关键信息解释如下。
+（1）targetRef：用于匹配目标Pod的选择器。这里选择名为frontend
+的Deployment控制的Pod。
+（2）ResourcePolicy：用于指定资源计算的策略，如果这一字段被
+
+省略，则将会为在targetRef中指定的控制器生成的所有Pod的容器进行
+资源测算，并根据UpdatePolicy的定义进行更新。
+◎　ContainerName：容器名称，如果为“*”，则对所有没有设置资
+源策略的容器都生效。
+◎　Mode：为Auto时，表示为指定的容器启用VPA；为Off时，表
+示关闭指定的容器的VPA。
+◎　MinAllowed：最小允许的资源值。
+◎　MaxAllowed：最大允许的资源值。
+（3）UpdatePolicy：用于指定监控资源需求时的操作策略，有以下
+几个选项。
+◎　UpdateMode：默认值为Auto。
+◎　Off：仅监控资源状况并提出建议，不进行自动修改。
+◎　Initial：在创建Pod时为Pod指派资源。
+◎　Recreate：在创建Pod时为Pod指派资源，并可以在Pod的生命周
+期中通过删除、重建Pod，将其资源数量更新为Pod申请的数量。
+◎　Auto：目前相当于Recreate。
+如果我们不放心VPA自动修改Pod的资源配置信息，则可以将
+UpdateMode设置为Off，这时可以通过命令行得到VPA给出的建议值。
+VPA还有一个重要的组件——VPA Admission Controller，它会拦截Pod
+的创建请求，如果该Pod对应的UpdateMode不是Off，则它会用
+Recommender推荐的值改写Pod中对应的Spec内容。在目前的版本中，
+Pod不必通过VPA的准入控制“修正”就能被正常调度，但在未来的版本
+中可能考虑增加强制性要求，比如某种Pod必须要经过VPA的修正才能
+被调度，如果该Pod没有定义对应的VerticalPodAutoscaler，则VPA
+Admission Controller可以拒绝该Pod的创建请求。
+VPA与HPA是否可能共同作用在同一个Pod上？从理论上来说，的
+确存在这种可能性，比如：CPU密集的负载（Pod）可以通过CPU利用
+率实现水平扩容，同时通过VPA缩减内存使用量；I/O密集的负载
+（Pod）可以基于I/O吞吐量实现水平扩容，同时通过VPA缩减内存和
+
+CPU使用量。
+但是，实际应用是很复杂的，因为Pod副本数量的变动不仅影响到
+瓶颈资源的使用情况，也影响到非瓶颈资源的使用情况，其中有一定的
+因果耦合关系。此外，VPA目前的设计实现没有考虑到多副本的影响，
+在未来扩展后有可能达到HPA与VPA双剑合璧的新境界。
+12.3.2　安装Vertical Pod Autoscaler
+在安装Autoscaler前要先启动Metrics 
+Server，首先使用Git获取
+Autoscaler的源码：
+下载结束之后，运行如下脚本启动VPA：
+可以看到，在安装过程中生成了常见的Deployment、Secret、
+Service及RBAC内容，还生成了两个CRD，接下来会用新生成的CRD设
+置Pod的垂直扩缩容。
+12.3.3　为Pod设置垂直扩缩容
+
+在下载的Git代码中包含一个子目录example，可以使用其中的
+redis.yaml来尝试使用VPA功能。
+查看其中的redis.yaml文件，可以看到VPA的定义：
+该定义非常简短：对名称为redis-master的Deployment进行自动垂直
+扩缩容。
+通过kubectl将测试文件提交到集群上运行：
+在创建结束之后，VPA会监控资源状况，大约5min后重新获取VPA
+对象的内容：
+
+可以看到，在VPA对象中已经有了新的推荐设置。接下来查看
+
+Redis的Pod资源请求：
+不难看出，Pod的资源状况和Deployment中的原始定义已经不同，
+和VPA中的推荐数量一致。
+12.3.4　注意事项
+注意事项如下。
+◎　VPA对Pod的更新会造成Pod的重新创建和调度。
+◎　对于不受控制器支配的Pod，VPA仅能在其创建时提供支持。
+◎　VPA的准入控制器是一个Webhook，可能会和其他同类
+Webhook存在冲突，从而导致无法正确执行。
+◎　VPA能够识别多数内存不足的问题，但并非全部。
+◎　尚未在大规模集群上测试VPA的性能。
+◎　如果多个VPA对象都匹配同一个Pod，则会造成不可预知的后
+果。
+◎　VPA目前不会设置limits字段的内容。
+12.4　Kubernetes生态系统与演进路线
+
+Kubernetes的快速演进大大推进了云计算技术的发展，伴随着云原
+生计算基金会CNCF的诞生、云原生开源项目的孵化，逐渐演化成一个
+完整的云原生技术生态系统。本节对Kubernetes与CNCF的关系、
+Kubernetes演进路线和Kubernetes开发模式进行介绍。
+12.4.1　Kubernetes与CNCF
+云原生计算的特点是使用开源软件技术栈，将应用程序以微服务的
+形式进行发布和部署，并动态编排这些微服务，优化资源使用率，帮助
+软件开发人员更快地构建出色的产品，进而提升业务服务的快速迭代与
+创新价值。
+Kubernetes作为CNCF的第一个开源项目，其智能的服务调度能力可
+以让开发人员在构建云原生应用时更加关注业务代码而不是烦琐的运维
+操作，Kubernetes可以在本地或云端运行，让用户不再担心基础设施被
+供应商或云提供商绑定。
+围绕Kubernetes，CNCF设计了云原生技术的全景图，从云原生的层
+次结构和不同的功能维度上给出了云原生技术体系的全貌，帮助用户在
+不同的层面选择适合的软件和工具进行支持。随着越来越多的开源项目
+在CNCF毕业，云原生技术的生态系统日趋完善，用户可以选择的工具
+也越来越丰富。经过了从 2014 年开源至今的快速发展，Kubernetes已经
+成为整个云原生体系的基石，在云原生技术全景图中，可以看到
+Kubernetes处于编排管理工具的核心位置，相当于云原生技术体系中操
+作系统的角色。
+同时，CNCF为云原生技术如何在生产环境中落地提供了循序渐进
+的路线图，如图12.7所示。
+
+
+图12.7　CNCF云原生技术路线图
+CNCF现在在中国有近50个成员，中国还是CNCF项目的第三大贡
+献者（按贡献者和提交者计），仅次于美国和德国。在CNCF于2020年
+年初发布的全球云原生调查报告中，84%的受访者在生产环境中使用容
+器，容器在生产环境中的使用已成为常态，并且在很大程度上改变了基
+于云的基础架构。同时，针对中国的第三次云原生应用调查报备显示：
+49%的受访者在生产环境中使用容器，另有32%计划这样做，与一年前
+相比，这是一个显著的增长；同时，72%的受访者已经在生产环境中使
+用Kubernetes，大大高于一年前的40%。图12.8显示了大规模生产环境中
+Kubernetes集群数量逐年增长的趋势。
+图12.8　Kubernetes集群数量逐年增长的趋势
+
+12.4.2　Kubernetes的演进路线
+1.Kubernetes与CNCF的容器标准化之路
+在CNCF的生态中，围绕着Kubernetes的一个重要目标是制定容器世
+界的标准。迄今为止，已经在容器运行时、容器网络接口、容器存储接
+口三个方面制定了标准的接口规范。
+◎　CRI（Container Runtime Interface）容器运行时接口。容器运行
+时（Container Runtime）是Kubernetes的基石，而Docker是我们最熟悉的
+容器运行环境。CNCF第一个标准化的符合OCI规范的核心容器运行时
+是Containerd，其来源于Docker在2017年的捐赠产物，关于CRI的详细说
+明请参考2.7节的说明。
+◎　CNI（Container Network Interface）容器网络接口。网络提供
+商基于CNI接口规范提供容器网络的实现，可以支持各种丰富的容器网
+络管理功能，开源的实现包括Flannel、Calico、Open 
+vSwitch等，关于
+CNI的详细说明请参考7.6节的说明。
+◎　CSI（Container Storage Interface）容器存储接口。Kubernetes在
+1.9版本中首次引入CSI存储插件，并在随后的1.10版本中默认启用。CSI
+用于在Kubernetes与第三方存储系统间建立一套标准的存储调用接口，
+并将位于Kubernetes系统内部的存储卷相关的代码剥离出来，从而简化
+核心代码并提升系统的安全性，同时借助CSI接口和插件机制，实现各
+类丰富的存储卷的支持，赢得更多存储厂商的跟进。Kubernetes在1.12
+版本中又进一步实现了存储卷的快照（VolumeSnapshot）这一高级特
+性。
+◎　API标准接口。我们再看一个Kubernetes标准化的例子，API
+Server之前的接口就是普通的RESTful接口，通过支持Swagger 1.2自动生
+成各种语言的客户端，方便开发者调用Kubernetes的API。从Kubernetes
+1.4版本开始，API Server对代码进行了重构，引入了Open API规范，之
+后的Kubernetes 1.5版本能很好地支持由Kubernetes源码自动生成其他语
+言的客户端代码。这种改动升级对于Kubernetes的发展、壮大很重要，
+它遵循了业界的标准，更容易对接第三方资源和系统，从而进一步扩大
+Kubernetes的影响力。
+
+2.Kubernetes安全机制的演进之路
+除了标准化，Kubernetes的另一个演进目标就是提升系统的安全
+性。自1.3版本开始，Kubernetes都在加强系统的安全性，如下所述。
+◎　1.3版本：引入了Network Policy，Network Policy提供了基于策
+略的网络控制，用于隔离应用并减少攻击面，属于重要的基础设施方面
+的安全保障。
+◎　1.4版本：开始提供Pod安全策略功能，这是容器安全的重要基
+础。
+◎　1.5版本：首次引入了基于角色的访问控制RBAC（Role-Based
+Access Control）安全机制，RBAC后来成为Kubernetes API默认的安全
+机制，此外添加了对kubelet API访问的认证/授权机制。
+◎　1.6版本：升级RBAC安全机制至Beta版本，通过严格限定系统
+组件的默认角色，增强了安全保护。
+◎　1.7版本：新增节点授权器Node Authorizer和准入控制插件来限
+制kubelet对节点、Pod和其对象的访问，确保kubelet具有正确操作所需
+的最小权限集，即只能操作自身节点上的Pod实例及其他相关资源。在
+网络安全方面，Network Policy API也升至稳定版本。此外，在审计日志
+方面也增强了定制化和可扩展性，有助于管理员发现运维过程中可能存
+在的安全问题。
+◎　1.8版本：基于角色的访问控制RBAC功能正式升级至v1稳定版
+本，高级审计功能则升级至Beta版本。
+◎　1.10版本开始：增加External Credential Providers，通过调用外
+部插件（Credential 
+Plugin）来获取用户的访问凭证，用来支持不在
+Kubernetes中内置的认证协议，如LDAP、oAuth2、SAML等。此特性主
+要为了公有云服务商而增加。1.11版本继续改进；1.20版本引入了配套
+的kubelet image credential provider，用于动态获取镜像仓库的访问凭
+证。
+◎　1.14版本：由于允许未经身份验证的访问，所以Discovery API
+被从RBAC基础架构中删除，以提高隐私和安全性。
+◎　1.19版本：seccomp机制更新到GA阶段。
+
+3.Kubernetes扩展功能的演进之路
+在Kubernetes的快速发展演进过程中，随着功能的不断增加，必然
+带来代码的极速膨胀，因此不断剥离一些核心代码并配合插件机制，实
+现核心的稳定性并具备很强的外围功能的扩展能力，也是Kubernetes的
+重要演进方向。除了CRI、CNI、CSI等可扩展接口，还包括API资源的
+扩展、云厂商控制器的扩展等。
+◎　Kubernetes从1.7版本开始引入扩展API资源的能力，使得开发
+人员在不修改Kubernetes核心代码的前提下可以对Kubernetes API进行扩
+展，仍然使用Kubernetes的语法对新增的API进行操作。Kubernetes提供
+了两种机制供用户扩展API：①使用CRD（Custom Resource Definition）
+自定义资源机制，用户只需定义CRD，并且提供一个CRD控制器，就能
+通过Kubernetes的API管理自定义资源对象；②使用API聚合机制，用户
+通过编写和扩展API Server，就可以对资源进行更细粒度的控制。
+◎　最早的时候，为了跟公有云厂商对接，Kubernetes在代码中内
+置了Cloud 
+Provider接口，云厂商需要实现自己的Cloud 
+Provider。
+Kubernetes核心库内置了很多主流云厂商的实现，包括AWS、GCE、
+Azure等，因为由不同的厂商参与开发，所以这些不同厂商提交的代码
+质量也影响到Kuberntes的核心代码质量，同时对Kubernetes的迭代和版
+本发布产生一定程度的影响。因此，在Kubernetes 
+1.6版本中引入了
+Cloud Controller Manager（CCM），目的就是最终替代Cloud Provider，
+将服务提供商的专用代码抽象到独立的cloud-controller-manager二进制
+程序中，cloud-controller-manager使得云供应商的代码和Kubernetes的代
+码可以各自独立演化。在后续的版本中，特定于云供应商的代码将由云
+供应商自行维护，并在运行Kubernetes时链接到cloud-controller-
+manager。
+4.Kubernetes自动化运维能力的演进之路
+在Kubernetes的快速发展演进过程中，架构和运维自动化、高级别
+的架构和运维自动化能力也是其坚持的核心目标，这也是Kubernetes最
+强的一面，同时是吸引众多IT人士的核心特性之一。最早的
+ReplicaController/Deployment其实就是Kubernetes运维自动化能力的第一
+次对外展示，因为具备应用全生命周期自我自动修复的能力，所以这个
+特性成为Kubernetes最早的亮点之一。再后来，HPA水平自动伸缩功能
+
+和集群资源自动扩缩容（Cluster Autoscaler）再次突破了我们所能想到
+的自动运维的上限。接下来，与HPA互补的VPA（Pod垂直自动伸缩）
+功能又将集群运维自动化的水平提升到一个新的高度。我们看到，从
+Deployment到HPA再到VPA的发展演进，是沿着Pod自动扩缩容的弹性
+计算能力的路线一步步演进、完善的，这也是超大规模集群的
+Kubernetes的核心竞争力的重要体现，未来会不断完善。
+除了高级别的架构和运维自动化能力，Kubernetes在常规的运维自
+动化方面也丝毫没有放松，它在不断提升、演进。我们以最常见的集群
+部署、停机检修、升级扩容这些常规运维工作为例来看看Kubernetes是
+怎么不断演进的。
+（1）在集群部署方面，Kubernetes很早就开始研发一键式部署工具
+——kubeadm，kubeadm可谓Kubernetes历史上最久的组件之一，它于
+Kubernetes 1.4版本面世，直到Kubernetes 1.13版本时才达到GA阶段。正
+是有了kubeadm，Kubernetes的安装才变得更加标准化，并大大简化了
+大规模集群的部署工作量。不过在集群部署方面还存在另一个烦琐并耗
+费很多人工的地方，这就是每个节点上kubelet的证书制作。Kubernetes
+1.4版本引入了一个用于从集群级证书颁发机构（CA）请求证书的
+API，可以方便地给各个节点上的kubelet进程提供TLS客户端证书，但
+每个节点上的kubelet进程在安装部署时仍需管理员手工创建并提供证
+书。Kubernetes在后续的版本中又实现了kubelet TLS Bootstrap这个新特
+性，基本解决了这个问题。
+（2）在停机检修和升级扩容方面，Kubernetes先后实现了滚动升
+级、节点驱逐、污点标记等配套运维工具，努力实现业务零中断的自动
+运维操作。
+此外，存储资源的运维自动化也是Kubernetes演进的一大方向。以
+PVC和StorageClass为核心的动态供给PV机制（Dynamic Provisioning）
+在很大程度上解决了传统方式下存储与架构分离的矛盾，自动创建了合
+适的PV并将其绑定到PVC上，拥有完善的PV回收机制，全程无须专业
+的存储管理人员，极大提升了系统架构的完整性。
+12.4.3　Kubernetes的开发模式
+
+最后，我们来说说Kubernetes的开发模式。Kubernetes社区是以
+SIG（Special Interest Group，特别兴趣小组）和工作组的形式组织起来
+的，目前已经成立的SIG小组有30个，涵盖了安全、自动扩缩容、大数
+据、AWS云、文档、网络、存储、调度、UI、Windows容器等方方面
+面，为完善Kubernetes的功能群策群力并共同开发。
+Kubernetes的每个功能模块都由一个特别兴趣小组负责开发和维
+护，如图12.9所示。
+
+
+图12.9　特别兴趣小组
+有兴趣、有能力的读者可以申请加入感兴趣的SIG小组，并通过
+Slack聊天频道与来自世界各地的开发组成员开展技术探讨和解决问
+题。同时，可以参加SIG小组的周例会，共同参与一个功能模块的开发
+工作。

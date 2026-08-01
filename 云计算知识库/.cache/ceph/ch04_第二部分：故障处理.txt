@@ -1,0 +1,945 @@
+本部分就 Ceph 存储集群常见的问题做了归纳和总结，方便运维人员进行故障排除。
+第二部分：故障处理
+第二部分：故障处理
+- 68 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+Monitor 维护着 Ceph 集群的信息，如果 Monitor 无法正常提供服务，那整个 Ceph 集群就不可
+访问。一般来说，在实际运行中，Ceph Monitor的个数是 2n + 1 ( n >= 0) 个，在线上至少3
+个，只要正常的节点数 >= n+1，Ceph 的 Paxos 算法就能保证系统的正常运行。所以，当
+Monitor 出现故障的时候，不要惊慌，冷静下来，一步一步地处理。
+在遭遇 Monitor 故障时，首先回答下列几个问题：
+Mon 进程在运行吗？
+我们首先要确保 Mon 进程是在正常运行的。很多人往往忽略了这一点。
+是否可以连接 Mon Server？
+有时候我们开启了防火墙，导致无法与 Monitor 的 IP 或端口进行通信。尝试使用  ssh  连接服
+务器，如果成功，再尝试用其他工具（如  telnet  ，  nc  等）连接 monitor 的端口。
+ceph -s 命令是否能运行并收到集群回复？
+如果答案是肯定的，那么你的集群已启动并运行着。你可以认为如果已经形成法定人数，monitors 就
+只会响应  status  请求。
+如果  ceph -s  阻塞了，并没有收到集群的响应且输出了很多  fault  信息，很可能此时你的
+monitors 全部都 down 掉了或只有部分在运行（但数量不足以形成法定人数）。
+ceph -s 没完成是什么情况？
+如果你到目前为止没有完成前述的几步，请返回去完成。然后你需要  ssh  登录到服务器上并使用
+monitor 的管理套接字。
+通过管理套接字，你可以用 Unix 套接字文件直接与指定守护进程交互。这个文件位于你 Mon 节点
+的  run  目录下，默认配置它位于  /var/run/ceph/ceph-mon.ID.asok ，但要是改过配置就不
+一定在那里了。如果你在那里没找到它，请检查  ceph.conf  里是否配置了其它路径，或者用下面
+的命令获取：
+1. ceph-conf --name mon.ID --show-config-value admin_socket
+1. 常见 MON 故障处理
+1.1 开始排障
+1.2 使用 Mon 的管理套接字
+1. 常见 MON 故障处理
+- 69 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+请牢记，只有在 Mon 运行时管理套接字才可用。Mon 正常关闭时，管理套接字会被删除；如果 Mon
+不运行了、但管理套接字还存在，就说明 Mon 不是正常关闭的。不管怎样，Mon 没在运行，你就不能
+使用管理套接字，  ceph  命令会返回类似  Error 111: Connection Refused  的错误消息。
+访问管理套接字很简单，就是让  ceph  工具使用  asok  文件。对于 Dumpling 之前的版本，
+命令是这样的：
+1. ceph --admin-daemon /var/run/ceph/ceph-mon.<id>.asok <command>
+对于 Dumpling 及后续版本，你可以用另一个（推荐的）命令：
+1. ceph daemon mon.<id> <command>
+ ceph  工具的  help  命令会显示管理套接字支持的其它命令。请仔细了解一下  config get 
+、  config show  、  mon_status  和  quorum_status  命令，在排除 Mon 故障时它们会
+很有用。
+当集群形成法定人数后，或在没有形成法定人数时通过管理套接字， 用  ceph  工具可以获得
+ mon_status  信息。命令会输出关于 monitor 的大多数信息，包括部分  quorum_status  命
+令的输出内容。
+下面是  mon_status  的输出样例：
+1. {
+2.     "name": "c",
+3.       "rank": 2,
+4.       "state": "peon",
+5.       "election_epoch": 38,
+6.       "quorum": [
+7.         1,
+8.         2
+9.     ],
+10.       "outside_quorum": [],
+11.       "extra_probe_peers": [],
+12.       "sync_provider": [],
+13.       "monmap": { 
+14.         "epoch": 3,
+15.           "fsid": "5c4e9d53-e2e1-478a-8061-f543f8be4cf8",
+16.           "modified": "2013-10-30 04:12:01.945629",
+17.           "created": "2013-10-29 14:14:41.914786",
+1.3 理解 MON_STATUS
+1. 常见 MON 故障处理
+- 70 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+18.           "mons": [
+19.             {     
+20.                 "rank": 0,
+21.                   "name": "a",
+22.                   "addr": "127.0.0.1:6789\/0"
+23.             },
+24.             { 
+25.                 "rank": 1,
+26.                   "name": "b",
+27.                   "addr": "127.0.0.1:6790\/0"
+28.             },
+29.             { 
+30.                 "rank": 2,
+31.                   "name": "c",
+32.                   "addr": "127.0.0.1:6795\/0"
+33.             }
+34.         ]
+35.     }
+36. }
+从上面的信息可以看出， monmap 中包含 3 个monitor （ a，b 和 c），只有 2 个 monitor
+形成了法定人数， c 是法定人数中的 peon 角色（非 leader 角色）。
+还可以看出， a 并不在法定人数之中。请看  quorum  集合。在集合中只有 1 和 2 。这不是
+monitor 的名字，而是它们加入当前 monmap 后确定的等级。丢失了等级 0 的 monitor，根据
+monmap ，这个 monitor 就是  mon.a  。
+那么，monitor 的等级是如何确定的？
+当加入或删除 monitor 时，会（重新）计算等级。计算时遵循一个简单的规则：  IP:PORT  的组
+合值越大， 等级越低（等级数字越大，级别越低）。因此在上例中，  127.0.0.1:6789  比其他
+ IP:PORT  的组合值都小，所以  mon.a  的等级是 0 。
+当此种情况发生时，根据你运行的 Ceph 版本，可能看到类似下面的输出：
+1. root@OPS-ceph1:~# ceph health detail
+2. HEALTH_WARN 1 mons down, quorum 1,2 b,c
+3. mon.a (rank 0) addr 127.0.0.1:6789/0 is down (out of quorum)
+1.4 最常见的 Mon 问题
+达到了法定人数但是有至少一个 Monitor 处于 Down 状态
+1. 常见 MON 故障处理
+- 71 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+首先，确认 mon.a 进程是否运行。
+其次，确定可以从其他 monitor 节点连到  mon.a  所在节点。同时检查下端口。如果开了防火
+墙，还需要检查下所有 monitor 节点的  iptables  ，以确定没有丢弃/拒绝连接。
+如果前两步没有解决问题，请继续往下走。
+首先，通过管理套接字检查问题 monitor 的  mon_status  。考虑到该 monitor 并不在法定人
+数中，它的状态应该是  probing  ，  electing  或  synchronizing  中的一种。如果它恰
+巧是  leader  或  peon  角色，它会认为自己在法定人数中，但集群中其他 monitor 并不这
+样认为。或者在我们处理故障的过程中它加入了法定人数，所以再次使用  ceph -s  确认下集群状
+态。如果该 monitor 还没加入法定人数，继续。
+ probing  状态是什么情况？
+这意味着该 monitor 还在搜寻其他 monitors 。每次你启动一个 monitor，它会去搜寻
+ monmap  中的其他 monitors ，所以会有一段时间处于该状态。此段时间的长短不一。例如，单
+节点 monitor 环境， monitor 几乎会立即通过该阶段。在多 monitor 环境中，monitors 在
+找到足够的节点形成法定人数之前，都会处于该状态，这意味着如果 3 个 monitor 中的 2 个
+down 了，剩下的 1 个会一直处于该状态，直到你再启动一个 monitor 。
+如果你的环境已经形成法定人数，只要 monitor 之间可以互通，新 monitor 应该可以很快搜寻到
+其他 monitors 。如果卡在 probing 状态，并且排除了连接的问题，那很有可能是该 monitor
+在尝试连接一个错误的 monitor 地址。可以根据  mon_status  命令输出中的  monmap  内
+容，检查其他 monitor 的地址是否和实际相符。如果不相符，请跳至恢复 Monitor 损坏的
+monmap。如果相符，这些 monitor 节点间可能存在严重的时钟偏移问题，请首先参考时钟偏移，如
+果没有解决问题，可以搜集相关的日志并向社区求助。
+ electing  状态是什么情况？
+这意味着该 monitor 处于选举过程中。选举应该很快就可以完成，但偶尔也会卡住，这往往是
+monitors 节点时钟偏移的一个标志，跳转至时钟偏移获取更多信息。如果时钟是正确同步的，可以搜
+集相关日志并向社区求助。此种情况除非是一些（非常）古老的 bug ，往往都是由时钟不同步引起
+的。
+ synchronizing  状态是什么情况？
+这意味着该 monitor 正在和集群中的其他 monitor 进行同步以便加入法定人数。Monitor 的数
+据库越小，同步过程的耗时就越短。
+然而，如果你注意到 monitor 的状态从 synchronizing 变为 electing 后又变回
+synchronizing ，那么就有问题了：集群的状态更新的太快（即产生新的 maps ），同步过程已经
+如何解决？
+1. 常见 MON 故障处理
+- 72 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+无法追赶上了。这种情况在早期版本中可以见到，但现在经过代码重构和增强，在较新版本中已经基本
+见不到了。
+ leader  或  peon  状态是什么情况？
+这种情况不应该发生，但还是有一定概率会发生，这常和时钟偏移有关。如果你并没有时钟偏移的问
+题，请搜集相关的日志并向社区求助。
+monmap 通常看起来是下面的样子，这取决于 monitor 的个数：
+1. epoch 3
+2. fsid 5c4e9d53-e2e1-478a-8061-f543f8be4cf8
+3. last_changed 2013-10-30 04:12:01.945629
+4. created 2013-10-29 14:14:41.914786
+5. 0: 127.0.0.1:6789/0 mon.a
+6. 1: 127.0.0.1:6790/0 mon.b
+7. 2: 127.0.0.1:6795/0 mon.c
+不过也不一定就是这样的内容。比如，在早期版本的 Ceph 中，有一个严重 bug 会导致  monmap 
+的内容全为 0 。这意味着即使用  monmaptool  也不能读取它，因为全 0 的内容没有任何意义。
+另外一些情况，某个 monitor 所持有的 monmap 已严重过期，以至于无法搜寻到集群中的其他
+monitors 。在这些状况下，你有两种可行的解决方法：
+销毁 monitor 然后新建
+只有在你确定不会丢失保存在该 monitor 上的数据时，你才能够采用这个方法。也就是说，集群中还
+有其他运行正常的 monitors，以便新 monitor 可以和其他 monitors 达到同步。请谨记，销毁
+一个 monitor 时，如果没有其上数据的备份，可能会丢失数据。
+给 monitor 手动注入 monmap
+通常是最安全的做法。你应该从剩余的 monitor 中抓取 monmap，然后手动注入 monmap 有问题的
+monitor 节点。
+下面是基本步骤：
+1、是否已形成法定人数？如果是，从法定人数中抓取 monmap ：
+1. ceph mon getmap -o /tmp/monmap
+2、没有形成法定人数？直接从其他 monitor 节点上抓取 monmap （这里假定你抓取 monmap 的
+monitor 的 id 是 ID-FOO 并且守护进程已经停止运行）：
+恢复 Monitor 损坏的 monmap
+1. 常见 MON 故障处理
+- 73 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+1. ceph-mon -i ID-FOO --extract-monmap /tmp/monmap
+3、停止你想要往其中注入 monmap 的 monitor。
+4、注入 monmap 。
+1. ceph-mon -i ID --inject-monmap /tmp/monmap
+5、启动 monitor 。
+请记住，能够注入 monmap 是一个很强大的特性，如果滥用可能会对 monitor 造成大破坏，因为这
+样做会覆盖 monitor 持有的最新 monmap 。
+Monitor 节点间明显的时钟偏移会对 monitor 造成严重的影响。这通常会导致一些奇怪的问题。为
+了避免这些问题，在 monitor 节点上应该运行时间同步工具。
+允许的最大时钟偏移量是多少？
+默认最大允许的时钟偏移量是  0.05 秒 。
+如何增加最大时钟偏移量？
+通过 mon-clock-drift-allowed 选项来配置。尽管你 可以 修改但不代表你 应该 修改。时钟偏
+移机制之所以是合理的，是因为有时钟偏移的 monitor 可能会表现不正常。未经测试而修改该值，尽
+管没有丢失数据的风险，但仍可能会对 monitors 的稳定性和集群的健康造成不可预知的影响。
+如何知道是否存在时钟偏移？
+Monitor 会用  HEALTH_WARN  的方式警告你。  ceph health detail  应该输出如下格式的信
+息：
+1. mon.c addr 10.10.0.1:6789/0 clock skew 0.08235s > max 0.05s (latency 0.0045s)
+这表示  mon.c  已被标记出正在遭受时钟偏移。
+如果存在时钟偏移该怎么处理？
+同步各 monitor 节点的时钟。运行 NTP 客户端会有帮助。如果你已经启动了 NTP 服务，但仍遭遇
+此问题，检查一下使用的 NTP 服务器是否离你的网络太过遥远，然后可以考虑在你的网络环境中运行
+自己的 NTP 服务器。最后这种选择可趋于减少 monitor 时钟偏移带来的问题。
+时钟偏移
+客户端无法连接或挂载
+1. 常见 MON 故障处理
+- 74 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+检查 IP 过滤表。某些操作系统安装工具会给  iptables  增加一条  REJECT  规则。这条规则
+会拒绝所有尝试连接该主机的客户端（除了  ssh  ）。如果你的 monitor 主机设置了这条防火墙
+ REJECT  规则，客户端从其他节点连接过来时就会超时失败。你需要定位出拒绝客户端连接 Ceph
+守护进程的那条  iptables  规则。比如，你需要对类似于下面的这条规则进行适当处理：
+1. REJECT all -- anywhere anywhere reject-with icmp-host-prohibited
+你还需要给 Ceph 主机的 IP 过滤表增加规则，以确保客户端可以访问 Ceph monitor （默认端口
+6789 ）和 Ceph OSD （默认 6800 ~ 7300 ）的相关端口。
+1. 
+iptables -A INPUT -m multiport -p tcp -s {ip-address}/{netmask} --dports 
+6789,6800:7300 -j ACCEPT
+或者，如果你的环境允许，也可以直接关闭主机的防火墙。
+Ceph monitor 把集群的各种 map 信息存放在 key/value 数据库中，如 LevelDB 。如果
+monitor 是因为数据库崩溃而失败，在 monitor 的 log 日志中应该会有如下错误信息：
+1. Corruption: error in middle of record
+或：
+1. Corruption: 1 missing files; e.g.: /var/lib/ceph/mon/mon.0/store.db/1234567.ldb
+如果还有幸存的 monitor，我们通常可以用新的数据库替换崩溃的数据库。并且在启动后，新加入的
+成员会和其他健康的伙伴进行同步，一旦同步完成，它就可以为客户端提供服务了。
+但是万一所有的 monitors 都同时失败了该怎么办？由于建议用户在部署集群时至少安装 3 个
+monitors，同时失效的可能性较小。但是数据中心意外的断电，再加上磁盘/文件系统配置不当，可能
+会引起底层文件系统失败，从而杀掉所有的 monitors 。这种情况下，我们可以通过存放在 OSDs
+上的信息来恢复 monitor 的数据库：
+1. ms=/tmp/mon-store
+1.5 Monitor 数据库失败
+数据库崩溃的表现
+通过健康的 Monitor(s) 恢复
+通过 OSDs 恢复
+1. 常见 MON 故障处理
+- 75 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+2. mkdir $ms
+3. # collect the cluster map from OSDs
+4. for host in $hosts; do
+5.       rsync -avz $ms user@host:$ms
+6.       rm -rf $ms
+7.       ssh user@host <<EOF
+8.         for osd in /var/lib/osd/osd-*; do
+9. 
+              ceph-objectstore-tool --data-path $osd --op update-mon-db --mon-
+store-path $ms
+10.         done
+11.       EOF
+12.       rsync -avz user@host:$ms $ms
+13. done
+14. # rebuild the monitor store from the collected map, if the cluster does not
+15. # use cephx authentication, we can skip the following steps to update the
+16. # keyring with the caps, and there is no need to pass the "--keyring" option.
+17. # i.e. just use "ceph-monstore-tool /tmp/mon-store rebuild" instead
+18. ceph-authtool /path/to/admin.keyring -n mon. \
+19.   --cap mon allow 'allow *'
+20. ceph-authtool /path/to/admin.keyring -n client.admin \
+21.   --cap mon allow 'allow *' --cap osd 'allow *' --cap mds 'allow *'
+22. ceph-monstore-tool /tmp/mon-store rebuild -- --keyring /path/to/admin.keyring
+23. # backup corrupted store.db just in case
+24. mv /var/lib/ceph/mon/mon.0/store.db /var/lib/ceph/mon/mon.0/store.db.corrupted
+25. mv /tmp/mon-store/store.db /var/lib/ceph/mon/mon.0/store.db
+上面的这些步骤：
+1. 从所有的 OSD 主机上收集 map 信息。
+2. 重建数据库。
+3. 用恢复副本替换 mon.0 上崩溃的数据库。
+已知的限制
+下面这些信息无法通过上述步骤恢复：
+一些新增的 keyring ： 通过  ceph auth add  命令增加的所有 OSD keyrings 都可以恢
+复。用  ceph-monstore-tool  可以导入  client.admin  的 keyring 。但是 MDS 和其他
+keyrings 在被恢复的那个 monitor 数据库中就会丢失。你可能需要手动重新添加一下。
+pg 的设置：通过  ceph pg set_full_ratio  和  ceph pg set_nearfull_ratio  命令设置
+的  full ratio  和  nearfull ratio  值会丢失。
+MDS Maps：MDS maps 会丢失。
+1. 常见 MON 故障处理
+- 76 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+当 monitor 进程检测到本地可用磁盘空间不足时，会停止 monitor 服务。Monitor 的日志中应
+该会有类似如下信息的输出：
+1. 
+2016-09-01 16:45:54.994488 7fb1cac09700  0 
+mon.jyceph01@0(leader).data_health(62) update_stats avail 5% total 297 GB, used 
+264 GB, avail 18107 MB
+2. 
+2016-09-01 16:45:54.994747 7fb1cac09700 -1 
+mon.jyceph01@0(leader).data_health(62) reached critical levels of available 
+space on local monitor storage -- shutdown!
+清理本地磁盘，增大可用空间，重启 monitor 进程，即可恢复正常。
+具体请参考本手册第三部分 2. Monitor 的备份和恢复 。
+磁盘空间不足导致 MON DOWN
+通过 Mon 数据库的备份恢复
+1. 常见 MON 故障处理
+- 77 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+进行 OSD 排障前，先检查一下 monitors 和网络。如果  ceph health  或  ceph -s  返回的
+是健康状态，这意味着 monitors 形成了法定人数。如果 monitor 还没达到法定人数、或者
+monitor 状态错误，要先解决 monitor 的问题。核实下你的网络，确保它在正常运行，因为网络对
+OSD 的运行和性能有显著影响。
+开始 OSD 排障的第一步最好先收集信息，另外还有监控 OSD 时收集的，如  ceph osd tree  。
+如果你没改默认路径，可以在  /var/log/ceph  下找到 Ceph 的日志：
+1. ls /var/log/ceph
+如果看到的日志还不够详细，可以增大日志级别。请参考1.12 日志和调试，查阅如何保证看到大量日
+志又不影响集群运行。
+用管理套接字工具检索运行时信息。列出节点上所有 Ceph 套接字：
+1. ls /var/run/ceph
+然后，执行下例命令显示可用选项，把  {daemon-name}  换成实际的守护进程（如 osd.0 ）：
+1. ceph daemon osd.0 help
+或者，你也可以指定一个  {socket-file}  （如  /var/run/ceph  下的文件）：
+1. ceph daemon {socket-file} help
+和其它手段相比，管理套接字允许你：
+在运行时列出配置
+列出历史操作
+列出操作的优先队列状态
+列出在进行的操作
+2. 常见 OSD 故障处理
+2.1 收集 OSD 数据
+Ceph 日志
+管理套接字
+2. 常见 OSD 故障处理
+- 78 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+列出性能计数器
+可能会引起文件系统问题。用  df  命令显示文件系统的可用空间。
+1. df -h
+其它用法见  df --help  。
+用  iostat  工具定位 I/O 相关问题。
+1. iostat -x
+要查看诊断信息，配合  less  、  more  、  grep  或  tail  使用  dmesg  ，例如：
+1. dmesg | grep scsi
+你得周期性地对集群的子集进行维护，或解决某个故障域的问题（如某个机架）。如果你不想在停机维
+护 OSD 时让 CRUSH 自动重均衡，首先设置集群的  noout  标志：
+1. ceph osd set noout
+设置了 noout 后，你就可以停机维护失败域内的 OSD 了。
+1. stop ceph-osd id={num}
+注意：在定位某故障域内的问题时，停机的 OSD 内的 PG 状态会变为  degraded  。
+维护结束后，重启 OSD 。
+1. start ceph-osd id={num}
+最后，解除  noout  标志。
+1. ceph osd unset noout
+显示可用空间
+I/O 统计信息
+诊断信息
+2.2 停止数据向外重平衡
+2. 常见 OSD 故障处理
+- 79 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+通常情况下，简单地重启  ceph-osd  进程就可以让它重回集群并恢复。
+如果你重启了集群，但其中一个 OSD 起不来，依次检查：
+配置文件： 如果你新装的 OSD 不能启动，检查下配置文件，确保它符合规定（比如  host 
+而非  hostname  ，等等）。
+检查路径： 检查配置文件的路径，以及 OSD 的数据和日志分区路径。如果你分离了 OSD 的数
+据和日志分区、而配置文件和实际挂载点存在出入，启动 OSD 时就可能失败。如果你想把日志
+存储于一个块设备，应该为日志硬盘分区并为各 OSD 分别指定一个分区。
+检查最大线程数： 如果你的节点有很多 OSD ，也许就会触碰到默认的最大线程数限制（如通常
+是 32k 个），尤其是在恢复期间。你可以用  sysctl  增大线程数，把最大线程数更改为支
+持的最大值（即 4194303 ），看看是否有用。例如：
+sysctl -w kernel.pid_max=4194303
+如果增大最大线程数解决了这个问题，你可以把此配置  kernel.pid_max  写入配置文件
+ /etc/sysctl.conf ，使之永久生效，例如：
+1. kernel.pid_max = 4194303
+内核版本： 确认你使用的内核版本和发布版本。 Ceph 默认依赖一些第三方工具，这些工具可
+能有缺陷或者与特定发布版和/或内核版本冲突（如 Google perftools ）。检查下操作系统
+推荐表，确保你已经解决了内核相关的问题。
+段错误： 如果有了段错误，提高日志级别（如果还没提高），再试试。如果重现了，联系
+ceph-devel 邮件列表并提供你的配置文件、monitor 输出和日志文件内容。
+当  ceph-osd  挂掉时，monitor 可通过活着的  ceph-osd  了解到此情况，并通过  ceph
+health  命令报告：
+1. ceph health
+2. HEALTH_WARN 1/3 in osds are down
+特别地，有  ceph-osd  进程标记为  in  且  down  的时候，你也会得到警告。你可以用下面
+2.3 OSD 没运行
+OSD 起不来
+OSD 失败
+2. 常见 OSD 故障处理
+- 80 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+的命令得知哪个  ceph-osd  进程挂了：
+1. ceph health detail
+2. HEALTH_WARN 1/3 in osds are down
+3. osd.0 is down since epoch 23, last address 192.168.106.220:6800/11080
+如果有硬盘失败或其它错误使  ceph-osd  不能正常运行或重启，将会在日志文件
+ /var/log/ceph/  里输出一条错误信息。
+如果守护进程因心跳失败、或者底层核心文件系统无响应而停止，查看  dmesg  获取硬盘或者内核
+错误。
+如果是软件错误（失败的断言或其它意外错误），应该向 ceph-devel 邮件列表报告。
+Ceph 不允许你向满的 OSD 写入数据，以免丢失数据。在运行着的集群中，你应该能收到集群空间将
+满的警告。  mon osd full ratio  默认为 0.95 ，或达到 95% 的空间使用率时它将阻止客户端
+写入数据。  mon osd nearfull ratio  默认为 0.85 ，也就是说达到容量的 85% 时它会产生健
+康警告。
+满载集群问题一般产生于测试小型 Ceph 集群上如何处理 OSD 失败时。当某一节点使用率较高时，
+集群能够很快掩盖将满和占满率。如果你在测试小型集群上的 Ceph 如何应对 OSD 失败，应该保留
+足够的可用磁盘空间，然后试着临时降低  mon osd full ratio  和  mon osd nearfull ratio 
+值。
+ ceph health  会报告将满的  ceph-osds  ：
+1. ceph health
+2. HEALTH_WARN 1 nearfull osds
+3. osd.2 is near full at 85%
+或者：
+1. ceph health
+2. HEALTH_ERR 1 nearfull osds, 1 full osds
+3. osd.2 is near full at 85%
+4. osd.3 is full at 97%
+处理这种情况的最好方法就是在出现  near full  告警时尽快增加新的  ceph-osd  ，这允许集
+群把数据重分布到新 OSD 里。
+如果因满载而导致 OSD 不能启动，你可以试着删除那个 OSD 上的一些数据。但是这时有个问题，当
+硬盘没剩余空间
+2. 常见 OSD 故障处理
+- 81 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+一个 OSD 使用比例达到 95% 时，集群将不接受任何 Ceph Client 端的读写数据的请求。这时
+ rbd rm  删除命令将不会得到响应。
+让集群能够读写是首先要做的事情。最容易想到的就是调高  mon osd full ratio  和  mon osd
+nearfull ratio  值，但是对于生产环境，一旦调整这个全局比例，可能会导致整个集群的数据都会
+动起来，引发更多的数据迁移。因此另一种折衷方法就是单独调整已满 OSD 的 near full 和
+full 比例；也可以使用调低 OSD 的 crush weight 的方法，使已满 OSD 上的数据迁移一部分出
+去。
+1. # 调整单个 osd 的比例
+2. ceph tell osd.id injectargs '--mon-osd-full-ratio .98'
+3. ceph tell osd.id injectargs '--mon-osd-full-ratio 0.98'
+4. 
+5. # 调整 osd 的 crush weight 值
+6. ceph osd crush reweight osd.id {a-little-lower-weight-value}
+一个反复出现的问题是 OSD 龟速或无响应。在深入性能问题前，你应该先确保不是其他故障。例如，
+确保你的网络运行正常、且 OSD 在运行，还要检查 OSD 是否被恢复流量拖住了。
+Tip： 较新版本的 Ceph 能更好地处理恢复，可防止恢复进程耗尽系统资源而导致  up  且  in 
+的 OSD 不可用或响应慢。
+Ceph 是一个分布式存储系统，所以它依赖于网络来互联 OSD 们、复制对象、从错误中恢复和检查心
+跳。网络问题会导致 OSD 延时和震荡（反复经历 up and down，详情可参考下文中的相关小节）
+。
+确保 Ceph 进程和 Ceph 依赖的进程已建立连接和/或在监听。
+1. netstat -a | grep ceph
+2. netstat -l | grep ceph
+3. sudo netstat -p | grep ceph
+检查网络统计信息。
+1. netstat -s
+2.4 OSD 龟速或无响应
+网络问题
+驱动器配置
+2. 常见 OSD 故障处理
+- 82 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+一个存储驱动器应该只用于一个 OSD 。如果有其它进程共享驱动器，顺序读写吞吐量会成为瓶颈，包
+括日志、操作系统、monitor 、其它 OSD 和非 Ceph 进程。
+Ceph 在日志记录完成之后才会确认写操作，所以使用  ext4  或  XFS  文件系统时高速的 SSD
+对降低响应延时很有吸引力。与之相比，  btrfs  文件系统可以同时读写日志和数据分区。
+注意： 给驱动器分区并不能改变总吞吐量或顺序读写限制。把日志分离到单独的分区可能有帮助，但
+最好是另外一块硬盘的分区。
+检修下硬盘是否有坏扇区和碎片。这会导致总吞吐量急剧下降。
+Monitor 通常是轻量级进程，但它们会频繁调用  fsync()  ，这会妨碍其它工作负载，特别是
+Mon 和 OSD 共享驱动器时。另外，如果你在 OSD 主机上同时运行 Mon，遭遇的性能问题可能和这
+些相关：
+运行较老的内核（低于 3.0 ）
+Argonaut 版运行在老的 glibc 之上
+运行的内核不支持 syncfs(2) 系统调用
+在这些情况下，同一主机上的多个 OSD 会相互拖垮对方。它们经常导致爆炸式写入。
+共用同一套硬件、并向 Ceph 写入数据的进程（像基于云的解决方案、虚拟机和其他应用程序）会导
+致 OSD 延时大增。一般来说，我们建议用单独的主机跑 Ceph 、其它主机跑其它进程。实践证明把
+Ceph 和其他应用程序分开可提高性能、并简化故障排除和维护。
+如果你为追踪某问题提高过日志级别，结束后又忘了调回去，这个 OSD 将向硬盘写入大量日志。如果
+你想始终保持高日志级别，可以考虑给默认日志路径（即  /var/log/ceph/$cluster-$name.log 
+）挂载一个单独的硬盘。
+根据你的配置， Ceph 可以降低恢复速度来维持性能，否则它会加快恢复速度而影响 OSD 的性能。
+检查下 OSD 是否正在恢复。
+检查下你在用的内核版本。较老的内核也许没有反合能提高 Ceph 性能的代码。
+扇区损坏 / 碎片化硬盘
+MON 和 OSD 共存
+进程共存
+日志记录级别
+恢复限流
+内核版本
+2. 常见 OSD 故障处理
+- 83 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+试试在一个主机上只运行一个 OSD ，看看能否提升性能。老内核未必支持有  syncfs(2)  系统调
+用的  glibc  。
+当前，我们推荐基于  xfs  部署集群。  btrfs  有很多诱人的功能，但文件系统内的缺陷可能会
+导致性能问题。我们不推荐使用  ext4  ，因为 xattr 大小的限制破坏了对长对象名的支持（
+RGW 需要）。
+我们建议为每 OSD 进程规划 1GB 内存。你也许注意到了，通常情况下 OSD 仅会使用一小部分（如
+100 - 200MB ）。你也许想用这些空闲内存跑一些其他应用，如虚拟机等等。然而当 OSD 进入恢复
+状态时，其内存利用率将激增。如果没有足够的可用内存，此 OSD 的性能将会明显下降。
+如果某  ceph-osd  守护进程对一请求响应很慢，它会生成日志消息来抱怨请求耗费的时间过长。默
+认警告阀值是 30 秒，可以通过  osd op complaint time  选项来配置。这种情况发生时，集群日
+志会收到这些消息。
+很老的版本抱怨 “old requests” ：
+1. 
+osd.0 192.168.106.220:6800/18813 312 : [WRN] old request 
+osd_op(client.5099.0:790 fatty_26485_object789 [write 0~4096] 2.5e54f643) v4 
+received at 2012-03-06 15:42:56.054801 currently waiting for sub ops
+较新版本的 Ceph 抱怨 “slow requests” ：
+1. 
+{date} {osd.num} [WRN] 1 slow requests, 1 included below; oldest blocked for > 
+30.005692 secs
+2. 
+{date} {osd.num}  [WRN] slow request 30.005692 seconds old, received at {date-
+time}: osd_op(client.4240.0:8 benchmark_data_ceph-1_39426_object7 [write 
+0~4194304] 0.69848840) v4 currently waiting for subops from [610]
+可能的原因有：
+坏驱动器（查看  dmesg  输出）
+内核文件系统缺陷（查看  dmesg  输出）
+集群过载（检查系统负载、 iostat 等等）
+ceph-osd 守护进程的 bug
+内核与 SYNCFS 问题
+文件系统问题
+内存不足
+OLD REQUESTS 或 SLOW REQUESTS
+2. 常见 OSD 故障处理
+- 84 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+可能的解决方法：
+从 Ceph 主机分离 VM 云解决方案
+升级内核
+升级 Ceph
+重启 OSD
+我们建议同时部署 public（前端）网络和 cluster（后端）网络，这样能更好地满足对象复制的网
+络性能需求。另一个优点是你可以运营一个不连接互联网的集群，以此避免某些拒绝服务攻击。 OSD
+们互联和检查心跳时会优选 cluster（后端）网络。
+然而，如果 cluster（后端）网络失败、或出现了明显的延时，同时 public（前端）网络却运行良
+好， OSD 目前不能很好地处理这种情况。这时 OSD 们会向 monitor 报告邻居  down  了、同
+时报告自己是  up  的，我们把这种情形称为震荡（ flapping ）。
+如果有原因导致 OSD 震荡（反复地被标记为  down  ，然后又  up  ），你可以强制 monitor
+停止这种震荡状态：
+1. ceph osd set noup      # prevent OSDs from getting marked up
+2. ceph osd set nodown    # prevent OSDs from getting marked down
+这些标记记录在 osdmap 数据结构里：
+1. ceph osd dump | grep flags
+2. flags no-up,no-down
+可用下列命令清除标记：
+1. ceph osd unset noup
+2. ceph osd unset nodown
+Ceph 还支持另外两个标记  noin  和  noout  ，它们可防止正在启动的 OSD 被标记为  in 
+（可以分配数据），或被误标记为  out  （不管  mon osd down out interval  的值是多
+少）。
+注意：  noup  、  noout  和  nodown  从某种意义上说是临时的，一旦标记被清除了，被它
+们阻塞的动作短时间内就会发生。另一方面，  noin  标记阻止 OSD 启动后加入集群，但其它守护
+进程都维持原样。
+2.5 震荡的 OSD
+2. 常见 OSD 故障处理
+- 85 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+创建一个新集群后，PG 的状态一直处于  active  ，  active + remapped  或  active +
+degraded  状态， 而无法达到  active + clean  状态 ，那很可能是你的配置有问题。
+你可能需要检查下集群中有关 Pool 、 PG 和 CRUSH 的配置项，做以适当的调整。
+一般来说，你的集群中需要多于 1 个 OSD，并且存储池的 size 要大于 1 副本。
+有时候，我们需要搭建一个单节点的 Ceph 实验环境。此时，在开始创建 monitor 和 OSD 之前，
+你需要把 Ceph 配置文件中的  osd crush chooseleaf type  选项从默认值  1  （表示
+ host  或  node ）修改为  0  （表示  osd ）。这样做是告诉 Ceph 允许把数据的不同副
+本分布到同一 host 的 OSDs 上。
+如果你已经启动了 2 个 OSD，它们都处于  up  和  in  的状态，但 PG 仍未达到  active +
+clean  状态，那可能是给  osd pool default size  设置了一个大于  2  的值。
+如果你想要在  active + degraded  状态（ 2 副本）操作你的集群，可以设置  osd pool
+default min size  为 2 ，这样你就可以对处于  active + degraded  的对象写入数据。然后
+你还可以把  osd pool default size  的值改为 2 ，这样集群就可以达到  active + clean 
+状态了。
+另外，修改参数  osd pool default size/min_size 后，只会对后面新建的 pool 起作用。如果
+想修改已存在的 pool 的  size/min_size  ，可用下面的命令：
+1. ceph osd pool set <poolname> size|min_size <val>
+注意： 你可以在运行时修改参数值。如果是在 Ceph 配置文件中进行的修改，你可能需要重启集群。
+如果你设置了  osd pool default size  的值为  1  ，那你就仅有对象的单份拷贝。OSD 依赖
+于其他 OSD 告诉自己应该保存哪些对象。如果第一个 OSD 持有对象的拷贝，并且没有第二份拷贝，
+那么也就没有第二个 OSD 去告诉第一个 OSD 它应该保管那份拷贝。对于每一个映射到第一个 OSD
+上的 PG （参考  ceph pg dump  的输出），你可以强制第一个 OSD 关注它应该保存的 PGs ：
+3. 常见 PG 故障处理
+3.1 PG 无法达到 CLEAN 状态
+单节点集群
+OSD 个数小于副本数
+POOL SIZE = 1
+3. 常见 PG 故障处理
+- 86 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+1. ceph pg force_create_pg <pgid>
+PG 达不到 clean 状态的另一个可能的原因就是集群的 CRUSH Map 有错误，导致 PG 不能映射到
+正确的地方。
+有失败发生后，PG 会进入“degraded”（降级）或“peering”（连接建立中）状态，这种情况时有发
+生。通常这些状态意味着正常的失败恢复正在进行。然而，如果一个 PG 长时间处于这些状态中的某
+个，就意味着有更大的问题。因此 monitor 在 PG 卡 （ stuck ） 在非最优状态时会告警。我们
+具体检查：
+ inactive  （不活跃）—— PG 长时间不是  active  （即它不能提供读写服务了）；
+ unclean  （不干净）—— PG 长时间不是  clean  （例如它未能从前面的失败完全恢复）；
+ stale  （不新鲜）—— PG 状态没有被  ceph-osd  更新，表明存储这个 PG 的所有节点可
+能都  down  了。
+你可以用下列命令显式地列出卡住的 PGs：
+1. ceph pg dump_stuck stale
+2. ceph pg dump_stuck inactive
+3. ceph pg dump_stuck unclean
+卡在  stale  状态的 PG 通过重启 ceph-osd 进程通常可以修复；卡在  inactive  状态的
+PG 通常是互联问题（参见 PG 挂了 —— 互联失败 ）；卡在  unclean  状态的 PG 通常是由于某
+些原因阻止了恢复的完成，像未找到的对象（参见 未找到的对象 ）。
+在某些情况下，  ceph-osd  互联进程会遇到问题，阻值 PG 达到活跃、可用的状态。例如，
+ ceph health  也许显示：
+1. ceph health detail
+2. 
+HEALTH_ERR 7 pgs degraded; 12 pgs down; 12 pgs peering; 1 pgs recovering; 6 pgs 
+stuck unclean; 114/3300 degraded (3.455%); 1/3 in osds are down
+3. ...
+4. pg 0.5 is down+peering
+5. pg 1.4 is down+peering
+6. ...
+7. osd.1 is down since epoch 69, last address 192.168.106.220:6801/8651
+CRUSH MAP 错误
+3.2 卡住的 PGs
+3.3 PG 挂了 —— 互联失败
+3. 常见 PG 故障处理
+- 87 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+可以查询到 PG 为何被标记为  down  ：
+1. ceph pg 0.5 query  
+2. 
+3. { "state": "down+peering",
+4.     ...
+5.     "recovery_state": [
+6.        { "name": "Started\/Primary\/Peering\/GetInfo",
+7.           "enter_time": "2012-03-06 14:40:16.169679",
+8.           "requested_info_from": []},
+9.           { "name": "Started\/Primary\/Peering",
+10.           "enter_time": "2012-03-06 14:40:16.169659",
+11.           "probing_osds": [
+12.                   0,
+13.                1],
+14.           "blocked": "peering is blocked due to down osds",
+15.           "down_osds_we_would_probe": [
+16.                1],
+17.           "peering_blocked_by": [
+18.                   { "osd": 1,
+19.                   "current_lost_at": 0,
+20. 
+                  "comment": "starting or marking this osd lost may let us 
+proceed"}]},
+21.           { "name": "Started",
+22.           "enter_time": "2012-03-06 14:40:16.169513"}
+23.   ]
+24. }
+ recovery_state  段告诉我们互联过程因  ceph-osd  进程挂了而被阻塞，本例是  osd.1 
+挂了，启动这个进程应该就可以恢复。
+或者，如果  osd.1  发生了灾难性的失败（如硬盘损坏），我们可以告诉集群它丢失（  lost 
+）了，让集群尽力完成副本拷贝。
+重要： 集群不能保证其它数据副本是一致且最新的，就会很危险！
+让 Ceph 无论如何都继续：
+1. ceph osd lost 1
+恢复将继续进行。
+3. 常见 PG 故障处理
+- 88 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+某几种失败相组合，可能导致 Ceph 抱怨有找不到（  unfound  ）的对象：
+1. ceph health detail
+2. HEALTH_WARN 1 pgs degraded; 78/3778 unfound (2.065%)
+3. pg 2.4 is active+degraded, 78 unfound
+这意味着存储集群知道一些对象（或者存在对象的较新副本）存在，却没有找到它们的副本。下例展示
+了这种情况是如何发生的，一个 PG 的数据存储在 ceph-osd 1 和 2 上：
+1 挂了
+2 独自处理一些写动作
+1 起来了
+1 和 2 重新互联， 1 上面丢失的对象加入队列准备恢复
+新对象还未拷贝完， 2 挂了
+这时， 1 知道这些对象存在，但是活着的  ceph-osd  都没有这些副本。这种情况下，读写这些对
+象的 IO 就会被阻塞，集群只能指望 down 掉的节点尽早恢复。这样处理是假设比直接给用户返回一
+个 IO 错误要好一些。
+首先，你应该确认哪些对象找不到了：
+1. ceph pg 2.4 list_missing [starting offset, in json]
+2. 
+3. { "offset": { "oid": "",
+4.      "key": "",
+5.      "snapid": 0,
+6.      "hash": 0,
+7.      "max": 0},
+8. "num_missing": 0,
+9. "num_unfound": 0,
+10. "objects": [
+11.    { "oid": "object 1",
+12.        "key": "",
+13.      "hash": 0,
+14.      "max": 0 },
+15.    ...
+16. ],
+17. "more": 0}
+如果在一次查询里列出的对象太多，  more  这个字段将为  true  ，你就可以查询更多。
+3.4 未找到的对象
+3. 常见 PG 故障处理
+- 89 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+其次，你可以找出哪些 OSD 上探测到、或可能包含数据：
+1. ceph pg 2.4 query
+2. 
+3. "recovery_state": [
+4.      { "name": "Started\/Primary\/Active",
+5.          "enter_time": "2012-03-06 15:15:46.713212",
+6.          "might_have_unfound": [
+7.              { "osd": 1,
+8.                  "status": "osd is down"}]},
+本例中，集群知道  osd.1  可能有数据，但它挂了（  down  ）。所有可能的状态有：
+已经探测到了
+在查询
+OSD 挂了
+尚未查询
+有时候集群要花一些时间来查询可能的位置。
+还有一种可能性，对象存在于其它位置却未被列出。例如，集群里的一个 ceph-osd 停止且被剔出集
+群，然后集群完全恢复了；后来一系列的失败导致了未找到的对象，它也不会觉得早已死亡的 ceph-
+osd 上仍可能包含这些对象。（这种情况几乎不太可能发生）。
+如果所有可能的位置都查询过了但仍有对象丢失，那就得放弃丢失的对象了。这仍可能是罕见的失败组
+合导致的，集群在写操作恢复后，未能得知写入是否已执行。以下命令把未找到的（  unfound  ）
+对象标记为丢失（  lost  ）。
+1. ceph pg 2.5 mark_unfound_lost revert|delete
+上述最后一个参数告诉集群应如何处理丢失的对象。
+ delete  选项将导致完全删除它们。
+ revert  选项（纠删码存储池不可用）会回滚到前一个版本或者（如果它是新对象的话）删除
+它。要慎用，它可能迷惑那些期望对象存在的应用程序。
+拥有 PG 拷贝的 OSD 可能会全部失败，这种情况下，那一部分的对象存储不可用， monitor 也就
+不会收到那些 PG 的状态更新了。为检测这种情况，monitor 会把任何主 OSD 失败的 PG 标记为
+ stale  （不新鲜），例如：
+3.5 无家可归的 PG
+3. 常见 PG 故障处理
+- 90 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+1. ceph health
+2. HEALTH_WARN 24 pgs stale; 3/300 in osds are down
+可以找出哪些 PG 是  stale  状态，和存储这些归置组的最新 OSD ，命令如下：
+1. ceph health detail
+2. HEALTH_WARN 24 pgs stale; 3/300 in osds are down
+3. ...
+4. pg 2.5 is stuck stale+active+remapped, last acting [2,0]
+5. ...
+6. osd.10 is down since epoch 23, last address 192.168.106.220:6800/11080
+7. osd.11 is down since epoch 13, last address 192.168.106.220:6803/11539
+8. osd.12 is down since epoch 24, last address 192.168.106.220:6806/11861
+如果想使 PG 2.5 重新上线，例如，上面的输出告诉我们它最后由  osd.0  和  osd.2  管理，
+重启这些  ceph-osd  将恢复之（可以假定还有其它的很多 PG 也会进行恢复 ）。
+如果你的集群有很多节点，但只有其中几个接收数据，检查下存储池里的 PG 数量。因为 PG 是映射
+到多个 OSD 的，较少的 PG 将不能均衡地分布于整个集群。试着创建个新存储池，设置 PG 数量是
+OSD 数量的若干倍。更详细的信息可以参考 Ceph 官方文档 —— Placement Groups 。
+如果你的集群已启动，但一些 OSD 没起来，导致不能写入数据，确认下运行的 OSD 数量满足 PG 要
+求的最低 OSD 数。如果不能满足， Ceph 就不会允许你写入数据，因为 Ceph 不能保证复制能如愿
+进行。这个最低 OSD 个数是由参数  osd pool default min size  限定的。
+如果收到  active + clean + inconsistent  这样的状态，很可能是由于在对 PG 做擦洗（
+scrubbing ）时发生了错误。如果是由于磁盘错误导致的不一致，请检查磁盘，如果磁盘有损坏，可
+能需要将这个磁盘对应的 OSD 踢出集群，然后进行更换。生产环境中遇到过不一致的问题，就是由于
+磁盘坏道导致的。
+当集群中出现 PG 不一致的问题时，执行  ceph -s  命令会出现下面的信息：
+1. root@mon:~# ceph -s
+2.     cluster 614e77b4-c997-490a-a3f9-e89aa0274da3
+3.      health HEALTH_ERR
+3.6 只有几个 OSD 接收数据
+3.7 不能写入数据
+3.8 PG 不一致
+3. 常见 PG 故障处理
+- 91 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+4.             1 pgs inconsistent
+5.             1 scrub errors
+6.      monmap e5: 1 mons at {osd1=10.95.2.43:6789/0}
+7.             election epoch 796, quorum 0 osd1
+8.      osdmap e1079: 3 osds: 3 up, 3 in
+9.             flags sortbitwise
+10.       pgmap v312153: 384 pgs, 6 pools, 1148 MB data, 311 objects
+11.             3604 MB used, 73154 MB / 76759 MB avail
+12.                  383 active+clean
+13.                    1 active+clean+inconsistent
+1、查找处于  inconsistent  状态的问题 PG ：
+1. root@mon:~# ceph health detail
+2. HEALTH_ERR 1 pgs inconsistent; 1 scrub errors
+3. pg 9.14 is active+clean+inconsistent, acting [1,2,0]
+4. 1 scrub errors
+这个有问题的 PG 分布在  osd.1  、  osd.2  和  osd.0  上，其中  osd.1  是主 OSD。
+2、去主 OSD（ osd.1 ）的日志中查找不一致的具体对象 。
+1. root@osd0:~# grep -Hn 'ERR' /var/log/ceph/ceph-osd.1.log
+2. 
+/var/log/ceph/ceph-osd.1.log:30:2016-11-10 13:49:07.848804 7f628c5e6700 -1 
+log_channel(cluster) log [ERR] : 9.14 shard 0: soid 
+9:29b4ad99:::rbd_data.1349f035c101d9.0000000000000001:head missing attr _
+3. 
+/var/log/ceph/ceph-osd.1.log:31:2016-11-10 13:49:07.849803 7f628c5e6700 -1 
+log_channel(cluster) log [ERR] : 9.14 scrub 0 missing, 1 inconsistent objects
+4. 
+/var/log/ceph/ceph-osd.1.log:32:2016-11-10 13:49:07.849824 7f628c5e6700 -1 
+log_channel(cluster) log [ERR] : 9.14 scrub 1 errors
+从日志中可以知道，是  rbd_data.1349f035c101d9.0000000000000001  这个对象的属性  _  丢
+失了，所以在 scrub 的过程中产生了 error 。
+3、执行  ceph pg repair  命令修复问题 PG 。
+1. root@mon:~# ceph pg repair 9.14
+2. instructing pg 9.14 on osd.1 to repair
+4、检查 Ceph 集群是否恢复到  HEALTH_OK  状态。
+1. root@mon:~# ceph -s
+3. 常见 PG 故障处理
+- 92 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+2.     cluster 614e77b4-c997-490a-a3f9-e89aa0274da3
+3.      health HEALTH_OK
+4.      monmap e5: 1 mons at {osd1=10.95.2.43:6789/0}
+5.             election epoch 796, quorum 0 osd1
+6.      osdmap e1079: 3 osds: 3 up, 3 in
+7.             flags sortbitwise
+8.       pgmap v312171: 384 pgs, 6 pools, 1148 MB data, 311 objects
+9.             3604 MB used, 73154 MB / 76759 MB avail
+10.                  384 active+clean
+osd.1 的日志里也提示修复成功：
+1. 
+2016-11-10 14:04:31.732640 7f628c5e6700  0 log_channel(cluster) log [INF] : 
+9.14 repair starts
+2. 
+2016-11-10 14:04:31.827951 7f628edeb700 -1 log_channel(cluster) log [ERR] : 
+9.14 shard 0: soid 9:29b4ad99:::rbd_data.1349f035c101d9.0000000000000001:head 
+missing attr _
+3. 
+2016-11-10 14:04:31.828117 7f628edeb700 -1 log_channel(cluster) log [ERR] : 
+9.14 repair 0 missing, 1 inconsistent objects
+4. 
+2016-11-10 14:04:31.828273 7f628edeb700 -1 log_channel(cluster) log [ERR] : 
+9.14 repair 1 errors, 1 fixed
+如果经过前面的步骤，Ceph 仍没有达到  HEALTH_OK  状态，可以尝试用下面这种方式进行修复。
+1、停掉不一致的 object 所属的 osd 。
+1. stop ceph-osd id=xxx
+2、刷新该 osd 的日志。
+1. ceph-osd -i xx --flush-journal
+3、将不一致的 object 移除。
+1. mv /var/lib/ceph/osd/ceph-{osd-id}/current/{pg.id}_head/ rbd\\udata.xxx /home
+4、重新启动该 osd 。
+1. start ceph-osd id=xx
+5、重新执行修复命令。
+3. 常见 PG 故障处理
+- 93 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+1. ceph pg repair {pg_id}
+6、检查 Ceph 集群是否恢复到  HEALTH_OK  状态。
+有时候，我们在 ceph -s 的输出中可以看到如下的告警信息：
+1. root@node241:~# ceph -s
+2.     cluster 3b37db44-f401-4409-b3bb-75585d21adfe
+3.      health HEALTH_WARN
+4.             too many PGs per OSD (652 > max 300)
+5.      monmap e1: 1 mons at {node241=192.168.2.41:6789/0}
+6.             election epoch 1, quorum 0 node241
+7.      osdmap e408: 5 osds: 5 up, 5 in
+8.       pgmap v23049: 1088 pgs, 16 pools, 256 MB data, 2889 objects
+9.             6100 MB used, 473 GB / 479 GB avail
+10.                  1088 active+clean
+这是因为集群 OSD 数量较少，测试过程中建立了多个存储池，每个存储池都要建立一些 PGs 。而目
+前 Ceph 配置的默认值是每 OSD 上最多有 300 个 PGs 。在测试环境中，为了快速解决这个问
+题，可以调大集群的关于此选项的告警阀值。方法如下：
+在 monitor 节点的 ceph.conf 配置文件中添加:
+1. [global]
+2. .......
+3. mon_pg_warn_max_per_osd = 1000
+然后重启 monitor 进程。
+或者直接用  tell  命令在运行时更改参数的值而不用重启服务：
+1. ceph tell mon.* injectargs '--mon_pg_warn_max_per_osd 1000'
+而另一种情况，  too few PGs per OSD （16 < min 20）  这样的告警信息则往往出现在集群刚刚
+建立起来，除了默认的 rbd 存储池，还没建立自己的存储池，再加上 OSD 个数较多，就会出现这个
+提示信息。这通常不是什么问题，也无需修改配置项，在建立了自己的存储池后，这个告警信息就会消
+失。
+3.9 Too Many/Few PGs per OSD
+3. 常见 PG 故障处理
+- 94 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+在极端情况下，如数据中心断电，造成 Ceph 存储集群全局宕机，可以按照本节所示流程进行 Ceph
+集群上电恢复操作。
+1. 如为 Ceph 集群上电，monitor server 应最先上电；集群上电前确认使用 Ceph 之前端作
+业服务已停止。
+2. 使用 IPMI 或于设备前手动进行上电。
+3. 确认 NTP 服务及系统时间已同步，命令如下：
+ # ps-ef | grep ntp 
+ # date 
+ # ntpq -p 
+4. 登入上电之 ceph server 确认 ceph service 已正常运行，命令如下：
+ # ps -ef | grep ceph 
+5. 登入集群 monitor server 查看状态，OSD 全都 up 集群仍为  noout flag(s) set 
+ # ceph -s 
+ # ceph osd tree 
+6. 登入 monitor server 解除  stopping w/out rebalancing ，命令如下：
+ # ceph osd unset noout 
+ # ceph -w 
+使用  ceph-w  可查看集群运作输出，同步完毕后集群 health 应为 HEALTH_OK  状态。
+1. 确认设备上电状态，以 IPMI 或 于设备前确认电源为开启上电状态。
+2.  ping ceph monitor server ，检查 monitor server 可以 ping 通。
+3. 系统时间和校时服务器时间同步。
+4.  ceph -s  状态为 HEALTH_OK 
+5.  ceph osd tree  OSD 状态皆为 UP 
+4. 全局Ceph节点宕机处理
+4.1 手动上电执行步骤
+4.2 恢复后检查步骤
+4. 全局 Ceph 节点宕机处理
+- 95 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+1.  ceph -s  ： 确认 ceph cluster status
+2.  ceph -w  ： 查看集群运作输出
+3.  ceph osd tree  ： 查看ceph cluster上osd排列及状态
+4.  start ceph-all  ： 启动 所有 ceph service
+5.  start ceph-osd-all  ： 启动 所有 osd service
+6.  start ceph-mon-all  ： 启动 所有 mon service
+7.  start ceph-osd id={id}  ： 启动指定 osd id service
+8.  start ceph-mon id={hostname}  ： 启动指定 ceph monitor host
+9.  ceph osd set noout  ： ceph stopping w/out rebalancing
+10.  ceph osd unset noout  ： 解除ceph stopping w/out rebalancing
+4.3 恢复使用指令及其说明
+4. 全局 Ceph 节点宕机处理
+- 96 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+在某些情况下，如服务器硬件故障，造成单台 Ceph 节点宕机无法启动，可以按照本节所示流程将该
+节点上的 OSD 移除集群，从而达到 Ceph 集群的恢复。
+1. 登陆 ceph monitor 节点，查询 ceph 状态：
+ ceph health detail 
+2. 将故障节点上的所有 osd 设置成 out，该步骤会触发数据 recovery, 需要等待数据迁移完
+成, 同时观察虚拟机是否正常：
+ ceph osd out osd_id 
+3. 从 crushmap 将 osd 移除，该步骤会触发数据 reblance，等待数据迁移完成，同时观察虚
+拟机是否正常：
+ ceph osd crush remove osd_name 
+4. 删除 osd 的认证：  ceph auth del osd_name 
+5. 删除 osd ： ceph osd rm osd_id 
+1. 检查 ceph 集群状态正常；
+2. 检查虚拟机状态正常；
+3. 楚天云人员检查虚拟机业务是否正常；
+4. 检查平台服务正常：nova、cinder、glance；
+5. 创建新卷正常；
+6. 创建虚拟机正常。
+5. 单个Ceph节点宕机处理
+5.1 单台 Ceph 节点宕机处理步骤
+5.2 恢复后检查步骤
+5. 单个 Ceph 节点宕机处理
+- 97 -
+本文档使用 书栈网 · BookStack.CN 构建

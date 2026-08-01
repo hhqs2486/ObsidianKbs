@@ -1,0 +1,729 @@
+.. 
+.. 
+... 
+. .... 
+..... 
+... 
+·
+且
+喜
+····
+ZE 
+m---
+4t 
+... 
+··
+41 
+.... 
+·li 
+－
+－
+·
+·
+M
+牙
+.... 
+i
+i 
+HH. 
+龟
+，
+- wt
+u 
+t
+- 
+UF
+U 
+G
+… 
+度量与日志管理
+曾经在一个客户那昕过这样一个规定：‘役有性能指标和日志监控的系统绝对不允许上线。”
+对于开发工程师而言，关注的焦点往往是功能是否已经实现。而运维工程师更关注应用是否安
+全、稳定及可靠。资源监控和日志管理对运维而言，就像是眼睛和耳朵。通过运行中应用的性
+能度量指标和日志，运维工程师能够获取潜在问题的预警，从而通过预警降低问题发生的概率
+和风险。此外，在问题发生后，监控和日志的信息可以帮助运维工程师快速定位问题。
+stats 命令获取主机容器
+容器集群度量采集
+监控容器性能度量指标有多种方法，简单的如通过docker
+的CPU、内存、网络及磁盘的使用情况。
+11.1 
+BLOCK I/0 
+0 B I 0 B 
+1.188 MB I 0 B 
+NET
+工／0
+0 B I 0 B 
+1.316 kB I 648 B 
+MEM
+宅
+。
+. 00 屯
+0
+. 04 毡
+[root@nodel
+~ J# docker stats 
+CONTAINER 
+CPU
+毡
+MEM USAGE I 
+LIM工T
+3de522e51585 
+0.00 毫
+0 B I 0 B 
+4af8514949fe 
+0.00 屯
+1.47 MB I 3 .96 GB 
+在集群的环境中，通过docker
+stats 命令对一台台机器收集容器的度量指标显然是
+不现实的。
+Kubemetes 在设计之初就考虑到了这一点，因此它将Google 开源的一个容器度量
+收集工具cAdv工sor 集成到了Kubelet 中。在集群中，
+Kubelet 会驻留在集群的每一个节点
+上，因此cAdvisor 也将随之运行在所有节点上。
+cAdvisor 是Google 开源的一个容器度量采集工具，负责收集及处理容器的性能指标
+信息。
+cAdvisorcAdvisor 主页：
+https:// github .com/ google/ cadvisor。
+＠景
+
+第11 章度量与日志管理
+•！•
+165 
+一个可用的度量收集方案应该至少包含三个基本元素：度量收集端、度量汇聚点以及展
+示分析端。为了汇聚各个节点收集上来的度量信息，
+Kubemetes 包含了一个名为heapster
+的子项目负责汇总从各个节点cAdvisor 收集的性能指标信息，并将这些信息存储在后端数据
+库或监控系统中，Heapster 称这些信息储存后端为叫池子”（Sink ）。Heapster 支持多种储存后端，
+如InfiuxDB 、
+Kafka 、
+Elastic Search 及Hawkular Metrics 等。在展示分析方面，因为Heaspter
+可以对接多个不同的后端，所以用户可以根据偏好自行选择。
+＠景
+heaspter .i. 页：
+https://g川
+11.2 
+部署容器集群度量采集
+OpenShi位在Kubemetes 架构的基础上提供了一套易于用户消费的度量采集和监控方
+案，通过这套方案，可以方便地查看和汇总集群节点及容器的性能度量信息。
+图11-1 是
+OpenShi位度量采集方案的架构。
+二－γ ＝二？二一二子、
+图
+l 1-1 
+OpenShift 度量采集及采集方案
+从图11-1 中可以看到，
+Open Shift 延续了Kubemetes 的基础，在度量采集端和度量
+汇聚层都和Kubemetes 保持一致。度量储存和管理OpenShift 使用的是Hawkular Metrics 。
+Hawkular Metrics 是一个开源的监控平台，
+Hawkular 本身就具备度量采集和汇总中间件集群
+的能力。
+Hawkular Metrics 后端对接的是Cassandra 分布式数据库，使其在度量采集流量较大
+的场景下也能有优秀的性能表现。
+＠景
+Hawkular lYi: 目的主页：
+htψ叫hawkular.o鸣
+OpenShide 的度量采集方案的组件Heaspt町、
+Hawkular Metrics 和Canssandra 数据库都是
+以容器的形式提供，并默认提供了可快速部署的Template 。用户通过简单的配置就可以快速
+部署和启用度量采集和监控。
+
+166
+令运维篇
+11.2.1 
+配置Service Account 
+下面为OpenShift 集群部署度量采集相关的组件。首先以集群管理员的身份登录，切换
+到openshift - infr a 项目。
+[root@master ~]# oc project openshift-infra 
+Now using project 
+" opensh 工ft-infra ”
+on server
+” https://master.example.com:8443 ”. 
+创建度量采集组件所需的Service Account 账号。
+[root@master ~]# oc create serviceaccount metrics-deployer 
+度量的收集需要读取集群信息的权限。
+因此，需要为Service Account 授权。
+[root@master -]# oadm policy add-role-to-user edit system:serviceaccount:openshift-
+1口fra : metrics-deployer
+[root@master ~]# oadm policy add-cluster-role-to-user cluster-reader system:servicea-
+ccount : openshift-infra :heapster 
+11.2.2 
+配置证书
+为Hawkular Metrics 、
+Heaspter 及Cassandra 数据库创建相应的证书。
+[root@master ~]# oadmca create-server-cert \ 
+--signer-cert=/etc / origin/master/ca.crt \ 
+--signer key=/etc / origin/master/ ca.key \ 
+--signer serial=/etc/origin/master/ca.serial.txt \ 
+--hostnames= 'hawkular-metr 工cs
+. apps
+. example
+. com , hawkular-metrics
+’
+＼
+--cert=/etc/or 工gin/master/metrics.crt
+\ 
+- key= / etc/origin/ master/metrics . key 
+根据生成的证书创建S ecret 对象。该Secret 对象包含了之前创建的证书，并会被相关的
+组件容器引用。
+[root@master ~]# oc secrets new metrics-deployer \ 
+hawkular-metr 工cs .pem= < (cat 
+/etc/or 工gin/master/metr 工cs.key
+/etc/origin/master/ 
+metrics . crt) 
+11.2.3 
+部署度量采集模板
+通过OpenShi位提供的部署模板metrics 『deploye r- template 部署度量采集及监
+控的组件。
+IMAGE_PREFI X 和IMAGE_VERSION 参数指定了要部署的组件的上下文及版本。
+USE PERS I S TENT STORAGE = false 表示当前的部署不使用持久化的后端。在实际的生产
+中，请启用后端储存保存度量数据。
+[root@master ~]# oc new-app 
+-template=metrics-deployer-template \ 
+-p HAWKULAR_METRICS_HOSTNAME=hawkular met r 工cs.apps.example.com \ 
+-p
+工MAGE_PREF 工X=openshift/origin
+\ 
+
+第11 章度量与曰志管理
+•！•
+167 
+-p IMAGE_VERSION=vl.3 . 0 \ 
+-p USE_PERSISTENT_STORAGE=false 
+执行部署后，一个名为metrics - deployer-xxxx x 的Pod 启动。这个Pod 将部署其
+他相关的组件。稍等片刻后会看见其他组件的容器正在启动。
+[root@master ~ J# oc get pod 
+NAME 
+READY 
+STATUS 
+RESTARTS 
+AGE 
+hawkular-cassandra-1-oihai 
+。/1
+Contai口erCreat 工ng
+。
+2m 
+hawkular-metr 工cs-d9ngn
+。/1
+ContainerCreat 工ng
+。
+2m 
+heapster-mva73 
+。/1
+Cont a 工nerCreating
+。
+2m 
+metrics-deployer-nqrtd 
+1/1 
+Running 
+。
+2m 
+＠票
+鉴于峭的组件比较多，且组件的镜像比较大，请保证网络酬，井耐心等待。执行
+oc logs metrics-deployer-nqrtd 
+-f 命令，可以查看部署日志了解部署进
+度。如果连接到DockerHub 的网络不稳定，可以在部署前提前下载好度量组件相关
+的容器镜像。镜像列表如下：
+docker.io/ openshift/origin-metrics-heapster :vl . 3 . 0 
+docker.io/openshift/origin-metrics-deployer:vl. 3 .0 
+docker .io/openshift/origin-metrics-cassandra:vl.3 . 0 
+docker.io/openshift/origin-metrics-hawkular- metrics:vl.3.0 
+部署完毕，再次查看Pod 的状态可见Hawkul町、
+Cassandra 及Heaspter 容器的状态均为
+Running 。
+[root@master ~ J# oc get pod 
+NAME 
+READY 
+STATUS 
+RESTARTS 
+AGE 
+hawkular-cassandra-1 oihai 
+1/1 
+Running 
+。
+12m 
+hawkular-metrics-d9ngn 
+1/1 
+Running 
+。
+12m 
+heapster-mva73 
+1/1 
+Running 
+。
+12m 
+metrics-deployer nqrtd 
+0/1 
+Completed 
+。
+13m 
+11.2.4 
+更新集群配置
+组件部署完毕后，修改Master 节点的／etc/or igin / master/master-config /yaml
+配置文件。在assetConfig 下添加metricsPublicURL 属性，并赋值为如下内容。
+assetConfig: 
+metricsPublicURL ：” https://hawkular-metr 工cs
+. apps.example.com/hawkular/metrics ”
+~~ metricsPublicURL 属性的值需要指向Hawkular Metrics 服务，注意不要遗忘添加路
+、函，刁可
+径／hawkular/metrics 。此外，必须确认haw kular-metrics.apps.exampl e
+.
+
+168 
+•！• 运维篇
+corn 域名在所有的节点和用户的客户机上能正常解析，并指向Router 所在节点的IP
+地址。
+因为Hawkular 服务运行在容器内，集群外访问此服务必须通过Router 进行转
+发。在实验的环境中，可以通过编辑／etc/hosts 文件实现。在正式环境中，通过
+域名服务器配置实现。
+配置文件修改完毕，重启Master 服务，使配置生效。
+[root@master ~ J# systemctl restart origin-maste r 
+11.2.5 
+查看容器度量指标
+部署和配置完成后，登录OpenShfit 的Web 控制台，进入某一个Pod 的详情页面，单
+击Metrics 页签，可以看到当前Pod 的CPU 、内存及网络资源的使用情况，如图11-2
+所示。
+11.2.6 进一步完善度量采集
+前文部署的例子是一个相对比较简单的配置。在实际的环境中，建议为Cassandra 数据
+库配置后端持久化储存，以保存度量信息。此外根据集群及应用规模，可以调整Hawku lar
+Metrics 及Cassandra 数据库的实例数量，
+以保证性能及响应速度。
+可以调整部署度量组件的Template 中的一些参数来精确控制度量组件的特性，如度量信
+息的存活时间及收集频率等，如表11-1 所示。
+表11-1
+度量采集组件部署参数
+参费量名
+METRIC RESOLUTION 
+METRIC DURAηON 
+释义
+度量信息的采集频率，默认为！Os
+度量信息的存活时间，默认最长存留7 天
+更多关于度量组件的信息，请参考官方的配置文档，里面有更详细的参数说明。
+＠景度量配置文档：
+https :
+11.3 
+度量接口
+OpenShift 的度量信息最终都存放在Hawkular Metrics 后端的Cassandra 数据库中。可以
+访问Hawkular Metrics 的RESTful 接口获取其中的度量信息。这对需要将Open Shi玩的度量
+和企业现有的监控平台对接的用户来说非常重要。
+
+Memory 
+120 l ffi 
+100 I -
+80 I 
+60 I 
+40 I 
+20 I 
+01 
+Fri 20: 19 
+Fri 20:25 
+Fri 20:31 
+Fri 20:37 
+Fri 20:43 
+Fri 20:49 
+Fri 20:55 
+Fri 21 :01 
+Fri 21 :07 
+Fri 21 : 13 
+12 
+10 
+8 
+6 
+4 
+2 
+0 
+Fri20:19 
+I
+E
+』
+O
+S
+－
+－
+－E
+PA
+- 
+C 
+Fri21:13 
+Fri 21:07 
+Fri21 :01 
+Fri 20:55 
+Fri 20:49 
+Fri 20:43 
+Fri 20:37 
+Fri 20:31 
+Fri 20:25 
+拙
+口
+则
+问
+酬
+曲
+目
+叫
+峨
+眉
+Network 
+国
+＼
+闰
+－u
+曲
+Fri 21 :13 
+Fri 21:07 
+Fri 21:01 
+Fri 20:55 
+Fri 20:43 
+Fri 20:49 
+• Sent • Received 
+Fri 20:37 
+Fri 20:31 
+Fri 20:25 
+Pod 性能指标展示界面
+图
+1 1-2 
+·>
+4
+0
+ω
+ 
+
+170
+今运维篇
+11.3.1 
+获取度量列表
+下面的例子是通过curl 命令调用Hawkular Metrics 的接口获取default 项目的所有
+性能指标对象。
+HawkularMe位cs 有多租户的概念。在OpenShift 利用Hawkular Metrics 多租
+户的概念来映射Open Shift 中P叫ect 的概念。因此，在请求头中设置Hawkular-Tenant
+为需要查询的OpenShift 项目的名称。如果将Hawkular-T enant 的值设置为一system,
+则返回Open Shift 集群节点的度量指标信息。和OpenShift 的RESTful 接口一样，
+OpenShift
+中的Hawkular 组件的RESTful 接口也受到了Opens峭的认证授权的控制。通过阻STful 接
+口查询度量信息时，必须提供token 信息，并获得相应的权限。
+curl -H
+” Authorization : Bearer $(ocwhoami -t )”\ 
+-H
+”Hawkular-Tenant : default ”-k \ 
+-X GET https : //hawkular-metrics.apps.example.com/hawkular/metrics/metrics I python 
+-m json . tool 
+通过上面的调用接口将返回该项目中的所有性能指标项的列表及每项指标的基本信息。
+例如，下面的返回值示例中展示的是一个名为docker-registry-1-92h8vPod 的CPU 利
+用率的指标。
+”dataRetention ”: 7' 
+” 工d” :”pod/30d6lac0-7c18-lle6-a903-000c29190a02/cp.u/usage”, 
+” tags”:{ 
+” des er 工ptor_name ” :
+” cpu/usage ” , 
+” group_id ” :
+” / cpu/usage ” , 
+"host_id ”:
+” nodel.example . com”, 
+”hostname ”:
+” nodel.example . com”, 
+” labels ” :
+” deployment :docker registry-1,deploymentconfig:docker-
+registry,docker-registry:default ”, 
+”namespace_id ” :”c9a717b4-6b94-lle6-ad63-000c29190a02 ”, 
+” namespace_name”:”default ”, 
+”nodename”:”nodel.example.com”, 
+”pod_id ” :”30d6lac0-7c18-lle6-a903 000c29190a02 ” , 
+” pod_name”:”docker-registry-1-92h8v”, 
+” pod_namespace ” :
+” default ”, 
+” type ” :
+"pod”, 
+” units ＂：”口S ”
+” tenant Id ” :
+”default ”, 
+” type”:” counter ” 
+11.3.2 
+获取度量数据
+通过上面指标的id 属性，可以进一步查询该指标管理的数据。注意将id 属性的值进行
+
+第11 章度量与日志管理
+令
+171
+URL 编码，将所有／替换成% 2 F 。
+curl -k -H ”Authorization : Bearer $(ocwhoami - t ) ”
+\ 
+-H ”Hawkular-Tenant: default ”
+\ 
+-X GET https : //hawkular-metrics . apps. example . com/hawkular/me t rics/counters/ 
+pod在2F30d61ac0-7c18-lle6-a903-000c2919 0 a02 毛2 F cpu 革2Fu sag e
+I python -m json.tool 
+命令执行后返回的数据示例如下：
+” t 工mes tamp ” : 1474037810000, 
+”value ” :
+66184843 
+” times tamp ” : 1474037800000, 
+”value ” :
+66184843 
+” times tamp”:
+1474037780000 , 
+”value ” :
+66184843 
+Hawkular Metrics 的阻STful 支持添加数据的查询条件。比如只想查询最近10 分钟的数
+据，可以在前文的命令添加如下URL 参数。
+?buckets=5\&start ＝、date -d - lOminutes ＋革s %3 N
+除了获取某一个指标的数据外，
+Hawkular Metrics 还支持对一组Pod 的指标进行汇总计
+算、根据标签查找目标指标对象等功能。更多关于Hawkular 的RESTful 接口的详细内容，
+请参考Hawkular 的RESTful 接口文挡。通过调用Hawkular Metrics 接口，
+OpenShi丘上容器
+和节点的度量信息与第三方平台的集成可以说是非常便捷的。
+＠景M叫口文档：
+h川WW.叫l叫docs/rest/rest-me叫tml。
+11.4 
+容器集群日志管理
+Open Shi俞平台上往往运行着成百上千个容器。每一个容器应用都会产生日志，所有
+这些日志必须有一个途径进行收集、汇总，然后进行查询或分析。和度量管理组件类似，
+Open Shift 默认提供了一套开箱即用的日志管理方案，如图11-3 所示。
+Open Shi负的日志聚合和管理是在目前社区流行的EFK 方案的基础上实现的。
+EFK 是三
+个流行的开源项目的缩写：
+Elasticsearch 、
+Fluentd 和Kibana 。
+OpenShi企日志管理的各个组件
+的作用如下：
+
+172
+令运维篇
+Node2 
+牛’－－－－斗…－－－………＿＿, 
+Node I 
+Master 
+Fluentd 
+Flue曰“
+、.... 
+”帽... ,, 
+Fluentd 
+‘· ..... 
+”””·耐，
+图
+l 1-3 
+OpenShi玩的日志聚合管理架构
+口Fluentd 容器将以容器的方式运行在集群的节点上。
+Fluentd 将读取宿主机上的／var/
+log/ message 及／var/li b /docker 目录下的系统及容器日志信息，并对日志进
+行格式化形成JSON 信息，最后将其发送给Elasticsearcb 。
+口Elasticsearch 收到日志信息后，储存信息并建立索引。
+口Kibana 提供一个图形的用户界面供用户检索和分析Elasticsearcb 中处理完毕的日志。
+口数据清理器Curator 按用户指定的规则定时清理Elasticsearch 中过期的数据，以防止
+数据占据过多的磁盘空间。
+口AuthProxy 为Kibana 实现身份验证，与OpenShi负Web 控制台实现单点登录。
+＠景
+Elasticse川是流行的开源分布式搜索及分析引擎。
+Elasticse叫到：
+https://www.
+elastic.co/products/elasticsearch 。
+口Fluentd 是开源的数据收集及信息汇总工具。
+Fluentd 主页：
+http: //www丑uentd.org/。
+口Kibana 是流行的数据化可视化工具。
+Kibana 主页：
+bttps://www.elastic .co/products/kibana。
+D Curator 是一款精悍的Elastic search 的数据清理器。
+Curator 主页：
+bttps://gi出uh . com/
+elastic/curator。
+Open Shift 以容器的方式提供了EFK 方案的各个组件，并通过OpenShi仕的模板功能让
+用户能更方便、快速地进行部署。
+11.5 
+部署集群日志管理组件
+11.5.1 
+创建部署模板
+部署Open Shift 的日志管理方案首先需要创建部署模板。以管理员身份登录OpenShi伐，
+并导人日志部署模板。
+[root@master ~ J# 
+https
+: //raw.githubus ercontent.com /opensh 工ft/origin-aggregated­
+logging/master/deployer/deployer .yaml 
+
+第11 章度量与日志管理
+令
+173
+11.5.2 
+配置Service Account 
+以集群管理员身份登录系统，并切换到logging 项目。
+[root@master ~]# oc project logging 
+创建应用部署Kibana 、
+Elasticsearch 及Fluentd 等服务使用的Service Account 账号。
+[root@master ~]# oc new-app logging-deployer-account template 
+[root@master ~]# oadm policy add-cluster-role-to-user oauth-editor \ 
+system : serviceaccount:logging : logging-deployer 
+为前文创建的Service Account 授权，允许相关的服务读取和操作集群内的信息和对象。
+[root@master ~]# oadm pol 工cy add scc-to-user privileged system:serviceaccount : l 
+ogging :aggregated-logging-fluentd 
+[root@master ~]# oadm policy add-cluster-role-to-user cluster-reader system:ser 
+viceaccount
+: logging:aggregated-logg 工ng-fluentd
+11.5.3 
+配置证书
+创建应用组件使用的证书，并创建Secret 对象logging-deployer 储存对应的证书。
+该Secret 对象会被部署引用。
+[root@master ~]# oadmca create-server-cert \ 
+--signer-cert=/etc/origin / master /ca . crt \ 
+--signer-key=/etc/origin/master/ca.key \ 
+--signer-serial=/etc/origin/master/ca.serial.txt \ 
+--hostnames ＝
+’ k工bana.apps.example.com ’
+＼
+--cert=/etc/origin/master/kibana.crt \ 
+--key=/etc/origin/master /kibana.key 
+[root@master ~]# oc create secret generic logging-deployer \ 
+--from-file kibana . crt=/etc/origin/master/kibana.crt \ 
+--from-file kibana
+. key=/etc/or 工gin/master/kibana .key
+11.5.4 
+部署日志组件模板
+设置集群部署参数。创建一个Config Map 对象logging-deployer 为日志组件的部
+署设定部署参数。下面示例中的参数指定了Kibana 的域名、
+OpenShift 集群Master 的地址、
+Elasticsearch 的实例数及使用的内存大小。
+[root@master ~]# oc create configmap logging-deployer \ 
+--from-literal kibana-hostname=kibana . apps . example . com \ 
+--from-literal public-master-url=https : //master . example.com : 8443 \ 
+--from-literal es-cluster-size=l \ 
+--from-literal es-instance-ram=lG 
+通过Template logging-deployer-temp la te 部署日志组件。
+
+174
+令运维篇
+[root@master ~ J# oc new-app logging-deployer-template \ 
+--param IMAGE_VERSION=vl.3.0 \ 
+--param IMAGE_PREFIX=openshift/origin- \ 
+--param MODE=install 
+＠埋
+如果连接到Do阳Hub 的网络不稳定，可以在部署前，提前下载好日志组件相关的
+刀飞
+容器镜像。镜像列表如下：
+docker.io/openshift/or 工gin-logging-curator:vl.3.0
+docker.io/openshift/origin-logging-fluentd:vl.3.0 
+docker.io/openshift/or 工gin-logging-auth-proxy:vl.3.0
+docker.io/openshift/origin-logging-deployment:vl.3.0 
+docker.io/openshift/origin-logg 工ng-elasticsearch:vl.3.0
+docker.io/openshift/orig 工n-logg 工ng-kibana:vl.3.0
+为需要运行Fluentd 的节点打上标签inf ra=elasticsearch 。
+Fluentd 的容器默认指定
+运行在含有inf ra=elasticsearch 标签的节点上。可以为集群内的所有节点打上此标签。
+[root@master ~ J# oc label nodes --all logging-infra-fluentd=true 
+也可以只为了某些需要的节点打上此标签，命令如下：
+[root@master ~ J# oc label node nodel . example.com logging-infra-fluentd=true 
+11.5.5 
+更新集群配置
+组件部署完毕后，修改Master 节点的／etc/origin/master/master-config/yaml
+配置文件。在as s etConfig 下添加loggingPublicURL 属性，井赋值，如下所示，让用
+户可以通过Web 控制台跳转到Kibana 的日志查询界面。
+assetConfig : 
+loggingPublicURL :
+”https://kibana.apps.example.com ” 
+配置文件修改完毕后，重启Master 服务使修改生效。
+[root@master ~]# systemctl restart origin-master 
+11.5.6 
+查看窑器日志
+登录OpenShi位的Web 控制台，单击某一个Pod 进入详情页面。单击Logs 页签。在
+Logs 页面单击右上角的View
+archiv e 链接，打开Kibana 的日志分析界面。在Kibana 的
+界面上可以根据需要执行通过表达式查询日志、建立报表和图形以及创建日志监控界面等操
+作，如图11-4 所示。
+11.5.7 
+进一步完善日志管理
+通过上述步骤我们部署了OpenShift 的日志聚合和管理组件。在这个基础上，可以进
+
+第11 章度量与日志管理
+•！•
+175 
+一步完善这个架构，比如为一些组件如Elasticsearch 和Kibana 添加持久化的存储，增加
+Elasticsearch 的实例数，以提高索引和检索的性能等。
+组”’咱町’筒”施’去’曦瓢市’如慌’鸭””陆栅‘啕国flGQ.000，恒星Z掌M阻挡
+·~呻
+吵，幽啊！回
+’,,.. 
+e 由…··
+• ..，，皿W Util IOl‘, U!lil 钳m
+M”·－”m。””、
+’阳明用
+.
+.....町川阳山Z: 41JIJ
+川叩川
+-
+$t”’叫叫“
+，由…m
+• 
+5e9tembcr Utn z~u. …
+.. ，，.
+叫－－1111'1;
+“··啕··』a回.＿..畹町，．，‘
+o 
+"-i-UillHU＇川＂“ H•
+hell• －…’”’向
+筝的“咱咱阳Z
+·~η…J翩翩瞰．”鸭”·帽a”句
+- g”‘…...阶””，n：“·‘”’
+Milo ””输”“
++ 
+一- 
+－句- 一
+-- -- 
+--- 
+---- 
+一. 
+．令eφφ－- 
+φ一毛＋
+φ 一＋φ－－
+，阳响…
+．
+…，…‘‘φ …．．…’冒．…
+. 
+…啕呻
+’ 
+饨
+．呻响…川
+. ……"‘…... ，.，.川．－…
+＇阳一
+‘四吨，..＿
+.. .. 
+. －呻... lHll 101. lUU4'0fi 
+'"-110 －”~＂＂ 
+．
+”t－~ Utll I0.11, 11 U 
+0 
+-
+lle11o-…
+m 
+' 
+Hllt-e，“阶””，
+n'n:o 剧时1. - ..,_11trt
+.
+.刷刷1r
+ui~ MU , u1u ：的.. ‘.. , 
+.. ’刷刷响
+• 
+ieln-IHllJOU,Ui”“'"' 1M11lo - ..,..n111th 
+• ·－町川叽川＂＇’”时’·－…’”
+图1 1-4 
+Kibana 日志检索界面
+. ‘ ‘ 
+』~uwlt‘中…
+kntlt ’吨，酣阳
+』nrwlc-，啕’鸭瞄t
+’5•~ w lelng rl!'l"Ht 
+Servld 啕，＿.民
+日志组件的Template logging-deployer-ternplate 提供了一些参数来帮助用户对
+日志组件进行调整，详细内容请参考logging-deployer-template 模板定义的参数（Parameter) 
+定义部分。
+针对这套日志管理方案中的各个组件，如Fluentd 、
+Elasticsearch 及Kinbana ，它们各自
+都提供了RESTful 接口或配置途径。通过接口和配置，用户可以方便地通过Fluentd 将日志
+同时发送到其他日志汇总管道；从Elasticsearch 中直接检索日志信息；直接引用Kibana 中的
+图表信息等定制化的需求，将OpenShi丘上的节点和容器的日志管理集成到企业现有的日志
+管理方案中。
+11.6 
+本章小结
+通过本章，可以了解OpenShift 的度量指标和日志的管理方案。
+OpenShi丘提供了开箱即
+用的度量指标和日志方案，提高了用户配置和运维的效率。度量指标和日志方案的提供方式
+非常类似，
+Open Shi位均提供了预先配置好的组件镜像，通过模板快速配置和部署。世界上没
+有一个能满足所有需求的方案，因此OpenShi位完全开放了度量指标和日志组件的接口，用
+户可以根据实际需要进行集成和二次开发。

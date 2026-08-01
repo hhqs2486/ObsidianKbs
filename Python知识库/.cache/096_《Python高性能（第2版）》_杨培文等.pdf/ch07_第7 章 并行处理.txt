@@ -1,0 +1,1331 @@
+仅供非商业用途或交流学习使用
+并行处理
+通过使用多核进行并行处理，无须速度更快的处理器，就可让程序在给定时间内执行更多的
+计算。这里的主要理念是将问题划分成独立的子单元，并使用多个内核并行地处理这些子单元。
+对处理大型问题来说，并行处理必不可少。公司每天都生成海量的数据，需要存储在多台计
+算机中并进行分析。科学家和工程师在超级计算机上运行并行代码来模拟庞大的系统。
+并行处理让你能够利用多核CPU 以及擅长处理高度并行问题的GPU 。本章介绍如下主题：
+口并行处理原理；
+口使用Python 库multiprocessing 并行地处理简单问题；
+口使用简单接口ProcessPoolExecutor;
+口通过Cython 和OpenMP 使用多线程进行并行编程；
+口使用Theano 和Tensorflow 自动实现并行性；
+口使用Theano 、
+Tensorflow 和Numba 在GPU 中执行代码。
+7.1 
+并行编程简介
+要让程序井行地运行，必须将问题划分为可彼此独立（或几乎独立）运行的子单元。
+如果一个问题的各个子单元是完全彼此独立的，这个问题就是高度并行的
+（embarrassi ngly
+parallel ）。对数组的各个元素分别执行的操作就是一个典型的例子一一这种操作只需知道当前处
+理的元素。另一个例子是本书的粒子模拟器：由于彼此不影响，每个粒子都是独立地运动的。对
+于高度并行的问题，其解决方案很容易实现，在井行架构上的性能也非常高。
+有些问题可划分为不同的子单元，但不同子单元涉及的计算需要共享数据。在这种情况下，
+解决方案实现起来不那么容易，还可能因为通信开销带来性能问题。
+我们将通过一个示例来演示这一点。假设有个粒子模拟器，其中的粒子在距离位于特定范围
+内时会彼此吸引，如下图所示。为并行地处理这个问题，我们将模拟箱划分成区域，其中每个区
+域都由一个不同的处理器来负责处理。如果我们每次计算一步，有些粒子将与邻接区域内的粒子
+
+仅供非商业用途或交流学习使用
+125 
+并行编程简介
+7.1 
+交互。为完成下－次迭代，相邻区域之间必须通告粒子的新位置。
+. . 
+.. . . . . 
+. . . . 
+. 
+. . . . 
+. . . 
+. . . 
+. . . . 
+. . . . 
+4 
+进程间通信的开销非常高，可能严重影响并行程序的性能。在并行程序中，处理数据通信的
+方式主要有两种：
+3 
+2 
+口共享内存
+口分布式内存
+在共享内存中，各个子单元可访问相同的内存空间。这种方法的优点在于，你无须显式地处
+理通信，因为只需读写共享内存就够了。然而，多个进程试图同时访问并修改相同的内存单元时＼
+将出现问题。因此，必须使用同步技术避免这样的冲突。
+在分布式内存模型中，每个进程都与其他进程完全分开，井有自己的内存空间。在这种情况
+下，必须显式地处理进程之间的通信。与共享内存相比，通信开销通常更高，因为数据可能穿过
+网络接口。
+回
+以共享内存方式实现并行的一种常见方式是使用线程。线程是师、自进程的独立子任务，并共
+享内存等资源。下图进一步说明了这个概念。线程生成多个执行上下文并共享内存空间，而进程
+提供多个执行上下文，有自己的内存空间，因此必须显式地处理通信。
+进程
+U
+吨
+程
+线
+、
+、
+一
+间
+－
+－
+－
+－
+－
+－
+－f
+o
+户
+、
+、
+‘
+一空
+l
+l
+l
+I
+l
+l
+i
+－－－
+1
+7
+’
+一
+存
+’
+，
+，
+，
+一
+内
+,- 
+
+仅供非商业用途或交流学习佼川
+126 
+第7 章并行处理
+Python 能够生成并处理线程，但使用线程不能改善’性能。由于
+Python 解释器的设计，每次
+只能运行一个Python 指令，这种机制称为全局解释器锁
+（GCL ）。每当线程执行Python 语句时，
+都获取一个锁，执行完毕后，再释放这个锁。由于每次只有一个线程能够获得这个t.V1 ，因此一个
+线程获得这个锁后，其他线程就不能执行Python 语句。
+虽然GIL 导致Python 指令无法并行执行，但在可释放这个锁的情况下（如在耗时的
+1/0 操
+作或C 语言扩展中），依然可使用线程来实现并发。
+为何不将GIL 删除呢？过去几年，有过很多这样的尝试，其中包括最近的
+GIL
+0 
+MIJuK ( giloct川U先问GIL 怀…，叫以部分
+Python 数据结构。另外，细粒度的锁定可能代价高昂，还可能导致单线程程序的
+性能急剧下降。虽然如此，有些Python 实现就没有使用G IL ，其中最著名的是
+Jython 和lronPython 。
+通过使用进程而不是线程，可完全避开G IL 。进程不共享内存区域，而且是彼此独立的一一
+每个进程都有自己的解释器。进程有一些缺点：启动新进二程通常比启动新线程慢；它们消耗的内
+存更多；进程间通信的速度可能很慢。另－方面，进程也非常灵活，分布在多台计算机中时可伸
+缩性更佳。
+图形处理单元
+图形处理单元是特殊的处理器，是为运行计算机图形学应用程序而设计的。这些应用程序通
+常需要处理3D 场景的几何结构，并将像素数组输出到屏幕上。GPU 执行的操作包括浮点数数组
+和矩阵运算。
+GPU 就是为高效地运行与图形相关的操作而设计的，这是通过采用高度并行的体系结构来
+实现的。相比于CPU,
+GPU 包含的小型处理单元要多得多（数千个）。
+GPU 以每秒6011典的速度
+生成数据，这比时钟速度更高的CPU 的典型响应速度慢得多。
+GPU 专门用于执行浮点数运算，其体系结构与标准CPU 有天壤之别。因此，要编译供G PU
+运行的程序，必须使用特殊的编程平台，如CUDA 和OpenCL 。
+统一计算设备体系结构
+（compute unified device architecture, CUDA ）是一种NVIDIA 专
+用的技术，提供了可在其他语言中访问的
+API 。CUDA 提供了工具NVCC ，可用来编译使用
+CUDA C 语言（类似于C ）编写的GPU 程序；它还提供了大量的库，这些库实现了高度优化的
+数学例程。
+Open CL 是一种开放技术，使用它编写的并行程序可针对各种目标平台（不同厂商生产的CPU
+和GPU ）进行编译，因此对非NVIDIA 设备来说，使用OpenCL 是个不错的选择。
+
+仅供非商业用途或交流学习使用
+7.2 
+使用多个进程
+127 
+GPU 编程好像很神奇，但你千万不要因此而抛弃CPU 。
+GPU 编程很棘手，而且仅在特定情
+况下你才能受益于GPU 体系结构。程序员必须明白将数据写入内存以及从内存读取数据的成本，
+还必须知道如何实现算法以充分发挥GPU 体系结构的作用。
+一般而言，
+GPU 可极大地提高单位时间内可执行的操作数（即吞吐量），但它们需要更多的
+时间来准备要处理的数据。相反，CPU 从头开始生成单个结果的速度耍’快得多（这被称为延时）。
+对于合适的问题，使用GPU 可极大地提高速度（高达
+10- 1 00 倍），因此，在改善数值密集
+型应用程序的性能方面，
+GPU 提供了极其廉价的解决方案（要实现同样的速度提升，需要数百
+个C PU ）。
+7 .4 节将演示如何在GPU 上执行一些算法。
+7.2 
+使用多个进程
+标准模块multiprocessing 可用来生成多个进程，以快速并行化简单任务，同时避免GIL
+问题。这个模块的接口使用起来很容易，其中包含多个处理任务提交和同步的实用工具。
+7.2.1 
+Process 和Pool 类
+要创建独立运行的进程，可从multiprocessing.Process 派生出子类。可通过扩展方法
+_init一来初始化资源，还可通过实现方法Proces s
+. run 来编写将在子进程中执行的代码。
+在下面的代码中，我们定义了一个Process 类，它等待
+l 秒钟再打印分配给自己的id 。
+工mport multiprocessing 
+import time 
+class Process(multiprocessing . Process) : 
+def
+一＿ini t一＿
+（self ,
+id) . 
+super(Process, self) ._ i 口it
+() 
+self
+. 工d
+＝工d
+def run(self) 
+t 工me
+. sleep(l)
+print( " I ' m the process with id : {} 
+要生成进程，必须实例化Process 类井调用方法Process.start 。请注意，不直接调用
+Process
+. run ，而是调用Process
+. start ，它将创建一个新进程，进而调用方法Process
+. runo
+要创建井启动新进程，可在上述代码片段末尾添加如下代码行：
+if 
+name 
+==
+’
+main 
+': 
+p = Process(O) 
+p . start() 
+Process
+. start 后面的指令将立即执行，而不是等到进程p 结束后再执行。要等待任务结
+束，可使用方法Process
+. jo 工n ，如下所示。
+仅供非商业用途或交流学习使用
+国
+
+128 
+第7 章并行处理
+if _ name_ ＝＝
+’一＿ma 工n
+' . 
+p = Process(O) 
+p . start() 
+p . join() 
+仅供非商业用途或交流学习使用
+我们可启动4 个并行执行的进程。在串行程序中，需要的总时间为4 秒，但并行执行时，只
+需要
+l 秒。在下面的代码中，我们创建了4 个并行执行的进程。
+工Eηame
+==’
+main
+’: 
+processes= Process(l) , Process(2) , Process(3) , Process(4) 
+[p . start () for p in processes] 
+请注意，并行进程的执行顺序是无法预测的，它们以什么样的顺序执行取决于操作系统是如
+何调用的。为验证这一点，你可执行上述程序多次。你将发现每次运行时进程的执行顺序都不同。
+模块multiprocessing 暴露了一个便利的接口，让你能够轻松地给驻留在multiprocess工吨－
+Pool 类中的进程分配任务。
+multiprocessing.Pool 类生成一组进程（称为工作进程）。要提交任务，可使用这个类的
+方法apply /apply_async 和map / map_asyn c 。
+方法Pool
+. map 对列表中的每个元素执行指定的函数，并返回一个包含结果的列表，其用法
+与内置（串行）函数map 相同。
+要使用并行映射（map ），必须先初始化一个multiprocessing.Pool 对象。它将工作进程数
+作为第一个参数；如果没有指定，这个参数将为系统包含的内核数量。要初始化multiprocessi吨－
+Pool 对象，可像下面这样做：
+pool = mult 工processing
+. Pool()
+pool= multiprocessing . Pool(processes =4) 
+下面来使用
+pool
+. map 。如果你有一个计算平方的函数，可将其应用于列表，方法是调用
+Pool.map ，并将函数和输入列表作为参数传递给它，如下所示。
+def square (x) : 
+return x * x 
+工口puts = [0 , 1 , 2 , 3, 4] 
+outputs = pool.map(square ，工nputs)
+函数Pool.map_async 与Pool.map 相同，但返回一个AsyncResult 对象，而不是实际
+结果。我们调用Pool
+. map 时，主程序将停止执行，直到所有工作进程处理完毕。使用map_async
+时，将立即返回一个AsyncResult 对象，而不阻塞主程序，因此计算是在后台进行的。接下来，
+我们可随时使用方法AsyncResult .get 来获取结果，如下所示。
+outputs_async = pool .map_ async(square , inputs) 
+outputs = outputs async .get() 
+仅供非商业用途或交流学习使用
+
+仅供非商业用途或交流学习使用
+7.2 
+使用多个进程
+129 
+Pool
+. apply_async 将由单个函数组成的任务分配给一个工作进程，它将这个函数及其参
+数作为参数，并返回一个AsyncResul t 对象。可使用apply
+async 来获得类似于使用map 的
+效果，如下所示。
+results_async = 
+[pool.apply_async(square ，
+工）
+for i
+工n range(l00))] 
+results = [r .get() for r 
+工口results_async] 
+7.2.2
+接口Executor
+从Python 3 .2 起，就可使用模块c oncurr ent
+. f u tu res 中的接口Executor 来并行地执行
+Python 代码。前一章介绍如何使用ThreadPoolExecutor 来同时执行多个任务时，你见过接口
+Executor 。本节将演示ProcessPoolExecutor 类的用法。
+ProcessPoolExecutor 暴露的接口非常简单，至少相比于功能强大的multiprocessing
+.
+Poo l 来说如此。实例化Pr o cessPoolExecutor 的方式与ThreadPoolExecutor 类似，只需
+通过参数
+rnax_workers 传入工作线程数量即可（这个参数默认为可用的
+CPU 内核数量）。
+Proc essPoo lExec u t o r 的主要方法是subm it 和map 。
+方法submit 将一个函数作为参数
+并返回一个Future （参见前一章），用于跟踪提交的函
+数的执行情况。方法map 类似于函数Pool
+. map ，但返回一个迭代器，而不是一个列表。
+from concurre口t.futures import ProcessPoolExecutor 
+executor = ProcessPoolExecutor(max_workers=4) 
+fut = executor.submit(square , 2) 
+＃结采·
+# <Future at Ox7f5b5c0 30940 state=running> 
+result = executor.map(square , [0 , 1 , 2 , 3 , 4]) 
+list (result) 
+＃结果，
+# [0, 1, 4 , 9, 16] 
+要从一个或多个
+Future 实例中提取结果，可使用函数
+concurrent
+. futures
+. wa i t 和im
+conc urrent
+. futures
+. as_cornpleted 。函数wait 将一个future 列表作为参数，并阻塞程---
+序执行，直到所有future 都执行完毕。然后，就可使用方法Future
+. result 来提取结果了。
+函数as_cornp leted 也将一个函数作为参数，但返回一个包含结果的迭代器。
+仅供非商业用途或交流学习使用
+from concurrent.futures import wait, as_completed 
+futl = executor.submit(square, 2) 
+fut2 = e xecut or.submit(square , 3) 
+wait([futl, fut2]) 
+＃然后就可使用futl
+. result （）和fut2
+. result （）未提取结采了
+results = as completed( [futl, fut2]) 
+
+130 
+第7 章并行处理
+1 工st(results)
+＃
+结果
+# [ 4' 9) 
+仅供非商业用途或交流学习使用
+另外，你可使用函数a syncio
+. run_in_executor 来生成“阳re ，并使用asyncio 库提供
+的工具和语法来操作结果，这样可同时实现并发和并行。
+7.2.3 
+使用蒙特卡洛方法计算pi 的近似值
+作为一个示例，我们将实现一个高度并行的程序一一使用蒙特卡洛方法计算
+pi 的近似值。
+假设有一个边长为2 单位的正方形，其面积为4 。接下来，我们在这个正方形内雕刻出一个半径
+为1 单位的圆。圆的面积为pi x 人将r 的值代人这个方程，将得到这个圆的面积：pi × (1)2=pi 。
+有关上述描述的图形表示，请参阅下图。
+如果我们向这个图随机地射击，有些子弹将落在圆内，我们称之为打中了，而其他的子弹落
+在圆外，即没有打中。圆的面积与打中的次数成正比，而正方形的面积与射击次数成正比。要计
+算pi 的值，只需将圆的面积（等于pi ）除以正方形的面积（等于4 ）即可：
+hits/total = area circle/area_ square = pi/4 
+pi = 4 * hits/total 
+在这个程序中，我们将采取如下策略：
+口生成大量均匀分布的随机数（x,y），这些随机数的范围为（－1, l); 
+口检查这些数字是否落在圆内，方法是检查x2 + y2 运l 。
+编写并行程序时，首先要做的是编写串行版本，并核实它能够正确地工作。在实际工作中，
+应将并行化作为优化过程的最后一步。首先，我们需要找出运行速度缓慢的部分；其次，并行化
+是项耗时的工作，其速度提升受制于处理器数量。这个程序的串行版本的实现如下：
+import random 
+samples = 1000000 
+仅供非商业用途或交流学习使用
+
+仅供非商业用途或交流学习使用
+h工ts
+= 0 
+for i in range(samples) : 
+x = random .uniform(-1 . 0 , 1.0) 
+y = random . uniform(-1.0 , 1 . 0) 
+if x**2 + y 女女2
+<= 1 · 
+hits += 1 
+P 工＝
+4 0 * hits/samples 
+7.2 
+使用多个进程
+131 
+计算结果的精度随样本数量的增加而提高。注意，各个循环迭代是彼此独立的一一这个问题
+是高度并行的。
+要并行化这些代码，可编写一个函数一－sample ，它对应于单次是否击中的检查。如果样
+本击中了圆，这个函数将返回
+l ，否则返回0。通过运行sample 多次，并将其返回的结果累加，
+就可得到总共击中了多少次。我们可像下面这样使用app ly_async 在多个进程中运行sample
+并获取结果。
+def sample(): 
+x = random.un 工form(
+1 0 , 1 0) 
+y = random
+. un 工form( 1.0 , 1 0) 
+工f
+x ＊食2
++ y* *2 <= 1 : 
+return 1 
+else : 
+re tu r口。
+pool = multiprocess l口g
+. Pool () 
+resul ts_asy口c
+= [pool apply asy口c (sample) for i in ra口ge (samples) l 
+hits = sum(r.get() for r in results asy口c)
+可将这两个版本分别放在函数pi
+serial 和p 工＿apply_async 中（这些函数的实现可在
+文件pi . py 中找到），并测量它们的执行速度，如下所示。
+$ time py thon -c 'import pi; pi.pi serial {)’ 
+real 
+Om0 . 73 4 s 
+user 
+Om0 . 731s 
+sys 
+Om0.004s 
+$ time python -c
+’ i mp or t p i; pi . pi_ apply a s ync () ’ 
+real 
+lm36. 989s 
+user 
+lm55.984s 
+sys 
+OmS0 . 386 
+上述基准测试结果表明，第一个并行版本实际上降低了代码的执行速度。这是因为与将任务
+发送并分配给工作进程的开销相比，执行计算花费的时间很短。
+要解决这个问题，必须让开销相比于计算时间可以忽略不计。例如，可让每个工作进程每次
+处理多个样本，从而降低通信开销。我们可编写一个s ample
+multiple 函数，它执行多个是否
+仅供非商业用途或交流学习使用
+’ 
+
+仅供非商业用途或交流学习使用
+132 
+第7 章并行处理
+击中的检查，同时修改当前的并行版本，将问题分成
+1 0 个子单元，如下面的代码所示。
+def sample_mul t 工p le(samples_part 工al)
+:
+return sum (sample () 
+for
+工
+in range(samples part 工al))
+n tasks = 10 
+c hunk_ size = samples ／口＿tasks
+pool = mult 工processing
+. Pool () 
+results_ async = [pool apply_async(sample_mult 工ple
+,
+chunk_ size) 
+for i in range (n_ tasks)] 
+hits= sum(r . get() for r
+工n results_ async) 
+我们可将这些代码放在一个名为p工＿app ly_a syn c_chu此时的函数中，再运行它，如下所示。
+丰
+time python 
+c
+『import pi; pi.pi_ apply_ a sync_ chunked () ’ 
+real 
+Om0.325s 
+user 
+Orn0.81 6s 
+sys 
+Orn0 . 008s 
+结果好得多，我们将程序的速度提高了一倍多。另外，注意指标user 大于real 。为何总
+CPU 时间会大于总时间呢？因为有多个CPU 在同时工作。如果你增大样本数，将发现通信时间
+与计算时间的比值随之下降，速度得到了进一步的提升。
+高度并行的问题处理起来非常简单，但在有些情况下，必须在进程间共享数据。
+7.2.4 
+同步和锁
+虽然mul tiproc es s i吨使用的是进程（这些进程有自己的内存区域），但它也允许你将变
+量和数组定义为共享内存。要定义共享变量，可使用
+multiprocess 工吨. Value ，并传入一个
+表示变量数据类型的字符串
+（i 表示整型，
+d 表示doub le,
+f 表示float 等）。要修改这种变量的
+内容，可使用属性value ，如下面的代码所示。
+s hared variable = mult 工proces s 工口g
+. Value
+（
+’ f
+’
+）
+shared variable . val ue = 0 
+使用共享内存时，必须考虑同时访问的问题。假设你有一个共享的整型变量，而每个进程都
+将其值递增多次。你将像下面这样定义一个进程类：
+class Process(multiprocess ing . Process) : 
+de f
+一＿init一一（self
+,
+counter) : 
+super(Process , 
+self ）.一＿i口工t一－（）
+self.counter= counter 
+def run(self) : 
+for
+工工n range (l OO O): 
+self.counter.value+= 1 
+你可在主程序中初始化这个共享变量，并将其传递给4 个进程，如下面的代码所示。
+仅供非商业用途或交流学习使用
+
+def ma 工n():
+counter = mult 工processing.Value ( ’ i ’,
+lock=True) 
+counter.value = 0 
+processes = [Process(counter) for i 
+l口
+range(4)]
+[p.start () for p 
+i口
+processes]
+[p . jo 工口（）
+for p in processes ] 
+＃
+进程执行完毕
+pri口t(cou口ter.value)
+7.2 
+使用多个进程
+133 
+如果你运行这个程序（目录code 中的shared .py ），将发现counter 的最终值不是4000 ，而
+是随机的（在我的机器上，为
+2000~2500 ）。如果我们假定算术运算正确无误，就可确定并行化
+存在问题。
+实际发生的情况是，多个进程同时试图访问同一个共享变量。为搞明白这种情况，请看下图。
+在串行执行中，第一个进程读取变量的值（数字0 ），将其加
+l ，再将新值（1 ）写回；第二个变
+量读取这个新值（1 ），将其加
+l ，并将结果（2 ）写回。
+在并行执行中，两个进程同时读取（0 ），将其加
+l ，再将结果（I ）写田，导致最终的答案
+不正确。
+应丑←一曰
+E二3
+~一→曰
+~←咀
+F寸
+@D-→曰
+并行
+counter 
+要解决这个问题，需要同步对这个变量的访问，确保每次只有一个进程访问该变量、将其值
+加
+l 并写因。
+rnult 工processi吨.Lock 类提供了这种功能。要获取和释放锁，可分别使用方法
+acquire 和l release ，也可将锁用作上下文管理器。由于每次只有一个进程能够获取锁，这种
+方法可防止多个进程同时执行受保护的代码部分。
+我们可定义一个全局锁，并将其用作上下文管理器，以限制对变量cou口ter 的访问，如下
+面的代码所示。
+lock = multiprocess 工ng .Lock () 
+class Process(multiprocess 工口g Process): 
+def
+一＿in 工t一一（self,
+cou口ter) · 
+仅供非商业用途或交流学习使用
+• 
+
+134 
+第7 幸并行处理
+super(Process, self ）．一＿in 工t一－（）
+self .counter= counter 
+def run (self) : 
+for
+工工口
+range(lOOO)
+:
+with lock ：
+＃获耳E锁
+self .counter value+= 1 
+＃释放锁
+诸如锁等同步元语对解决众多问题来说必不可少，但应尽可能少使用，以改善程序的性能。
+。摸块…roe es山山叫通信和忱具附参阳文档
+( http: //docs . python.org/3/library/multiprocessing . html ）。
+7.3 
+使用Open MP 编写并行的Cython 代码
+Cython 通过OpenMP 提供了一个便利的接口，让你能够实现共享内存式并行处理。这让你
+能够直接使用Cython 编写效率极高的并行代码，而无须创建C 语言包装器。
+OpenMP 是一个规范兼A凹，设计用于编写多线程并行程序。
+OpenMP 规范包括一系列C 语
+言预处理器指令，用于管理线程以及提供通信模式、负载均衡和其他同步功能。包括GCC 在内
+的多个CIC＋＋和Fortran 编译器都实现了OpenMPAPI 。
+下面通过一个简单的示例来介绍Cython 井行功能。
+Cython 通过模块cython . parallel 提
+供了一个基于OpenMP 的简单AP I 。要实现并行，最简单的方式是使用prange ，这是一个自动
+将循环操作分配给多个线程的结构。
+首先，我们编写一个程序的串行版本，这个程序计算一个NumPy 数组中每个元素的平方（参
+见文件hello_parallel. pyx ）。我们定义了一个函数－square_serial ，它将一个缓冲区（buffer )
+作为输入，并使用这个输入数组中各个元素的平方填充一个输出数组，如下面的代码所示。
+import numpy as
+口p
+def square_ser 工al (double [ : ] inp) : 
+cdef int
+工，
+s ize
+cdef double[ : ] out 
+size = inp . shape[OJ 
+out np 
+＝
+口p
+. empty(size ，
+’ double')
+out = out_np 
+for i in ra口ge(size)
+:
+out ［工］= 工口p[i] *inp[i] 
+return out_np 
+对于这个遍历数组元素的循环，要实现其并行版本，需要将所有的
+ra叫调用都替换为
+仅供非商业用途或交流学习使用
+
+7.3 
+千吏用OpenMP 编写并乎于的Cython 代码
+135 
+prang e 。需要注意的是，要使用prange ，必须确保循环体不使用解释器。前面说过，我们需要
+释放GIL ，而解释器调用通常会获取GIL ，因此要使用线程，必须避免解释器调用。
+在Cython 中，要释放GIL ，可使用上下文口og il ，如下所示。
+with nogil: 
+for i in prange(size) : 
+out ［工J
+= inp
+［工］＊工np ［工］
+也可使用prang e 选项nogi l = Tru e ，这将自动将循环体放在一个nogil 块中。
+for i i n prange(size , nogil=True) : 
+out (i] ＝工np ［工］*inp [ i] 
+在prange 块中试图调用Python 代码将引发错误。禁止的操作包括函数调用、对象初始化等。
+要允许在p r ange 块中执行这些操作（这可能是为了调试），必须使用gil 语句重新启用GIL 。
+for i 
+i口
+prange(s 工ze
+,
+nogil=True) : 
+out[i] = inp[i]*inp[i] 
+with gil : 
+x = 0 # Python 赋佳
+现在可以将这些代码作为Pyth o n 扩展模块进行编译，以便测试它们。要启用OpenMP 支持，
+必须修改文件阴阳p PY ，在其中包含编译选项－foperunp 。为此，可使用
+di stutils
+中的
+d工stutils
+. extension.Extens i on 类，并将它传递给cythonize 。下面是完整的seh1p .py 文件。
+from d i stutil s . core import setup 
+from d工stu t 工ls
+. ex tension import Extens ion 
+from Cython. Bui ld import cythonize 
+hello_parallel = Extension (’ hello_parallel ' , 
+setup( 
+name = ’ Hello ', 
+[ ' hello_parallel . pyx ' J , 
+extra_compile_args=[’- fopenmp'] , 
+extra_ link_args =[ ’ - fopenmp ’ ]) 
+ext_modules = cythonize
+（
+［’ cevolve
+. py x 『，
+hello_parallel J ) , 
+通过使用prange ，可轻松地并行化Cython 版的Par ti cleSimulator 。下面的代码包含第
+4 章编写的Cython 模块c evolve . pyx 中的函数c_evolve 。
+def c_evolve( double[ :, : J r _ i , double[ : J ang_ speed_i , 
+double timestep ，工nt nsteps) : 
+# cdef 卢明
+for
+工
+工n range(nsteps) 
+fo r ]
+工口range(npartic l es ): 
+＃
+循环休
+’ 
+
+136 
+第7 章并行处理
+首先，反转循环的顺序，让外面的循环并行地执行（迭代之间彼此独立）。由于粒子之间没
+有交五，因此修改迭代顺序不会有任何问题，如下面的代码所示。
+for j in range(nparticles): 
+for i in range(nsteps) : 
+＃
+循环体
+接下来，将外部循环中的range 调用替换为prang e ，并将获取GIL 的调用删除。由于已
+经使用静态类型改进了代码，因此可安全地使用口ogil 选项，如下所示。
+for 〕工n prange(nparticles , nogil=True) 
+现在可以将这些函数包装到函数benchmark 中，以便对它们进行比较并评估性能方面的改
+进了。
+In 
+[3 ）
+：
+毛t 工me 工t benchmark ( 10000 , 
+' openmp ' ) # Running on 4 processors 
+1 loops , best of 3 : 599 ms per loop 
+In 
+[ 4 ）
+：
+毛time i t benchmark ( 10000 , 
+' cython ’ ) 
+1 loops , best of 3 : 1 . 35 s per loop 
+有趣的是，通过使用prange 编写一个并行版本，获得了两倍的速度提升。
+7.4 
+并行自动化
+前面说过，常规Pyth o n 程序因GIL 无法实现线程并行化。到目前为止，我们都是使用独立
+的进程来避开这种问题，但相比于启动线程，启动进程需要的时间和内存要多得多。
+我们还看到，通过避开Pyth on 环境，我们将原本就很快的Cython 代码的速度又提高了两倍。
+这种策略可实现轻量级的并行，但多了一个额外的编译步骤。本节将通过特殊库进一步探索这种
+策略，这些特殊库能够将代码自动转换为并行版本，从而高效地执行。
+当前，实现了并行自动化的包包括你熟悉的丑T 编译器numexpr 和Numba。还有一些包能够
+自动优化和并行化数组和矩阵密集型表达式，它们对数值计算和l机器学习应用程序来说至关重要。
+Th ean o 是一个项目，让你能够定义包含数组的数学表达式（更笼统地说就是张量），并将它
+们编译成快速语言，如C 或C＋＋。Thea no 实现的很多操作都是可并行化的，并可在CPU 和GPU
+中运行。
+Tensorflow 是一个类似于Thea no 的库，也是为计算数组密集型数学表达式而设计的，但不
+会将表达式转换为特殊的C 语言代码，而是在高效的C＋＋引擎中执行操作。
+在要解决的问题可用一串矩阵和基于元素的运算（如神经网络）表示时，
+Theano 和Tensorflow
+都是理想的选择。
+
+7.4 
+并行自动化
+137 
+7.4.1 
+丁heano 初步
+Theano 有点像编译器，但还能表示、操作和优化数学表达式，同时能够在CPU 和GPU 中运
+行代码。从201 0 年起，
+Th eano 就一直在不断推出改进版本，并被其他几个Python 项目用来自动
+生成高效的计算模型。
+在Theano 中，首先需要定义要运行的函数，方法是使用一个纯粹的P）咄on API 来指定变量
+和变换。然后，这些定义将被编译成机器码进行执行。
+在本节的第一个示例中，我们将探索如何实现一个计算平方的函数。我们用一个标量变量（a)
+表示输入，再进行变换以获得其平方值（用
+a
+sq 表示）。在下面的代码中，我们使用函数
+T
+. scalar 定义这个变量，并使用常规运算符川来获得一个新变量。
+工mport theano . tensor as T 
+import theano as th 
+a = T.scalar ( ’ a ’ ) 
+a_sq = a ** 2 
+print(a_sq) 
+＃输出
+# Elemwise{pow,no_inplace} . 0 
+如你所见，没有计算具体的值，执行的变换是纯粹的符号。要使用这个变换，需要生成一个
+函数。为此，可使用实用工具th.functio且，它接受两个参数，分别是输入变量列表和输出变
+换（这里是a_sq ）。
+compute_square = th
+. functio口（［a]
+, a_sq) 
+Theano 将花时间将这个表达式转换为高效的C 语言代码，并对代码进行编译，而所有这些
+操作都是在幕后进行的！
+th . functio口的返回值是一个可直接使用的Python 函数，下面的代码
+演示了如何使用这个返回的函数。
+compute square(2) 
+∞： 
+不是整数（与输入类型一样），而是浮点数。这是因为在Theano 中，变量的类型默认为float64 。
+要验证这一点，可查看变量a 的dtype 属性。
+a dtype 
+＃
+结果。
+# float64 
+相比于Numba ,
+Theano 的行为有天壤之别。Thean o 不会编译通用的Python 代码，也不做任
+何类型推断；定义Thea n o 函数时＼必须准确地指定类型。
+Thean o 真正的威力在于它对数组表达式的支持。要定义一维向量，可使用函数T . vector,
+
+138 
+第7 章并行处理
+它返回的变量支持广播操作，就像NumPy 数组一样。例如，我们可计算两个向量对应元素的平
+方和，如下所示。
+a = T .vector( ' a ’ ) 
+b = T .vector ( ’ b ’ ) 
+ab_sq = a 女女2
++ 
+b 食费2
+compute square = th functio口（［a
+,
+bl , ab sq) 
+) 
+] 
+只
+J
+A
+俗
+气
+气
+d
+内
+4
+1
+J
+，
+。
+J
+1
+＆
+肉
+，
+G
+nu
+- 
+r
+L
+寸
+，
+tt
+,
+14 
+e 
+r
+’ 
+a
+- 
+u9 
+阿
+飞
+srL 
+ey 
+t
+J
+a 
+u
+m
+水
+E
+paz
+-
+r 
+m
+44a 
+o 
+C## 
+这里的理念是将Theano APT 作为一种微型语言，用来合并各种Numpy 数组表达式，这样将
+生成高效的机器码。
+。
+Theano 的一个卖点是能够简化算法和自动计算梯度，更详细的信息请参阅官方
+文档（http://deepleaming.net/software/theano/introduction.html ）。
+为通过一个熟悉的用例来演示Theano 的功能，我们再次来并行地计算pi 的近似值。这个函数
+将两组随机坐标作为输入，并返回pi 的近似值。对于输入的随机数，我们将其定义为向量x 和y。
+为检查它们是否在圆内，我们使用基于元素的标准操作，井将这个表达式存储在变量hit_test 中。
+x = T .vector( ' x ’ ) 
+y = T . vector ( ' y 『）
+hit_test = x ** 2 + y ** 2 < 1 
+现在需要计算h it
+test 中值为True 的元素个数，为此可计算hit_test 的所有元素的和
+（将隐式把元素的值转换为整数）。要计算pi 的近似值，需要计算击中次数和射击次数的比值。
+需要执行的计算如下面的代码所示。
+hits = hit_ test .surn() 
+total = x shape[O] 
+P工＿est = 4 * h 工ts/total 
+为测量这种Theano 实现的执行时间，可使用th.function 和模块timeit 。在这里的测试
+中，我们传入两个长度为30 000 的数组，并使用timeit
+. timeit 多次执行函数calculate_pi 。
+calculat e__p 工
+＝th . function([x , y] , pi_est) 
+x val = np randorn
+. un 工forrn(-1
+,
+1 , 30000) 
+y_val = np
+. randorn
+. u口工forrn(-1
+,
+1, 30000 ) 
+import t 工me 工t
+res = t 工rneit
+. t 工rneit(
+" calculate__pi( x_val
+,
+y val ) ” , 
+” from 
+main＿
+工mport x_val , y_val , calculate__pi ” ,
+nurnber=lOOOOO) 
+print(res) 
+＃输出
+# 10 . 905971487998613 
+
+7.4 
+并行自动化
+139 
+串行执行这个函数时，花费了大约10 秒的时间。Theano 能够自动并行化代码一一使用Ope础。
+和BLAS ( Basic Linear Algebra Subprograms ）线性代数例程等专用包实现基于元素的操作和矩阵
+操作。要启用并行执行，可使用配置选项。
+在Th eano 中，要设置配置选项，可在导人时修改对象theano
+. config 中变量的值。例如，
+要启用OpenMP 支持，可执行如下命令：
+import theano 
+theano.config.openmp = True 
+theano.config.openmp elemwise_minsize = 10 
+与OpenMP 相关的参数如下。
+口openmp_elernw工se_rninsize ：这是一个整数，表示仅当数组长度超过多少时，才对基
+于元素的操作启用并行化（数组太小时，并行化的开销可能降低性能）。
+0 openmp ：这是一个布尔标志，决定是否激活OpenMP 编译（默认应激活）。
+要控制分配给Ope础。执行的线程数，可在执行代码前’设置环境变量OMP_NUM_THREADS 。
+现在可编写一个简单的基准测试程序，来演示如何使用Open MP 。我们将pi 值估算示例的代
+码放在文件test_theano.py 中。
+＃
+丈件test_t heano . py 
+import numpy as np 
+工mport
+theano
+. te口sor as T 
+import theano as th 
+th
+. conf 工g openmp_elemwise minsize = 1000 
+th
+. conf 工g
+. openmp = True 
+x = T .vector ( ’ x ’) 
+y = T .vector( ' y ' ) 
+hit_ test = x ** 2 + y ** 2 <= 1 
+hits = hit test sum() 
+misses = x.shape[O] 
+pi_est = 4 * hits/m 工sses
+calculate_p 工
+＝th . function([x, y], pi_est) 
+x_val ＝
+口p
+. random.uniform(-1
+,
+1 , 30000) 
+y_ val = np . random.uniform(-1, 1 , 30000) 
+import timeit 
+res = timeit
+. time 工t ( ” c alcu l ate_pi (x_val , y_val )” , 
+pr 工nt(res)
+” from
+一＿main一一
+工mport x_val , y_val , 
+calculate_pi ” ,
+number=100000) 
+现在可从命令行运行这些代码，并通过设置环境变量来增加线程数，以评估其可伸缩性。
+回
+
+140 
+第7 章并行处理
+$ OMP NUM THREADS=l python test_ theano . py 
+10 . 905971487998613 
+$ OMP_ NUM_ THREADS=2 python test_ theano .py 
+7 . 538279129999864 
+$ OMP_ NUM THREADS=3 python test_theano .py 
+9 . 405846934998408 
+$ OMP_ NUM_ THREADS=4 python test_ theano .py 
+14 . 634153957000308 
+有趣的是，使用两个线程时，性能有小幅的提升，但再增加线程数时，性能急剧下降。这意
+味着就这里的输入规模而言，使用两个以上的线程没有任何好处，因为启动新线程和同步其共享
+数据的代价比并行计算带来的好处大。
+要获得良好的并行性能需要一定的技巧，因为这取决于具体的操作以及它们访问底层数据
+的方式。一般而言，对并行程序的性能进行测量至关重要，而要获得大幅的速度提升，需要反
+复试验。
+例如，只要稍微修改一下代码，并行性能就会急剧下降。前面检查是否击中时，我们直接使
+用了方法sum ，这依赖于布尔数组hit_tests 的隐式转换。如果我们执行显式转换，
+Th eano 生
+成的代码将稍微不同，导致多线程带来的好处更小。可修改文件tes t_theano .py 来，恼，正这一点：
+＃
+旧版本
+# hits = h 工t_test.sum()
+hits = hit test.astype (’ int32 ’) . sum() 
+如果你再次运行基准测试程序，将发现线程的多少对运行时间没有太大的影响，但相比于原
+来的版本，速度得到了极大的提高。
+$ OMP NUM THREADS=l python test_theano .py 
+5 822126664999814 
+$ OMP一阳M THREADS=2 python test_ theano .py 
+5 697357518001809 
+$ OMP
+肌m THREADS=3 python test_ theano .py 
+5 . 636914656002773 
+$ OMP_ NUM_THREADS=4 python test_ theano . py 
+5 . 764030176000233 
+剖析Thea no 代码
+鉴于性能测量和分析的重要性，
+Th ean o 提供了功能强大且信息丰富的剖析工具。要生成剖
+析数据，只需给th
+. funct 工0口添加选项profile=True 即可。
+calculate_p 工＝th . function([x , y] , p i est, profile=True ) 
+剖析器将在函数运行时收集数据（如通过time it 或直接调用）。要打印剖析摘要，可执行
+命令summary ，如下所示。
+calculate_pi . profile . summary() 
+在
+
+7.4 
+并行自动化
+141 
+为生成剖析数据，我们在脚本中添加选项profile=True ，并再次运行它（在这里，我们将
+环境变量OMP_NUM_THREADS 设置为
+1
+）。另外我们还将这个脚本恢复到隐式转换hit tests 
+的版本。
+。
+你-ltor 1it m i2t J9i 叫g . profile 全问叫。
+calculate_p i
+. profile . surnmary （）打印的输出很长，包含大量的信息，下面是其中的一
+部分。输出由包含时间信息的三部分组成，依次为Class 、Ops 和Apply 。这里将重点放在Op s
+部分；
+Ops 大致相当于编译后的Theano 代码中使用的函数。如你所见，大约8 0%的时间都花在
+计算两个数的平方和上，而其他时间花在计算元素的和上。
+Functio口
+profiling
+Message : test_ theano . py : l5 
+other output 
+Time in 100000 calls to Function ._ call 
+: 1 . 015549e+Ols 
+other output 
+Class 
+〈革
+time>
+<Sum
+毡＞<apply time> <time per call> <type> <#call> <#apply> 
+<Class name> 
+timing info by class 
+Ops 
+〈在
+t ime> <sum
+革＞<apply time> <t ime per call> <type> <#call> <#apply> <Op 
+name> 
+80.0% 
+80 . 0% 
+6.722s 
+6.72e-05 s 
+C 
+Elemwise{Composite {LT((sqr(iO ) + sqr(il ) ), i2 )} } 
+19.4 在
+99
+. 4%
+l . 634s 
+1 63e-05s 
+C 
+100000 
+工
+100000 
+1 
+Sum(acc_dtype=int64} 
+0.3 毛
+99
+8 屯
+0
+. 027s
+2 . 66e-07s 
+c 
+100000 
+1 
+国
+Elemwise{Composite{((iO * il) I i2)}} 
+0
+. 2 屯
+100
+. 0 毫
+0
+. 020s
+2 03e-07 s 
+c 
+100000 
+1 
+Shape_i{O} 
+(remaining 0 Ops account for 0
+. 00 毛（0 00s) of the runtime) 
+Apply 
+〈毡
+t ime> <sum
+毡＞<apply t 工me>
+<t 工me per call> <#call> ＜工d> <Apply name> 
+timing
+工nfo by apply 
+这与我们在第一个基准测试程序中发现的情况一致。使用两个线程时，代码的执行时间从
+1 l 秒缩短到大约8 秒。根据这些数字，可分析时间都花在了什么地方。
+在这
+l l 秒中，
+8 0% （大约8.8 秒）花在执行基于元素的操作上。这意味着在完美的并行条件
+在
+
+142 
+第7 章并行处理
+下，使用两个线程时时间将缩短4.4 秒，即从理论上说，此时的执行时间将为
+6.6 秒。考虑到实
+际测量到的执行时间大约为8 秒，看起来使用线程会带来一些额外开销（
+1 .4 秒）。
+7.4.2 
+Tenso 「flow
+Tensorflow 也是一个设计用于快速执行数值计算和并行自动化的库，这是Google 于2015 年
+发布的开源项目。
+Tensorflow 像Theano 那样创建数学表达式，但不将表达式编译成机器码，而
+是在使用C＋＋编写的外部引擎中执行它们。
+Tensorflow 支持在一个或多个CPU 和GPU 中执行和
+部署并行代码。
+Tensorflow 的用法与Theano 很像。要在Tensorflow 中创建变量，可使用函数tf
+. p laceho lde r ,
+它将一个数据类型作为输入。
+工mport tensorflow as tf 
+a = tf .placeholder( ' float64 ' ) 
+在Tensorflow 中，定义数学表达式的方式与Theano 很像，但命名约定有些不同，对NumPy
+语义的支持也更有限。
+Tensorflow 不像Thean。那样将函数编译成C 语言代码，再编译成机器码，而是将定义的数
+学函数序列化（包含变量和变换的数据结构被称为计算图），再在特定的设备上执行它们。要配
+置设备和上下文，可使用tf
+. S e ss ion 对象。
+定义所需的表达式后，需要初始化
+tf.Sess 工0口，这种对象可用来执行计算图（使用方法
+Se ssion.ru川。下面的示例演示了如何使用Tensorflow API 来计算相应元素的平方和。
+a = tf. placeholder ( 'float64 ’) 
+b = tf .placeholder ( ' float64 ’ ) 
+ab sq = a ** 2 + b**2 
+with tf.Ses s 工on() as session : 
+result = session .run (ab_sq , feed_dict={a : [0, 1, 2] , 
+b : 
+[3 ' 4' 5 ] } ) 
+print(result) 
+＃
+输出
+．
+# array ( [ 9 . , 17 ., 29 ] ) 
+在Tensorflow 中，并行化是由其智能执行引擎自动实现的；通常，无须做很大的调整，自动
+实现的并行化的效果就很好。然而，
+Tensorflow 最适合处理深度学习负载，这种负载包含复杂函
+数的定义，
+即使用大量的矩阵乘法以及计算梯度。
+下面使用Tensorflow 再次实现pi 值估算示例，测量其执行速度和并行性，并与Theano 实现
+进行比较。我们需要做的工作如下。
+在
+
+7.4 
+并行自动化
+143 
+口定义变量x 和y ，并使用广播操作检查是否击中。
+口使用函数tf.reduce_sum 计算数组hit_tests 的元素的和。
+口使用配置选项
+i nter_op_parallel i sm_threads
+和
+i ntra_op_parall elism_
+threads 初始化一个Session 对象。这些选项指定用于执行不同类型的并行操作的线程
+数。请注意，创建第一个
+Session 对象时，使用的这些选项为整个脚本（包括后面的
+Session 实例）设置线程数。
+我们编写一个名为test_ten sorflow. py 的脚本，它包含如下代码。请注意，线程数是由传递给
+这个脚本的第一个参数（sys . a rgv [ 1 J ）指定的。
+工mport tensorflow as tf 
+import
+口umpy as np 
+工mport time 
+工mport sys 
+NUM_THREADS = int(sys .argv[l]) 
+5缸nples
+= 30000 
+pr 工口t ( ' Num threads ' , NUM_ THREADS) 
+x_data ＝口p . random
+. uniform(-1
+,
+1 , samples) 
+y_data ＝口p.random
+. uniform(-1
+,
+l , samples) 
+x = tf . placeholder (’ float64 ' , name= ’ x ' ) 
+y = tf . placeholder ( ’ f loat64 ’,
+n ame =’ y ') 
+hit_tests = x ** 2 + y ** 2 <= 1.0 
+hits = tf . reduce_ sum(tf.cast(hit tests ，『i口t32
+' ))
+W工th tf.Session 
+(conf 工g=tf
+. Conf 工gProto
+(inter_op__parallelism_ threads =NUM_THREADS, 
+工ntra
+op__parallelism_ threads=NUM一THREADS)) assess : 
+start = time . time() 
+for
+工工n range (10000): 
+sess .run(hits , {x : x data, y : y_data}) 
+• 
+print(t 工me
+. time ()
+start) 
+如果运行这个脚本多次，并在每次都给NUM_THREADS 指定不同的值，将发现性能与Theano 
+实现差别不大，且并行化带来的性能提升很有限。
+$ python test_tensorflow.py 1 
+13 . 059704780578613 
+$ python test_ tensorflow.py 2 
+11 938535928726196 
+$ python test_tensorflow.py 3 
+12 783955574035645 
+$ python test_tensorflow . py 4 
+12 158143043518066 
+在
+
+144 
+第7 幸并行处理
+使用诸如Tensorflow 和Theano 软件包的主要优点是，它们支持并行地执行机器学习算法中
+常用的矩阵操作。这很管用，因为在GPU 硬件上执行时，这些操作的性能将得到极大的提升，
+原因是GPU 能够以极高的吞吐量执行这些操作。
+7.4.3 
+在GPU 中运行代码
+本节将演示如何将GPU 同Theano 和Ten sorflow 结合起来使用。作为示例，我们将测量一个
+非常简单的矩阵乘法在GPU 上的执行时间，并将其与在CPU 上的执行时间进行比较。
+。
+妥完成本节的示例，你需妾有GPU 。就学习而言，
+可使用Amazon EC2 服务请
+求一个支持GPU 的实例。
+下面的代码使用Theano 执行一个简单的矩阵乘法运算。我们使用函数T .matrix 初始化一
+个二维数组，然后使用方法T
+. dot 执行矩阵乘法。
+from theano
+工mport function, config 
+import theano . tensor as T 
+import
+口umpy as np 
+import time 
+N = 5000 
+A_data = np.random . rand(N , N) astype (’ f loat32
+『
+）
+B_data = np.random.rand(N , N) . astype (’ float32') 
+A = T .matrix ( ’ A’ ) 
+B = T.matrix ( ’ B ’ ) 
+f = function ([A, BJ , T . dot (A, B)) 
+start = time.t 工me()
+f(A_data , B_data) 
+pr 工口t （” Matr 工X multiply ({}) took{} seconds ” . format(N , 
+time.t 工me () -
+start) ) 
+pr 工口t ( ' Device used : ’ , config device) 
+要让Thean。在GPU 上执行这些代码，可设置选项config
+. dev工ce=gpu 。出于方便考虑，
+可在命令行使用环境变量THEANO_FLAGS 设置这个配置值，如下所示。将上述代码保存到文件
+test theano _ m atmul. py 中，然后就可使用下面的命令来测量执行时间了。
+$ THEANO_ FLAGS=device=gpu python test_theano gpu . py 
+Matrix multiply (5000) took 0 4182612895965576 seconds 
+Device used : gpu 
+要在CPU 上运行这些代码，可使用配置选项dev 工ce=cpu 。
+在
+
+7.4 
+并行自动化
+145 
+$ THEANO_FLAGS=device=cpu python test theano.py 
+Matrix multiply (5000) took 2 9623231887817383 seconds 
+Device used: cpu 
+如你所见，就这个示例而言，在GPU 上运行时，速度比在CPU 上运行时快7.2 倍！
+为进行比较，可对使用Tensorflow 实现的等效代码进行基准测试。
+Tensorflow 版本的实现如
+下面的代码片段所示。相比于Theano 版本，主要不同如下：
+口使用配置管理器tf
+. de飞rice 来指定目标设备（/cp u :O 或／gpu:O ) ; 
+口使用运算符tf.matmul 来执行矩阵乘法。
+import tensorflow as tf 
+工mport
+t 工me
+工mport
+口umpy as np 
+N = 5000 
+A_data ＝口p
+. random
+. rand(N,
+N) 
+B_data = np . random . rand(N, N) 
+＃
+创建一个图
+with tf.device {’/gpu : 0'): 
+A = tf . placeholder( ' float32 ' ) 
+B = t f . placeholder ( ' float3 2 ’ ) 
+C = tf .matmul IA, B) 
+with tf . Sess 工on () as sess : 
+start = t 工me
+. t 工me()
+sess. run(C, {A : A_data, B: B_ data}) 
+print ( ’ Matrix multiply({)) took : {} '. format(N , time time() 
+start)) 
+如果使用合适的t f
+. device 选项运行脚本test_tensorflow _ matmul. py ，将得到如下执行时间。
+＃使用tf .device ( '/gpu: 0 ＇）运行
+Matrix multiply (5000) took : 1 . 417285680770874 
+＃使用tf.device ｛’／cpu:O ＇）运行
+Matrix multiply (5000) took : 2 . 9646761417388916 
+• 
+如你所见，就这个简单示例而言，在GPU 上运行时性能得到了极大的提升（但没有Theano 
+版本那么大）。
+要使用GPU 来自动执行计算，另一种方式是使用你现在应该很熟悉的Numba 。使用Numba
+可将
+Python 代码编译成可在GPU 上运行的程序。这种灵活性让你能够使用简单接口完成高级
+GP U 编程，具体地说，
+Numba 能够让你非常轻松地编写支持GPU 的泛型通用函数。
+在下面的示例中，我们将演示如何编写一个通用函数，它对两个数字执行指数函数并将结果
+相加。第5 章说过，这可使用函数由.vec t or 工ze 来实现（我们还显式地将目标设备指定为CPU ）。
+在
+
+146 
+第7 章并行处理
+import numba as nb 
+工mport math 
+@nb . vectorize(target= ' cpu ’ ) 
+def expon cpu (x, y) : 
+return math.exp(x) + math . exp(y) 
+要编译通用函数expo口一cpu ，以便在GPU 设备上运行，可使用选项target ＝
+’ cuda ’ 。另
+外，对于CUDA 通用函数，还必须输入类型。
+expon_gpu 的实现如下：
+@nb.vectorize ([’ f loat32 ( float32, float32) ' ] , target =’ cuda ' ) 
+def expon_gpu (x, y) : 
+return math . exp(x) + math . exp(y) 
+现在可以对这两个函数进行基准测试了：将它们应用于两个长度为
+l 000 000 的数组。另外
+请注意，测量执行时间前，我们先调用一次函数，以触发Numba 即时编译。
+工mport numpy as np 
+import time 
+N = 1000000 
+niter = 100 
+a= np . random . rand(N).astype( ' float32 ') 
+b = np . random.rand(N) . astype (’ float32 ' ) 
+＃触发编译
+expo口＿cpu(a ,
+b) 
+expo口一gpu(a
+,
+b) 
+＃测量时间
+start = 
+t 工me.t 工me()
+for i in ra口ge （口iter):
+expo口＿cpu(a,
+b) 
+print ( "CPU :”,
+t ime . time() - start) 
+start = t 工me
+. time () 
+for i
+工n
+range(n 工ter)
+:
+expon_gpu(a, b ) 
+print ( ”GPU :" , time . time() - start) 
+＃输出：
+# CPU: 2 .4762887954711914 
+# GPU: 0.8668839931488037 
+在GPU 上执行时，速度比在CPU 上执行时提高了3 倍。请注意，将数据传输给GPU 的开
+销非常高，因此仅当数组非常大时，在GPU 上执行才有优势。
+7.5 
+小结
+对大型数据集来说，并行处理是一种改善’性能的有效方式。高度并行的问题非常适合采用并
+行处理；对于这种问题，实现并行处理很容易，同时性能可得到极大的提升。
+在
+
+7.5 
+小结
+147 
+本章介绍了Python 并行编程的基础知识。你学习了如何使用Python 标准库中的工具来生成
+进程，以避开Python 线程技术的局限性，还学习了如何使用Cython 和OpenMP 来实现多线程
+程序。
+对于更复杂的问题，你学习了如何使用Theano 、
+Tensorflow 和Numba 包来自动编译数组密
+集型表达式，以便在CPU 和GPU 设备上并行地执行。
+下一章将介绍如何使用Dask 和PySpark 等库编写在多个处理器和计算机上执行的并行程序。
+回
+在

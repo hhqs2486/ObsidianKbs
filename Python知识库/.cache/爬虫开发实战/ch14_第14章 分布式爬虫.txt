@@ -1,0 +1,2447 @@
+分布式爬虫
+在上一章巾，我们了解了Scrapy 爬虫框架的用法。这些框架都是在同一台主机上运行的，爬取效
+率比较有限。如果多台主机协同爬取，那么爬取效率必然会成倍增长，这就是分布式爬虫的优势。
+本章我们就来了解一下分布式爬虫的基本原理，以及Scrapy 实现分布式爬虫的流程。
+14.1 
+分布式爬虫原理
+我们在前面已经实现了Scrapy 微博爬虫，虽然爬虫是异步加多线程的，但是我们只能在一台主机
+上运行，所以爬取效率还是有限的，分布式爬虫则是将多台主机组合起来，共同完成一个爬取任务，
+这将大大提高爬取的效率。
+1 . 分布式爬虫架构
+在了解分布式爬虫架构之前，首先回顾一下Scrapy 的架构，如罔13-1 所示。
+Scrapy 单机爬虫中有一个本地爬取队列Queue ，这个队列是利用
+deque 模块实现的。如果新的
+Request 生成就会放到队列里面，随1舌R叩创t 被Sch巳du
+爬取，简单的调度架构如罔14-1 所示。
+一－…·一－→
+爬取队列
+i周度器
+图
+1 4 - l
+调度架构
+如果两个Schedu l er 同时从队列里面取Request，每个Scheduler 都有其对应的Downloader ，那么
+在带宽足够、正常爬取且不考虑队列存取压力的情况下，爬取效率会有什么变化？没错，爬取效率会
+翻倍。
+这样，
+Sch讪ler 可以扩展多个，
+Downloa伽也可以扩展多个。而爬取队列Queu e 必须始终为－ml 
+个，也就是所谓的共享爬取队列。这样才能保证
+Scheduer 从队列里调度某个
+Request 之后，其他... 
+Scheduler 不会重复调度此Request ，就可以做到多个Schduler 同步爬取。这就是分布式爬虫的基本雏
+形，简单调度架构如图14-2 所示。
+更多免费资源请访问ppbuzz.com
+
+556 
+第
+14 幸分布式爬虫
+调度器
+爬取队列
+ii司度器
+调度器
+图
+14-2
+调度架构
+我们需要做的就是在多台主机上同时运行爬虫任务协同爬取，而协同爬取的前提就是共享爬取队
+列。这样各台主机就不需要各向维护爬取队列，而是从共享爬取队列存取
+Request。但是各台主机还
+是有各自的Scheduler 和Downloader ，所以调度和下载功能分别完成。如果不考虑队列存取性能消屁，
+爬取效率还是会成倍提高。
+2 . 维护爬取队列
+那么这个队列用什么来维护？首先需要考虑的就是性能问题。我们向然想到的是基于内存存储的
+Red is ，它支持多种数据结构，例如列表（List ）、集合（Se t ）、有序集合（Sorted Set ）等，存取的操作
+也非常简单。
+Redis 支持的这几种数据结构存储各有优点。
+口列表有lpus h （）、
+lpop （）、
+rpush （）、
+rpop （）方法，我们可以用它来实现先进先出式爬取队列，
+也可以实现先进后出梳式爬取队列。
+口集合的元素是元序的且不重复的，这样我们可以非常方便地实现随机排序且不重复的爬取队列。
+口有序集合带有分数表示，而
+Scrapy 的Request 也有优先级的控制，我们可以用它来实现带优
+先级调度的队列。
+我们需要根据具体爬虫的需求来灵活选择不同的队列。
+3 如何去重
+Scrapy 有自动去重，它的去重使用了
+Python 中的集合。这个集合记录了
+Scrapy 中每个
+Request
+的指纹，这个指纹实际上就是Request 的散列值。我们可以看看Scrapy 的、源代码，如下所示：
+import hashlib 
+def request_fingerprint(request, include_headers=None): 
+if include headers: 
+include_headers = tuple(to_bytes(h.lower()) 
+for h in sorted(include_headers)) 
+cache = _fingerprint cache.setde于ault(request, {}) 
+if include headers not in cache: 
+更多免费资源请访问ppbuzz.com
+
+fp = hashlib . sha1 () 
+fp.update(to_bytes(request.method)) 
+fp .update(to_bytes(canonicalize url(request.url))) 
+fp.update(request.body orb '' ) 
+if include headers: 
+for hdr in include headers ’ 
+if hdr in request.headers : 
+fp.update(hdr) 
+for v in request.headers.getlist(hdr): 
+fp.update(v) 
+cache[include_ headers] = fp. hexdigest() 
+return cache[include_headers] 
+14.1 
+分布式爬虫原理
+557 
+request_ fingerprint （）就是计算Request 指纹的方法，其方法内部使用的是hash lib 的sha 1 （）方法。
+计算的字段包括Request 的Method 、
+URL 、
+Body 、
+Headers 这几部分内容，这里只要有一点不同，那
+么计算的结果就不同。计算得到的结果是加密后的字符串，也就是指纹。每个Request 都有独有的指
+纹，指纹就是一个字符串，判定字符串是否重复比判定Request 对象是否重复容易得多，所以指纹可
+以作为判定Reques t 是否重复的依据。
+那么我们如何判定重复呢？
+Scrapy 是这样实现的，如下所示：
+def _init一（sel干）：
+self. fingerprints = set() 
+def request_seen(self, request): 
+fp =self . request＿干ingerprint(request)
+if fp in self. fingerprints’ 
+return True 
+self.fingerprints.add(fp) 
+在去重的类RF PDupeFilter 中，有一个request_seen （）方法，这个方法有一个参数request ，它的
+作用就是检测该Request 对象是否重复。这个方法调用reques t_fingerprint （）获取该Request 的指纹，
+检测这个指纹是杏存在于fingerprints 变量中，而fingerprints 是一个集合，集合的元素都是不重复
+的。如果指纹存在，那么就返回True ，说明该Request 是重复的，否则这个指纹加入到集合中。如果
+下次还有相同的Request 传递过来，指纹也是相同的，那么这时指纹就已经存在于集合中，
+Request 对
+象就会直接判定为重复。这样去重的目的就实现了。
+Scrapy 的去重过程就是，利用集合元素的不重复特性来实现Request 的去重。
+对于分布式爬虫来说，我们肯定不能再用每个爬虫各自的集合来去重了。因为这样还是每个主机
+单独维护向己的集合，不能做到共享。多台主机如果生成了相同的
+Request ，只能各自去重，各个主
+机之间就无法做到去重了。
+那么要实现去重，这个指纹集合也需要是共享的，
+Red is 正好有集合的存储数据结构，我们可以
+利用Redis 的集合作为指纹集合，那么这样去重集合也是利用Redis 共亭的。每台主机新生成Request
+之后，把该Request 的指纹与集合比对，如果指纹已经存在，说明该Request 是重复的，否则将Request
+_ 
+的指纹加入到这个集合中即可。利用同样的原理不同的存储结构我们也实现了分布式Reqeust 的去重。
+119
+4. 防止中断
+在Scrapy 中，爬虫运行时的Request 队列放在内存中。爬虫运行中断后，这个队列的空间就被释
+更多免费资源请访问ppbuzz.com
+
+558 
+第
+14 幸分布式爬虫
+放，此队列就被销毁了。所以一旦爬虫运行中断，爬虫再次运行就相当于全新的爬取过程。
+要做到中断后继续爬取，我们可以将队列中的Request 保存起来，下次爬取直接读取保存数据即
+可获取上次爬取的队列。我们在Scrapy 中指定一个爬取队列的存储路径即可，这个路径使用〕OB_DI R
+变量来标识，我们可以用如下命令来实现：
+scrapy crawl spider -s JOB_DIR=crawls/spider 
+更加详细的使用方法可以参见官方文档，链接为：
+https: //doc . scrapy.org/en/latest/topics/jobs.html 。
+在Scrapy 中，我们实际是把爬取队列保存到本地，第二：如阻取直接读取井’恢复队列即可。那么在
+分布式架构中我们还用担心这个问题吗？不需要。因为爬取队列本身就是用数据库保存的，如果爬虫
+巾断了，数据库中的Request 依然是存在的，下次启动就会接着上次中断的地方继续爬取。
+所以，当Red is 的队列为空时，爬虫会重新爬取；当Red is 的队列不为空时，爬虫便会接着上次
+中断之处继续爬取。
+5. 架构实现
+我们接下来就需要在程序中实现这个架构了。首先实现一个共享的爬取队列，还要实现去重的功
+能。另外，重写一个Scheduer 的实现，使之可以从共享的爬取队列存取Request 。
+幸运的是，已经有人实现了这些逻辑和架构，并发布成叫Scrapy-Redis 的Python 包。接下来，我
+们看看Scrapy-Redis 的源码实现，以及它的详细工作原理。
+14.2 
+Scrapy-Redis 源码解析
+Scrapy-Redis 库已经为我们提供了Scrapy 分布式的队列、调度器、去重等功能，其G itHub 地址为：
+https: //github.com/rmax/scrapy-redis 。
+本节我们深入了解一下，利用Redis 如何实现Scrapy 分布式。
+1
+. 获取源码
+可以把源码克隆下来，执行如下命令：
+git clone https: //github.com/rmax/scrapy-redis.git 
+核心源码在scrapy-redis/src/scrapy_redis 目录下。
+2 . 爬取队列
+从爬取队列入手，看看它的具体实现。源码文件为queue.py ，它有三个队列的实现，首先它实现
+了一个父类Base ，提供一些基本方法和属性，如下所示：
+class Base(object): 
+””“Per-spider base queue class’1 1111 
+def _init (self, server, spider, key, serializer=None): 
+if serializer is None: 
+serializer = picklecompat 
+if not hasattr(serializer,’loads ' ): 
+raise TypeError(”serializer does not implement ’ loads ' function: %r” 
+% serializer) 
+更多免费资源请访问ppbuzz.com
+
+14.2 
+Scrapy-Redis 源码解析
+559 
+if not hasattr(serializer, 'dumps') 
+raise TypeError(”serializer '%s ’ does not implement ’ dumps' function: %r” 
+% serializer) 
+self .server = server 
+self.spider = spider 
+self.key = key %{’ spider' 
+spider. name} 
+sel干.serializer = serializer 
+de于＿encode_request(self, request): 
+obj = request_to_dict(request, self .spider) 
+return sel干.serializer .d umps(obj)
+def _decode_request(self, encoded_request): 
+obj = self. serializer. loads (encoded _request) 
+return request_from_dict(obj, self.spider) 
+def _len一（self):
+l ”Return the length of the queue”’.., 
+raise NotimplementedError 
+def push(self, request): 
+””Push a request””” 
+raise NotimplementedError 
+def pop(self, timeout=O): 
+”’Pop a request””” 
+raise NotimplementedError 
+def clear( self): 
+"'Clear queue/stack”“·· 
+self .server.delete(self .key) 
+首先看一下一encode_request （）和＿decode_reques t （）方法。我们要把一个Request 对象存储到数据
+库中，但数据库无法直接存储对象，所以先要将Request 序列化转成字符串，而这两个方法分别可以
+实现序列化和反序列化的操作，这个过程可以利用pickle 库来实现。队列Queue 在调用push （）方法将
+Request 存入数据库时，会调用＿encode_request （）方法进行序列化，在调用pop （）取tt\ Request 时，会
+调用
+decode_request （）进行反序列化。
+在父类中，一len一（）、
+push （）和
+pop （）这三个方法都是未实现的，三个方法直接抛出
+NotimplementedError 异常，因此这个类不能直接使用。那么，必须要实现一个子类来重写这三个方法，
+而不同的子类就会有不同的实现和不同的功能。
+接下来我们定义一些子类来继承
+Base 类，并重写这几个方法。在源码中有三个子类的实现，它
+们分别是FifoQueue 、
+PriorityQueue 、
+LifoQueue ，我们分别来看看它们的实现原理。
+首先是FifoQueue ，如下所示：
+class FifoQueue(Base): 
+””“ Per-spider FIFO queue””’ 
+def _len一（self):
+””Return the length of the queue””” 
+return self .server.llen(self .key) 
+def push(self, request): 
+"’Push a request "”” 
+回
+更多免费资源请访问ppbuzz.com
+
+560 
+第
+14 幸分布式爬虫
+self.server .lpush(self.key, self._encode_request(request)) 
+def pop( self, timeout=O): 
+’”” Pop a request””” 
+if timeout > o: 
+data = sel干.server.brpop(self.key, timeout) 
+if isinstance(data, tuple): 
+data = data[l] 
+else: 
+data = self. server. rpop(self. key) 
+if data: 
+return self ._decode_request(data) 
+这个类继承了Base 类，并重写了一len一（）、
+push （）、
+pop （）三个方法，这三个方法都是对server
+对象的操作。
+server 对象就是一个Red i s 连接对象，我们可以直接调用其操作Red is 的方法对数据库
+进行操作，这里的操作方法有llen （）、lpush （）、rpop （）等，这就代表此爬取队列使用了Red is 的列表e
+序列化后的Request 会存入列表中，＿len一（）方法获取列表的长度，
+push （）方法调用了lpush （）操作，
+这代表从列表左侧存入数据，
+pop （）方法中调用了rpop （）操作，这代表从列表右侧取出数据。
+Request 在列表中的存取顺序是左侧进、右侧出，这是有序的进出，即先进先出（First Input First 
+Output, FIFO ），此类的名称就叫作FifoQueue 。
+还有一个与之相反的实现类，叫作LifoQueue ，实现如下：
+- 
+O
+」
+川
+U
+ρ
+」
+HU 
+nu, 
+.
+nu 
+)
+F 
+OLT
+, .. 
+SL 
+3u 
+n
+M
+U
+γ
+h
+A
+ 
+f
+t
+、
+ρ
+、
+O
+L
+』
+n
+U
+HU
+---- 
+env 
+川
+U
+F
+、
+d
+nu
+‘
+- 
+n
+u
+γ
+牟
+正
+l
+ρ
+』
+14nr 
+L
+” 
+r3” 
+e3 
+-a 
+、
+E
+A
+rL 
+L
+K
+、
+I
+J
+FLUV
+’’ 
+吨
+d
+ρ
+h
+w
++LLK 
+P3· 
+r+l 
+e
+－
+－
+品
+ι
+门
+E
+＋
+’ι
+－
+r
+、
+d
+( 
+俨
+↑
+n
+nUOL 
+1
+l
+牛
+ι
+n
+川
+、
+t
+i
++
+I‘- 
+nsr 
+n
+川
+a
+L
+ρ
+』
+V
+·
+、
+t
+h
+A
+γ
+－
+－
+E
+·
+ρ
+』
+、
+l
+J
+E
+S
+r
+＋
+l
+l
+n
+川
+－
+1
+4
+＋
+L
+正
+t
+PL14 
+r
+、
+d
+n
+川
+O
+L
+f
+t
+飞
+γ
+ι
+ζ
+4
+-un 
+n
+H
+O
+」
+V
+A
+O
+L
+n
+w
+n
+川
+U
+1IAH
++
+L 
+一
+川
+凹
+,+t 
+ρ
+、
+AU 
+def push(self, request): 
+“””Push a request'""' 
+self.server.lpush(self.key, self._encode_request(request)) 
+def pop(self, timeout=O): 
+1”Pop a request”··” 
+if timeout > o: 
+data = self. server. blpop(self. key, timeout) 
+if isinstance(data, tuple): 
+data = data[1] 
+else: 
+data = self. server. lpop (self. key) 
+) 
+2u 
++
+L 
+『
+d
+lnu 
+( 
++L 
+pb 
+ρ
+』
+川
+u
+nUt 
+a
+h
+』
+γ
+－
+．
+ 
+ρ
+」
+Jnu 
+nu 
+f
+、
+ρ
+」
+』
+n
+u
+r+t 
+14 
+ρ
+』
+<
+d
+n 
+γ
+＆
+ 
+.. 
+Hu 
+R
+A
+α
+＆
+1
+ 
+＋
+l
+、
+ρ
+』
+吨
+a
+γ
+I
+. 
+Au 
+ZI 
+e
+叮
+I
+牟
+与FifoQueue 不同的是LifoQueue 的pop （）方法，它使用的是lpop （）操作，也就是从左侧巾，push ()
+方法依然使用lpush （）操作，从左侧入。那么效果就是先进后出、后进先出（Last In First Out, LIFO ), 
+此类名称就叫作LifoQueue 。这个存取方式类似枝的操作，所以也可以称作StackQueue 。
+在源码中还有一个子类叫作PriorityQueue ，顾名思义，它是优先级队列，实现如下：
+class PriorityQueue(Base): 
+”””Per-spider priority queue abstraction using redis ’ sorted set””” 
+更多免费资源请访问ppbuzz.com
+
+14.2 
+Scrapy-Redis 源码解析
+561 
+def _len一（self)
+”””Return the length of the queue '’”” 
+return sel干.server.zcard(self.key)
+def push(self, request): 
+l ”“Push a request ””” 
+data = self._encode_request(request) 
+score = -request.priority 
+sel干.server . execute_command （’ ZADD ', self .key, score, data) 
+de干
+pop(self, timeout=O): 
+Pop a request 
+timeout not support in this queue class 
+pipe = sel于.server .pip eline()
+pipe. multi() 
+pipe.zrange(self.key ，口，
+o)
+. zremra鸣ebyrank(self . key, o, o) 
+resL』lts, count = pipe . execute() 
+if results : 
+return self ._decode_request(results [ o)) 
+在这里＿len一（）、
+push （）、
+pop （）方法使用了server 对象的zcard （）、
+zadd （）、
+zrange （）操作，这
+里使用的存储结果是有序集合，这个集合中的每个元素都可以设置一个分数，这个分数就代表优先级。
+一len一（）方法调用了zcard （）操作，返回的就是有序集合的大小，也就是爬取队列的长度。push()
+方法调用了zadd （）操作，就是向集合中添加元素，这里的分数指定成Request 的优先级的相反数，分
+数低的会排在集合的前面，即高优先级的Request 就会在集合的最前面。pop （）方法首先调用了zrange()
+操作，取出集合的第一个元素，第一个元素就是最高优先级的Request ，然后再调用zremrangebyrank()
+操作，将这个元素删除，这样就完成了取出井删除的操作。
+此队列是默认使用的队列，即爬取队列默认是使用有序集合来存储的。
+3 . 去重过滤
+前面说过Scrapy 的去重是利用集合来实现的，而在S crapy 分布式中的去重就需要利用共享的集
+合，那么这里使用的就是Redis 中的集合数据结构。我们来看看去重类是怎样实现的，洒、码文件是
+dupefilter. py ，其内实现了一个RFPDupeFilter 类，如下所示：
+class RFPDupeFilter(BaseDupeFilter): 
+”’Redis-based request duplicates filter. 
+This class can also be used with default Scrapy ’ s scheduler. 
+. 
+) 
+ρ
+田
+、
+F3 
+1i 
+宫
+。
+－
+r
+』
+E
+V
+A
+＝
+O
+E
+』
+ob
++L 
+N
+U
+唱
+B
+A
+i
+n
+υ
+、
+A
+ρ
+L
+F
+＋
+’
+ 
+AU 
+e3 
+’
+aEh 
+uy
++L 
+O
+L
+、
+d
+ivAFL 
+咱
+A
+，
+、
+i
+γ
+A
+n
+V
+ 
+OLHU 
+M
+V
+』
+n
+u
+γ
+牟
+ρ
+凰
+”
+a
+E
+』
+r
+、
+d
+e
+n
+H
++
+L , 
+正
+’
+a
+E
+』
+、
+E
+4
+9
+4
+γ
+A
+ρ
+凰
+”
+、
+4
+es
+--
+5 
+n
+v
+o，
+，
+t
+、
+『
+a
+v
+A
+n
+v
+o
+－
+、
+在
+《
+C
+O
+-t
++L 
+T
+B
+A
+＋
+L
+．
+、
+』
+－
+A
+C
+．
+、
+4
+n
+H
+m
+川
+＝
+n
+H
+T
+E
+E
+－
+气
+d
+．
+、
+4
+”
+γ
+盯
+一
+川
+问
+nKu 
+向
+K
+u
+俨
+＋4
+n
+u
+ρ
+ 
+1
+4
+ι
+A
+u
+ 
+. 
+server : redis .StrictRedis 
+The redis server instance. 
+key : str 
+Redis key Where to store fingerprints. 
+debug : bool, optional 
+Whether to log filtered requests. 
+m
+self.server = server 
+更多免费资源请访问ppbuzz.com
+
+562 
+第
+14 幸分布式爬虫
+self. key = key 
+sel干.debug = debug 
+sel干.logdupes = True 
+@classmethod 
+def from_settings(cls, settings): 
+’“Returns an instance from given settings. 
+This uses by default the key 
+、、dupefilter: <timestamp ＞、、
+. When using the 
+、、scrapy
+redis.scheduler.Scheduler 、、
+class, this method is not used as 
+it needs to pass the spider name in the key. 
+Parameters 
+settings 
+scrapy.settings.Settings 
+Returns 
+RFPDupeFilter 
+A RFPDupeFilter instance. 
+server = get_redis_from_settings(settings) 
+key = defaults . DUPE FILTER KEY % {’ times ta 「旷：
+int (time. time())} 
+debug = settings.getbool(’DUPEFILTER_DEBUG') 
+return cls(server, key=key, debug=debug) 
+@classmethod 
+def from_crawler(cls, crawler): 
+”“”Returns instance from crawler. 
+Parameters 
+crawler : scrapy.crawler.Crawler 
+Returns 
+RFPDupeFilter 
+Instance of RFPDupeFilter. 
+return cls .from_settings(crawler. settings) 
+def request_seen(self, request): 
+..”“Returns True if request was already seen. 
+Parameters 
+request : scrapy . http .Request 
+Returns 
+bool 
+fp = self .request_fingerprint(request) 
+added = self. server. sadd (self . key, fp) 
+return added == o 
+def request_fingerprint(self, request): 
+’”Returns a fingerprint
+于or a given request . 
+Parameters 
+request : scrapy.http.Request 
+Returns 
+str 
+更多免费资源请访问ppbuzz.com
+
+14.2 
+Scrapy-Redi s 源码解析
+563 
+return request_fingerprint(request) 
+def close(self, reason~ ”）： 
+”"”Delete data on close. Called by Scrapy's scheduler. 
+Parameters 
+reason : str, optional 
+self. clear() 
+def clear(self): 
+…'Clears fingerprints data . ' 
+self.server.delete(self.key) 
+def log(self, request, spider): 
+’” Logs given request. 
+Parameters 
+request : scrapy.http .Request 
+spider : scrapy.spiders.Spider 
+if self.debug: 
+msg = ” Filtered duplicate request: %(request)s" 
+self.logger .debug(msg, {’ request ’: request}, extra={' spider': spider}) 
+elif self .logdupes: 
+msg = (” Filtered duplicate request %(request)s" 
+- no more duplicates will be shown " 
+' (see DUPEFILTER_DEBUG to show all d叩licates ）”）
+self.logger.debug(msg, {’ request': request}, extra ＝｛『spider
+'
+: spider}) 
+self.logdupes = False 
+这里同样实现了一个request_seen （）方法，和Scrapy 中的req u est_seen （）方法实现极其类似。不
+过这里集合使用的是server 对象的
+sadd （）操作，也就是集合不再是一个简单数据结构了，而是直接
+换成了数据库的存储方式。
+鉴别重复的方式还是使用指纹，指纹同样是依靠req u est
+f i ngerprint （）方法来获取的。获取指纹
+之后就直接向集合添加指纹，如果添加成功，说明这个指纹原本不存在于集合中，返回值
+l 。代码中
+战后的返回结果是判定添加结果是否为0 ，如果刚才的返回值为
+l ，那这个判定结果就是Fa l se ，也就
+是不重复，否则判定为重复。
+这样我们就成功利用Redi s 的集合完成了指纹的记录和重复的验证。
+4. 调度器
+Scrapy-Redi s 还帮我们实现了配合Queue 、
+DupeF ilter 使用的调度器
+Scheduler ，源文件名称是
+scheduler.py 。我们可以指定一些配置，如SC H EDULER_FLUS H_ON_STAR T 即是否在爬取开始的时候清空爬
+取队列，
+SCHEDULER_PERSIST 即是否在爬取结束后保持爬取队列不清除。我们可以在settings. py 里向由
+配置，而此调度器很好地实现了对接。
+接下来我们看着两个核心的存取方法，实现如下所示：
+def enqueue_request(self, request): 
+if not request.dont_filter and self.df.request_seen(request): 
+self.df .log(request, self.spider) 
+return False 
+回
+更多免费资源请访问ppbuzz.com
+
+564 
+第
+14 章分布式爬虫
+if self.stats: 
+self.stats.inc_value('scheduler/enqueued/redis’, spider=self.spider) 
+self .queue.push(request) 
+return True 
+def next_request(self) 
+block pop timeout = self.idle before_close 
+request = self.queue.pop(block pop_timeout) 
+if request and self.stats: 
+self.stats . inc_value('scheduler/dequeued/redis ’，
+spider=sel于.spider )
+return request 
+e nqu eue_request （）可以向队列中添加Request ，核心操作就是调用Queue 的pu sh （）操作，还有一些
+统计和日志操作。
+next_reque st （）就是从I),人列中取Request ，核心操作就是调用Queue 的
+pop （）操作，
+此时如果队列中还有Request ，则Request 会直接取出来，爬取继续，有则如果队列为空，爬取则会重
+新开始。
+5 . 总结
+目前为止，我们就之前所说的三个分布式的问题解决了，总结如下。
+口爬取队歹lj 的实现：这里提供了三种队列，使用了Redis 的列表或有序集合来维护。
+口去重的实现：这里使用了Red is 的集合来保存Request 的指纹，以提供重复过洁、。
+口中断后重新爬取的实现：中断后
+Redis 的队列没有清空，爬取再次启动时，调度器的
+「1ext_request （）会从~列中取到下一个Request ，爬取继续。
+6. 结语
+以上内容便是Scrapy-Redis 的核心源码解析。
+Scrapy-Redis 中还提供了S pider 、
+It巳m Pipeline 的实
+现，不过它们并不是必须使用。
+在下一节，我们会将Scrapy-Redis 集成到之前所实现的Scrapy 新浪微博项目中，实现多台主机协
+同爬取。
+14.3 
+Scrapy 分布式实现
+接下来，我们会利用Scrapy-Redis 来实现分布式的对接。
+1. 准备工作
+请确保已经成功实现了Scrapy 新浪微博爬虫，
+Scrapy-Redis 库已经正确安装，如果还没安装，请
+参考第
+l 章的安装说明。
+2. 搭建Red is 服务器
+要实现分布式部署，多台主机需要共享爬取队列和去重集合，而这两部分内容都是存于Red is 数
+据库中的，我们需要搭建一个可公网访问的Redis 服务器。
+推荐使用Linux 服务器，可以购买阿里云、腾讯云、
+Azure 等提供的云主机，一般都会配有公网
+IP ，具体的搭建方式可以参考第
+l 章中Red is 数据库的安装方式。
+更多免费资源请访问ppbuzz.com
+
+14.3 
+Scrapy 分布式实现
+565 
+Red i s 安装完成之后就可以远程连接了，注意部分商家（如阿里云、腾讯云）的服务器需要配置
+安全组放通Red is 运行端口才可以远程访问。如果遇到不能远程连接的问题，可以排查安全组的设置。
+需要记录Red is 的运行IP 、端口、地址，供后面配置分布式爬虫使用。当前配置好的Redis 的IP
+为服务器的lP l 20.27 .34.25 ，端口为默认的6379 ，密码为foobared 。
+3. 部署代理池和Cookies 池
+新浪微博项目需要用到代理池和Cookies 池，而之前我们的代理池和Cookies 池都是在本地运行
+的。所以我们市要将二者放到可以被公网访问的服务器上运行，将代码上传到服务器，修改Red is 的
+连接信息配置，用同样的方式运行代理池和Cookies 池。
+远程访问代理池和Cookies 池提供的接口，来获取随机代理和Cookies 。如果不能远程访问，先确
+保且在0OcO. 。这个Host 上运行，再检查安全组的配置。
+如我当前配置好的代理池和Cookies 池的运行IP 都是服务器的IP , 120.27.34 .2 5 ，端口分别为5555
+和5556 ，如图
+14-3 和图
+14-4 所示。
+- 
+f-
+自
+1。calhost : 5555/random
+x 
+σ
+口
+1 20 .1 7 . 34 . 25 :5555/random
+• 
+• 
+f ['.l localh。st:SOOO/weibo/rand。m x 
+4二
+σCl 120.17 .34.25:5556/weibo/random 
+201.217.245.108:8080 
+{”SCF”: "AreQOyHn6MIOQ5dEjNLnixQmhbSykOs_iByw 
+”2ae0073fda1862e6a5a76251cee3a108",”SSOLoginS1 
+'_2A250e3MqDeRhGeBM6VYX9CbOzDmlHXVXhB1irD· 
+图
+14-3
+代理池接口
+图
+14-4
+Cookies 池接口
+接下来我们要修改Scrapy 新浪微博项目中的访问链接，如下所示：
+PROXY_URL =’ http:/1120.27.34.25 :5555/random' 
+COOKIES_URL = ’ http :l/120.27.34.25:5556/weibo/random’ 
+具体的修改方式根据实际配置的IP 和端口做相应调整。
+4 . 配置Scrapy-Redis
+配置Scrapy-Redis 非常简单，只需要修改一下settings.py 配置文件即可。
+·核心配直
+首先最主要的是，需要将调度器的类和去重的类替换为Scrapy-Redis 提供的类，在settings.py 里
+面添加如下配置即可：
+SCHEDULER = ” scrapy_redis.scheduler.Scheduler” 
+DUPEFILTER_CLASS =”scrapy_redis.dupefilter.RFPDupeFilter" 
+• 
+Redis 连接自己直
+接下来配置Red is 的连接信息，这里有两种配置方式。
+第一种方式是通过连接字符串配置。我们可以用Redis 的地址、端口、密码来构造一个Red i s 连
+回
+更多免费资源请访问ppbuzz.com
+
+566 
+第
+14 幸分布式爬虫
+接字符串，支持的连接形式如下所示：
+redis://[:passward)@hast:part/db 
+rediss ：／／［’ password ］串hast: part/ db 
+unix://[:passward]@/path/ta/sacket .sack?db=db 
+password 是密码，比如要以冒号开头，中括号代表此选项可有可无，
+host 是Red is 的地址，
+port
+是运行端口，
+db 是数据库代号，其值默认是0。
+根据上文中提到我的Red is 连接信息，构造这个Redis 的连接字符串如下所示：
+redis
+：／／：干aabared@120.27.34.25 :6379
+直接在settings.py 里面配置为REDIS_URL 变量即可：
+REDIS URL 
+＝
+’ r edis
+：／／：干aabared@ 1 20 . 27 .34. 25:6379 ’
+第二种配置方式是分项单独配置。这个配置就更加直观明了，如根据我的Red is 连接信息，可以
+在settings.py 中配置如下代码：
+REDIS HOST = ’ 120.27.34.25’ 
+REDIS PORT = 6379 
+REDIS PASSWORD = 'faabared ’ 
+这段代码分开配置了Red is 的地址、端口和密码。
+注意，如果配置了REDIS
+URL ，那么Scrapy-Redis 将优先使用REDI S_URL 连接，会覆盖上面的工项
+配置。如果想要分项单独配置的话，请不要配置REDIS
+URL 。
+在本项目中，我选择的是配置REDIS
+URL 。
+· 配直调度队列
+此项配置是可选的，默认使用PriorityQueue 。如果想要更改配置，可以配置SCHEDULER_QUEUE_CLASS
+变量，如下所示：
+OL 
+HU 
+ρ
+L
+ 
+HU·
+’ 
+n
+u
+‘
+ρ
+L
+ρ
+、
+U
+V
+J
+川
+U
+川
+U
+＋
+、
+E
+E
+．
+、
+I
+企
+川
+U
+H
+U
+γ
+A
+n
+u
+－
+《
+U
+－
+nunvnv 
+、
+4
+f
+＋
+’
+俨
+＋’
+γ
+I‘
+．
+叮
+4
+·
+叮
+I
+A
+PFL 
+... 
+ρ
+．
+、
+o
+目
+』
+ρ
+川
+u
+川
+u
+川
+u
+ρ
+‘
+》
+ρ
+‘
+』
+ρ
+」
+川
+u
+川
+u
+川
+u
+n
+u
+ι
+．
+n
+u’
+n
+吨
+’
+... 
+<d5
+,
+挡
+、
+I
+A
+叮
+I
+企
+．
+叮
+I
+A 
+」
+n
+u
+』
+n
+u
+』
+n
+u
+ρ
+h
+》
+ρ
+‘
+』
+ρ
+γ
+I
+＆
+γ
+I
+．
+γ
+牛
+--- 
+VJVJVJ 
+nynyny 
+吨
+d
+『
+d
+「
+d
+γ
+I
+晶
+γ
+I
+·
+γ
+4
+FLFLFL 
+《
+4
+ζ
+d
+F
+、
+d
+=== 
+r
+、
+J
+F
+、
+d
+r
+、
+d
+r
+、
+J
+F
+、
+J
+F
+、
+J
+AumAunAun 
+LLL 
+FLFLfL 
+一
+一
+－
+「
+←
+L
+F
+←
+L
+F
+卡
+』
+川
+U
+川
+U
+川
+U
+EEE 
+ω
+ω
+ω
+ 
+一
+一
+－
+n
+w
+川
+n
+k
+n
+n
+w
+n
+EEE 
+t
+l
+」
+t
+l
+』
+t
+l
+』
+即
+四
+川
+F
+乍
+L
+r
+←
+」
+俨
+←
+」
+川
+n
+u
+n
+u
+n
+FLFLFL 
+《
+J
+P
+、
+“
+F
+、
+“
+以上三行任选其一配置，即可切换爬取队列的存储方式。
+在本项目中不进行任何配置，我们使用默认配置。
+· 配直持久化
+此配置是可选的，默认是Fa lse 。Scrapy-Redis 默认会在爬取全部完成后清空爬取队列和去重指纹
+集合。
+如果不想自动清空爬取队列和去重指纹集合，可以增加如下配置：
+SCHEDULER PERSIST = True 
+将SCHEDULER
+PERSIST 设置为True 之后，爬取队列和去重指纹集合不会在爬取完成后向动清空，
+如果不配置，默认是False ，即自动清空。
+值得注意的是，如果强制中断爬虫的运行，爬取队列和去重指纹集合是不会自动清空的。
+更多免费资源请访问ppbuzz.com
+
+在本项目巾不进行任何配置，我们使用默认配置。
+·配直重爬
+飞鸟3
+飞口吨i';J ｝并7号久亏~~丸
+1){;)1 
+此配置是可选的，默认是
+False 。如果配置了持久化或者强制中断了爬虫，那么爬取队列和指纹
+集合不会被清空，爬虫重新启动之后就会接着上：如阻取。如果想重新爬取，我们可以配置重爬的选项：
+SCHEDULER FLUSH ON START = True 
+这样将SC HEDULER_FLUSH_ON_START 设置为Tru e 之后，爬虫每次启动时，爬取队列和指纹集合都会
+清空。所以要做分布式爬取，我们必须保证只能清空一次，否则每个爬虫任务在启动时都清空一次，
+就会把之前的爬取队列清空，势必会影响分布式爬取。
+注意，此配置在单机爬取的时候比较方便，分布式爬取不常用此配置。
+在本项目中不进行任何配置，我们使用默认配置。
+• 
+Pipeline 配直
+此配置是可选的，默认不启动Pipeline 。
+Scrapy-Redis 实现了一个存储到Redis 的Item Pipeline , 
+启用了这个Pipeline 的话，爬虫会把生成的Item 存储到Red is 数据库中。在数据量比较大的情况下，
+我们一般不会这么做。因为Redi s 是基于内存的，我们利用的是它处理速度快的特性，用它来做存储
+术免太浪费了，配置如下：
+ITE几PIPELINES = { 
+' scrapy redis.pipelines.RedisPipeline ’ : 300 
+本项目不进行任何配置，即不启动Pipeline。
+到此为止，
+Scrapy-Redis 的配置就完成了。有的选项我们没有配置，但是这些配置在其他Scrapy
+项口巾可能用到，要根据具体情况而定。
+5 . 配置存储目标
+之前Scrapy 新浪微博爬虫项目使用的存储是Mongo DB ，而且MongoDB 是本地运行的，即连接
+的是
+localhost。但是，当爬虫程序分发到各台主机运行的时候，爬虫就会连接各自的的MongoDB 。
+所以我们需要在各台主机上都安装MongoDB ，这样有两个缺点：一是搭建MongoDB 环境比较烦琐；
+一是这样各台主机的爬虫会把爬取结果分散存到各自主机上，不方便统一管理。
+所以我们最好将存储目标存到同一个地方，例如都存到同一个MongoDB 数据库中。我们可以在
+服务器上搭建一个MongoDB 服务，或者直接购买MongoDB 数据存储服务。
+这里使用的就是服务器上搭建的的MongoDB 服务，
+IP 仍然为120.27 . 34.25 ，用户名为admin ，密
+码为adminl23 。
+修改配置MONGO
+URI 为如下：
+MONGD_URI = 'mongodb ://admin: admin123@120 . 27 .34 . 25 :27017 ’ 
+到此为止，我们就成功完成了Scrapy 分布式爬虫的配置。
+回
+更多免费资源请访问ppbuzz.com
+
+568 
+第
+14 幸
+分布式爬虫
+6. 运行
+接下来将代码部署到各台主机上，记得每台主机都需要配好对应的Py thon 环境。
+每台主机上都执行如下命令，即可启动爬取：
+scrapy crawl weibocn 
+每台主机启动了此命令之后，就会从配置的Redis 数据库中调度Req uest ，做到爬取队列共享和指
+纹集合共享。同时每台主机占用各自的带宽和处理器，不会互相影响，爬取效率成倍提高。
+7. 结果
+一段时间后，我们可以用RedisDesktop 观察远程Redis 数据库的信息。这里会H ＼现两个Key ：一
+个叫作weibocn : dupefilter ，用来储存指纹；另一个叫作weibocn :requests ，即爬取队列，如图
+14-5 和罔
+14-6 所示。
+擅自唰阳（2)
+？唰阳呻阳衔
+’帽阳、喃酬
+。酣（0)
+喝’ 幽2(0 } 
+＠酣｛。} 
+0 } 
+＠制｛
+＠耐｛0 } 
+＠曲6(。} 
+＠命？｛0 } 
+。} 
+喝’ 制｛
+0 } 
+＠耐｛.. ,,. { 0 } 
+＠酣1(0 } 
+喝如dbl2 . 
+..,,, 
+喝’ 幽14
+{ 0 } 
+．．晴lboon(2)
+’晒阳、呻何圃
+’咱阿甲＂
+唱’ 制｛ω
+喝.. ""' ( 
+0 } 
+0 ) 
+喝h 斟｛
+＠酣｛0 ) 
+0 ) 
+＠耐｛
+喝’ 耐｛0 } 
+喝－曲＂＇0 } 
+喝’ 幽｛0 } 
+4’ 翩｛0 } 
+＠酣0(0 } 
+喝’ 份1
+01 ... ,,, 
+喝’ 曲13
+喝’ 削｛0 } 
+惑：，j
+SET
+睛一问
+阳刚
+吭
+，1
+阳－
+·－·』t TTL 
+阳’啕阳
+'1 
+l79b739嗣2部~7b国3曲8国抠，694d08602d25b18
+02da5国呻曲49a382e曲曲目。4260C28啤时国8
+曲cc3e能自6fa6493段部副＇＂＇我)6fb5饱8c!l1c96
+4 
+f6b9bbc6ae12~ 57曲目制国2c58目如町剧”9d4b
+5 
+＂础知甜甜饱耐汉掏出e3a203出1倒17国d9414b
+6 
+1 2bf恼2回国吁d4d4e铀b3 505c8f1』阳3b55哺
+7 
+臼472ac6刷曲732时她oc4852班绵阳崎曲47bo
+8 
+3&x:f02先后也46944t>f447<1 6032，锐，6913 1533794
+9 
+ee回到Oa 1 3把ec3d0ac6c5抽币61940186Qf8439a
+’…·圃’圃’E圈厚’圃’－－圈圈”’因圃”－圃’－
+11 
+01514。。d67田，。例880ec38d59。锁，92$55ab9.崎
+柑
+而1 S235仿他....阳0'67o210406S街9以k万o75c
+13 
+M甜61的咄咄23daf0d6b2063g钊码的加曲饱－
+14 
+"'""……… 
+Value: 
+.. ”823d959411da271c11f.:Jcl!bcb7•H2dl24 
+图14-5
+去重指纹
+ZSεY 驯1elbocn:re佩揭跑回
+l·;o.,, 工步步画－－
+、础。飞抵归＼＞＜95"87\><01飞
+以田、＂＂＇飞周5\ •87\•01飞
+、尬。\><04飞枫.95＼＞＜町怡。，、
+汪德汤阴忽然没
+, , 
+，，曲、呻4\><95\><9C\•01
+B 
+、... 飞而4飞崎5、SC\><01
+M回飞础4\"'5\ •BC:\•01
+、只阅、灿叫咱S\><9C\><01
+' 
+'"'"'""""' "8C\><01 
+10 
+＼＞＜曲、泛>4\><95\><9C\><01
+11 
+＼＞＜朋＼•04\><9'\><9C\><01
+!’Z 
+W闹闹，＼，BC\><01
+13 
+以回飞”。趴蜡S\><9C\><01
+i际机、~1
+。剧同时
+’』以er<YN
+.＂＂＇饵”d "'"" 
+龟，叹宫，＂＇＇渊。，‘阙
+.... , 
+al2 
+.... ... 
+。
+加叫阳＂＂＂＇
+B 
+Sll&: 70 
+π~ －1 
+阳W咱
+．』甸甸
+Set TTl 
+。剧阳
+．』阳”’恻
+．阳帽dVo'"'
+s“”’刷刷、＂＇州
+同咆·
+1 
+0” 
+....创，.
+。。
+阳”翩翩
+飞员”、雀”、，~＼47\xll\x”、抗”、属llEl\xM ＼•阀、篇··｝飞州州、•&c\xtlurl\x”、‘民愤u””·喇iboW”l/(0响Ulllef"’11ttfoclexl11id吨，，
+，，‘21241.ty”zyJd蝇...帽：1)3174212锦e。”＂＇饨，ldal倒”S6Jl1742124\lr.”、K艇、.ea“ ll~k.＼•’4\•IC＼•轨”r”＿llHr、掌”、‘＆C\-Utrr
+＂＂＂＇、β ＂＇＇町、，甸回thod＼~94\18C\•创锺l\a94、泊。a&7header疆、凰”阳94C\xe1Rtfll!re内’‘3、d40ftltt””·唰，.. ，’”i何~t•ln
+＇＂‘＂＂＂＇创?containedd=B165 1_J；剖’句号”52t7”“每....,, ...”、＇＂＇＇阳恒。γu’“、民”飞嚣’4\x9C\11t7cooklu ＼•’”、民，• ＼11.tc\dl
+‘~＂飞＂＇］飞”叭＇＂＇＇＇帖“可＂＇飞州4K＼~12s、‘艇、精’”恕。..咆飞挺’4\x8C\xllS“筐，，，＼d4\•&c\x”伊M筐，、施’“＇＂＇、，＂＇＇斟ktont,Jllter
+u”、民”、峰。精~n111s\x”3、‘.. 
+创
+图
+14-6
+爬取队列
+更多免费资源请访问ppbuzz.com
+
+14.4 
+Bloom Filter 的对才妾
+569 
+随着时间的推移，指纹集合会不断增长，爬取队列会动态变化，爬取的数据也会被储存到
+MongoDB 数据库中。
+8. 本节代码
+本节代码地址为：
+https: //github.com/Python3WebSpider/Weibo/tree/distributed ，注意这里是distributed
+分支。
+9. 结语
+本节通过对接Scrapy-Redis 成功实现了分布式爬虫，但是部署还是有很多不方便的地方。另外，
+如果爬取量特别大的话，
+Red is 的内存也是个问题。在后文我们会继续了解相关优化方案。
+14.4 Bloom Filter 的对接
+首先回顾一下Scrapy-R巳dis 的去重机制。
+Scrapy-Redis 将Request 的指纹存储到了Redis 集合中，
+每个指纹的长度为40 ，例如27adcc2e8979巳dee0c9cecbbe8bf8ff5 ledefb6 l 就是一个指纹，它的每一位都
+是16 进制数。
+我们计算一下用这种方式耗费的存储空间。每个十六进制数占用4 b, 
+1 个指纹用40 个十六进制
+数表示，占用空间为20B,
+I 万个指纹即占用空间200 阻，
+l 亿个指纹占用2GB 。当爬取数量达到上
+亿级别时，
+Redis 的占用的内存就会变得很大，而且这仅仅是指纹的存储。
+Redis 还存储了爬取队列，
+内抒占用会进一步提高，更别说有多个
+Scrapy 项目同时爬取的情况了。当爬取达到亿级别规模时，
+Scrapy-Redis 提供的集合去重已经不能满足我们的要求。所以我们需要使用一个更加节省内存的去重
+算法Bloom Filter a 
+1. 了解Bloom Filter 
+Bloom Filt町，中文名称叫作布隆过滤器，是1970 年由Bloom 提出的，它可以被用来检测一个元
+亲是否在一个集合中。Bloom Filter 的空间利用效率很高，使用它可以大大节省存储空间。BloomFilt巳r
+使用位数组表示一个待检测集合，并可以快速地通过概率算法判断一个元素是否存在于这个集合中。
+利用这个算法我们可以实现去重效果。
+本节我们来了解Bloom Filter 的基本算法，以及Scrapy-Redis 中对接Bloom Filter 的方法。
+2. Bloom Filter 的算法
+在Bloom Filter 中使用位数组来辅助实现检测判断。在初始状态下，我们声明一个包含m 位的位
+数组，它的所有位都是0 ，如图14-7 所示。
+[ 0 1010101010101010101010 
+图14-7
+初始位数组
+现在我们有了一个待检测集合，其表示为S={x1, h ,…, Xn ｝。接下来需要做的就是检测一个x 是否
+已经存在于集合S 中。在Bloom Filter 算法中，首先使用k 个相互独立、随机的散列函数来将集合S
+回
+更多免费资源请访问ppbuzz.com
+
+分布式爬虫
+中的每个元素X1,X2 ；· · ，儿，映射到长度为m 的位数组上，散列函数得到的结果记作位置索引，然后将位
+数组该位置索引的位置
+l 。例如，我们取k 为3 ，表示有三个散列函数，
+x ，经过三个散列函数映射得到
+的结果分别为l 、
+4 、
+8,
+X2 经过三个散列函数映射得到的结果分别为4 、
+6 、
+10 ，那么位数组的i 、
+4 、
+6 、
+8 、
+l 。这五位就会置为
+l ，如图14-8 所示。
+第
+14 章
+570 
+~I 飞;;::;-q..二三飞飞
+10111 010111 0111 0111 01110 
+映射后位数组
+如果有一个新的元素x ，我们要判断x 是否属于S 集合，我们仍然用k个散列函数对x 求映射结果。
+如果所有结果对应的位数组位置均为
+l ，那么x 属于S 这个集合；如果有一个不为
+1 ，则x 不属于S
+集合。
+图
+1 4- 8
+例如，新元素x 经过三个散列函数映射的结果为4 、
+6 、
+8 ，对应的位置均为
+l ，则x 属于S集合。
+如果结果为4 、
+6 、
+7 ，而7 对应的位置为0 ，则x 不属于S 集合。
+注意，这里m 、
+n 、
+k满足的关系是m＞时，也就是说位数组的长度m 要比集合元素n 和散列雨数
+k 的乘积还要大。
+这样的判定方法很高效，但是也是有代价的，它可能把不属于这个集合的元素误认为属于这个集
+合。我们来估计一下这种方法的错误率。当集合S= {x,, x2 ，…，对的所有元素都被k个散列函数映射到
+m 位的位数组中时，这个位数组中某一位还是0 的概率是：
+k 
+ρ
+U
+W
+ 
+~~ 
+n 
+A 
+＼
+飞t
+t
+1
+4
+t
+J
+／
+l-m 
+’EA 
+/fill
+--
+\ 
+一
+－
+p 
+散列函数是随机的，则任意一个散列函数选中这一位的概率为
+llm ，那么
+1 -1/m 就代表散列函数
+从未没有选中这一位的概率，要把S 完全映射到m 位数组中
+需要做kn 次散列运算，最后的概率就
+是1-1 /m 的kn 次方。
+一个不属于S 的元素x 如果误判定为在S 中，那么这个概率就是k 次散列运算得到的结果对应的
+位数组位置都为
+l ，则误判概率为：
+＼
+、l
+i
+l
+t
+－
+／
+＼
+飞
+1
+l
+l
+l
+’
+J
+／
+l-m 
+／
+r
+i
+l
+l
+－
+－
+飞
+、
+／
+f
+i
+t
+｝
+I
+l
+l
+－
+飞
+＼
+！坠（i －~r =e 
+根据：
+可以将误判概率转化为：
+更多免费资源请访问ppbuzz.com
+
+14.4 
+Bloom Filter 的1于才妾
+571 
+’
+b
+κ
+ 
+、
+l
+j
+m 
+n 
+k 
+puw 
+r
+t
+飞
+~~ 
+k 
+、
+、
+t
+t
+t
+l
+t
+t
+t
+t
+’
+’
+J
+A 
+\ .. ,ill
+-,/ 
+l-m 
+l 
+/lill
+-\ 
+l 
+／
+r
+l
+I
+l
+l
+－
+1
+1
+、
+在给定m 、
+n 时，可以求II\使得f最小化的k 值为：
+主Ln2z2旦＂＇0 . 7旦
+n 
+13n 
+n 
+这里将误判概率归纳为表14-l 。
+表14-1
+i吴判概率
+min 
+最优k
+k=1 
+k=2 
+k=3 
+k=4 
+k=5 
+k=6 
+k=? 
+k=B 
+2 
+1.39 
+0.393 
+0.400 
+3 
+2.08 
+0.283 
+0.237 
+0.253 
+4 
+2.77 
+0.221 
+0.155 
+0.147 
+。160
+5 
+3.46 
+0.181 
+。. 109
+0.092 
+0.092 
+0.101 
+6 
+4.16 
+。154
+0.0804 
+0.0609 
+0.0561 
+0.0578 
+0.0638 
+7 
+4.85 
+。13 3
+0.061 8 
+0.0423 
+0.0359 
+0.0347 
+0.0364 
+8 
+5.55 
+0.11 8 
+0.0489 
+0.0306 
+0.024 
+0.0217 
+0.0216 
+。.0229
+9 
+6.24 
+。105
+0.0397 
+0.0228 
+0.0166 
+0.0141 
+0.0133 
+0.0135 
+0.0145 
+10 
+6.93 
+0.0952 
+0.0329 
+0.0174 
+0.0118 
+0.00943 
+0.00844 
+0.00819 
+0.00846 
+II 
+7.62 
+0.0869 
+0.0276 
+0.0136 
+0.00864 
+0.0065 
+0.00552 
+0.00513 
+0.00509 
+12 
+8.32 
+0.08 
+0.0236 
+0.0108 
+0.00646 
+0.00459 
+0.00371 
+0.00329 
+0.00314 
+13 
+9.01 
+0.074 
+0.0203 
+0.00875 
+0.00492 
+0.00332 
+0.00255 
+0.00217 
+0.00199 
+14 
+9.7 
+0.0689 
+0.01 77 
+0.00718 
+0.00381 
+0.00244 
+0.00179 
+0.00146 
+0.00129 
+15 
+10.4 
+0.0645 
+0.0156 
+0.00596 
+0.003 
+0.00183 
+0.00128 
+。.001
+0.000852 
+16 
+I I. I 
+0.0606 
+0.01 38 
+0.005 
+0.00239 
+0.00139 
+0.000935 
+0.000702 
+0.000574 
+17 
+11.8 
+0.0571 
+0.0123 
+0.00423 
+0.00193 
+0.00107 
+0.000692 
+0.000499 
+0.000394 
+18 
+12.5 
+0.054 
+0.0111 
+0.00362 
+0.00158 
+0.000839 
+0.000519 
+0.00036 
+0.000275 
+19 
+13.2 
+0.0513 
+0.00998 
+0.00312 
+0.0013 
+0.000663 
+0.000394 
+0.000264 
+0.000194 
+20 
+13.9 
+0.0488 
+0.00906 
+0.0027 
+0.00108 
+。. 00053
+0.000303 
+0.000196 
+0.00014 
+21 
+14.6 
+0.0465 
+0.00825 
+0.00236 
+0.000905 
+0.000427 
+0.000236 
+0.000147 
+0.000101 
+22 
+15.2 
+0.0444 
+0.00755 
+0.00207 
+0.000764 
+0.000347 
+0.000185 
+0.000112 
+7.46e-05 
+23 
+15.9 
+0.0425 
+0.00694 
+0.00183 
+0.000649 
+。. 000285
+0.000147 
+8.56e-05 
+5.55e-05 
+24 
+16.6 
+0.0408 
+0.00639 
+0.00162 
+0.000555 
+。. 000235
+0.000117 
+6.63e-05 
+4. I 7e-05 
+25 
+17.3 
+0.0392 
+0.00591 
+0.00145 
+0.000478 
+0.000196 
+9.44e-05 
+5.18e-05 
+3. I 6e-05 
+26 
+18 
+0.0377 
+0.00548 
+0.00129 
+0.000413 
+0.000164 
+7.66e-05 
+4.08e-05 
+2.42e-05 
+27 
+18.7 
+0.0364 
+0.0051 
+0.00116 
+0.000359 
+0.000138 
+6.26e-05 
+3.24e-05 
+I .87e-05 
+28 
+19.4 
+0.0351 
+0.00475 
+0.00105 
+0.000314 
+0.000117 
+5.15e-05 
+2.59e-05 
+l.46e-05 
+29 
+20.1 
+0.0339 
+0.00444 
+0.000949 
+0.000276 
+9.96e-05 
+4.26e-05 
+2.09e-05 
+l.14e-05 
+30 
+20.8 
+0.0328 
+0.00416 
+0.000862 
+0.000243 
+8.53e-05 
+3.55e-05 
+l .69e-05 
+9.0le-06 
+31 
+21.5 
+0.0317 
+0.0039 
+0.000785 
+0.000215 
+7.33e-05 
+2.97e-05 
+l .38e-05 
+7.16e-06 
+32 
+22.2 
+0.0308 
+0.00367 
+0.000717 
+0.000191 
+6.33e-05 
+2.5e-05 
+l . I 3e-05 
+5.73e-06 
+回
+更多免费资源请访问ppbuzz.com
+
+572 
+第
+14 幸分布式爬虫
+表14-1 中第一列为min 的值，第二列为最优k 值，其后列为不同k值的误判概率。当k 值确定时，
+随着min 的增大，误判概率逐渐变小。当min 的值确定时，当k 越靠近最优K 值，误判概率越小。
+误判概率总体来看都是极小的，在容忍此误判概率的情况下，大幅减小存储空间和判定速度是完全值
+得的。
+接下来，我们将Bloom Fi lter 算法应用到Scrapy-Redis 分布式爬虫的去重过程中，以解决Red is 内
+存不足的问题。
+3 . 对接Scrapy-Redis
+实现Bloom F ilter 时，首先要保证不能破坏Scrapy-Redis 分布式爬取的运行架构。我们需要修放
+Scrapy-Redis 的源码，将它的去重类替换掉。同时，
+Bloom Filter 的实现需要借助于一个位数组，既然
+当前架构还是依赖于Red is ，那么位数组的维护直接使用Redis 就好了。
+首先实现一个基本的散列算法，将一个值经过散列运算后映射到一个m 位数组的某一位上，代刑
+如下：
+) 
+AU 
+ρ
+』
+ρ
+画
+、
+<
+d
+, 
+m
+川
+A
+U
+Oh
+>
+-
+PQL 
+、
+j
+r
+T
+S
++L14 
+r
+、
+ρ
+』
+＝
+E5m 
+](
+d 
+ι
+h
+u
+－
+＝
+ρ
+ 
+n
+ν
+－
+ρ
+．
+ 
+、
+，
+，
+‘
+、
+伞1
+I
+‘
+m
+川
+F
+、
+J 
+n
+μ
+『
+、
+目
+＆
+.. 
+古
+α
+n
+H
+r
+＋
+l
+r
+＋
+B
+M
+川
+－
+、
+I
+－
+1
+i
+1
+i
+i
+n
+－
+ρ
+、
+E
+F
+、
+J
+－
+俨
+、
+J
+F
+、
+J 
+2u 
+HnrT 
+ρ
+」
+只
+d
+A
+U
+ζ
+J
+ 
+2u 
+咱
+E
+A
+r
+－
+、
+def hash(self, value): 
+ρ
+」
+ρ
+‘
+白
+川
+U
+川
+U
+1414 
+a
+吨
+d
+uvuv 
+m 
+Ln··Ln 
++LES 
+--
+ua 
+γ
+＆
+1
+4
+H
+n
+ 
+《
+U
+「
+d
+内
+K
+U
+U
+V
+·
+·
+、
+E
+A
+n
+H
+A
+H
+m
+川
+γ
+＆
+、
+O
+H
+U
+」
+门
+γ
+＆
+＋
+L
+C
+J
+『
+d
+ρ
+、
+any
+- 
+Hn·
+. 
+ret ＝。
+于or i in range(len(value)): 
+ret += self. seed * ret + ord (value [ i]) 
+return (self.m - 1) & ret 
+这里新建了一个HashMap 类。构造函数传人两个值，一个是m 位数组的位数，另一个是种子值seed ,
+不同的散列函数需要有不同的seed ，这样可以保证不同的散列函数的结果不会碰撞。
+在hash （）方法的实现中，
+value 是要被处理的内容。这里遍历了
+value 的每一位，并利用
+ord( )
+方法取到每一位的ASCII 码值，然后？昆淆
+seed 进行迭代求和运算，最终得到一个数值。这个数值的
+结果就由value 和seed 唯一确定。我们再将这个数值和m 进行按位与运算，即可获取到m 位数组的
+映射结果，这样就实现了一个由字符串和seed 来确定的散列函数。当m 固定时，只要seed 值相同，
+散列函数就是相同的，相同的value 必然会映射到相同的位置。所以如果想要构造几个不同的散列两
+数，只需要改变其seed 就好了。以上内容便是一个简易的散列函数的实现。
+接下来我们再实现B loom Filter 。
+Bloom Filter 里面需要用到k个散列函数，这里要对这几个散列
+函数指定相同的m 值和不同的seed 值，构造如下：
+BLOOMFILTER HASH NUMBER = 6 
+BLOOMFIL TER BIT = 30 
+class BloomFilter(object). 
+def _init一（self, server, key, bit=BLOOMFILTER_BIT, hash_number=BLOOMFILTER_HASH_NUMBER): 
+更多免费资源请访问ppbuzz.com
+
+Initialize BloomFilter 
+:param server: Redis Server 
+:param key: BloomFilter Key 
+:param bit: m = 2
+< bit
+:param hash number: the number of hash
+干unction
+14.4 
+Bloom Filter 的1才接－
+573 
+# default to 1 < 30=10, 7374, 1824 = 2'30 = 128MB, max filter 2'30/hash_number = 1, 7895,6970 fingerprints 
+self.m = 1 <
+bit
+sel 干.seeds = range(hash_number) 
+sel干. maps = [HashMap(self .m, seed) for seed in self .seeds] 
+self.server = server 
+self.key = key 
+由于我们需要亿级别的数据的去重，即前文介绍的算法中的n 为
+1 亿以上，散列函数的个数k大
+约取
+10 左右的孟级。而m＞切，这里m 值大约保底在10 亿，由于这个数值比较大，所以这里用移位
+操作来实现，传入位数bit ，将其定义为3 0 ，然后做一个移位操作1《30 ，相当于2 的30 次方，等于
+1073741824, fil级也是恰好在10 亿左右，由于是位数组，所以这个位数组占用的大小就是2"3 0 b= l28 
+MB 。开头我们计算过Scrapy-Redi s 集合去重的占用空间大约在2 GB 左右，可见Bloom
+Filter 的空间
+利用效率极高。
+随后我们再传人散列函数的个数，用它来生成几个不同的
+seed 。用不同的see d 来定义不同的散
+列原i数，这样我们就可以构造一个散列函数列表。遍历seed ，构造带有不同seed 值的HashMap 对象，
+然后将Has hMap 对象保存成变量maps 供后续使用。
+另外，
+se rver 就是Red is 连接对象，
+key 就是这个m 位数组的名称。
+接下来，我们要实现比较关键的两个方法：一个是判定元素是否重复的方法exists （），另一个是
+添加元素到集合中的方法insert （），实现如下：
+def exists(self, value): 
+if value exists 
+:param value: 
+:return: 
+1于
+not value: 
+return False 
+exist = 1 
+for map in self.maps: 
+offset = map.hash(value) 
+exist = exist &. self. server. get bit (self. key, offset) 
+return exist 
+def insert(self, value): 
+add value to bloom 
+:param value: 
+:return: 
+for f in self.maps: 
+offset = f .hash(value) 
+self.serνer . setbit(self.key, offset, 1) 
+首先看下
+insert （）方法。
+Bloom
+Filter 算法会逐个调用散列函数对放入集合中的元素进行运算，
+得到在m 位位数组中的映射位置，然后将位数组对应的位置置
+l 。这里代码中我们遍历了初始化好的
+回
+更多免费资源请访问ppbuzz.com
+
+574 
+第
+14 幸分布式爬虫
+散列函数，然后调用其has h （）方法算出映射位置off set ，再利用Redis 的setbit （）方法将该位置
+l 。
+在exists （）方法中，我们要实现判定是否重复的逻辑，方法参数value 为待判断的元素。我们肯
+先定义一个变量exi此，遍历所有散列函数对value 进行散列运算，得到映射位置，用getbit （）方法
+取得该映射位置的结果，循环进行与运算。这样只有每次getbit （）得到的结果都为
+l 时＼最后的exist
+才为True ，即代表value 属于这个集合。如果其中只要有一次getbit （）得到的结果为0 ，即m 位数组
+中有对应的0 位，那么最终的结果exist 就为False ，即代表value 不属于这个集合。
+Bloom Filter 的实现就已经完成了，我们可以用一个实例来测试一下，代码如下：
+conn= StrictRedis(host='localhost', port=6379, password ＝’于oobared ’）
+bf = BloomFil ter( con 「l ，’ testbf ’ ，
+S, 6) 
+bf. insert(’ Hello’) 
+b干.insert （’ World')
+result = bf. exists (’ Hello') 
+print(bool(result)) 
+result = bf. exists (’ Python’) 
+print(bool(result)) 
+这里首先定义了一个Redis 连接对象，然后传递给B loom Filter。为了避免内存占用过大，这里传
+的位数bit 比较小，设置为5 ，散列函数的个数设置为6。
+调用insert （）方法插入Hello 和World 两个字符串，随后判断Hello 和Python 这两个字符串是杏
+存在，最后输出它的结果，运行结果如下：
+True 
+False 
+很明显，结果完全没有问题。这样我们就借助Redis 成功实现了Bloom Filter 的算法。
+接下来继续修改Scrapy-Redis 的惊码，将它的dupefilter 逻辑替换为B loom Filter 的逻辑。这里主
+要是修改RFPDupeFilter 类的request_seen （）方法，实现如下：
+def request_seen(self, request): 
+fp = self.request_fingerprint(request) 
+if self.b于.exists(fp):
+return True 
+self.bf.insert(fp) 
+return False 
+利用request_fingerprint （）方法获取Request 的指纹，调用Bloom Filter 的exists （）方法判定该
+指纹是否存在。如果存在，则说明该Request 是重复的，返回True ，否则调用Bloom Filter 的insert ()
+方法将该指纹添加并返回False 。这样就成功利用Bloom Filter 替换了Scrapy-Redis 的集合去重。
+对于Bloom Filter 的初始化定义，我们可以将＿init一（）方法修改为如下内容：
+def _init一（self, server, key, debug, bit, hash_number): 
+self.server = server 
+self.key= key 
+self.debug = debug 
+self. bit = bit 
+self.hash number = hash number 
+self.logdupes = True 
+self.bf = BloomFilter(server, self.key, bit, hash_number) 
+更多免费资源请访问ppbuzz.com
+
+14.4 
+Bloom Filter 的对接－
+575 
+其中bit 和hash_number 需要使用from_settings （）方法传递，修改如下：
+@classmethod 
+def fro 『n_settings(cls, settings): 
+server = get_redis_fr口m_settings(sett ing s)
+key = de句ults.DUPEFILTER_KEY % {’ timestamp' : int(time .time())} 
+debug = settings .getbool(’DUPEFIL TER_DEBUG’, DUPEFILTER_DEBUG) 
+bit = settings .getint(’ BLOOMFIL TER_BIT’, BLOOMFIL TER _BIT) 
+hash_ number = settings .getint （’ BLOOr叫FILTER_HASH _NUMBER ’，
+BLOO帆FILTER』ASH_N\J帆SLR)
+return cls(server, key=key, debug=debug, bi t=bi t, hash_number=hash_ m川er)
+其中，常量DUPEFILTER_DEBUG 和BLOOMFILTER_BIT 统一定义在defaults.py 中，默认如下：
+BLOO问FILTER HASH NUMBER = 6 
+BLOOMFIL TER BIT = 30 
+现在，我们成功实现了B loom Filter 和Scrapy-Redis 的对接。
+4 . 本节代码
+本节代码地址为：
+htψs ://github . com/Python3WebSp ider/ScrapyRedisBloomFi lter。
+5 . 使用
+为了方便使用，本节的1~码已经打包成一个Python 包并发布到PyPi ，链接为https ://pypi . python . org/
+pypi/scrapy-redis-bloomfilter ，可以直接使用ScrapyRedisBloomFilter ，不需要向己实现一遍。
+我们可以直接使用pip 来安装，命令如下：
+pip3 install scrapy-redis-bloomfilter 
+使用的方法和S crapy-Redi s 基本相似，在这里说明几个关键配置。
+＃去重类，妥使用Bloom
+Filter 请替换DUPEFILTER CLASS 
+DUPEFILTER_CLASS =”scrapy_redis_bloomfilter.dupefilter .RFPDupeFilter" 
+＃散列函数的个数，默认为6 ，可以自行修改
+BLOOMFILTER HASH NUMBER = 6 
+# Bloom Filter 的bit 参数，默认30 ，占用
+128问B 空间，去重量级1 亿
+BLOOMFIL TER BIT = 30 
+口DUPEFILTER_C LASS 是去重类，如果要使用Bloom Fi l ter，则DUPEFILTER
+CLASS 需要修改为该包
+的去重类。
+口BLOOMFILTER_HASH_NUMBER 是Bloom Filter 使用的散列函数的个数，默认为6 ，可以根据去重量
+级向行修改。
+口BLOOMFILTER_B IT 即前文所介绍的BloomFilter 类的bit 参数，它决定了位数组的位数。如果
+BLOOMFILTER_BIT 为30 ，那么位数组位数为2 的3 0 次方，这将占用Redis 128 MB 的存储空间，
+去重盘级在l 亿左右，即对应爬取量级l 亿左右。如果爬取量级在10 亿、
+2 0 亿甚至100 亿，
+请务必将此参数对应调高。
+6 . 测试
+惊代码附有一个测试项目，放在tests 文件夹，该项目使用了ScrapyRed i sBloom Filt er 来去重，Spider
+的实现如下：
+回
+更多免费资源请访问ppbuzz.com
+
+576 
+第
+14 章
+分布式爬虫
+from scrapy import Request , Spider 
+class TestSpider(Spider) : 
+name = 'test' 
+base_url = ' https ://www.baidu.com/s?wd=’ 
+de干
+start_requests(self)
+:
+for i in range(10) : 
+url = self.base url + str( i ) 
+yield Request (url , callback=self. parse) 
+# Here contains 10 duplicated Requests 
+干or i in range(100) : 
+url = self.base_url + str(i) 
+yield Request(url, callback=self.parse) 
+de干
+parse(self, response)’ 
+self.logger.debug （『Response of 『＋response .url) 
+start_re qu ests （）方法首先循环10 次，构造参数为0～9 的URL ，然后重新循环了
+1 00 次，构造了
+参数为0～99 的URL 。那么这里就会包含10 个重复的Reque s t ，我们运行项目测试一下：
+scrapy crawl test 
+最后的输出结果如下：
+{ ’bloomfilter /filtered ' : 10, 
+’downloader/request_bytes ’: 34021, 
+’ downloader/request_count': 100, 
+'downloader/request_method_count/GET’ : 100, 
+'downloader/response_bytes 『：72943, 
+' downloader/response_count ’: 100, 
+’ downloader/response_status_count/200': 100, 
+’finish reason t : ’finished ’ 3 
+’ finish_time ' : datetime.datetime(2017, 8, 11, 9, 34, 30, 419597) , 
+’ log_ count/DEBUG ' : 202, 
+’ log_count/INFO ' : 7, 
+’memusage/max ' : 54153216, 
+'memusage/startup ': 54153216, 
+’ response_received_count ’目
+100,
+' scheduler/dequeued/redis ’: 100, 
+' scheduler/e 「1queued/redis'
+: 100, 
+' start time ': dateti 「ne.datetime(2017 , 8, 11, 9, 34, 26, 495018)} 
+最后统计的第一行的结果：
+’ bloomfilter /filtered ' : 10, 
+这就是Bloom
+Filter 过滤后的统计结果，它的过滤个数为
+10 个，也就是它成功将重复的
+10 个
+Reqeus t 识别出来了，测试通过。
+7. 结语
+以上内容便是Bloom Filter 的原理及对接实现，
+Bloom Filter 的使用可以大大节省Red i s 内存。在
+数据量大的情况下推荐此方案。
+更多免费资源请访问ppbuzz.com

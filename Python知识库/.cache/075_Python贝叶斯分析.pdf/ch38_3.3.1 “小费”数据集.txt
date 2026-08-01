@@ -1,0 +1,130 @@
+笨，不过下次再听到有人说某种东西更坚固、更好、更快、更强时，
+记得问一下他对比的基准线是什么。
+3.3.1　“小费”数据集
+接下来，我们将使用seaborn中的tips数据集来讨论前面提到的
+那些思想。我们希望知道星期几对于餐馆小费数量的影响。这个例子
+中，实际上并没有明确的实验组和对照组之分，这只是观察性的实
+验，并非像前面药物测试的例子一样。如果愿意的话，我们可以任选
+一天（例如星期四）作为实验组，或者对照组，尽管我们并没有控制
+某个具体的东西。需要注意的一点是：对于观察性实验，我们没法得
+出某种因果关系，能得到的只是相关性。事实上，如何从数据中得出
+因果关系是一个非常热门的研究问题，我们会在第4章重新讨论这个
+问题。现在，我们首先用一行代码将数据导入成Pandas中的数据结
+构，如果你对Pandas不太熟悉，这里需要说明下，tail函数返回数据
+中的最后一部分（当然你也可以用head函数返回前面一部分数
+据）。
+tips = sns.load_dataset('tips')
+tips.tail()
+total_bill
+tip
+sex
+smoker
+day
+time
+size
+239
+29.03
+5.92
+Male
+No
+Sat
+Dinner
+3
+240
+27.18
+2.00
+Female
+Yes
+Sat
+Dinner
+2
+241
+22.67
+2.00
+Male
+Yes
+Sat
+Dinner
+2
+110
+
+242
+17.82
+1.75
+Male
+No
+Sat
+Dinner
+2
+243
+18.78
+3.00
+Female
+No
+Thur
+Dinner
+2
+对于这个数据集，我们只关心其中的day和tip列，利
+用seaborn中的violinplot函数可以将其画出来：
+sns.violinplot(x='day', y='tip', data=tips)
+把问题简化下，我们创建两个变量：变量y表示tips；变量idx
+表示分类变量的编码。也就是说，我们用数字0、1、2、3表示星期
+四、星期五、星期六和星期天。
+y = tips['tip'].values
+idx = pd.Categorical(tips['day']).codes
+这个问题中的模型与之前的模型几乎一样，唯一的区别是和现
+在是一组随机向量而不再是一个标量。换句话说，每次从先验中采样
+111
+
+的时候，我们会得到4个和4个。PyMC3的语法能够很好地适应这
+个场景，我们可以直接用向量的方式表示模型，而不用使用for循
+环，代码的变化相比前面的模型很小。对应先验，我们需要传一个维
+度变量shape，对于似然，我们需要对和正确地进行编码，这也是
+为什么创建了idx变量。
+with pm.Model() as comparing_groups:　　　　
+    means = pm.Normal('means', mu=0, sd=10, shape=len(set(x)))
+    sds = pm.HalfNormal('sds', sd=10, shape=len(set(x)))
+    y = pm.Normal('y', mu=means[idx], sd=sds[idx], observed=y)
+    trace_cg = pm.sample(5000)
+chain_cg = trace_cg[100::]
+pm.traceplot(chain_cg)
+这里照常使用df_summary函数来描述估计点，同样你还可以进
+行诊断测试。切记贝叶斯分析返回的是（在给定数据和模型条件下）
+参数的完整分布，因而我们可以对后验进行进一步处理，并从中提出
+一些合理的问题。比如，我们可能想知道组与组之间均值差别的分布
+情况，下面，我们就来分析看看。
+这里我们使用PyMC3中的plot_posterior函数画出后验分布，
+其中选取参考值（ref_val）为0，因为我们希望将后验与0进行比
+较。下面的代码将两个变量的差画了出来，没有进行重复比较。注意
+这里并没有一对一的对比矩阵，只是画出了上三角部分。代码和图中
+112
+
+最陌生的部分是Cohen’s d和概率优势，后面会详细解释，其实它们
+都是对效应值的不同表示方式而已。
+dist = dist = stats.norm()
+_, ax = plt.subplots(3, 2, figsize=(16, 12))
+comparisons = [(i,j) for i in range(4) for j in range(i+1, 4)]
+pos = [(k,l) for k in range(3) for l in (0, 1)]
+for (i, j), (k,l) in zip(comparisons, pos):
+    means_diff = chain_cg['means'][:,i]-chain_cg['means'][:,j]
+    d_cohen = (means_diff / np.sqrt((chain_cg['sds'][:,i]**2 + chain_cg
+['sds'][:,j]**2) / 2)).mean()
+    ps = dist.cdf(d_cohen/(2**0.5))
+　　　　
+    pm.plot_posterior(means_diff, ref_val=0, ax=ax[k, l], color='skyblu
+e')
+    ax[k, l].plot(0, label="Cohen's d = {:.2f}\nProb sup = {:.2f}".form
+at(d_cohen, ps) ,alpha=0)
+    ax[k, l].set_xlabel('$\mu_{}-\mu_{}$'.format(i, j), fontsize=18)
+    ax[k,l ].legend(loc=0, fontsize=14)
+前面的例子中，一种解释结果的方式是将参考值与HPD区间进行
+比较。只有一种情况下95%HPD没有包含0（我们的参考值），即星
+期四与星期天的对比。对于所有其他情况，我们没法得出两者的区别
+为0的结论（根据HPD区间与参考值的重叠性准则）。但是即便如
+此，平均下来0.5美元的小费差别是否足够大了呢？这个差别是否大
+到让人们牺牲星期日陪家人或者朋友的时间去工作呢？是否大到就应
+该这4天都给相同的小费而且男服务员和女服务员的小费一模一样
+呢？诸如此类的问题很难用统计学来回答，只能从统计学中找到些启
+发。 描述效应值的方式有好几种，我们接下来将学习其中的两个：
+Cohen’s d 和概率优势。
+113

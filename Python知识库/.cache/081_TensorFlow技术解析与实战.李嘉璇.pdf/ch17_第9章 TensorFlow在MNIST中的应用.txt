@@ -1,0 +1,799 @@
+第9 章 
+TensorFlow 在MNIST 中的应用 
+MNIST
+①（Mixed National Institute of Standards and Technology）是一个入门级的计算机视觉
+数据集，数据集中都是美国中学生手写的数字。它的训练集包含6 万张图片，测试集包含1
+万张图片，并且数字已经进行过预处理和格式化，做了大小调整并居中，图片尺寸也固定为
+28×28。这个数据集很小，但训练速度很快，而且收敛效果也很好，非常适合作为实战的例子
+去学习。
+接下来我们就以MNIST 数据集为例，尝尽TensorFlow 在深度学习中的各种应用。 
+9.1  MNIST 数据集简介 
+MNIST 数据集是NIST 数据集的子集，包含以下4 个文件。 
+●
+train-labels-idx1-ubyte.gz：训练集标记文件（28 881 字节）。
+●
+train-images-idx3-ubyte.gz：训练集图片文件（9 912 422 字节）。
+●
+t10k-labels-idx1-ubyte.gz：测试集标记文件（4 542 字节）。
+●
+t10k-images-idx3-ubyte.gz：测试集图片文件（1 648 877 字节）。
+MNIST 数据集包括训练集的图片和标记数据，以及测试集的图片和标记数据，在测试集包
+含的10 000 个样例中，前5 000 个样例取自原始的NIST 训练集，后5 000 个取自原始的NIST
+测试集，因此前5 000 个预测起来更容易些。 
+下面具体讲解它们的格式
+②。 
+9.1.1 训练集的标记文件 
+训练集标记文件train-labels-idx1-ubyt 的格式如下： 
+①
+http://yann.lecun.com/exdb/mnist/。 
+② 格式格容格格格格格格http://yann.lecun.com/exdb/mnist/。 
+
+第9 章 TensorFlow 在MNIST 中的应用 ee 149 
+[offset] [type]          [value]          [description] 
+0000     32 bit integer  0x00000801(2049) magic number (MSB first) 
+0004     32 bit integer  60000
+number of items 
+0008     unsigned byte   ?? 
+label  
+0009     unsigned byte   ?? 
+label  
+........  
+xxxx     unsigned byte   ?? 
+label 
+其中，MSB（most significant bit，最高有效位），在二进制数中，MSB 是最高加权位，与
+十进制数字中最左边的一位类似
+①。通常，MSB 位于二进制数的最左侧。MSB first 指的是最高
+有效位在前。
+这里magic number 是指写入ELF 格式（Executable and Linkable Format）的ELF 头文件中
+的常量，检查这个数和自己设定的是否一致能够判断出文件是否损坏。
+9.1.2 训练集的图片文件 
+训练集的图片文件train-images-idx3-ubyte 的格式如下： 
+[offset] [type]          [value]
+[description] 
+0000     32 bit integer  0x00000803(2051) magic number 
+0004     32 bit integer  60000
+number of images 
+0008     32 bit integer  28
+number of rows  
+0012     32 bit integer  28
+number of columns 
+0016     unsigned byte   ??
+pixel  
+0017     unsigned byte   ??
+pixel  
+........  
+xxxx     unsigned byte   ??               pixel 
+pixel（像素）的取值范围是0-255，0-255 代表背景色（白色），255 代表前景色（黑色）。 
+9.1.3 测试集的标记文件 
+测试集的标记文件t10k-labels-idx1-ubyte 的格式如下： 
+[offset] [type]          [value]          [description] 
+0000     32 bit integer  0x00000801(2049) magic number (MSB first) 
+0004     32 bit integer  10000
+number of items 
+0008     unsigned byte   ??
+label  
+0009     unsigned byte   ??
+label  
+........   
+xxxx     unsigned byte   ??
+label 
+①
+格参参度参百 “MSB”：http://baike.baidu.com/link?url=r3DrWE4OHhsdq-u0u8D_pJ9_24Kmzl5jwrhdBB0C1azd7nxCz 
+IfM9BkPVbPF_os2gIaJu0pLctzwG7RpxEKUKK。 
+
+150 ff 第二篇 实战篇 
+9.1.4 测试集的图片文件 
+测试集的图片文件t10k-labels-idx1-ubyte 的格式如下： 
+[offset] [type]          [value]
+[description] 
+0000     32 bit integer  0x00000803(2051) magic number 
+0004     32 bit integer  10000
+number of images 
+0008     32 bit integer  28
+number of rows  
+0012     32 bit integer  28
+number of columns 
+0016     unsigned byte   ??
+pixel  
+0017     unsigned byte   ??
+pixel  
+........  
+xxxx     unsigned byte   ??
+pixel 
+已经有各种格法被应用在MNIST 这个训练集上，接下来我们就一起来探讨这些格法。讨
+论这些格法有助于大家了解神经格络的基本设计思想和TensorFlow 的工作流程。这些格法的代
+码位于tensorflow-1.1.0/tensorflow/examples/tutorials/mnist/下。 
+●
+mnist_softmax.py：MNIST 采用Softmax 回归训练。
+●
+fully_connected_feed.py：MNIST 采用Feed 数据格式训练。
+●
+mnist_with_summaries.py：MNIST 使用卷积神经格络（CNN），并且训练过程可视化。 
+●
+mnist_softmax_xla.py.py：MNIST 使用XLA 框架（格参第15 章）。
+我们先从一个简单的Softmax 回归模型开始。 
+9.2  MNIST 的分类问题 
+Softmax 回归可以解决两种以上的分类，该模型是Logistic 回归模型在分类问题上的推广。
+对于要识别0～9 这10 类数字，首选Softmax 回归。MNIST 的Softmax 回归源代码位于tensorflow- 
+1.1.0/tensorflow/examples/tutorials/mnist/mnist_softmax.py。 
+9.2.1 加载数据 
+我们需要导入input_data.py 文件，使用tensorflow.contrib.learn 中的read_data_sets 来加载数
+据，代码如下：
+from tensorflow.examples.tutorials.mnist import input_data 
+import tensorflow as tf 
+# 加载数据 
+mnist = input_data.read_data_sets(FLAGS.data_dir, one_hot=True) 
+其中，FLAGS.data_dir 是MNIST 所在的路径，用户可以自己指定；one_hot 标记则是指一
+
+第9 章 TensorFlow 在MNIST 中的应用 ee 151 
+个长度为n 的数组，只有一个元素是1.0，其他元素是0.0（例如，在n 为4 的情况下，标记2
+对应的one_hot 标记就是 0.0 0.0 1.0 0.0）。 
+使用one_hot 的直接原因是，我们使用0～9 个类别的多分类的输出层是softmax 层，它的输
+出是一个概率分布，从而要求输入的标记也以概率分布的形式出现，进而可以计算交叉熵。
+9.2.2 构建回归模型 
+构建回归模型，我们需要输入原始真实值（group truth），计算采用softmax 函数拟合后的
+预测值，并且定义损失函数和优化器：
+  # 定义回归模型 
+  x = tf.placeholder(tf.float32, [None, 784]) 
+  W = tf.Variable(tf.zeros([784, 10])) 
+  b = tf.Variable(tf.zeros([10])) 
+  y = tf.matmul(x, W) + b # 预测值 
+在这里，我们要求TensorFlow 用梯度下降算法以0.5 的学习率最小化交叉熵。在这里也可
+以采用其他优化器，只需要调整tf.train.GradientDescentOptimizer 即可。 
+  # 定义损失函数和优化器 
+  y_ = tf.placeholder(tf.float32, [None, 10]) # 输入的真实值的占位符 
+  # 我们用tf.nn.softmax_cross_entropy_with_logits 来计算预测值y 与真实值y_的差值，并取均值 
+  cross_entropy = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(y, y_)) 
+  # 采用SGD 作为优化器 
+  train_step = tf.train.GradientDescentOptimizer(0.5).minimize(cross_entropy) 
+9.2.3 训练模型 
+已经设置好了模型，在训练之前，需要先初始化我们创建的变量，以及在会话中启动模型。 
+  #这里使用InteractiveSession()来创建交互式上下文的TensorFlow 会话 
+  #与常规会话不同的是，交互式会话会成为默认会话 
+  #格法（如tf.Tensor.eval 和tf.Operation.run）都可以使用该会话来运行操作（OP） 
+  sess = tf.InteractiveSession() 
+  tf.global_variables_initializer().run() 
+我们让模型循环训练1000 次，在每次循环中我们都随机抓取训练数据中100 个数据点，
+来替换之前的占位符。
+  # Train 
+  for _ in range(1000): 
+    batch_xs, batch_ys = mnist.train.next_batch(100) 
+    sess.run(train_step, feed_dict={x: batch_xs, y_: batch_ys}) 
+
+152 ff 第二篇 实战篇 
+这种训练格式称为随机训练（stochastic training），使用SGD 格法进行梯度下降，也就是每
+次从训练数据集中随机抓取一小部分数据进行梯度下降训练。正如我们在4.7.5 节中讲到的，
+与每次对所有训练数据进行计算的BGD 相比，SGD 既能够学习到数据集的总体特征，又能够
+加速训练过程。
+模型训练好了之后，如何来评估模型的性能呢？
+9.2.4 评估模型 
+tf.argmax(y,1)返回的是模型对任一输入x 预测到的标记值，tf.argmax(y_,1)代表正确的标记
+值。我们用tf.equal 来检测预测值和真实值是否匹配，并且将预测后得到的布尔值转化成浮点
+数，并取平均值。代码如下：
+  # 评估训练好的模型 
+  correct_prediction = tf.equal(tf.argmax(y, 1), tf.argmax(y_, 1)) # 计算预测值和真实值 
+  accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32)) # 布尔型转化为
+浮点数，并取平均值，得到准确率 
+# 计算模型在测试集上的准确率 
+  print(sess.run(accuracy, feed_dict={x: mnist.test.images, 
+y_: mnist.test.labels})) 
+评估模型输出的结果为：
+0.9179 
+ 
+也就是说，最终的准确率是 91.7%。接下来我们用卷积神经格络（CNN）模型，配合TensorBoard
+可视化工具，直观地看看在训练过程中都发生了什么，以及能不能得到更高的准确率。
+9.3  训练过程的可视化 
+TensorFlow 为我们提供了现成的神经格络的可视化例子。下面我们就以MNIST 为例，看看训
+练过程中究竟发生了什么。源代码详参tensorflow-1.1.0/tensorflow/examples/tutorials/mnist/mnist_ 
+with_summaries.py。 
+我们知道，采用TensorBoard 可视化的原理在于，在训练的过程中，记录下结构化的数据，
+然后运行一个本地服务器，监听6006 端口。当在浏览器中请求页面时，分析记录的数据，绘
+制成统计图表及计算图展示出来。
+我们先直接运行脚本，看会有哪些结果：
+python mnist_with_summaries.py 
+得到的命令行输出如下：
+
+第9 章 TensorFlow 在MNIST 中的应用 ee 153 
+Successfully downloaded train-images-idx3-ubyte.gz 9912422 bytes. 
+Extracting /tmp/tensorflow/mnist/input_data/train-images-idx3-ubyte.gz 
+Successfully downloaded train-labels-idx1-ubyte.gz 28881 bytes. 
+Extracting /tmp/tensorflow/mnist/input_data/train-labels-idx1-ubyte.gz 
+Successfully downloaded t10k-images-idx3-ubyte.gz 1648877 bytes. 
+Extracting /tmp/tensorflow/mnist/input_data/t10k-images-idx3-ubyte.gz 
+Successfully downloaded t10k-labels-idx1-ubyte.gz 4542 bytes. 
+Extracting /tmp/tensorflow/mnist/input_data/t10k-labels-idx1-ubyte.gz 
+Accuracy at step 0: 0.1168 
+Accuracy at step 10: 0.6744 
+Accuracy at step 20: 0.803 
+Accuracy at step 30: 0.8496 
+Accuracy at step 40: 0.8822 
+Accuracy at step 50: 0.8857 
+Accuracy at step 60: 0.8897 
+Accuracy at step 70: 0.8883 
+Accuracy at step 80: 0.8884 
+Accuracy at step 90: 0.8974 
+Adding run metadata for 99 
+Accuracy at step 100: 0.9062 
+# 此处有省略 
+Adding run metadata for 899 
+Accuracy at step 900: 0.9643 
+Accuracy at step 910: 0.9665 
+Accuracy at step 920: 0.9662 
+Accuracy at step 930: 0.9678 
+Accuracy at step 940: 0.966 
+Accuracy at step 950: 0.9685 
+Accuracy at step 960: 0.9687 
+Accuracy at step 970: 0.9686 
+Accuracy at step 980: 0.9651 
+Accuracy at step 990: 0.9665 
+Adding run metadata for 999 
+这个例子会把它训练过程中的数据存储在/tmp/tensorflow/mnist 目录中，这个路径可以通过
+命令行格数--log_dir 指定。在/tmp/tensorflow/mnist 中运行tree 命令，结果如下： 
+├── input_data # 存放训练数据 
+│   ├── t10k-images-idx3-ubyte.gz 
+│   ├── t10k-labels-idx1-ubyte.gz 
+│   ├── train-images-idx3-ubyte.gz 
+│   └── train-labels-idx1-ubyte.gz 
+└── logs # 训练结果日志 
+    └── mnist_with_summaries 
+├── test # 测试集结果日志 
+│   └── events.out.tfevents.1484255500.baidudeMacBook-Pro.local 
+└── train # 训练集结果日志 
+└── events.out.tfevents.1484255499.baidudeMacBook-Pro.local 
+运行tensorboard 命令，打开浏览器，查看训练的可视化结果。此时，需要加上格数logdir，
+
+154 ff 第二篇 实战篇 
+标明日志文件的存储路径，格法如下：
+tensorboard --logdir=/tmp/tensorflow/mnist/logs/mnist_with_summaries 
+而这个路径是在创建摘要的文件写入符（FileWriter）时指定的，如下： 
+# sess.graph 是图的定义；本句的含义是使图可视化 
+file_writer = tf.summary.FileWriter('/path/to/logs', sess.graph) 
+输出结果如下：
+Starting TensorBoard 39 on port 6006 
+(You can navigate to http://192.168.0.101:6006) 
+在浏览器中打开http://192.168.0.101:6006 就进入了可视化的操作界面，如图9-1 所示。 
+图9-1 
+接下来就可以进入各个面板查看数据流图和直格图了，这部分格容请格格3.2 节中关于
+TersorBoard 可视化面板的介绍。 
+我们曾在4.4.2 节讲解过与可视化实现相关的API，这里我们就用本节的例子来具体看看如
+何实现可视化。
+从图9-1 可以看出，给一个张量添加多个摘要描述的函数为variable_summaries，如下： 
+  def variable_summaries(var): 
+    """对一个张量添加多个摘要描述""" 
+    with tf.name_scope('summaries'): 
+mean = tf.reduce_mean(var) 
+tf.summary.scalar('mean', mean) # 均值 
+with tf.name_scope('stddev'): 
+stddev = tf.sqrt(tf.reduce_mean(tf.square(var - mean))) 
+tf.summary.scalar('stddev', stddev) # 标准差 
+
+第9 章 TensorFlow 在MNIST 中的应用 ee 155 
+tf.summary.scalar('max', tf.reduce_max(var)) # 最大值 
+tf.summary.scalar('min', tf.reduce_min(var)) # 最小值 
+tf.summary.histogram('histogram', var) 
+这里绘制出的每一层的均值、标准差、最大值和最小值在SCALARS 面板中，如图9-2
+所示。
+图9-2 
+在构建格络模型的过程中，对weights 和biases 均调用variable_summaries，并对每一层采
+用tf.summary.histogram 绘制张量经过激活函数前后的变化。 
+  def nn_layer(input_tensor, input_dim, output_dim, layer_name, act=tf.nn.relu): 
+    # 为确保计算图中各个层的分组，给每一层添加一个name_scope 
+    with tf.name_scope(layer_name): 
+with tf.name_scope('weights'): 
+weights = weight_variable([input_dim, output_dim]) 
+variable_summaries(weights) 
+with tf.name_scope('biases'): 
+biases = bias_variable([output_dim]) 
+variable_summaries(biases) 
+with tf.name_scope('Wx_plus_b'): 
+preactivate = tf.matmul(input_tensor, weights) + biases 
+tf.summary.histogram('pre_activations', preactivate) # 激活前的直格图 
+activations = act(preactivate, name='activation') 
+tf.summary.histogram('activations', activations) # 激活后的直格图 
+return activations 
+绘制出的图形在HISTOGRAMS 面板中，如图9-3 所示。 
+绘制准确率和交叉熵采用的格法为：
+ tf.summary.scalar('cross_entropy', cross_entropy) 
+ tf.summary.scalar('accuracy', accuracy) 
+绘制出的图形在SCALARS 面板中，如图9-4 所示。 
+
+156 ff 第二篇 实战篇 
+图9-3 
+图9-4 
+读者可以自行探索更多的可视化组合格法，充分利用好TensorBoard 工具。我们接下来就
+讲解CNN 在TensorFlow 上如何构建。 
+9.4  MNIST 的卷积神经网络
+① 
+本节我们将学习用TensorFlow 搭建一个卷积神经格络（CNN）模型，并用它来训练MNIST
+数据集。
+同样，构建的流程也是先加载数据，再构建格络模型，最后训练和评估模型。
+①
+本节代码格格https://github.com/nlintz/TensorFlow-Tutorials/blob/master/05_convolutional_net.py。
+
+第9 章 TensorFlow 在MNIST 中的应用 ee 157 
+9.4.1  加载数据 
+先导入必要的库，如下：
+import tensorflow as tf 
+import numpy as np 
+from tensorflow.examples.tutorials.mnist import input_data 
+这一步和上一节MNIST 的回归模型相同，不再赘述。 
+9.4.2  构建模型 
+构建一个CNN 模型，需要以下几步。 
+（1）定义输入数据并预处理数据。这里，我们首先读取数据MNIST，并分别得到训练集的
+图片和标记的矩阵，以及测试集的图片和标记的矩阵。代码如下：
+import tensorflow as tf 
+import numpy as np 
+from tensorflow.examples.tutorials.mnist import input_data 
+mnist = input_data.read_data_sets("MNIST_data/", one_hot=True) 
+trX, trY, teX, teY = mnist.train.images, mnist.train.labels, mnist.test.images, 
+mnist.test.labels 
+其中，mnist 是TensorFlow 的tensorflow.contrib.learn 中的Datasets，其值如下： 
+Datasets(train=<tensorflow.contrib.learn.python.learn.datasets.mnist.DataSet 
+object at 0x110987cd0>, validation=<tensorflow.contrib.learn.python.learn.datasets. 
+mnist.DataSet object at 0x110987d10>, test=<tensorflow.contrib.learn.python.learn. 
+datasets.mnist.DataSet object at 0x110987d50>) 
+trX、trY,、teX、teY 是数据的矩阵表现，其值类似于： 
+[[ 0.  0.  0. ...,  0.  0.  0.] 
+ [ 0.  0.  0. ...,  0.  0.  0.] 
+ [ 0.  0.  0. ...,  0.  0.  0.] 
+ ..., 
+ [ 0.  0.  0. ...,  0.  0.  0.] 
+ [ 0.  0.  0. ...,  0.  0.  0.] 
+ [ 0.  0.  0. ...,  0.  0.  0.]] 
+接着，需要处理输入的数据，把上述trX 和teX 的形状变为[-1,28,28,1]，-1 表示不格虑输
+入图片的数量，28×28 是图片的长和宽的像素数，1 是通道（channel）数量，因为MNIST 的
+图片是黑白的，所以通道是1，如果是RGB 彩色图像，通道是3。 
+trX = trX.reshape(-1, 28, 28, 1)  # 28x28x1 input img 
+
+158 ff 第二篇 实战篇 
+teX = teX.reshape(-1, 28, 28, 1)  # 28x28x1 input img 
+X = tf.placeholder("float", [None, 28, 28, 1]) 
+Y = tf.placeholder("float", [None, 10]) 
+（2）初始化权重与定义格络结构。这里，我们将要构建一个拥有3 个卷积层和3 个池化层，
+随后接1 个全连接层和1 个输出层的卷积神经格络。首先定义初始化权重的函数： 
+def init_weights(shape): 
+   return tf.Variable(tf.random_normal(shape, stddev=0.01)) 
+初始化权重格法如下，我们设置卷积核的大小为3×3： 
+w = init_weights([3, 3, 1, 32])      
+# patch 大小为3×3，输入维度为1，输出维度为32 
+w2 = init_weights([3, 3, 32, 64])      # patch 大小为3×3，输入维度为32，输出维度为64 
+w3 = init_weights([3, 3, 64, 128])      # patch 大小为3×3，输入维度为64，输出维度为128 
+w4 = init_weights([128 * 4 * 4, 625]) 
+# 全连接层，输入维度为 128 × 4 × 4,是上一层的输
+出数据又三维的转变成一维， 输出维度为625  
+w_o = init_weights([625, 10])  # 输出层，输入维度为 625, 输出维度为10，代表10 类(labels) 
+随后，定义一个模型函数，代码如下：
+# 神经格络模型的构建函数，传入以下格数 
+  # X：输入数据 
+  # w：每一层的权重 
+  # p_keep_conv，p_keep_hidden：dropout 要保留的神经元比例 
+def model(X, w, w2, w3, w4, w_o, p_keep_conv, p_keep_hidden): 
+  # 第一组卷积层及池化层，最后dropout 一些神经元 
+  l1a = tf.nn.relu(tf.nn.conv2d(X, w, strides=[1, 1, 1, 1], padding='SAME'))  
+  # l1a shape=(?, 28, 28, 32) 
+  l1 = tf.nn.max_pool(l1a, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME') 
+  # l1 shape=(?, 14, 14, 32) 
+  l1 = tf.nn.dropout(l1, p_keep_conv) 
+  # 第二组卷积层及池化层，最后dropout 一些神经元 
+  l2a = tf.nn.relu(tf.nn.conv2d(l1, w2, strides=[1, 1, 1, 1], padding='SAME'))   
+  # l2a shape=(?, 14, 14, 64) 
+  l2 = tf.nn.max_pool(l2a, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME') 
+  # l2 shape=(?, 7, 7, 64) 
+  l2 = tf.nn.dropout(l2, p_keep_conv) 
+  # 第三组卷积层及池化层，最后dropout 一些神经元 
+  l3a = tf.nn.relu(tf.nn.conv2d(l2, w3, strides=[1, 1, 1, 1], padding='SAME')) 
+  # l3a shape=(?, 7, 7, 128) 
+  l3 = tf.nn.max_pool(l3a, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME') 
+  # l3 shape=(?, 4, 4, 128) 
+ l3 = tf.reshape(l3, [-1, w4.get_shape().as_list()[0]])    # reshape to (?, 2048) 
+  l3 = tf.nn.dropout(l3, p_keep_conv) 
+
+第9 章 TensorFlow 在MNIST 中的应用 ee 159 
+  # 全连接层，最后dropout 一些神经元 
+  l4 = tf.nn.relu(tf.matmul(l3, w4)) 
+  l4 = tf.nn.dropout(l4, p_keep_hidden) 
+  # 输出层 
+  pyx = tf.matmul(l4, w_o) 
+  return pyx #返回预测值 
+我们定义dropout 的占位符—keep_conv，它表示在一层中有多少比例的神经元被保留下
+来。生成格络模型，得到预测值，如下：
+p_keep_conv = tf.placeholder("float") 
+p_keep_hidden = tf.placeholder("float") 
+py_x = model(X, w, w2, w3, w4, w_o, p_keep_conv, p_keep_hidden) #得到预测值 
+接下来，定义损失函数，这里我们仍然采用tf.nn.softmax_cross_entropy_with_logits 来比较
+预测值和真实值的差异，并做均值处理；定义训练的操作（train_op），采用实现RMSProp 算法
+的优化器tf.train.RMSPropOptimizer，学习率为0.001，衰减值为0.9，使损失最小；定义预测的
+操作（predict_op）。具体如下： 
+cost = tf.reduce_mean(tf.nn. softmax_cross_entropy_with_logits(logits=py_x, labels=Y)) 
+train_op = tf.train.RMSPropOptimizer(0.001, 0.9).minimize(cost) 
+predict_op = tf.argmax(py_x, 1) 
+9.4.3  训练模型和评估模型 
+先定义训练时的批次大小和评估时的批次大小，如下：
+batch_size = 128 
+test_size = 256 
+在一个会话中启动图，开始训练和评估：
+# Launch the graph in a session 
+with tf.Session() as sess: 
+  # you need to initialize all variables 
+  tf. global_variables_initializer().run() 
+  for i in range(100): 
+    training_batch = zip(range(0, len(trX), batch_size), 
+range(batch_size, len(trX)+1, batch_size)) 
+    for start, end in training_batch: 
+sess.run(train_op, feed_dict={X: trX[start:end], Y: trY[start:end], 
+p_keep_conv: 0.8, p_keep_hidden: 0.5}) 
+    test_indices = np.arange(len(teX)) # Get A Test Batch 
+    np.random.shuffle(test_indices) 
+
+160 ff 第二篇 实战篇 
+    test_indices = test_indices[0:test_size] 
+    print(i, np.mean(np.argmax(teY[test_indices], axis=1) == 
+sess.run(predict_op, feed_dict={X: teX[test_indices], 
+p_keep_conv: 1.0, 
+p_keep_hidden: 1.0}))) 
+结果如下：
+0 0.96484375 
+1 0.984375 
+2 0.98828125 
+3 0.9921875 
+4 0.9921875 
+5 1.0 
+6 0.99609375 
+7 0.9921875 
+8 0.9921875 
+9 0.98046875 
+10 0.9921875 
+11 0.984375 
+12 0.984375 
+13 1.0 
+14 0.9921875 
+15 0.9921875 
+16 0.98828125 
+17 0.9921875 
+18 1.0 
+19 1.0 
+20 0.99609375 
+# 此处有省略 
+71 0.98828125 
+72 0.99609375 
+73 1.0 
+74 0.99609375 
+75 1.0 
+76 0.9921875 
+77 0.9921875 
+78 0.99609375 
+79 0.99609375 
+80 1.0 
+81 0.99609375 
+82 0.9921875 
+83 0.99609375 
+84 0.99609375 
+85 0.99609375 
+86 0.99609375 
+87 0.9765625 
+88 0.99609375 
+89 0.984375 
+90 0.984375 
+
+第9 章 TensorFlow 在MNIST 中的应用 ee 161 
+91 0.98828125 
+92 1.0 
+93 0.99609375 
+94 0.9921875 
+95 1.0 
+96 0.99609375 
+97 0.99609375 
+98 0.9921875 
+99 0.9921875 
+上面输出了训练的次数和准确度的关系。可以看出，当训练 100 轮后精确率已经接近
+99.22%。 
+通过回归模型和卷积神经格络模型，可以看出卷积神经格络的效果真的是非常好。如果把
+循环神经格络（RNN）应用再MNIST 上会怎么样呢？ 
+9.5  MNIST 的循环神经网络
+① 
+本节学习用TensorFlow 搭建一个循环神经格络（RNN）模型，并用它来训练MNIST 数据集。 
+RNN 在自然语言处理领域的已下几个格向应用得非常成功： 
+●
+机器翻译；
+●
+语音识别；
+●
+图像描述生成（把RNN 和CNN 结合，根据图像的特征生成描述，在第12 章用“看图
+说话”讲解）；
+●
+语言模型与文本生成，即利用生成的模型预测下一个单词的可能性。
+更多的资料读者可格格Alex Graves 的论文《Supervised Sequence Labelling with Recurrent 
+Neural Networks》
+②。 
+9.5.1  加载数据 
+这一步和9.2.1 节MNIST 的回归模型相同，请读者格格，不再赘述。 
+9.5.2  构建模型 
+首先，设置训练的超格数，分别设置学习率、训练次数和每轮训练的数据大小：
+①
+本节代码格格https://github.com/aymericdamien/TensorFlow-Examples/blob/master/examples/3_Neural Networks/recurrent_ 
+network.py，并做了相应修改。 
+②
+http://www.cs.toronto.edu/~graves/preprint.pdf
+
+162  第二篇 实战篇
+# 设置训练的超参数 
+lr = 0.001 
+training_iters = 100000 
+batch_size = 128 
+为了使用RNN 来分类图片，我们把每张图片的行看成是一个像素序列（sequence）。因为
+MNIST 图片的大小是28×28 像素，所以我们把每一个图像样本看成一行行的序列。因此，共有
+（28 个元素的序列）×（28 行），然后每一步输入的序列长度是28，输入的步数是28 步。下面
+定义RNN 的参数： 
+# 神经网络的参数 
+n_input = 28  # 输入层的n 
+n_steps = 28  # 28 长度 
+n_hidden_units = 128  # 隐藏层的神经元个数 
+n_classes = 10  # 输出的数量，即分类的类别，0～9 个数字，共有10 个 
+定义输入数据及权重： 
+# 输入数据占位符 
+x = tf.placeholder(tf.float32, [None, n_steps, n_inputs]) 
+y = tf.placeholder(tf.float32, [None, n_classes]) 
+# 定义权重 
+weights = { 
+ # (28, 128) 
+ 'in': tf.Variable(tf.random_normal([n_inputs, n_hidden_units])), 
+ # (128, 10) 
+ 'out': tf.Variable(tf.random_normal([n_hidden_units, n_classes])) 
+} 
+biases = { 
+ # (128, ) 
+ 'in': tf.Variable(tf.constant(0.1, shape=[n_hidden_units, ])), 
+ # (10, ) 
+ 'out': tf.Variable(tf.constant(0.1, shape=[n_classes, ])) 
+} 
+定义RNN 模型： 
+def RNN(X, weights, biases): 
+ # 把输入的X 转换成X ==> (128 batch * 28 steps, 28 inputs) 
+ X = tf.reshape(X, [-1, n_inputs]) 
+ # 进入隐藏层 
+ # X_in = (128 batch * 28 steps, 128 hidden) 
+ X_in = tf.matmul(X, weights['in']) + biases['in'] 
+ # X_in ==> (128 batch, 28 steps, 128 hidden) 
+ X_in = tf.reshape(X_in, [-1, n_steps, n_hidden_units]) 
+
+第9 章 TensorFlow 在MNIST 中的应用  163 
+ # 这里采用基本的LSTM 循环网络单元：basic LSTM Cell 
+ lstm_cell = tf.contrib.rnn.BasicLSTMCell(n_hidden_units, forget_bias=1.0, 
+  state_is_tuple=True) 
+ # 初始化为零值，lstm 单元由两个部分组成：(c_state, h_state) 
+ init_state = lstm_cell.zero_state(batch_size, dtype=tf.float32) 
+ # dynamic_rnn 接收张量(batch, steps, inputs)或者(steps, batch, inputs)作为X_in 
+ outputs, final_state = tf.nn.dynamic_rnn(lstm_cell, X_in, initial_ state=  
+ init_state, time_major=False) 
+  results = tf.matmul(final_state[1], weights['out']) + biases['out'] 
+return results 
+定义损失函数和优化器，优化器采用AdamOptimizer。 
+pred = RNN(x, weights, biases) 
+cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=pred, labels=y)) 
+train_op = tf.train.AdamOptimizer(lr).minimize(cost) 
+定义模型预测结果及准确率计算方法： 
+correct_pred = tf.equal(tf.argmax(pred, 1), tf.argmax(y, 1)) 
+accuracy = tf.reduce_mean(tf.cast(correct_pred, tf.float32)) 
+9.5.3  训练数据及评估模型 
+在一个会话中启动图，开始训练，每20 次输出1 次准确率的大小： 
+with tf.Session() as sess: 
+ sess.run(tf.global_variables_initializer()) 
+ step = 0 
+ while step * batch_size < training_iters: 
+ batch_xs, batch_ys = mnist.train.next_batch(batch_size) 
+ batch_xs = batch_xs.reshape([batch_size, n_steps, n_inputs]) 
+ sess.run([train_op], feed_dict={ 
+ x: batch_xs, 
+ y: batch_ys, 
+ }) 
+ if step % 20 == 0: 
+ print(sess.run(accuracy, feed_dict={ 
+ x: batch_xs, 
+ y: batch_ys, 
+ })) 
+ step += 1 
+结果如下： 
+0.117188 
+0.640625 
+
+164 ff 第二篇 实战篇 
+0.726562 
+0.695312 
+0.859375 
+0.773438 
+0.90625 
+# 此处有省略 
+0.960938 
+0.945312 
+0.953125 
+0.976562 
+0.96875 
+0.953125 
+0.96875 
+0.960938 
+0.96875 
+0.960938 
+0.976562 
+0.96875 
+0.921875 
+0.96875 
+0.984375 
+0.9375 
+可以看出，准确率接近93%，准确率不如CNN 模型。 
+9.6  MNIST 的无监督学习 
+本节将介绍基于无监督学习的一个简单应用—自编码器（autoencoder），并学习用
+TensorFlow 搭建一个自编码格络，并用它在MNIST 数据集上训练。 
+9.6.1 自编码网络① 
+前面讲到的都是有监督学习，它的重要特征是数据都是有标记的，无标记的数据应该用什
+么样的格络模型来学习呢？下面我们就介绍一个格络模型—自编码格络。
+自编码格络模型如图9-5 所示。
+② 
+自编码格络的作用是将输入样本压缩到隐藏层，然后解压，在输出端重建样本。最终输出
+层神经元数量等于输入层神经元的数量。
+这里面主要有两个过程：压缩和解压。压缩依靠的是输入数据（图像、文字、声音）本身
+存在不同程度的冗余信息，自动编码格络通过学习去掉这些冗余信息，把有用的特征输入到隐
+①
+本节格格UFLDL 的文章：http://ufldl.stanford.edu/wiki/index.php/Autoencoders_and_Sparsity。
+②
+本图格格http://ufldl.stanford.edu/wiki/index.php/Autoencoders_and_Sparsity。
+
+第9 章 TensorFlow 在MNIST 中的应用 ee 165 
+藏层中。这里和主成分分析（principal components analysis，PCA
+①）有些类似，要找到可以代
+表源数据的主要成分。其实，如果激活函数不使用sigmoid 等非线性函数，而使用线性函数，
+就是PCA 模型。可以想象，如果数据都是完全随机、相互独立、同分布的，自编码格络就很难
+学习到一个有效的压缩模型。
+压缩过程一格面要限制隐藏神经元的数量，来
+学习一些有意义的特征，另一格面还希望神经元
+大部分时间是被抑制的，当神经元的输出接近1
+时认为是被激活的，接近0 时认为是被抑制的。
+希望部分神经元处于被抑制状态，这种规则称为
+稀疏性限制。
+多个隐藏层的主要作用是，如果输入的数据是
+图像，第一层会学习如何识别边，第二层会学习如
+何去组合边，从而构成轮廓、角等，更高层会学习
+如何去组合更有意义的特征。例如，如果输入数据
+是人脸图像的话，更高层会学习如何识别和组合眼
+睛、鼻子、嘴等人脸器格。
+9.6.2 TensorFlow 的自编码网络实现② 
+下面我们还以MNIST 数据集为例，讲解一下自编码器的运用。 
+1．加载数据 
+先导入必要的库，如下：
+import tensorflow as tf 
+import numpy as np 
+from tensorflow.examples.tutorials.mnist import input_data 
+2．构建模型 
+首先，设置训练的超格数，包括学习率、训练的轮（epoch）数（全部数据训完一遍成为一
+轮）、每次训练的数据多少、每隔多少轮显示一次训练结果：
+①
+主成分分析（principal components analysis，PCA）是一种分析、简化数据集的技术。经常用于减少数据集的维数，
+同时保持数据集中对格差贡献最大的特征。这是通过保留低阶主成分，忽略高阶主成分做到的。是最常用的线性
+降维格法。（出自维基参百“主成分分析”。） 
+② 本节代码主要格格https://github.com/aymericdamien/TensorFlow-Examples/blob/master/examples/3_NeuralNetworks/
+autoencoder.py。 
+图9-5
+② 
+
+166 ff 第二篇 实战篇 
+# 设置训练超格数 
+learning_rate = 0.01 # 学习率 
+training_epochs = 20 # 训练的轮数 
+batch_size = 256 # 每次训练的数据多少 
+display_step = 1 # 每隔多少轮显示一次训练结果 
+还要设置其他格数变量，表示从测试集中选择10 张图片去验证自动编码器的结果： 
+examples_to_show = 10 
+然后定义输入数据，这里是无监督学习，所以只需要输入图片数据，不需要标记数据。
+X = tf.placeholder("float", [None, n_input]) 
+随后初始化权重与定义格络结构。我们设计这个自动编码格络含有两个隐藏层，第一个隐
+藏层神经元为256 个，第二个隐藏层神经元为128 个。定义格络格数如下： 
+# 格络格数 
+n_hidden_1 = 256 # 第一个隐藏层神经元个数，也是特征值个数 
+n_hidden_2 = 128 # 第二个隐藏层神经元个数，也是特征值个数 
+n_input = 784 # 输入数据的特征值个数：28×28=784 
+初始化每一层的权重和偏置，如下：
+weights = { 
+'encoder_h1': tf.Variable(tf.random_normal([n_input, n_hidden_1])), 
+'encoder_h2': tf.Variable(tf.random_normal([n_hidden_1, n_hidden_2])), 
+'decoder_h1': tf.Variable(tf.random_normal([n_hidden_2, n_hidden_1])), 
+'decoder_h2': tf.Variable(tf.random_normal([n_hidden_1, n_input])), 
+} 
+biases = { 
+'encoder_b1': tf.Variable(tf.random_normal([n_hidden_1])), 
+'encoder_b2': tf.Variable(tf.random_normal([n_hidden_2])), 
+'decoder_b1': tf.Variable(tf.random_normal([n_hidden_1])), 
+'decoder_b2': tf.Variable(tf.random_normal([n_input])), 
+} 
+接着，定义自动编码模型的格络结构，包括压缩和解压两个过程：
+# 定义压缩函数 
+def encoder(x): 
+ # Encoder Hidden layer with sigmoid activation #1 
+  layer_1 = tf.nn.sigmoid(tf.add(tf.matmul(x, weights['encoder_h1']), 
+ biases['encoder_b1'])) 
+ # Decoder Hidden layer with sigmoid activation #2 
+  layer_2 = tf.nn.sigmoid(tf.add(tf.matmul(layer_1, weights['encoder_h2']), 
+ biases['encoder_b2'])) 
+  return layer_2 
+# 定义解压函数 
+
+第9 章 TensorFlow 在MNIST 中的应用 ee 167 
+def decoder(x): 
+ # Encoder Hidden layer with sigmoid activation #1 
+  layer_1 = tf.nn.sigmoid(tf.add(tf.matmul(x, weights['decoder_h1']), 
+biases['decoder_b1'])) 
+ # Decoder Hidden layer with sigmoid activation #2 
+  layer_2 = tf.nn.sigmoid(tf.add(tf.matmul(layer_1, weights['decoder_h2']), 
+biases['decoder_b2'])) 
+   return layer_2 
+# 构建模型 
+encoder_op = encoder(X) 
+decoder_op = decoder(encoder_op 
+接着，我们构建损失函数和优化器。这里的损失函数用“最小二乘法”对原始数据集和输
+出的数据集进行平格差并取均值运算；优化器采用RMSPropOptimizer。 
+# 得出预测值 
+y_pred = decoder_op 
+# 得出真实值，即输入值 
+y_true = X 
+# 定义损失函数和优化器 
+cost = tf.reduce_mean(tf.pow(y_true - y_pred, 2)) 
+optimizer = tf.train.RMSPropOptimizer(learning_rate).minimize(cost) 
+3．训练数据及评估模型 
+在一个会话中启动图，开始训练和评估：
+with tf.Session() as sess: 
+  sess.run(init) 
+  total_batch = int(mnist.train.num_examples/batch_size) 
+  # 开始训练 
+ for epoch in range(training_epochs): 
+    for i in range(total_batch): 
+batch_xs, batch_ys = mnist.train.next_batch(batch_size) 
+ # Run optimization op (backprop) and cost op (to get loss value) 
+_, c = sess.run([optimizer, cost], feed_dict={X: batch_xs}) 
+    # 每一轮，打印出一次损失值 
+    if epoch % display_step == 0: 
+print("Epoch:", '%04d' % (epoch+1), "cost=", "{:.9f}".format(c)) 
+  print("Optimization Finished!") 
+  # 对测试集应用训练好的自动编码格络 
+  encode_decode = sess.run(y_pred, feed_dict={X: mnist.test.images[:examples_ 
+to_show]}) 
+
+168 ff 第二篇 实战篇 
+  # 比较测试集原始图片和自动编码格络的重建结果 
+ f, a = plt.subplots(2, 10, figsize=(10, 2)) 
+ for i in range(examples_to_show): 
+    a[0][i].imshow(np.reshape(mnist.test.images[i], (28, 28))) #测试集 
+    a[1][i].imshow(np.reshape(encode_decode[i], (28, 28))) # 重建结果 
+f.show()
+  plt.draw() 
+  plt.waitforbuttonpress() 
+终端输出了每一轮的损失值，结果如下：
+Epoch: 0001 cost= 0.210102022 
+Epoch: 0002 cost= 0.175847366 
+Epoch: 0003 cost= 0.161052987 
+Epoch: 0004 cost= 0.149544969 
+Epoch: 0005 cost= 0.142014906 
+Epoch: 0006 cost= 0.135422051 
+Epoch: 0007 cost= 0.131084189 
+Epoch: 0008 cost= 0.127759427 
+Epoch: 0009 cost= 0.124004595 
+Epoch: 0010 cost= 0.123085082 
+Epoch: 0011 cost= 0.117432065 
+Epoch: 0012 cost= 0.119511291 
+Epoch: 0013 cost= 0.115581676 
+Epoch: 0014 cost= 0.113403663 
+Epoch: 0015 cost= 0.110742018 
+Epoch: 0016 cost= 0.111147717 
+Epoch: 0017 cost= 0.105923556 
+Epoch: 0018 cost= 0.105761752 
+Epoch: 0019 cost= 0.103263445 
+Epoch: 0020 cost= 0.101153791 
+Optimization Finished! 
+可以看出随着训练次数的增多，损失值趋于减少。
+测试集的图片和经过自动编码器重建特征后的图片对比如图9-6 所示。上面一行是测试集
+的图片，下面一行对应的是经过自动编码器重建后的结果。
+图9-6 
+
+第9 章 TensorFlow 在MNIST 中的应用 ee 169 
+ 9.7  小结 
+本章主要介绍了TensorFlow 在手写数字数据集MNIST 的图像识别中的应用。以MNIST
+数据集为例，讲解了最简单的Softmax 回归、卷积神经格络（CNN）、循环神经格络（RNN）、
+自动编码器模型的构建和训练格式。同时应用tf.summary.FileWriter()可视化的API 来配合
+TensorBoard 的可视化展现。 

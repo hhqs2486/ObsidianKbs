@@ -1,0 +1,150 @@
+sudo rbd map rbd/myimage --id admin --keyfile
+/path/to/file
+查看已映射块设备
+可以用rbd 命令的showmapped 选项查看映射为内核模块的块设备映像。
+rbd showmapped
+取消块设备映射
+要取消块设备映射，用rbd 命令、指定unmap 选项和设备名（即为方便起见使用的同名块
+设备映像）。
+sudo rbd unmap /dev/rbd/{poolname}/{imagename}
+例如：
+sudo rbd unmap /dev/rbd/rbd/foo
+快照
+快照是映像在某个特定时间点的一份只读副本。Ceph 块设备的一个高级特性就是你可以为映
+像创建快照来保留其历史。Ceph 还支持分层快照，让你快速、简便地克隆映像（如VM 映
+像）。Ceph 的快照功能支持rbd 命令和多种高级接口，包
+括QEMU 、libvirt 、OpenStack 和CloudStack 。
+Important
+要使用RBD 快照功能，你必须有一个在运行的Ceph 集群。
+
+Note
+如果在做快照时映像仍在进行I/O 操作，快照可能就获取不到该映像准确的或最新的数据，并
+且该快照可能不得不被克隆到一个新的可挂载的映像中。所以，我们建议在做快照前先停
+止I/O 操作。如果映像内包含文件系统，在做快照前请确保文件系统处于一致的状态。要停
+止I/O 操作可以使用fsfreeze 命令。详情可参考fsfreeze(8) 手册页。对于虚拟机，qemu-
+guest-agent 被用来在做快照时自动冻结文件系统。
+CEPHX 注意事项
+启用了cephx 时（默认的），你必须指定用户名或ID 、及其对应的密钥文件，详情见用户管
+理。你也可以用CEPH_ARGS 环境变量来避免重复输入下列参数。
+rbd --id {user-ID} --keyring=/path/to/secret [commands]
+rbd --name {username} --keyring=/path/to/secret [commands]
+例如：
+rbd --id admin --keyring=/etc/ceph/ceph.keyring [commands]
+rbd --name client.admin --keyring=/etc/ceph/ceph.keyring
+[commands]
+Tip
+
+把用户名和密钥写入CEPH_ARGS 环境变量，这样就无需每次手动输入。
+快照基础
+下列过程演示了如何用rbd 命令创建、罗列、和删除快照。
+创建快照
+用rbd 命令创建快照，要指定snap create 选项、存储池名和映像名。
+rbd snap create {pool-name}/{image-name}@{snap-name}
+例如：
+rbd snap create rbd/foo@snapname
+罗列快照
+列出某个映像的快照，需要指定存储池名和映像名。
+rbd snap ls {pool-name}/{image-name}
+例如：
+rbd snap ls rbd/foo
+回滚快照
+用rbd 命令回滚到某一快照，指定snap rollback 选项、存储池名、映像名和快照名。
+rbd snap rollback {pool-name}/{image-name}@{snap-name}
+
+例如：
+rbd snap rollback rbd/foo@snapname
+Note
+把映像回滚到某一快照的意思是，用快照中的数据覆盖映像的当前版本，映像越大，此过程花
+费的时间就越长。从快照克隆要快于回滚到某快照，这也是回到先前状态的首选方法。
+删除快照
+要用rbd 删除一快照，指定snap rm 选项、存储池名、映像名和快照名。
+rbd snap rm {pool-name}/{image-name}@{snap-name}
+例如：
+rbd snap rm rbd/foo@snapname
+Note
+Ceph OSDs 异步地删除数据，所以删除快照后不会立即释放磁盘空间。
+清除快照
+要用rbd 删除某个映像的所有快照，指定snap purge 选项、存储池名和映像名。
+rbd snap purge {pool-name}/{image-name}
+例如：
+
+rbd snap purge rbd/foo
+分层
+Ceph 支持为某一设备快照创建很多个写时复制（COW ）克隆。分层快照使得Ceph 块设备
+客户端可以很快地创建映像。例如，你可以创建一个包含有Linux VM 的块设备映像；然后做
+快照、保护快照，再创建任意多个写时复制克隆。快照是只读的，所以简化了克隆快照的语义
+—— 使得克隆很迅速。
+Note
+这里的术语“父”和“子”指的是一个Ceph 块设备快照（父），和从此快照克隆出来的对应映像
+（子）。这些术语对下列的命令行用法来说很重要。
+各个克隆出来的映像（子）都存储着对父映像的引用，这使得克隆出来的映像可以打开父映像
+并读取它。
+一个快照的COW 克隆和其它任何Ceph 块设备映像的行为完全一样。克隆出的映像没有特别
+的限制，你可以读出、写入、克隆、调整克隆映像的大小。然而快照的写时复制克隆引用了快
+照，所以你克隆快照前必须保护它。下图描述了此过程。
+Note
+Ceph 仅支持克隆format 2 的映像（即用rbd create --image-format 2 创建的）。
+内核客户端从3.10 版开始支持克隆的映像。
+
+分层入门
+Ceph 块设备的分层是个简单的过程。你必须有个映像、必须为它创建快照、并且必须保护快
+照，执行过这些步骤后，你才能克隆快照。
+克隆出的映像包含对父快照的引用，也包含存储池ID 、映像ID 和快照ID 。包含存储池ID
+意味着你可以把一个存储池内的快照克隆到其他存储池。
+1.
+映像模板：块设备分层的一个常见用法是创建一个主映像及其快照，并作为模板以供
+克隆。例如，用户可以创建某一Linux 发行版（如Ubuntu 12.04 ）的映像、并对其做
+快照。此用户可能会周期性地更新映像、并创建新的快照（如
+在rbd snap create 之后执行sudo apt-getupdate 、sudo apt-
+get upgrade 、sudo apt-get dist-upgrade ）。当映像成熟时，用户可
+以克隆任意快照。
+2.
+扩展模板：更高级的用法包括扩展映像模板，来提供比基础映像更多的信息。例如，
+用户可以克隆一个映像（如VM 模板）、并安装其它软件（如数据库、内容管理系统、
+分析系统等等），然后为此扩展映像做快照，做好的快照可以像基础映像一样进行更
+新。
+3.
+模板存储池：块设备分层的一种用法是创建一个存储池，存放作为模板的主映像和那
+些模板的快照。然后把只读权限分给用户，这样他们就可以克隆快照了，而无需分配
+此存储池的写和执行权限。
+4.
+映像迁移/恢复：块设备分层的一种用法是把某一存储池内的数据迁移或恢复到另一存
+储池。
+
+保护快照
+克隆映像要访问父快照。如果用户不小心删除了父快照，所有克隆映像都会损坏。为防止数据
+丢失，在克隆前必须先保护快照。
+rbd snap protect {pool-name}/{image-name}@{snapshot-name}
+例如：
+rbd snap protect rbd/my-image@my-snapshot
+Note
+你删除不了受保护的快照。
+克隆快照
+要克隆快照，你得指定父存储池、父映像名和快照，还有子存储池和子映像名。克隆前必须先
+保护快照。
+rbd clone {pool-name}/{parent-image}@{snap-name} {pool-
+name}/{child-image-name}
+例如：
+rbd clone rbd/my-image@my-snapshot rbd/new-image
+Note
+你可以把某个存储池中映像的快照克隆到另一存储池。例如，你可以把某一存储池中的只读映
+像及其快照作为模板维护，把可写克隆置于另一存储池。
+
+取消快照保护
+删除快照前，必须先取消保护。另外，你不可以删除被克隆映像引用的快照，所以在你删除快
+照前，必须先拍平（flatten ）此快照的各个克隆。
+rbd snap unprotect {pool-name}/{image-name}@{snapshot-
+name}
+例如：
+rbd snap unprotect rbd/my-image@my-snapshot
+罗列快照的子孙
+用下列命令罗列某个快照的子孙：
+rbd children {pool-name}/{image-name}@{snapshot-name}
+例如：
+rbd children rbd/my-image@my-snapshot
+拍平克隆映像
+克隆出来的映像仍保留了对父快照的引用。要从子克隆删除这些到父快照的引用，你可以把快
+照的信息复制给子克隆，也就是“拍平”它。拍平克隆映像的时间随快照尺寸增大而增加。要删
+除快照，必须先拍平子映像。
+rbd flatten {pool-name}/{image-name}
+例如：

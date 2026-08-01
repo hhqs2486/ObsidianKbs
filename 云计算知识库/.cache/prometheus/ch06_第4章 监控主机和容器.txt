@@ -1,0 +1,773 @@
+第4章　监控主机和容器
+在上一章，我们安装了Prometheus并进行了一些基本配置，还从Prometheus服务器本身抓取了一些
+时间序列数据。而本章将讨论使用Prometheus来监控主机和容器的指标。我们将在3台运行了Docker守
+护进程的Ubuntu主机集群上进行演示。
+首先，我们将在每台主机上安装exporter，然后配置节点和Docker指标让Prometheus来抓取。
+接下来，我们将介绍一些基本主机资源监控，包括：
+·CPU
+·内存
+·磁盘
+·可用性
+为了确定要监控的内容，我们将回顾USE监控方法[1]，以帮助确定正确的监控指标。我们还将介
+绍如何使用Prometheus来检测服务状态以及主机可用性。
+然后，我们利用收集的指标来构建一些聚合指标并保存为记录规则。
+最后，我们会简要介绍Grafana，并对收集的数据进行基本的可视化。
+上述内容都是部署监控工具的标准任务，为深入理解Prometheus提供了坚实的基础。这些基本数
+据让我们能够识别主机的性能问题，它们为应用程序问题的故障诊断提供足够的数据补充。
+[1] http://www.brendangregg.com/usemethod.html。
+
+4.1　监控节点
+Prometheus使用exporter工具来暴露主机和应用程序上的指标，目前有很多可用于各种目的的
+exporter[1]。现在我们将专注于一个特定的exporter：Node Exporter[2]。它是用Go语言编写的，提供了
+一个可用于收集各种主机指标数据（包括CPU、内存和磁盘）的库。它还有一个textfile收集器，允许
+你导出静态指标，我们很快就会看到这对发送有关节点的信息很有帮助，此外它还可以从批处理作业
+导出指标。
+我们有时会使用术语“节点”来指代主机。
+首先选择其中一台Linux主机，然后下载并安装Node Exporter。我们将选择一个Docker守护进程主
+机。
+如果你不想使用exporter，那么还有很多支持Prometheus的主机监控客户端。例如，collectd也
+可以收集Prometheus指标[3]。
+[1] https://prometheus.io/docs/instrumenting/exporters/。
+[2] https://github.com/prometheus/node_exporter。
+[3] https://collectd.org/wiki/index.php/Plugin:Write_Prometheus。
+
+4.1.1　安装Node Exporter
+你可以通过tar包来安装Node Exporter，在部分操作系统上也可以通过软件包进行安装。可以从
+Prometheus官网[1]下载Node Exporter的tar包。
+下载并解压缩Node Exporter，然后将二进制文件移动到环境变量path包含的路径中。
+代码清单4-1　下载Node Exporter
+在编写本书时，Node Exporter的版本为0.16.0，请根据实际情况下载最新版本。
+在CentOS和Fedora平台上，可以通过COPR[2]软件包安装。
+使用配置管理工具是运行和安装exporter的最佳方式。这种方式可以轻松地管理配置，并提供
+自动化和服务管理。
+测试一下node_exporter二进制文件是否正常工作。
+代码清单4-2　测试Node Exporter二进制文件
+[1] https://prometheus.io/download/#node_exporter。
+[2] https://copr.fedorainfracloud.org/coprs/ibotty/prometheus-exporters/。
+
+4.1.2　配置Node Exporter
+可以通过参数来对node_exporter进行配置，使用--help查看完整的参数列表。
+代码清单4-3　查看Node Exporter帮助
+你将看到可用参数的列表。默认情况下，node_exporter在端口9100上运行，并在路径/metrics上暴
+露指标。你可以通过--web.listen-address和--web.telemetry-path参数来设置端口和路径，如下所示：
+代码清单4-4　配置端口和路径
+这会将node_exporter绑定到端口9600并在路径/node-metrics上暴露指标。
+这些参数还可以控制启用哪些收集器，许多收集器默认都是启用的[1]。它们的状态要么是启用要
+么是禁用，你可以通过使用no-前缀来修改状态。例如，暴露/proc/net/arp统计信息的arp收集器默认是
+启用的，由参数--collector.arp控制。因此，要禁用此收集器，需要运行如下命令：
+代码清单4-5　禁用arp收集器
+[1] https://github.com/prometheus/node_exporter#enabled-by-default。
+
+4.1.3　配置textfile收集器
+我们还想配置一个特定的收集器，即textfile收集器，本章后面将使用它。textfile收集器非常有用，
+因为它允许我们暴露自定义指标。这些自定义指标可能是批处理或cron作业等无法抓取的，可能是没
+有exporter的源，甚至可能是为主机提供上下文的静态指标。
+收集器通过扫描指定目录中的文件，提取所有格式为Prometheus指标的字符串，然后暴露它们以
+便抓取。
+现在让我们设置收集器，首先创建一个目录来保存指标定义文件。
+代码清单4-6　创建目录
+现在在这个目录中创建一个新的指标。刚创建的目录中，指标在以.prom结尾的文件内定义，并且
+使用Prometheus特定文本格式[1]。
+特定文本格式允许我们指定Prometheus支持的所有指标类型：计数型、测量型、计时型等。
+我们使用此格式创建一个包含有关此主机的元数据指标。
+可以看到它包含一个指标名称（metadata）和两个标签。一个标签role定义节点的角色。在示例
+中，标签的值为docker_server。另一个标签datacenter定义主机的地理位置。最后，指标的值为1，因为
+它不是计数型、测量型或计时型的指标，而是提供上下文。
+让我们将这个指标添加到textfile_collector目录下的metadata.prom文件中。
+代码清单4-7　元数据指标
+在这里，我们将指标传递到名为metadata.prom的文件中。
+在真实环境中，建议使用配置管理工具来编辑该文件。例如，在配置新主机时，可以从模板
+创建元数据指标，这可以让你自动对主机和服务进行分类。
+要启用textfile收集器，我们不需要配置参数，它默认就会被加载。但我们需要指定textfile_exporter
+
+目录，以便Node Exporter知道在哪里可以找到自定义指标。为此，我们需要指定--
+collector.textfile.directory参数。
+[1] https://prometheus.io/docs/instrumenting/exposition_formats/#text-format-details。
+
+4.1.4　启用systemd收集器
+这里我们再启用另一个systemd收集器，它记录systemd[1]中的服务和系统状态。这个收集器收集
+了很多指标，但我们并不想收集systemd管理的所有内容，而只想收集某些关键服务。为了保持简洁，
+我们可以将特定服务列入白名单，只收集以下服务的指标：
+·docker.service
+·ssh.service
+·rsyslog.service
+它们是Docker守护进程、SSH守护进程和RSyslog守护进程。使用--collector.systemd.unit-whitelist参
+数进行配置，它会匹配systemd的正则表达式。
+[1] https://www.freedesktop.org/wiki/Software/systemd/。
+
+4.1.5　运行Node Exporter
+最后，可以在其中一个Docker节点上启动node_exporter，如下所示：
+代码清单4-8　启动Node Exporter（启用textfile收集器和systemd收集器）
+我们已经为textfile收集器指定了目录以查找指标，然后启用了systemd收集器，并使用正则表达式
+白名单过滤待监控的服务。
+现在Node Exporter正在其中一个Docker节点上运行，让我们将其添加到其他节点。总共有3个节
+点，现在使用相同的策略来配置其他两个节点。每个节点的名称和IP地址是：
+·Docker1：138.197.26.39
+·Docker2：138.197.30.147
+·Docker3：138.197.30.163
+现在让我们看看如何抓取刚刚导出的时间序列数据。
+
+4.1.6　抓取Node Exporter
+回到Prometheus服务器，让我们配置一个新作业来抓取Node Exporter导出的数据。查看当前
+prometheus.yml文件和抓取配置中的scrape_configs部分。
+代码清单4-9　当前Prometheus抓取配置
+要获取新数据，需要为配置添加另一个作业。我们打算给新作业起名为node，并将继续使用
+static_configs来添加单个目标，而不是使用服务发现（我们将在下一章看到有关服务发现的更多内
+容）。现在让我们添加新作业。
+代码清单4-10　添加新作业
+可以看到我们添加了名为node的新作业。它包含一个static_configs块，通过IP地址加端口9100的方
+式添加了三个Docker主机的列表。Prometheus假设Node Exporter具有默认路径/metrics，并且抓取的目
+标形式如下：
+如果现在使用SIGHUP或重新启动Prometheus服务器，那么我们的配置将被重新加载，并且服务器
+也会开始抓取。我们很快就会看到时间序列数据开始流入Prometheus服务器。
+
+4.1.7　过滤收集器
+Node Exporter可以返回很多指标，也许你并不想把它们全部收集上来。除了通过本地配置来控制
+Node Exporter在本地运行哪些收集器之外，Prometheus还提供了一种方式来限制收集器从服务器端实
+际抓取的数据，尤其是在你无法控制正抓取的主机的配置时，这种方式非常有帮助。
+Prometheus通过添加特定收集器列表来实现作业配置。
+代码清单4-11　过滤收集器
+这里，我们将被抓取的指标限制在上面的收集器列表中，使用params块中的collect[]列表指定，然
+后将它们作为URL参数传递给抓取请求。你可以使用Node Exporter实例上的curl命令来对此进行测试。
+代码清单4-12　测试收集参数
+这将返回Node Exporter基本指标，例如我们在Prometheus服务器上看到的Go指标，以及CPU收集
+器生成的指标，所有其他指标都将被忽略。
+就目前而言，我们会收集Prometheus服务器上的所有内容。
+现在我们已经拥有了节点指标，那么接下来看看Docker守护进程的监控。
+
+4.2　监控Docker容器
+Prometheus提供了几种方法来监控Docker，包括一些自定义exporter。然而，这些exporter一般都不
+会用到，推荐的方法是使用Google的cAdvisor工具。在Docker守护进程上，cAdvisor作为Docker容器运
+行，单个cAdvisor容器返回针对Docker守护进程和所有正在运行的容器的指标。Prometheus支持通过它
+导出指标，并将数据传输到其他各种存储系统，如InfluxDB、Elasticsearch和Kafka。
+我们假设你已经安装并运行了Docker守护进程，并且了解Docker的基础知识。如果你是
+Docker的新手，那么这里推荐另一本你可能感兴趣的书[1]。
+[1] https://dockerbook.com/
+
+4.2.1　运行cAdvisor
+由于cAdvisor只是Docker主机上的另一个容器，因此我们可以使用docker run命令启动它。让我们
+在Docker1主机上运行一个cAdvisor容器。
+代码清单4-13　运行cAdvisor容器
+让我们稍微分解查看下这个docker run命令。首先，我们在容器内挂载了几个目录。目录分为两种
+类型，第一种是只读的，cAdvisor将从中收集数据，例如/sys目录：
+ro表示只读。
+第二种类型是可读写的，是Docker套接字的挂载，通常位于/var/run目录中。我们还将容器内部的
+8080端口映射到主机上的8080端口，你可以用任何适合的端口来覆盖它。我们使用参数--detach以守护
+进程方式运行容器，并将容器命名为cadvisor。最后，我们使用带有latest标签的google/cadvisor图像。
+如果运行docker ps命令，刚可以看到正在运行的cAdvisor容器。
+代码清单4-14　查看cAdvisor容器
+cAdvisor会立刻开始监控。我们可以浏览主机上的8080端口以查看cAdvisor的Web界面并确认它是
+正常运行的（如图4-1所示）。
+
+图4-1　cAdvisor的Web界面
+如果浏览端口8080上的路径/metrics，则我们将看到暴露的内置Prometheus指标（如图4-2所示）。
+图4-2　cAdvisor上的Prometheus指标
+
+同样，我们也会在另外两个Docker节点上安装cAdvisor。
+
+4.2.2　抓取cAdvisor
+我们需要告诉Prometheus cAdvisor是在Docker守护进程上运行的。为此，我们将在配置中添加第
+三个作业。让我们在Prometheus服务器上编辑prometheus.yml。
+我们将再次使用static_configs添加单个目标，而不是使用任何类型的服务发现。
+代码清单4-15　添加Docker作业
+可以看到我们添加了名为docker的新作业，它包含一个static_configs块，并且通过IP地址加端口
+8080的方式添加了三个Docker主机的列表。我们依然使用默认路径/metrics。如果再次使用SIGHUP或
+重新启动Prometheus服务器，那么我们的配置将被重新加载，它将开始抓取，然后新的时间序列数据
+将会出现。
+但比较重要的是，在我们继续之前，需要首先了解抓取的工作原理以及标签的生命周期。我们将
+使用cAdvisor指标来探索这个生命周期。
+
+4.3　抓取的生命周期
+让我们先看看抓取本身的生命周期，然后再转到标签的生命周期。在每个scrape_interval期间（示
+例中是15秒），Prometheus都会检查执行的作业。这些作业将生成目标列表，即服务发现过程。到目
+前为止，我们的示例都是已手动指定的静态配置的主机，以及一些其他服务发现机制，例如从文件加
+载目标或查询API等。
+我们将在第5章详细介绍服务发现。
+服务发现返回一个目标列表，其中包含一组称为元数据的标签，这些标签以__meta_为前缀。每个
+服务发现机制都有不同的元数据，例如，AWS EC2的发现机制会返回名为__meta_ec2_availability_zone
+的标签中的实例所在可用区（availability zone）。
+服务发现还会根据目标的配置来设置其他标签，这些标签带有__的前缀和后缀，包括
+__scheme__、__address__和__metrics_path__。这些标签包含目标的模式（http或https）、目标的地址
+以及指标的具体路径。
+每个标签通常都有一个默认值。例如，__metrics_path__默认为/metrics，__scheme__默认为http。
+此外，如果路径中存在任何URL参数，则它们的前缀会设置为__param_*。
+配置标签会在抓取的生命周期中重复利用以生成其他标签。例如，指标上instance标签的默认内容
+是__address__标签的内容。
+为什么到现在我们都没有在界面上看到任何带__前缀和后缀的标签呢？这是因为有些标签在
+生命周期的后期被删除了，并且所有这些标签都被专门排除掉，不在Web UI上显示。
+然后这些目标列表和标签会返回给Prometheus，其中一些标签可以在配置中被覆盖，例如，通过
+metrics_path参数设置的指标路径以及通过scheme参数指定的模式。
+代码清单4-16　覆盖标签配置
+这里，我们将schema覆盖为https，将metrics_path覆盖为/moremetrics。
+Prometheus提供了可以重新标记目标的机会，并可能使用你的服务发现所添加的一些元数据。你
+还可以过滤目标，以删除或保留特定条目。
+
+然后就是真正的数据抓取，以及指标返回。当指标被抓取时，你将拥有最后一次机会在将它们保
+存到服务器之前重新标记并过滤。
+听上去很复杂。让我们先看一下该生命周期的简化版本（如图4-3所示）。
+图4-3　抓取的生命周期
+可以看到我们引入了一系列概念，包括两处Prometheus重新标记指标的部分。现在正是讨论标
+签、重新标记和标签分类的好时机，我们先插入这部分内容进行介绍。
+
+4.4　标签
+我们在第2章了解到，标签提供了时间序列的维度。它们可以定义目标，并为时间序列提供上下
+文。但最重要的是，结合指标名称，它们构成了时间序列的标识，如果它们改变了，那么时间序列的
+标识也会跟着改变。
+更改或添加标签会创建新的时间序列。
+这意味着应该明智地使用标签并尽可能保持不变。如果不遵守这一规定，则可能产生新的时间序
+列，从而创建出一个动态的数据环境，使监控的数据源难以跟踪。想象一下，你有一个时间序列，用
+于跟踪服务的状态。你为该时间系列配置了一个警报，该警报依赖于指标的标签来评判。如果更改或
+添加标签，那么警报将变为无效。这同样适用于历史时间序列数据：更改或添加标签，我们会丢失先
+前时间序列的跟踪，破坏已有的图像和表达式，并可能导致混乱。
+如果不再写入新数据，那么历史时间序列会发生什么？对于先前存在数据的时间序列，如果
+抓取不再返回数据，则该系列将被标记为陈旧。这同样适用于任何被删除的目标：所有时间序列都将
+标记为陈旧。图像中不会显示陈旧的数据。
+
+4.4.1　标签分类
+那么，何时应该添加标签以及应该添加哪些标签呢？好吧，就像所有优秀的监控架构那样，这值
+得构建一个分类法。与大多数监控分类法一样，在分层更加广泛时标签可能表现最好。一个设定分类
+标准的好办法是利用拓扑标签和模式标签。
+拓扑标签（topological label）通过其物理或逻辑组成来切割服务组件，例如我们在上面看到的
+datacenter标签。每个指标都天然带有两个拓扑标签：job和instance。标签job是根据抓取配置中的作业
+名称设置的。我们倾向于使用job来描述正在监控的事物的类型。在之前的Node Exporter作业中，我们
+将其命名为node。这会为每个Node Exporter指标打上job标签node。instance标签可以标识目标，它通常
+是目标的IP地址和端口，并且来自__address__标签。
+模式标签（schematic label）是url、error_code或user之类的东西，它们允许你将拓扑中同一级别的
+时间序列匹配在一起，例如创建数据间的比率。
+如果你需要添加额外的标签，则可以考虑如图4-4所示的层次结构。
+在本章后面，我们将查看之前使用textfile收集器创建的metadata指标，该收集器可以使用上下文信
+息进行修饰。
+
+图4-4　示例标签分类
+我们还可以创建和操作已有标签，以更好地管理时间序列数据。
+
+4.4.2　重新标记
+既然我们已经精心设计了标签，为什么还需要重新标记（relabel）呢？用一个词来回答就是：控
+制。在一个集中的复杂监控环境中，有时你无法控制监控的所有资源以及所有暴露的监控数据。通过
+重新标记，你可以控制、管理并标准化环境中的指标。一些最常见的用例是：
+·删除不必要的指标。
+·从指标中删除敏感或不需要的标签。
+·添加、编辑或修改指标的标签值或标签格式。
+请记住，我们有两个阶段可以重新标记。第一个阶段是对来自服务发现的目标进行重新标记，这
+对于将来自服务发现的元数据标签中的信息应用于指标上的标签来说非常有用。这是在作业内的
+relabel_configs块中完成的，我们将在下一章介绍更多相关内容。
+第二个阶段是在抓取之后且指标被保存于存储系统之前。这样，我们就可以确定哪些指标需要保
+存、哪些需要丢弃以及这些指标的样式。这是在我们作业内的metric_relabel_configs块中完成的。
+记住这两个阶段的最简单方法是：在抓取之前使用relabel_configs，在抓取之后使用
+metric_relabel_configs。
+让我们来看看cAdvisor指标的重新标记。cAdvisor收集了大量数据，但并非所有数据都是有用的。
+因此，我们来看看如何在它们进入存储之前删除其中一些指标，以避免占用不必要的空间。
+代码清单4-17　通过重新标记来删除指标
+这里，我们设置了名为docker的作业。在static_configs块之后，我们添加了一个新的块
+metric_relabel_configs，其中可以指定一系列相关操作[1]。
+删除指标
+首先来看看第一种操作。我们使用source_labels参数选择要操作的指标，并且还需要一组标签名
+称。在示例中我们使用__name__标签，__name__标签是表示指标名称的预留标签。因此，docker作业
+的源标签是所有从cAdvisor抓取的指标的连接名称。
+
+多个标签通过分隔符连接在一起，默认分隔符为“;”，也可以使用separator参数覆盖分隔符配置。
+代码清单4-18　定义新的分隔符
+这里__name__标签值将使用“,”进行分隔。
+接下来，我们指定一个正则表达式来搜索连接后的指标名称并进行匹配。正则表达式使用RE2表
+达式语法[2]，这也是Go的正则表达式库RegExp使用的语法。
+你还在为正则表达式头疼吗？网上有一些很好的正则表达式测试工具[3]可以帮到你。
+我们的正则表达式包含在regex参数中：
+它将匹配并捕获两个指标：
+·container_tasks_state
+·container_memory_failures_total
+如果指定了多个源标签，那么我们将使用分隔符隔开每个正则表达式，例如：
+然后执行action参数中指定的操作。在示例中，这两个指标都包含大量的时间序列，但是可能仅有
+部分数据有价值，所以我们使用了drop操作，这将在数据存储之前删除指标。其他操作[4]（如keep）
+则会保留与正则表达式匹配的指标，并删除所有其他指标。
+替换标签值
+我们还可以替换标签的值。举个例子，许多cAdvisor指标都有一个id标签，其中包含正在运行的进
+程的名称。如果该进程是一个容器，那么我们会看到类似如下的信息：
+
+上面的内容有点冗长，我们想要从中获取容器ID：
+然后将其放入一个新标签container_id中，通过重新标记我们可以这样做：
+代码清单4-19　替换标签
+重新标记是按顺序执行的，使用配置文件中自上而下的顺序。
+我们的源标签是id。然后，指定匹配并捕获容器ID的正则表达式（regex）。replacement字段包含
+新标签值，在示例中使用的是匹配的结果$1。然后，在target_label参数中指定捕获信息的目标，此处
+为container_id。
+你可能会注意到我们没有为此指定action。这是因为默认操作是replace，如果没有指定操作，那么
+Prometheus将假定你要执行替换操作。
+Prometheus还有一个参数honor_labels，当你尝试覆盖并添加已存在的标签时，这个参数会控制冲
+突行为。假设你已经抓取的数据有一个名为job的标签。默认情况下honor_labels为false，Prometheus将
+通过在其前面添加exported_前缀来重命名现有标签。所以我们的job标签将变成exported_job。如果
+honor_labels被设置为true，则Prometheus会保留标签，并忽略服务器上的任何重新标记行为。
+删除标签
+最后我们介绍一个删除标签的例子。这通常用于隐藏敏感信息或简化时间序列。在这个（为演示
+而创建的）示例中，我们将删除kernelVersion标签，隐藏Docker主机的内核版本。
+代码清单4-20　删除标签
+为了删除标签，我们指定一个正则表达式，然后指定删除标签的操作labeldrop。这将删除与正则
+表达式匹配的所有标签。
+
+此操作还有一个对应的反向操作labelkeep，它将保留与正则表达式匹配的标签，并删除所有其他
+标签。
+请记住，标签是时间序列的唯一性约束。如果你删除标签并导致时间序列重复，那么系统
+可能会出现问题！
+在Prometheus Web界面中可以查看到重新标记之前的标签状态。我们在http://localhost:9090/targets
+的目标列表中进行查看，将鼠标放在Labels框中的instance标签上，以查看重新标记之前的标签列表
+（如图4-5所示）。
+现在来仔细看看我们的新指标。
+图4-5　重新标记前的标签列表
+[1]
+https://prometheus.io/docs/prometheus/latest/configuration/configuration/#note_66Crelabel_confignote_66E。
+[2] https://github.com/google/re2/wiki/Syntax。
+[3] http://www.regexplanet.com/advanced/golang/index.html。
+[4] https://prometheus.io/docs/prometheus/latest/configuration/configuration/#relabel_config。
+
+4.5　Node Exporter和cAdvisor指标
+我们现在从4个主机中收集总共7组独立的指标：
+·Prometheus服务器自己的指标
+·来自3台主机的Node Exporter指标
+·来自3台主机的cAdvisor指标
+你可以通过Prometheus Web界面来查看每个目标的状态。访问http://localhost:9090/targets以查
+看Prometheus正在抓取的目标列表以及每个目标的状态。
+让我们跳过Prometheus服务器自己的指标，重点关注Node Exporter和cAdvisor指标。我们会使用其
+中一些指标来探索Prometheus的功能并确保我们的主机得到适当的监控。
+
+4.5.1　USE方法
+我们将使用在本书开头介绍的监控框架之一：USE方法。这种方法建议收集并关注使用率、饱和
+度和错误指标，以帮助进行性能诊断。我们将把这种方法广泛地应用于一种常见的监控模式，即
+CPU、内存和磁盘监控，以了解如何利用Node Exporter指标以及如何使用PromQL。
+这些主机指标主要被看作是主机上性能问题的信号。我们使用它们来了解有关使用指标的更
+多信息。但大多数情况下，我们将专注于应用程序指标，这是更适合衡量用户体验的指标。
+让我们从CPU指标开始。
+CPU使用率
+为了获得USE中的使用率，我们将使用Node Exporter收集的名为node_cpu_seconds_total的指标。
+这是我们主机上CPU的使用率，按模式细分并按使用的时间进行显示。现在让我们从Prometheus Web
+界面查询该指标，导航到http://localhost:9090/graph，从指标下拉列表中选择node_cpu_seconds_total，
+然后单击Execute（如图4-6所示）。
+图4-6　指标node_cpu_seconds_total
+你应该看到一个指标列表，就像这样：
+node_cpu_seconds_total指标包含许多标签，包括instance和job标签，分别标识它来自哪个主机以及
+被哪个作业抓取。
+instance标签通常由主机的地址和被抓取的端口组成。
+
+我们还有两个特定于CPU的标签：从某个CPU（例如cpu0）收集的cpu指标和用于测量的CPU模式
+（例如user、system、idle等）的mode指标。数据从/proc/stat中抽取，并以计数的形式告诉我们每个
+CPU在每种模式下使用了多少秒。
+这个指标列表并不是特别有用。对于任何性能分析，我们都需要使用PromQL将其转化为更有用的
+指标。我们在这里真正想要的是获得每个实例的CPU使用百分比，但要实现这一点，需要稍微处理下
+指标，我们可以通过一系列PromQL计算来实现这一结果。
+首先计算每种CPU模式的每秒使用率。PromQL有一个名为irate的函数，用于计算范围向量中时间
+序列增加的每秒即时速率。让我们对node_cpu_seconds_total指标使用irate函数，在查询框中输入：
+然后单击Execute，这将在irate函数中使用node_cpu_seconds_total指标并查询5分钟范围的数据。它
+将从node作业返回每个CPU在每种模式下的列表，表示为5分钟范围内的每秒速率。但这仍然没有太大
+帮助，我们还需要聚合不同CPU和模式间的指标。
+为此，我们可以使用avg或average运算符以及我们在第3章介绍的by子句[1]。
+现在将我们的irate函数放在avg聚合中，并添加了一个由instance标签聚合的by子句。通过使用来自
+所有指标和所有模式的值，这将生成三个新指标，分别表示每台主机的平均CPU使用率。
+但这个指标还是不太准确，它仍然包括idle的值，并且它没有表示成百分比的形式。我们将查询每
+个实例的idle使用率，因为它已经是一个比率，将它乘以100可以转换为百分比。
+在这里，我们为irate查询添加了一个值为idle的mode标签，表示仅查询idle数据。我们按实例对结
+果进行了平均，并且还乘上100以转换为百分比的形式，这样就得到了每个主机5分钟范围内idle使用率
+的平均百分比。我们可以用100减去这个值，结果就是CPU使用率的百分比，如下所示：
+现在我们有三个指标，每台主机一个，展示了5分钟范围内平均使用CPU的百分比（如图4-7所
+示）。
+
+图4-7　每台主机平均CPU使用率指标
+现在，如果点击Graph标签，那么我们也可以看到这些数据的图示（如图4-8所示）。
+图4-8　每台主机CPU使用率指标图示
+CPU饱和度
+在主机上获得CPU饱和的一种方法是跟踪平均负载，实际上它是将主机上的CPU数量考虑在内的
+一段时间内的平均运行队列长度。平均负载少于CPU的数量通常是正常的，长时间内超过该数字的平
+均值则表示CPU已饱和。
+要查看主机的平均负载，我们可以使用node_load*指标，它们显示了1分钟、5分钟和15分钟的平
+均负载。我们将使用1分钟的平均负载：node_load1。
+我们快速浏览一下这个指标。从指标下拉列表中选择node_load1，然后单击Execute，这将列出被
+监控节点当前1分钟的平均负载值。
+
+我们还需要计算主机上的CPU数量，可以使用count聚合[2]实现：
+这里我们用idle的mode来计算node_cpu_seconds_total时间序列的出现次数，然后使用by子句从结
+果向量中删除instance之外的所有标签，这会为我们提供一个包含每台主机CPU数量的主机列表（如图
+4-9所示）。
+我们可以看到3个节点各有2个CPU。
+由于我们也在收集Docker指标，因此也可以使用cAdvisor的指标machine_cpu_cores来快速获
+取CPU数量。
+图4-9　每台主机的CPU数量
+然后我们可以将此计数与node_load1指标结合起来，如下所示：
+这里我们查询的是1分钟的平均负载超过主机CPU数量的两倍的结果。这并不一定是一个问题，但
+是我们将在第6章介绍如何将它转换为警报，以便在出现问题时及时通知。
+现在让我们看看能否使用内存指标做类似的事情。
+我们将跳过USE中的CPU错误，因为我们不太可能收集到任何有用的数据。
+内存使用率
+我们来看看主机上的内存使用率。Node Exporter的内存指标按内存的类型和使用率进行细分。你
+可以在以node_memory为前缀的指标列表中找到它们（如图4-10所示）。
+
+图4-10　指标node_memory_MemTotal_bytes
+我们将重点关注node_memory指标的一个子集以获取使用率：
+·node_memory_MemTotal_bytes：主机上的总内存。
+·node_memory_MemFree_bytes：主机上的可用内存。
+·node_memory_Buffers_bytes：缓冲缓存中的内存。
+·node_memory_Cached_bytes：页面缓存中的内存。
+所有这些指标都是以字节为单位来表示的。
+我们将使用这些指标组合来计算每个主机上使用的内存百分比。为此，我们将
+node_memory_MemFree_bytes、node_memory_Cached_bytes和node_memory_Buffers_bytes指标的值相
+加，这代表我们主机上的可用内存。然后我们将使用这个值和node_memory_MemTotal_bytes指标来计
+算可用内存的百分比，使用以下查询：
+在这里，我们将三个内存指标相加，从总数中减去它们然后再除以总数，最后乘以100以将其转换
+为百分比。这将生成三个指标，显示每个主机使用的内存百分比（如图4-11所示）。
+图4-11　每台主机的内存使用率
+
+在这里，我们不需要使用by子句来保留不同的维度，因为指标具有相同的维度标签，每个指标都
+会依次应用查询。
+内存饱和度
+我们还可以通过检查内存和磁盘的读写来监控内存饱和度。可以使用从/proc/vmstat收集的两个
+Node Exporter指标：
+·node_vmstat_pswpin：系统每秒从磁盘读到内存的字节数。
+·node_vmstat_pswpout：系统每秒从内存写到磁盘的字节数。
+两者都是自上次启动以来的字节数，以KB为单位。
+为了获得饱和度指标，我们对每个指标计算一分钟的速率，将两个速率相加，然后乘以1024以获
+得字节数。我们会创建一个查询来执行此操作。
+代码清单4-21　内存饱和度查询
+然后，我们可以对此设置图形化展示或者警报，以识别行为不当的应用程序主机。
+磁盘使用率
+对于磁盘，我们只测量磁盘使用情况而不是使用率、饱和度或错误。这是因为在大多数情况下，
+它是对可视化和警报最有用的数据。Node Exporter的磁盘使用指标位于以node_filesystem为前缀的指标
+列表中（如图4-12所示）。
+图4-12　磁盘指标
+例如，node_filesystem_size_bytes指标显示了被监控的每个文件系统挂载的大小。我们可以使用与
+
+内存指标类似的查询来生成在主机上使用的磁盘空间的百分比。
+但是，与内存指标不同，我们在每个主机上的每个挂载点都有文件系统指标。所以我们添加了
+mountpoint标签，特别是根文件系统“/”挂载。这将在每台主机上返回该文件系统的磁盘使用指标（如
+图4-13所示）。
+图4-13　每台主机的磁盘空间指标
+如果想要或需要监控特定挂载点，那么我们可以为其添加查询。要监控/data挂载点，我们可以使
+用：
+或者可以使用正则表达式[3]来匹配多个挂载点。
+你不能使用正则表达式来匹配空字符串。
+可以看到我们已经更新了mountpoint标签，将操作符从=更改为=~，这告诉Prometheus右侧值是正
+则表达式。然后我们匹配/run和/根文件系统。
+正则表达式中还有表示不匹配的运算符。
+这仍然是一个相当经典的磁盘使用量指标，它告诉我们文件系统当前使用的百分比。在许多情况
+下，这些数据是无用的。例如，如果磁盘以每年1%的速度增长，那么对于1 GB文件系统来说80％的使
+
+用可能根本不是一个问题。但是对于1 TB文件系统，如果以每10分钟10％的速度增长，那么10%的使
+用则可能面临磁盘写满的严重风险。对于磁盘空间，我们确实需要了解指标的趋势和方向。我们通常
+要回答的问题是：“考虑到现在磁盘的使用情况，以及它的增长，我们会在什么时候耗尽磁盘空间？”
+实际上Prometheus提供了一种机制，通过一个名为predict_linear的函数，我们可以构造一个查询来
+回答这个问题。我们来看一个例子：
+这里我们查看根文件系统node_filesystem_free_bytes{mountpoint="/"}，可以通过指定作业名称或
+使用正则表达式来选择所有文件系统，就像我们在本节前面所做的。
+我们选择一小时的时间窗口[1h]，并将此时间序列快照放在predict_linear函数中。该函数使用简单
+的线性回归，根据以前的增长情况来确定文件系统何时会耗尽空间。该函数参数包括一个范围向量，
+即一小时窗口，以及未来需要预测的时间点。这些都是以秒为单位的，因此这里使4*3600秒，即四小
+时。最后<0过滤出小于0的值，即文件系统空间不足。
+因此，如果基于最后一小时的增长历史记录，文件系统将在接下来的四个小时内用完空间，那么
+查询将返回一个负数，然后我们可以使用它来触发警报。我们将在第6章看到这个警报是如何工作的。
+[1] https://prometheus.io/docs/prometheus/latest/querying/operators/#aggregation-operators。
+[2] https://prometheus.io/docs/prometheus/latest/querying/operators/#aggregation-operators。
+[3] https://prometheus.io/docs/prometheus/latest/querying/basics/。
+
+4.5.2　服务状态
+现在让我们看看来自systemd收集器的数据，它向我们展示了主机上的服务状态和其他各种
+systemd配置。服务的状态在node_systemd_unit_state指标中暴露出来。对于收集的每个服务和服务状
+态都有一个指标。在示例中，我们只收集Docker、SSH和RSyslog守护进程的指标。
+代码清单4-22　指标node_systemd_unit_state
+可以通过表达式浏览器查询这些数据的一部分，比如我们专门查看下docker服务。为此，我们使
+用name标签进行查询（如图4-14所示）。
+图4-14　systemd时间序列数据
+此查询为每个潜在的服务和状态（failed、inactive、active等）的组合生成指标，其中表示当前服
+
+务状态的指标的值为1。我们可以通过添加state标签来进一步缩小搜索范围，仅返回active状态的数
+据。
+或者，我们可以搜索值为1的所有指标，这将返回当前服务的状态。
+在这里，我们看到了一个新的查询，使用比较运算符“==”[1]。查询将返回值为1、name标签为
+docker.service的所有指标（如图4-15所示）。
+图4-15　active状态的服务
+我们将使用systemd指标来监控主机上的服务可用性，例如Docker守护进程。第6章会介绍如何对
+此发出警报。
+[1] https://prometheus.io/docs/prometheus/latest/querying/operators/#comparison-binary-operators。
+
+4.5.3　可用性和up指标
+值得一提的是用于监控特定节点状态的另一个有用指标：up指标。对于每个实例抓取，
+Prometheus都会在以下时间序列中存储样本：
+代码清单4-23　up指标
+如果实例是健康的，则指标设置为1，即数据抓取成功返回。如果抓取失败，则设置为0。指标使
+用作业名称job和时间序列的实例instance来进行标记。
+Prometheus还会填充其他一些监控指标，包括scrape_duration_seconds（抓取的持续时间）和
+scrape_samples_scraped（目标暴露的样本数）。
+我们可以查询主机的所有up指标（如图4-16所示）。
+图4-16　up指标
+此外，许多exporter都有特定的指标，旨在确定最后一次成功的数据抓取。例如，cAdvisor指标
+container_last_seen，它提供容器列表以及它们最近一次活动的时间。MySQL Exporter返回一个指标
+mysql_up，如果SELECT查询在数据库服务器上成功运行，则将该指标设置为1。
+我们将在第6章介绍如何使用up指标来帮助我们进行可用性监控。
+你不能重新标记自动填充的指标，如up指标，因为它们是在重新标记阶段之后生成的。
+
+4.5.4　metadata指标
+最后，使用Node Exporter的textfile收集器来查看我们创建的metadata指标。
+该指标提供资源的上下文信息，如角色docker_server、主机的位置datacenter。尽管这些数据本身
+很有用，但为什么又要创建一个单独的指标而不是仅将这些作为标签添加到主机的指标中呢？我们已
+经知道标签提供了时间序列的维度，并且与指标名称相结合，它们构成了时间序列的标识。同时，我
+们也已经被警告过：
+更改标签或添加新标签都会创建新的时间序列。
+这意味着我们应该谨慎地使用标签，并且应尽可能保持不变。因此，我们不是使用一组完整的标
+签集来修饰每个时间序列，而是创建一个时间序列，我们可以使用它来查询特定类型或类别的资源。
+让我们看看如何利用该指标上的标签。假设我们只想从某个特定的数据中心或一组数据中心选择
+指标。我们可以快速找到所有主机，例如，查询不在新泽西（NJ）的数据中心：
+你可以看到我们查询了metadata指标，并使用运算符（!=，不等于）指定了datacenter，以便从不
+在新泽西的数据中心返回所有metadata指标。
+Prometheus有一整套可以使用的算术和比较二元运算符[1]。
+向量匹配
+我们还可以使用metadata指标来进行向量匹配（vector match）[2]。向量匹配可以使用任何PromQL
+二元运算符[3]。向量匹配尝试针对左侧向量中的每个元素在右侧向量中查找对应的匹配元素。
+目前有两种向量匹配：一对一（one-to-one）和多对一（many-to-one，或一对多（one-to-
+many））。
+一对一匹配
+一对一匹配从每一侧找到唯一匹配的条目对。如果两个条目具有完全相同的标签和值，则它们是
+一对一匹配的。你可以考虑使用ignoring修饰符忽略掉特定标签，或者使用on修饰符来减少显示的标签
+列表。我们来看一个例子。
+代码清单4-24　一对一向量匹配
+
+这将查询所有node_systemd_unit_state指标中name标签为docker.service并且值为1的指标。然后，我
+们使用on修饰符将返回的标签列表减少到metadata指标的instance和job标签，并且datacenter标签的值为
+SF。
+在我们的例子中，这将返回一个指标：
+如果我们要将查询中的datacenter标签更改为NJ，则将返回两个指标：位于NJ数据中心的两个
+Docker服务器。
+多对一和一对多匹配
+多对一和一对多匹配是其中一侧向量中的元素与另一侧向量中的多个元素相匹配。这些匹配使用
+group_left或group_right修饰符显式指定，其中left或right是为了确定哪个向量具有更高的基数。
+Prometheus文档[4]包含了一些这种匹配的例子，但它们通常不会被使用。大多数情况下，一对一匹配
+就足够了。
+元数据风格的指标
+许多现有的exporter使用这种“元数据”模式来提供额外状态的信息，例如cAdvisor的
+cadvisor_version指标，它提供了本地Docker守护进程和相应配置的信息（如图4-17所示）。
+图4-17　cadvisor_version指标
+这种指标允许你使用向量匹配来列出所有符合某些上下文标准的指标：如位置、版本等。
+现在已经看到了如何使用某些指标，那么我们如何持久化这些查询呢？
+[1] https://prometheus.io/docs/prometheus/latest/querying/operators/。
+
+[2] https://prometheus.io/docs/prometheus/latest/querying/operators/#vector-matching。
+[3] https://prometheus.io/docs/prometheus/latest/querying/operators/#binary-operators。
+[4] https://prometheus.io/docs/prometheus/latest/querying/operators/#vector-matching。
+
+4.6　查询持久性
+到目前为止，我们只是在表达式浏览器中运行查询。虽然查看该查询的输出很方便，但结果仍然
+是临时存储在Prometheus服务器上。我们可以通过以下三种方式使查询持久化：
+·记录规则：根据查询创建新指标。
+·警报规则：从查询生成警报。
+·可视化：使用Grafana等仪表板可视化查询。
+之前的查询都可以交替应用这三种机制，因为所有这些机制都能理解和执行PromQL查询。
+在本章中，我们将使用一些记录规则，以便根据查询创建新指标，并且还将配置Grafana仪表板以
+可视化指标。在第6章，我们将使用警报规则来生成警报。
+
+4.6.1　记录规则
+我们在第2章已经提到了记录规则[1]及其“兄弟”警报规则[2]。
+记录规则是一种根据已有时间序列计算新时间序列（特别是聚合时间序列）的方法，我们这样做
+是为了：
+·跨多个时间序列生成聚合。
+·预先计算消耗大的查询。
+·产生可用于生成警报的时间序列。
+现在让我们编写一些规则。
+[1] https://prometheus.io/docs/prometheus/latest/configuration/recording_rules/。
+[2] https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/。
+
+4.6.2　配置记录规则
+记录规则存储在Prometheus服务器上，位于Prometheus服务器加载的文件中。规则是自动计算的，
+频率则由第3章介绍的prometheus.yml配置文件的global块中的evaluation_interval参数控制。
+代码清单4-25　evaluation_interval参数
+规则文件在Prometheus配置文件的rules_files块中指定。
+在prometheus.yml文件的同一文件夹中创建一个名为rules的子文件夹，用于保存我们的记录规则。
+我们还将为节点指标创建一个名为node_rules.yml的文件。Prometheus规则与Prometheus配置一样是通
+过YAML编写的。
+YAML规则已在Prometheus 2.0中更新。早期的版本使用了不同的结构，一些旧的规则文件
+在Prometheus 2.0或更高版本中会失效，可以使用promtool来升级旧规则文件。这里有一篇关于升级过
+程的博文[1]。
+代码清单4-26　创建一个记录规则文件
+在Prometheus配置文件prometheus.yml的rule_files块中添加这个文件。
+代码清单4-27　添加规则文件
+现在让我们用一些规则来填充这个文件。
+[1] https://www.robustperception.io/converting-rules-to-the-prometheus-2-0-format/。
+
+4.6.3　添加记录规则
+让我们把CPU、内存和磁盘计算转换为记录规则。我们有很多要监控的主机，所以我们要对所有
+节点预先计算这三个指标的查询，这样就可以将这些计算作为指标，然后可以设置警报或者通过
+Grafana等仪表板进行可视化。
+让我们从CPU计算开始吧。
+代码清单4-28　一个记录规则
+记录规则在规则组中定义，这里的规则组叫作node_rules。规则组名称在服务器中必须是唯一的。
+规则组内的规则以固定间隔顺序执行。默认情况下，这是通过全局evaluate_interval来控制的，但你可
+以使用interval子句在规则组中覆盖。
+规则组内规则执行的顺序性质意味着你可以在后续规则中使用之前创建的规则。这允许你根据规
+则创建指标，然后在之后的规则中重用这些指标。这仅在规则组内适用，规则组是并行运行的，因此
+不建议跨组使用规则。
+这意味着你可以将记录规则用作参数，例如，你可能希望创建一个带有阈值的规则。然后，
+你可以在规则中设置一次阈值并重复使用多次。如果你需要更改阈值，则只需更改一处即可。
+代码清单4-29　记录规则间隔
+这将更新规则组为每10秒运行一次，而不是全局定义的15秒。
+接下来，我们有一个名为rules的YAML块，它包含该组的记录规则。每条规则都包含一条记录，
+告诉Prometheus将新的时间序列命名为什么。你应该仔细命名规则，以便快速识别它们代表的内容。
+一般推荐的格式是：
+其中level表示聚合级别，以及规则输出的标签。metric是指标名称，除了使用rate()或irate()函数剥
+
+离_total计数器之外，应该保持不变。这样的命名可以帮助你更轻松地找到新指标。最后，operations
+是应用于指标的操作列表，一般最新的操作放在前面。
+所以我们的CPU查询将命名为：
+在Prometheus文档中有一些命名的最佳实践[1]。
+然后，我们指定一个expr字段来保存生成新时间序列的查询。
+我们还可以添加labels块以向新时间序列添加新标签。根据规则创建的时间序列会继承用于创建它
+们的时间序列的相关标签，但你也可以添加或覆盖标签。例如：
+代码清单4-30　一个记录规则
+让我们再创建一些查询，并添加它们。
+代码清单4-31　一个记录规则
+本书的配置文件和代码位于GitHub[2]上。
+
+我们现在需要重启Prometheus服务器或进行SIGHUP以激活新规则。这将为每个规则创建一个新的
+时间序列。一小段时间后，你应该能够在服务器上找到新的时间序列。
+通过将SIGHUP信号发送到Prometheus进程（或在Microsoft Windows上重启），可以在运行
+时重新加载规则文件。重新加载仅在规则文件格式良好时才有效。Prometheus服务器附带一个名为
+promtool的实用程序，可以帮助检测规则文件。
+如果我们现在搜索一个新的时间序列instance:node_cpu:avg_rate5m，则应该可以看到如图4-18所示
+的内容。
+图4-18　instance:node_cpu:avg_rate5m记录规则
+最后，让我们快速了解一下如何对刚刚创建的指标进行可视化。
+你可以在Web界面的/rules路径中查看当前服务器上定义的规则。它会提供一些有用的信息，
+如每个规则的执行时间，可以帮助你调试可能需要优化的规则。
+[1] https://prometheus.io/docs/practices/naming/。
+[2] https://github.com/turnbullpress/prometheusbook-code。
+
+4.7　可视化
+正如之前所见，Prometheus有一个内置的仪表板和图形界面。它非常简单，通常最适合查看指标
+和呈现单个图表。为了给Prometheus添加一个功能更全面的可视化界面，该平台选择与开源仪表板工
+具Grafana[1]集成。Grafana接受来自不同数据源的数据，然后提供可视化仪表板。它支持多种数据源，
+例如Graphite、Elasticsearch和Prometheus。
+值得注意的是，Prometheus通常不用于长期数据保留，默认保存15天的时间序列数据。这意味着
+Prometheus更专注于监控问题，而不是其他可视化和仪表板系统。针对Prometheus时间序列数据的处
+理，更加实用的方式是使用表达式浏览器、绘制Prometheus UI内置图形以及构建适当的警报，而不是
+构建大量仪表板。
+尽管如此，我们也将快速安装Grafana并将Prometheus连接到它上面。
+[1] https://grafana.org/。
+
+4.7.1　安装Grafana
+如何安装Grafana取决于你正在使用的平台。Grafana支持在Linux、Microsoft Windows和Mac OS X
+上运行。让我们依次介绍每个平台上的安装步骤。
+在Ubuntu上安装Grafana
+对于Ubuntu和Debian系统，我们可以添加Grafana包的存储库。首先需要添加PackageCloud公钥，
+如下所示：
+代码清单4-32　在Ubuntu上获取PackageCloud公钥
+添加如下Apt配置以查找Grafana存储库。
+代码清单4-33　添加Grafana包
+接下来我们更新Apt并通过apt-get命令安装Grafana。
+代码清单4-34　更新Apt并安装Grafana
+在Red Hat上安装Grafana
+要在Red Hat系统上安装Grafana，我们首先需要添加PackageCloud公钥，如下所示：
+代码清单4-35　在Red Hat上获取PackageCloud公钥
+然后我们将以下内容添加到grafana.repo文件内的/etc/yum.repos.d/目录中：
+代码清单4-36　Grafana的Yum源配置
+
+现在我们通过yum或者dnf命令来安装Grafana。
+代码清单4-37　在Red Hat上安装Grafana
+在Microsoft Windows上安装Grafana
+要在Microsoft Windows上安装Grafana，我们需要下载软件并将其放在合适的目录中。使用
+Powershell为可执行文件创建一个目录。
+代码清单4-38　在Windows上创建Grafana目录
+现在从Grafana站点下载Grafana。
+代码清单4-39　下载Windows版本Grafana
+该zip文件包含一个当前版本Grafana的文件夹。使用7-Zip等工具解压文件，并将解压后的目录内
+容放入C:\grafana目录。最后，将C:\grafana目录添加到path环境变量中，这将允许Windows找到可执行
+文件，为此，需要在Powershell中运行如下命令。
+代码清单4-40　为Grafana设置path环境变量
+然后，我们需要进行一些快速配置来调整默认端口。Grafana默认端口是3000，这是一个在
+Microsoft Windows上需要额外权限的端口。因此我们将其更改为端口8080，使Grafana更容易使用。
+
+进入C:\grafana\conf\目录，复制sample.ini文件到custom.ini。编辑custom.ini文件并取消http_port配
+置选项的注释。注释的前缀在ini文件中为“;”。将端口号更改为8080，该端口不需要额外的Windows权
+限。
+在Mac OS X上安装Grafana
+Homebrew[1]提供Grafana安装。如果你在Mac OS X主机上使用Homebrew，则可以通过brew命令安
+装Grafana。
+代码清单4-41　通过Homebrew安装Grafana
+通过配置管理工具或套件安装Grafana
+通过配置管理工具安装Grafana有多种方式。我们在第3章看到的许多套件和配置管理模块也支持
+Grafana安装。
+·Chef cookbook：https://supermarket.chef.io/cookbooks/grafana。
+·Puppet模块：https://forge.puppetlabs.com/modules?utf-8=%E2%9C%93&sort=rank&q=grafana。
+·Ansible角色：https://galaxy.ansible.com/list#roles/3563。
+·Docker镜像：https://hub.docker.com/search/?q=grafana。
+[1] https://brew.sh/。
+
+4.7.2　启动和配置Grafana
+有两个地方可以配置Grafana：本地配置文件和Grafana Web界面。本地配置文件主要用于配置服务
+器级的设置（如身份验证和网络），文件在不同系统的位置如下：
+·Linux：/etc/grafana/grafana.ini。
+·Mac OS X：/usr/local/etc/grafana/grafana.ini。
+·Windows：C:\grafana\conf\custom.ini。
+Grafana Web界面用于配置数据源、图形、视图和仪表板。我们在本章中的配置将通过Web界面进
+行。
+要访问Web界面，需要先启动Grafana Web服务。我们将在Linux上进行操作。
+代码清单4-42　在Linux上启动Grafana
+以上命令适用于Ubuntu和Red Hat。
+在OS X上，如果我们想在系统启动时启动Grafana，则需要执行以下命令：
+代码清单4-43　在配置OS X启动时启动Grafana
+或者通过以下命令在OS X上临时启动它：
+代码清单4-44　在OS X上启动Grafana
+在Microsoft Windows上，我们将运行grafana-server.exe可执行文件，如果我们想将其作为服务运
+行，则需要使用类似NSSM的工具。
+
+4.7.3　配置Grafana Web界面
+Grafana是一个基于Go的Web应用服务，默认在端口3000（或者在Microsoft Windows上配置为
+8080）上运行。一旦运行，你就可以通过浏览器访问——例如，如果它在本地主机上运行，则可直接
+访问http://localhost:3000（如图4-19所示）。
+开始你会看到一个登录界面，默认用户名和密码为admin和admin，你可以通过更新Grafana配置文
+件的[security]部分来控制。
+你可以配置用户身份验证，包括与Google验证、GitHub验证或本地用户身份验证的集成。Grafana
+配置文档中包含用户管理和身份验证。针对我们的意图，我们将假设控制台位于内部环境中并继续使
+用本地身份验证。
+
+图4-19　Grafana控制台登录界面
+使用admin/admin用户名和密码，然后单击“Log in”按钮登录控制台。你应该可以看到Grafana默认
+的控制台视图（如图4-20所示）。
+图4-20　Grafana控制台视图
+它包含一个入门使用教程。首先要将Grafana与我们的Prometheus数据关联起来，单击入门教程中
+的“Add data source”，你将看到数据源的定义界面。
+
+要添加新数据源，我们需要指定一些细节信息。首先，我们需要命名数据源，这里采用
+Prometheus。接下来，选中Default复选框，告诉Grafana默认搜索该数据源的数据。我们还需要确保将
+数据源类型设置为Prometheus。
+此外，需要为数据源指定HTTP设置，这是我们要查询的Prometheus服务器的URL。我们假设
+Grafana与Prometheus在同一台主机上运行，因此这里使用本地服务器的http://localhost:9090。如果你是
+在其他地方运行Prometheus，则需要指定Prometheus的URL并确保Grafana主机和Prometheus服务器之间
+可以正常连接。
+需要Prometheus服务器保持正常运行状态，以便Grafana检索数据。
+将Access选项设置为proxy（代理），但是这并没有为我们的连接配置HTTP代理，不过它告诉
+Grafana使用自己的Web服务来代理与Prometheus的连接（如图4-21所示）。另一个选项direct，是从Web
+浏览器直接连接。proxy设置更加实用一些，因为连接部分交由Grafana服务负责。
+单击“Add”按钮就可以完成新数据源的添加。在界面上，现在可以看到我们的数据源显示。如果
+保存后有横幅弹出提示“Data source is working”，则表明它正在工作！
+单击Grafana图标，然后单击“Dashboards→Home”返回主控制台视图（如图4-22所示）。
+
+图4-21　为Grafana添加Prometheus数据源
+
+图4-22　为Grafana添加Prometheus数据源
+
+4.7.4　第一个仪表板
+现在你又回到了入门教程界面，单击“New dashboard”按钮以创建新的仪表板。然后，你可以看到
+第一个仪表板如图4-23所示。
+创建图形和仪表板的过程比较复杂，超出了本书讨论的范畴。但是有大量资源和示例可供参考：
+·Grafana入门：http://docs.grafana.org/guides/getting_started/。
+·Grafana教程和录像：http://docs.grafana.org/tutorials/screencasts/。
+·Prometheus文档中的Grafana部分：https://prometheus.io/docs/visualization/grafana/。
+·Grafana预建仪表板：https://grafana.com/dashboards。
+图4-23　节点仪表板
+许多项目还包括预先构建的Grafana仪表板，以满足特定的需求，如MySQL[1]或Redis[2]。
+然后，你可以为我们在本章探讨的其他指标添加图表。我们在本书源码中提供了可以导入的完整
+仪表板JSON文件[3]。
+[1] https://github.com/percona/grafana-dashboards。
+[2] https://grafana.com/dashboards/763。
+[3] https://github.com/turnbullpress/prometheusbook-code/blob/master/4/dashboard.json。
+
+4.8　小结
+在本章中，我们使用了第一个exporter来抓取主机和容器的指标。
+我们已经开始逐步探索PromQL查询语言，介绍如何利用查询来聚合指标，并报告一些节点资源的
+状态，并且深入研究了USE方法以找到要监控的关键指标。此外，我们还学习了如何将这些查询保存
+为记录规则。
+接着我们将exporter的应用扩展到所有主机。然而，这也带来了一个挑战：Prometheus如何知道新
+主机的存在？是否还需要手动将IP地址添加到配置中？我们很快就会发现这种方式扩展性很差。值得
+庆幸的是，Prometheus为我们提供了解决方案：服务发现。在下一章，我们将探讨Prometheus如何发现
+主机和服务。

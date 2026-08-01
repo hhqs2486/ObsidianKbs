@@ -1,0 +1,2028 @@
+。
+…
+苦
+’r 
+4
+· 
+MY
+… 
+G
+… 
+.... 
+--
+E 
+·
+·
+·
+·
+由
+＝
+F
+.. 
+跑
+·
+... 
+···.
+m
+qd 
+····
+4l 
+.... 
+r, 
+.. 
+扳
+回
+U
+S
+A
+·
+攘
+·
+·
+a
+.... 
+. ... 
+.. 
+惶
+惶
+. 
+Kubernetes 运维管理
+当搭建好Kubernet郎平台并在此平台丰部署相关的应用后，如何掌握此平台及应用的
+运行状态是系统运维人员十分关注的问题，目前了解系统运行状态的主要手段是通过系统
+监控采集日志及相关性能数据并传输到服务器端进行分析后集中展现。下面就日志及监控
+等日常运维手段进行描述。
+13.1 
+Kubernetes 日志管理
+用户部署完Kubernetes 平台后，会在此平台上安装运行大量的应用，
+Kubernetes 平台
+及各种应用系统运行过程中会产生大量的各种各样的系统日志和应用日志，通过对这些日
+志的采集、传输、存储、分析，
+掌握系统运行状况，对故障处理、安全审计、行为统计等
+有非常重要的作用。下面主要介绍日志采集、传输、存储及分析的具体方案及实践。
+13.1.1 
+日志概述
+Kubernetes 平台上的日志按照运维领域分为应用日志和平台日志。平台日志主要是指
+容器云平台执行过程中产生的系统日志，应用日志是指租户部署的容器应用所产生的日
+志。一般容器内的应用日志会通过标准输出设备输出到宿主机，容器引擎可以通过Docker
+Deamon 来接收和重定向这些日志数据。对于应用日志这种数据量比较大的数据可以考虑
+通过网络直接重定向到收集器，不必通过文件中转，这样可以一定程度地加快数据流转的
+速度。
+对于容器应用数据的收集，由于容器的动态申请和释放的特性，因此日志中能够包含
+
+162
+。
+基于Kubernetes 的容器云平台实战
+日志来源的拓扑信息和IP 地址等身份信息就显得尤为重要。应用日志由于数据量巨大，一
+般应当根据系统确定保存时间，并对存储空间溢出的异常进行保护。
+13.1.2 
+ELK 日志管理方案实践
+在Kubernetes 集群搭建完成后，通过使用一些监控组件（如cAdvisor 、
+logs 等）也能完
+成一些基本的日志采集及管理功能，但是在分布式架构中这些组件采集的日志分布在各个
+节点上，应用及平台记录的日志路径及名字都是一样的，因此无法分清是哪个节点、哪个
+Pod ，无法直接聚合这些日志进行分析。另外，本节点无法访问其他节点的日志信息，因此
+日志信息是离散的不成体系的，不能简单地将这些日志放到一起进行分析，
+ELK 方案应运
+而生，正好解决了这些问题。
+1. ELK 简要介绍
+ELK 是ElasticSearch 、
+Logstash 、
+Kibana 的简称，是容器日志管理的核心套件。
+ElasticSearch 是基于Apache Lucene 引擎开发的实时全文搜索和分析引擎，提供结构化
+数据的搜集、分析、存储数据三大功能。它提供Rest 和Java API 两种接口方式。
+Logstash 是一个日志搜集处理框架，也是日志透传和过滤的工具，它支持多种类型的
+日志，包括系统日志、错误日志和自定义应用程序日志。它可以从许多来源接收日志，这
+些来源包括syslog 、消息传递（例如RabbitMQ ）和JMX ，它能够以多种方式输出数据，包
+括电子邮件、
+Websockets 和ElasticSearch 。
+Kibana 是一个图形化的Web 应用，它通过调用Elastic Search 提供的Rest 或Java API 
+接口搜索存储在ElasticSearch 中的日志，并围绕分析主题进行分析得出结果，并将这些结
+果数据按照需要进行界面可视化展示；另外，
+Kibana 可以定制仪表盘视图，展示不同的信
+息以便满足不同的需求。
+2. ELK 实践
+使用ELK 核心组件的部署有多种方式，但除了ELK 外还需要其他组件的配合，本实
+践采用其中最通用的方式进行，具体架构如图
+13-1 所示。
+在各个计算节点上部署采集相关的软件，如cAdvisor 、
+Fluentd 、
+Logstash 等；在管理
+节点上部署ElasticSearch 和Kibana 。计算节点采集平台及应用相关的日志并且附加上Pod
+及容器信息后传输到ElasticSearch 进行存储；用户通过Kibana 对日志进行搜索、查询及可
+视化分析。
+( 1 ）准备工作
+版本要求：操作系统CentOS Linux release 7.2; JDK 版本1.8 。
+镜像准备：将ElasticSearch 、
+Logstash 、
+Kibana 、
+Fluentd 的镜像文件上传到本地私有
+镜像仓库，确保能从本地私有镜像仓库中下载镜像。
+
+第13 章
+Kubernetes 运维管理
+•！•
+163 
+管理节点
+图
+13 ” l
+ELK 架构图
+( 2 ) yam ！文件编写
+• ElasticSearch 
+elasticsearch-master. yam！文件内容：
+apiVersion: 
+extensions / vlbetal 
+kind: Deployment 
+metadata: 
+name: elasticsearch-master 
+labels: 
+component: elasticsearch 
+role: master 
+spec: 
+template: 
+metadata: 
+labels: 
+component: elasticsearch 
+role: master 
+annotations: 
+pod.beta.kubernetes.io/init-containers:’[ 
+” name”:”sysctl", 
+"image":”busy box”, 
+"imagePullPolicy”:" IfNotPresent”, 
+"command ”:[”sysctl”,"-w”," vm.max map count=262144 ”], 
+” securityContext”:{ 
+” privileged”: true 
+
+164
+令
+基于Kubernetes 的窑器云平台实战
+spec: 
+containers: 
+-
+name: es-master 
+securitycontext: 
+privileged: true 
+capabilities: 
+add: 
+-
+IPC LOCK 
+image: 
+10. 4 7. 202. 23/elasticsearch: 2. 3. 0 
+imagePullPolicy: Always 
+env: 
+-
+name: NAMESPACE 
+valueFrom: 
+fieldRef: 
+fieldPath: metadata.n缸nespace
+-
+name:”CLUSTER NAME ” 
+value :”mycluster" 
+-
+name: NODE MASTER 
+value :”true ” 
+-
+name: NODE INGEST 
+value :”false ” 
+-
+name: NODE DATA 
+value :”f alse ” 
+-
+name: HTTP ENABLE 
+value :”false" 
+-
+name:”ES JAVA OPTS" 
+value :”-Xms256m -Xmx256m" 
+ports: 
+- containerPort: 9300 
+t 
+r 
+op 
+p
+&
+FU 
+ST 
+n 
+a·· 
+rl 
+to 
+c 
+--
+o 
+et 
+mm 
+np
+‘ 
+. volumeMounts: 
+-
+n缸ne: storage 
+mountPath: I data 
+volumes: 
+-
+emptyDir: 
+medium:”” 
+name: "storage" 
+elasticsearch-client . yaml 文件内容：
+apiVersion: 
+extensions/vlbetal 
+kind: Deployment 
+metadata: 
+n缸ne: elasticsearch-client 
+labels: 
+component: elasticsearch 
+role: client 
+spec: 
+template: 
+
+metadata: 
+labels: 
+component: elasticsearch 
+role: client 
+annotations: 
+第13 章
+Kubernetes 运维管理
+•！•
+165 
+pod.beta.kubernetes.io/init-containers:’[ 
+” name":”sysctl ”, 
+"image”:”busybox", 
+"imagePullPolicy":”I fNotPresent", 
+"command ”:[”sysctl”,”-w” ,
+” vm.max_map_ count=262144 ”], 
+” securityContext”:{ 
+"privileged": true 
+spec: 
+containers : 
+-
+name: es-client 
+securityContext: 
+privileged: true 
+cap ab工工工ties:
+add: 
+-
+IPC LOCK 
+image: 10.47.202.23/elasticsearch:2.3.0 
+imagePullPolicy: Always 
+env: 
+-
+name: NAMESPACE 
+valueFrom : 
+fieldRef: 
+直eldPath: metadata.namespace 
+-
+name:”CLUSTER NAME ” 
+value :”mycluster ” 
+-
+name: NODE MASTER 
+value :”false" 
+-
+name: NODE DATA 
+value z
+” false" 
+-
+name: HTTP ENABLE 
+value t
+”true ” 
+-
+name:”ES JAVA OPTS" 
+value :”-Xms256m - Xmx2 56m” 
+ports: 
+- containerPort: 9200 
+name: http 
+protocol: TCP 
+- containerPort: 9300 
+name: transport 
+protocol: TCP 
+volumeMounts: 
+-
+name: storage 
+mountPath: /data 
+
+166 
+•！•
+基于Kubernetes 的窑器云平台实战
+volumes: 
+-
+emptyDir: 
+medium: 
+name:“storage" 
+elasticsearch-data. yam！文件内容：
+apiVersion: 
+extensions/vlbetal 
+kind: Deployment 
+metadata: 
+name: es-data 
+labels: 
+spec: 
+component: elasticsearch 
+role: data 
+template: 
+metadata: 
+labels: 
+component: elasticsearch 
+role: data 
+annotations: 
+pod.beta.kubernetes.io/init-containers:’[ 
+” name”:" sysctl”, 
+"image": "busybox”, 
+” imagePullPolicy”:” IfNotPresent”, 
+” command": [”sysctl”,”-w”,"vm.max map count=262144 ”], 
+” securityContext”: { 
+” privileged": true 
+spec: 
+containers: 
+-
+name: es-data 
+securitycontext: 
+privileged: true 
+capabilities: 
+add: 
+-
+IPC LOCK 
+image: 10.47.202.23/elasticsearch:2.3.0 
+imagePullPolicy: Always 
+env: 
+-
+name: NAMESPACE 
+valueFrom: 
+五eldRef:
+fieldPath: metadata.namespace 
+-
+name: "CLUSTER NAME" 
+value: "mycluster" 
+-
+name: NODE MASTER 
+value: "false ” 
+
+第13 章
+Kubernetes 运维管理
+〈－
+167 
+-
+name: NODE INGEST 
+value z ” false" 
+-
+name: HTTP ENABLE 
+value: "false" 
+-
+name: "ES JAVA OPTS" 
+value z ”-Xms256m -Xmx256m” 
+ports: 
+- containerPort: 9300 
+name: transport 
+protocol: TCP 
+volumeMounts: 
+-
+name: storage 
+mountPath: /data 
+volumes: 
+- emptyDir: 
+medium :”” 
+name: "storage" 
+elasticsearch-discover）吨vc.yaml 文件内容：
+apiVersion: vl 
+kind: Service 
+metadata: 
+n缸ne:
+elasticsearch-disc。very
+labels: 
+component: elasticsearch 
+role: master 
+spec: 
+selector: 
+component: elasticsearch 
+role: master 
+ports: 
+-
+name: transport 
+port: 9300 
+protocol: TCP 
+elasticsearch-svc.yaml 文件内容：
+apiVersion: vl 
+kind: Service 
+metadata: 
+n缸ne: elasticsearch 
+labels: 
+component: elasticsearch 
+role: client 
+spec: 
+type: LoadBalancer 
+selector: 
+component: elasticsearch 
+role: client 
+ports: 
+
+168 
+•！•
+基于Kubernetes 的窑器云平台实战
+-
+name: http 
+port: 9200 
+protocol: TCP 
+elasticsearch - s v c-log.yaml 文件内容：
+apiVersion: vl 
+kind: Service 
+metadata: 
+name: elasticsearch-logging 
+namespace: kube- system 
+labels: 
+kubernetes - app: elasticsearch 
+kubernetes.io / name:”elastic search ” 
+spec: 
+type: ExternalName 
+externalName: elasticsearch.default.svc.cluster.local 
+ports: 
+- port: 9200 
+targetPort: 9200 
+• Logstash 
+logstash-controller. ）咄nl 文件内容：
+apiVersion: vl 
+kind: ReplicationController 
+metadata: 
+name: logstash 
+namespace: default 
+labels: 
+component: elk 
+role: logstash 
+spec: 
+replicas: 1 
+selector: 
+component: elk 
+role: logstash 
+template : 
+metadata : 
+labels: 
+component: elk 
+role: logstash 
+spec: 
+serv 工ceAccount: elk 
+containers: 
+h 
+CM 
+a 
+＋
+」
+s 
+qJ 
+O 
+--& 
+,,, 
+2J 
+勾
+，
+& 
+q, 
+& 
+n
+υ
+ 
+叫
+J
+．
+n
+呵
+/ 
+巳
+M
+A
+“
+τ
+ 
+a
+. 
+＋
+ι
+栩
+n
+U
+e
+D
+咱
+t
+‘
+阿
+崎
+d 
+Oz 
+---
+e 
+qd 
+.. 
+a 
+em 
+ml 
+a 
+n 
+env: 
+-
+name: KUBERNETES TRUST CERT 
+value :”true ” 
+ports: 
+
+- containerPort: 5043 
+name: lumberjack 
+protocol : TCP 
+volumeMounts: 
+- mountPath: /certs 
+name: certs 
+volumes: 
+- emptyDir: 
+medium:”” 
+name:”storage" 
+- hostPath: 
+path: "/tmp" 
+name:”certs ” 
+logstash-service.yaml 文件内容：
+apiVers 工on: vl 
+kind: Service 
+metadata: 
+name: logstash 
+namespace: default 
+labels: 
+spec: 
+component: elk 
+role: logstash 
+selector: 
+component: elk 
+role: logstash 
+ports: 
+-
+name: lumberjack 
+port: 5043 
+protocol: TCP 
+• Kibana 
+kibana-controller. yam ！文件内容：
+apiVersion: vl 
+kind: Replicationcontroller 
+metadata: 
+name: 
+k 工bana 
+namespace: default 
+labels: 
+component: elk 
+role: kibana 
+spec: 
+replicas: 1 
+selector: 
+component: elk 
+role: kibana 
+template: 
+metadata: 
+第13 章
+Kubernetes 运维管理
+•！•
+169 
+’? 
+
+170
+令
+基于Kubernetes 的窑器云平台实战
+labels: 
+component: elk 
+role: kibana 
+spec: 
+serviceAccount: elk 
+containers: 
+-
+name: kibana 
+image: 10.47.202.23/kibana:latest 
+env: 
+-
+name: KIBANA ES URL 
+value: 
+"http://elasticsearch.default.svc.cluster.local:920 。”
+-
+name: KUBERNETES TRUST CERT 
+value :”true” 
+ports: 
+-SA 
+nU 
+FO 
+EJ 
+nr 
+·
+－
+F
+」
+tT 
+rp 
+ot
+-- 
+ptl 
+r
+-no 
+ee 
+nzo 
+--
+et 
+amo 
+tar 
+nnp 
+o 
+c 
+kibana-service.yaml 文件内容：
+apiVersion: vl 
+kind: Service 
+metadata: 
+name: kibana 
+namespace: default 
+labels: 
+component: elk 
+role: kibana 
+spec: 
+selector: 
+component: elk 
+role: kibana 
+type: NodePort 
+ports: 
+-
+name: http 
+port: 80 
+nodePort: 30080 
+targetPort: 5601 
+protocol: TCP 
+•Service 
+service-elk. yam！文件内容：
+apiVersion: vl 
+kind: ServiceAccount 
+metadata: 
+n臼ne: elk 
+• Fluentd 
+fluentd.yaml 文件内容：
+
+apiVersion: vl 
+kind: DaemonSet 
+metadata: 
+name: fluentd-elasticsearch 
+namespace: kube-system 
+labels: 
+kubernetes-app: fluentd-logging 
+spec: 
+template: 
+metadata: 
+labels: 
+n缸ne: fluentd-elasticsearch 
+spec: 
+containers: 
+- name: fluentd-elasticsearch
+第13 章
+Kubernetes运维管理令
+171
+image: 10.47.202.23/fluentd-elasticsearch:l.20
+( 3 ）安装
+resources: 
+limits: 
+memory: 200Mi 
+requests: 
+cpu: lOOm 
+memory: 200Mi 
+volumeMounts: 
+- n缸ne: varlog 
+mountPath: /var/log 
+- name: varlibdockercontainers
+mountPath: /var/lib/docker/containers
+readOnly: true 
+terminationGracePeriodSeconds: 30 
+volumes: 
+- n缸ne: varlog 
+hostPath: 
+path: /var/log 
+- name: varlibdockercontainers
+hostPath: 
+path: /var/lib/docker/containers 
+修改各个节点Rsyslog 服务配置文件vim /etc/rsyslog.conf，开启三个参数：
+$ModLoad imtcp 
+$InputTCPServierRun 514 
+*·* @@localhost:4560 
+让Rsyslog 加载imtcp 模块并监昕514 端口，然后将Rsyslog 中收集的数据转发到本地
+端口4560。
+重新启动Rsyslog 服务：
+systemctl restart rsyslog。
+执行如下脚本安装ELK:
+kubectl create -f 
+elasticsearch-client.yaml 
+
+172 
+•！•
+基于Kubernetes的窑器云平台实战
+kubectl create -f elasticsearch-data.yarnl 
+kubectl create -f elasticsearch-discovery-svc.yarnl 
+kubectl create -f elasticsearch-rnaster.yarnl 
+kubectl create -f elasticsearch-svc.yarnl 
+kubectl create -f elasticsearch-svc-log.yarnl 
+kubectl create -f service-elk.yarnl 
+kubectl create -f logstash-service.yarnl 
+kubectl create -f logstash-controller.yarnl 
+kubectl create -f kibana-service.yarnl 
+kubectl create -f kibana-controller.yarnl 
+kubectl create -f fluentd.yarnl 
+13.2 
+Kubernetes监控管理
+Kubernetes平台搭建好后，
+了解Kub巳metes平台及在此平台上部署的应用的运行状况，
+以及处理系统主要告警及性能瓶颈，这些都依赖监控管理系统。下文将主要讲解监控系统
+的架构及具体实践。
+13.2.1 监控概述
+监控是任何商用系统不能缺少的，容器同虚拟机／物理机一样，运行时也需要监控。
+Kubernetes监控分为平台监控和应用监控，
+一般采用NodeExporter、Prometheus、Grafana
+相结合的方式来实现监控。
+Prometheus是一款开源的监控解决方案，能在监控Kubernetes平台的同时监控部署在
+此平台中的应用，它提供了一系列工具集及多维度监控指标。Prometheus依赖Grafana实
+现数据可视化。
+Grafana是一个Dashboard工具，用Go和JS开发，界面十分美观，也可以认为它是一
+个时间序列数据库的界面展示层，通过SQL命令查询出Metrics并将结果展示出来。它能
+自定义多种仪表盘，可以轻松实现覆盖多个Docker的宿主机监控信息的展现。
+NodeExporter主要用来采集服务器CPU、内存、磁盘、1/0等信息，是机器数据的通用
+采集方案。只要在宿主机上安装NodeExporter和cAdisor容器，通过Prometheus进行抓取
+即可。它同Zabbix的功能相似
+虽然Zabbix功能比较完善，但架构复杂且十分厚重，还不
+能完美地同Prometheus结合，
+因此还是采用NodeExporter。
+13.2.2 监控方案实践
+使用NodeExporter、Prometheus、Grafana进行监控是容器监控的主要方案，
+其部署架
+构如图13-2所示。
+在各个计算节点上部署N odeExporter采集CPU、内存、磁盘及1/0信息，并将这些信
+息传输给监控节点上的Prometheus服务器进行存储分析，通过Grafana进行可视化监控，
+
+仅供11,n有业用用
+第13章
+Kubernetes运维管理
+•！•
+173 
+展示相关的仪表盘及监控信息。
+node_ exporter 
+d坠服务都A
+Prometheus 
+node exporter 
+.＿......旨画服务报
+‘雪显服务器B
+Grafana 
+嘻3服务
+监控节点
+图13-2
+监控架构图
+1.环境介绍
+操作系统环境：CentOS linux 7.4 64bit。
+Kubernetes软件版本：1.9.0。
+Master节点IP:
+I 0.40.4 7 .5/24。
+Node节点IP:
+I 0.40.4 7 .6/24。
+2下载安装文件
+在Kubernetes集群的所有节点上下载所需要的Image。
+# docker pull 
+node-exporter 
+# docker pull 
+prometheus 
+# docker pull 
+grafana 
+3. yaml文件准备
+( I ) Node Exporter
+• node-exporter.yam！文件内容：
+apiVersion:vl 
+kind: DaemonSet 
+metadata: 
+name: node-exporter 
+n缸nespace: kube-system 
+labels: 
+kubernetes-app: node-exporter 
+spec: 
+template: 
+metadata: 
+仅供11，商业用途或交流守
+’习佼用
+
+仅供｜｜二阴业用途或交流于习佼用
+174 
+·：·
+基于Kubernetes 的窑器云平台实战
+labels: 
+kubernetes-app: node-exporter 
+spec: 
+containers: 
+- image: 10.47.202.23/node-exporter 
+name: node-exporter 
+ports: 
+- containerPort: 9100 
+protocol: TCP 
+name: http 
+• node-exporter-svc.yaml 文件内容：
+apiVersion: vl 
+kind: Service 
+metadata: 
+labels: 
+kubernetes-app: node-exporter 
+n缸ne: node-exporter 
+namespace: kube-system 
+spec: 
+ports: 
+- name: http
+port: 9100
+node Port: 316 72 
+protocol: TCP 
+type: NodePort 
+selector: 
+kubernetes-app: node-exporter 
+( 2 ) Prometheus 
+• prometheus-rbac.yaml 文件内容：
+apiVersion: vl 
+kind: ClusterRole 
+metadata: 
+name: prometheus 
+rules: 
+- apiGroups : ［”” ］ 
+resources: 
+- nodes
+- nodes/proxy
+- services 
+- endpoints 
+- pods 
+verbs: ［”get H，”list ”，”watch ” ］ 
+- apiGroups:
+- extensions 
+］
+ 
+h
+ c
+ 
+＋」a
+ w
+ 
+，
+ 
+＋EM
+ S
+ 
+－
+－
+ 1儿
+，
+＋EM
+ 
+s
+e
+ 
+－－
+e
+q
+ 
+RM
+CG
+”
+ 
+e
+s
+rt
+ 
+c
+e
+ 
+r
+r
+－－
+ 
+u
+qd
+s
+ 
+o
+n
+－D
+ 
+s
+l
+r
+ 
+e
+e
+ 
+r
+－
+v
+
+第13 章
+Kubernetes运维管理
+•！•
+175
+- nonResourceURLs: ［” ／metrics ” ］ 
+verbs: ［
+”get ” ］ 
+• prometheus-configmap. yaml 文件内容：
+apiVersion: vl 
+kind: ConfigMap 
+rnetadata: 
+qJ
+m
+ 
+d
+M
+ 
+o
+s
+ 
+e
+y
+－
+s
+ll
+s
+－
+ u
+e
+z
+e
+b
+－
+ 
+－n
+u
+m
+ 
+t
+k
+y
+ 
+e
+－
+ 
+m
+··
+s
+ 
+o
+e
+u
+ 
+r
+c
+e
+ 
+p
+a
+h
+ 
+p
+at
+－
+－
+s
+e
+ 
+e
+e
+m
+ 
+四
+m
+m
+n
+n
+··
+P
+ 
+a
+ ＋－－
+ a
+ d
+ 
+global: 
+SS
+PD
+ 
+E3
+1‘
+ 
+唱4
+l
+a
+v
+ 
+－
+－
+E
+ 
+l
+e
+ 
+a
+t
+ 
+v
+nr
+·
+－
+ 
+e
+ t
+n
+ 
+n
+o
+ 
+－
+L
+－
+L
+ 
+－
+＋EWe
+a
+ 
+p－
+ua
+14
+ 
+r
+a
+ 
+c
+v
+ s
+e
+ 
+scrape_configs: 
+- job name：
+’ kubernetes-apiservers' 
+kubernetes sd configs: 
+- role: endpoints
+scheme: https 
+tls_config: 
+ca file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt 
+bearer token file: /var/run/secrets/kubernetes.io/serviceaccount/token 
+relabel_configs: 
+- source labels: (rnyelk n缸nespace, rnyelk service n缸ne, rnyelk endpoint 
+port_narne]
+action: keep 
+regex: default;kubernetes;https 
+- job n缸ne:
+'kubernetes-nodes ’ 
+kubernetes_sd一configs:
+- role: node
+scheme: https 
+tls_config: 
+ca file: /var/run/secrets/kubernetes.i。／serviceaccount/ca.crt
+bearer token file:/var/run/secrets/kubernetes.io/serviceaccount/token 
+relabel configs: 
+）
+＋
+ ．
+ 
+（
+ 
+14
+e
+－
+ 
+b
+sa
+s
+ 
+l
+e－
+r
+ 
+e
+d
+ 
+－d
+－d
+o
+a
+ 
+p‘
+n
+vd
+ 
+a
+－
+m
+m
+－K
+ 
+、4
+、4
+··
+e
+e
+l
+ 
+b
+y
+e
+a
+m
+b
+ 
+l
+a
+ 
+．．
+ 
+、4
+··
+x
+－
+ 
+n
+e
+t
+ 
+o
+qd
+e
+l
+e
+qd
+ 
+t
+r
+r
+c
+a
+ 
+a
+t
+ 
+replacement: kubernetes.default.svc:443 
+- source labels: (rnyelk node n缸ne]
+regex: ( .+) 
+target_label: _rnetrics_path_ 
+replacement: /api/vl/nodes/${1}/proxy/rnetrics 
+- job_n缸ne：
+’ kubernetes-cadvisor ’
+kubernetes_sd_configs: 
+- role: node
+scheme: https 
+tls config: 
+ca file: /var/run/secrets/kubernetes.工o/serviceaccount/ca.crt
+bearer token file: /var/run/secrets/kubernetes.io/serviceaccount/token 
+
+176令基于Kubernetes的窑器云平台实战
+relabel configs: 
+- action: labelmap
+regex: myelk node label(.+)
+- target_label: myaddress_
+replacement: kubernetes.default.svc:443
+- source labels: [myelk node name]
+regex: ( .+)
+target_label: _metrics_path_ 
+replacement: /api/vl/nodes/${1}/proxy/metrics/cadvisor 
+- job name: 'kubernetes-service-endpoints'
+kubernetes_sd_configs:
+- role: endpoints
+relabel con丑gs:
+- source_labels:(myelk_serv工ce_annotat工ootation_prometheus_io_scrape]
+p
+ e
+e
+ 
+e
+u
+ 
+k
+r
+ 
+＋」
+．．
+ n
+··
+ 
+o
+x
+ 
+l
+e
+ 
+t
+q’
+ 
+c
+e
+ 
+a
+r
+ 
+- source labels:[myelk service annotatiootation prometheus io scheme]
+e
+m
+ ehcs
+e
+ 
+c
+ a
+··
+ 
+l
+lp
+e
+ 
+e
+b
+ 
+r
+a
+ 
+14
+ 
+m
+t－
+ 
+o
+e
+ 
+－
+－
+q
+ 
+t
+r
+ 
+c
+a
+ 
+a
+t
+ 
+regex: ( https?) 
+- source labels: [myelk service annotatiootation prometheus io path]
+ku
+ 
+＋」
+a
+ p
+se
+－
+lr
+ ＋EW
+ 
+e
+ 
+e
+m－
+ 
+c
+ a
+··
+ 
+l
+l
+ 
+p
+e
+ 
+e
+b
+ 
+r
+a
+ 
+、4
+··
+－
+ 
+n
+t
+o
+e
+ 
+－
+qdt
+r
+ 
+c
+a
+a
+t
+ 
+regex: ( .+) 
+- source_labels: [myaddress＿’myelk_service_annotation_prometheus_io_port] 
+）＋
+d、、、
+（－
+；
+ 
+S
+呵，．S
+飞，e
+＋
+ 
+r
+‘d
+ d
+＼d
+··
+ 
+a
+··
+ 
+VA
+筒，．
+e
+m
+f－、
+c
+、，
+a
+··
+＋
+ 
+、4
+、4
+1』
+p
+e
+－－
+e
+b
+《
+r
+a
+『－
+1‘
+，t
+n
+t
+·
+－
+ 
+o
+e
+x
+l
+qd
+e
+t
+r
+qd
+c
+a
+e
+a
+t
+r
+replacement: $1:$2 
+- action: labelmap 
+regex: myelk service label(.+)
+- source labels: [myelk n缸nespace]
+action: replace
+target label: kubernetes namespace 
+- source labels: [myelk service name]
+action: replace
+target_label: kubernetes_name 
+- job name：
+’ kubernetes-services ’ 
+kubernetes sd configs: 
+- role: service
+x
+ 
+e
+x
+b
+2
+ 
+0
+－
+E
+p
+ 
+p
+t
+ 
+／
+t
+ 
+h
+h
+ t
+·－
+ 
+a
+e
+ 
+J
+U
+G
+M
+·
+·
+J
+U
+ 
+C
+S
+O
+ 
+E
+口
+m
+m
+t
+r
+ 
+e
+a
+ 
+m
+p
+ 
+relabel configs: 
+- source_labels: [myelk_service_annotatiootation_prometheus_io_probe] 
+action: keep 
+t
+e
+qd
+ 
+11
+E－
+a
+ 
+s
+t
+ 
+s
+－－
+ 
+e
+m
+S
+r
+a
+s
+d
+r
+e
+d
+a
+r
+a
+p‘
+－G
+ 
+V4
+－－
+d
+ 
+m
+－
+a
+ 
+rt
+V4
+ 
+·
+·
+m
+ 
+．．
+ 、4
+e
+s
+e
+－－
+u
+l
+b
+l
+r
+e
+a
+e
+ 
+t
+b
+l
+b
+ 
+a
+－
+a
+ 
+··
+l
+t
+l
+ 
+x
+－
+e
+－
+ 
+e
+e
+g
+t
+qd
+C
+r
+e
+ 
+e
+r
+a
+qd
+ 
+r
+u
+t
+r
+ 
+o
+a
+s
+t
+
+第13童
+Kubernetes运维管理
+•！•
+177
+replacement: blackbox-exporter.example.com:9115 
+- source labels: [ 
+par出n target)
+target label: instance
+- action: labelmap
+regex: myelk_service_label_( .+)
+- source_labels: [myelk_namespace]
+target label: kubernetes namespace
+- source labels: [myelk service n臼ne]
+target label: kubernetes name
+- Job_name：
+’ kubernetes-1.ngresses ’ 
+kubernetes_sd_configs: 
+- role: ingress
+relabel_configs:
+- source labels: [myelk ingress annotation prometheus io probe]
+action: keep
+regex: true 
+- source_labels: (myelk_ingress_scheme,myaddress_,myelk_ingress_path] 
+regex: ( .+); ( .+); ( .+)
+replacement: $ { 1}: I I$ { 2} $ {3} 
+target label: 
+param target 
+- target_label: myaddress_
+replacement: blackbox-exporter.example.com:9115
+- source_labels: [_param_target]
+target_label: instance
+- action: labelmap
+regex: myelk_ingress_label_( .+)
+- source labels: [myelk n缸nespace]
+target label: kubernetes namespace
+- source labels: (myelk ingress name]
+target_label: kubernetes_name
+－〕ob_name:
+'kubernetes-pods' 
+kubernetes_sd_configs: 
+- role: pod
+relabel_configs:
+- source_labels: [myelk_pod_annotation_prometheus_io_scrape]
+action: keep
+regex: true 
+- source_labels: (myelk_pod_annotation_prometheus_io_path]
+action: replace
+target_label: _metr1.cs_path_ 
+regex: ( .+) 
+- source_labels:[myaddress＿’myelk_pod_annotat1.on_prometheus_io_port]
+action: replace
+regex: ( ［
+《
+：］＋）(?: :\d+)?; (\d+) 
+replacement: $1:$2 
+］
+ec、，
+a＋
+P
+ 
+－
+GM
+ 
+－
+r飞
+e
+臼
+l－
+m
+e
+e
+n
+r
+b
+－
+ 
+d
+a
+k
+ 
+d
+14
+1－
+ 
+a
+－
+e
+ 
+y
+d
+y
+m
+o
+m
+e
+ 
+p
+p
+rt
+e
+ 
+－
+－
+a
+－
+a
+l
+m
+k
+·－
+l
+e
+－
+－
+s
+p
+ 
+b
+e
+e
+－A
+e
+ 
+a
+b
+y
+e
+E
+l
+a
+m
+－D
+ 
+－
+、4
+au
+－
+－
+t
+·
+·
+l
+n
+ 
+e
+－－
+x
+－
+o
+ 
+qd
+n
+e
+e
+－
+ 
+r
+o
+g
+e
+t
+ 
+a－
+－
+e
+r
+c
+ 
+t
+t
+r
+u
+a
+ 
+c
+o
+ 
+a
+s
+ 
+
+178 •》基于Kubernetes的容器云平台实战
+target_label: kubernetes_namespace 
+- source labels: (myelk pod name]
+action: replace
+target_label: kubernetes_pod_name 
+•
+prometheus-deploy.yaml文件内容：
+apiVersion: vl 
+kind: Deployment 
+metadata: 
+labels: 
+n臼ne: prometheus-deployment 
+name: prometheus 
+namespace: kube-system 
+spec: 
+replicas: 1 
+selector: 
+matchLabels: 
+app: prometheus 
+template: 
+metadata: 
+labels: 
+app: prometheus 
+spec: 
+containers: 
+- image: 10.47.202.23/prometheus
+name: prometheus
+command: 
+- "/bin/prometheus” 
+args: 
+－
+”－－config.file=/etc/pr。metheus/prometheus.yml ”
+－
+”－－storage.tsdb.path=/prometheus ” 
+－
+”－－storage.tsdb.retention=24h ” 
+ports: 
+- containerPort: 9090
+protocol: TCP 
+volumeMounts: 
+- mountPath：
+” ／prometheus ” 
+n出吼e: data 
+- mountPath：
+” ／etc/prometheus ” 
+n缸ne: config-volume 
+resources: 
+requests: 
+cpu: lOOm 
+memory: lOOMi 
+limits: 
+cpu: 500m 
+memory: 2500Mi 
+serviceAccountName: prometheus 
+volumes: 
+- n臼ne: data 
+
+第13 章
+Kubernetes运维管理〈－
+179
+emptyDir: {} 
+- name: config-volume
+configMap:
+name: prometheus-config 
+• Prometheus-svc.yaml 文件内容：
+apiVersion: vl 
+metadata: 
+labels: 
+app: prometheus 
+name: prometheus 
+namespace: kube-system 
+spec: 
+type: NodePort 
+ports: 
+- port: 9090
+targetPort: 9090
+nodePort: 30003 
+selector: 
+app: prometheus 
+( 3) Grafana
+• grafana-deploy.yaml 文件内容：
+apiVersion: vl 
+kind: Deployment 
+metadata: 
+n缸ne: grafana-core
+namespace: kube-system
+labels: 
+app: grafana 
+component: core 
+spec: 
+replicas: 1 
+template: 
+metadata: 
+labels: 
+app: grafana 
+component: core 
+spec: 
+containers: 
+＋』
+n
+ e
+ s
+ 
+a
+e
+n
+r
+a
+p
+在ι
+＋au
+a
+o
+r
+N
+ 
+n3
+84
+／
+e
+工
+、J
+r·2
+。．．
+ 
+·
+c
+y
+2
+－
+c
+nυ
+au
+唱辛
+2
+n
+la
+0
+ 
+7，
+在－－
+P＆
+4
+a
+l
+ 
+r
+14
+o
+g
+u
+ 
+－－－
+P‘
+ 
+··
+e
+ 
+··
+e
+qd
+ 
+e
+m
+a
+ 
+qd
+a
+m
+ 
+a
+n
+－
+l
+m
+ 
+－
+l
+ 
+# env: 
+resources: 
+# keep request= limit t。keep this container in guaranteed class 
+limits: 
+cpu: lOOm 
+memory: lOOMi 
+
+180
+令基于Kubernetes的容器云平台实战
+requests: 
+cpu: lOOm 
+memory: lOOMi 
+env: 
+# The following env variables set up basic auth twith the 
+default admin user and admin password. 
+- name: GF AUTH BASIC ENABLED
+value: "true ” 
+- name: GF AUTH ANONYMOUS ENABLED
+value ：
+” false" 
+# - name: GF AUTH ANONYMOUS ORG ROLE 
+# 
+value: Admin 
+# does not really work, because of template variables in 
+exported dashboards: 
+# - name: GF DASHBOARDS JSON ENABLED 
+# 
+value: "true" 
+readinessProbe: 
+httpGet: 
+path: /login 
+port: 3000 
+# initialDelaySeconds: 30 
+# timeoutSeconds: 1 
+volumeMounts: 
+e
+qda
+ro
+＋」s
+＋」ne
+＋」cd
+ 
+．
+l
+ s
+ r
+r
+ 
+e
+a
+ 
+p
+v
+ 
+－
+，f
+ 
+a
+ n
+··
+ 
+a
+h
+ 
+£L
+＋L
+ 
+a
+a
+ 
+r
+p
+ 
+阿罗
+＋」n
+··
+ue
+om
+m
+a
+ n
+volumes: 
+- name: grafana-persistent-storage 
+emptyDir: {}
+• grafana-svc.yaml 文件内容：
+apiVersion: vl 
+kind: Service 
+metadata: 
+name: grafana 
+namespace: kube-system 
+labels: 
+app: grafana 
+component: core 
+spec: 
+type: NodePort 
+ports: 
+- port: 3000
+selector: 
+app: grafana 
+component: core 
+• grafana-ingress.xml 文件内容：
+、apiVersion: vl 
+kind: Ingress 
+
+metadata: 
+name: grafana 
+namespace: kube-system 
+spec: 
+rules: 
+- host: kubernetes.grafana 
+http: 
+paths: 
+- path: I 
+backend: 
+serviceName: grafana 
+servicePort: 3000 
+4. 执行下面的命令安装
+kubectl create -f node-exporter . yam! 
+kubectl create -f node-exporter-svc.yaml 
+kubectl create -f prometheus-rbacyaml 
+kubectl create -f prometheus-configmap.yaml 
+kubectl create -f prometheus-deploy.yml 
+kubectl create -f grafana-deploy.yaml 
+kubectl create -f grafana-svc.yaml 
+kubectl create -f grafana-ingress.xml 
+第13 章
+Kubernetes 运维管理
+〈－
+181
+、
+Node Exporter 对应的Nodeport 端口为31672 ，通过访问http: //l 0.47.43 .115 :31672/ 
+metrics 可以看到对应的metrics ; Prometheus 对应的Nodeport 端口为30003 ，通过访问
+http://l 0.47.43.115:30003 /target 可以看到Prometheus 已经成功连接上了Kubernetes 的API
+服务器。通过以上方式可以检查环境是否安装好。

@@ -1,0 +1,199 @@
+第11章　Trouble Shooting指南
+本章将对Kubernetes集群中常见问题的排查方法进行说明。
+为了跟踪和发现在Kubernetes集群中运行的容器应用出现的问题，
+我们常用如下查错方法。
+（1）查看Kubernetes对象的当前运行时信息，特别是与对象关联的
+Event事件。这些事件记录了相关主题、发生时间、最近发生时间、发
+生次数及事件原因等，对排查故障非常有价值。此外，通过查看对象的
+运行时数据，我们还可以发现参数错误、关联错误、状态异常等明显问
+题。由于在Kubernetes中多种对象相互关联，因此这一步可能会涉及多
+个相关对象的排查问题。
+（2）对于服务、容器方面的问题，可能需要深入容器内部进行故
+障诊断，此时可以通过查看容器的运行日志来定位具体问题。
+（3）对于某些复杂问题，例如Pod调度这种全局性的问题，可能需
+要结合集群中每个节点上的Kubernetes服务日志来排查。比如搜集
+Master上的kube-apiserver、kube-schedule、kube-controler-manager服务日
+志，以及各个Node上的kubelet、kube-proxy服务日志，通过综合判断各
+种信息，就能找到问题的成因并解决问题。
+11.1　查看系统Event
+在Kubernetes集群中创建Pod后，我们可以通过kubectl get pods命令
+查看Pod列表，但通过该命令显示的信息有限。Kubernetes提供了kubectl
+describe pod命令来查看一个Pod的详细信息，例如：
+
+
+
+通过kubectl describe pod命令，可以显示Pod创建时的配置定义、状
+态等信息，还可以显示与该Pod相关的最近的Event（事件），事件信息
+对于查错非常有用。如果某个Pod一直处于Pending状态，我们就可以通
+过kubectl describe命令了解具体原因。例如，从Event事件中获知Pod失
+败的原因可能有以下几种。
+◎　没有可用的Node以供调度。
+◎　开启了资源配额管理，但在当前调度的目标节点上资源不足。
+◎　镜像下载失败。
+通过kubectl describe命令，我们还可以查看其他Kubernetes对象，包
+括Node、RC、Service、Namespace、Secrets等，对每种对象都会显示相
+关的其他信息。
+例如，查看一个服务的详细信息：
+
+如果要查看的对象属于某个特定的命名空间，就需要加上--
+namespace=<namespace>进行查询。例如：
+11.2　查看容器日志
+在需要排查容器内部应用程序生成的日志时，我们可以使用kubectl
+logs <pod_name>命令：
+
+如果在某个Pod中包含多个容器，就需要通过-c参数指定容器的名
+称来查看，例如：
+其效果与在Pod的宿主机上运行docker logs <container_id>一样。
+容器中应用程序生成的日志与容器的生命周期是一致的，所以在容
+器被销毁之后，容器内部的文件也会被丢弃，包括日志等。如果需要保
+留容器内应用程序生成的日志，则可以使用挂载的Volume将容器内应
+用程序生成的日志保存到宿主机上，还可以通过一些工具如Fluentd、
+Elasticsearch等对日志进行采集。
+11.3　查看Kubernetes服务日志
+如果在Linux系统上安装Kubernetes，并且使用systemd系统管理
+Kubernetes服务，那么systemd的journal系统会接管服务程序的输出日
+志。在这种环境中，可以通过使用systemd status或journalctl工具来查看
+系统服务的日志。
+例如，使用systemctl 
+status命令查看kube-controller-manager服务的
+日志：
+
+使用journalctl命令查看：
+
+如果不使用systemd系统接管Kubernetes服务的标准输出，则也可以
+通过日志相关的启动参数来指定日志的存放目录。
+◎　--logtostderr=false：不输出到stderr。
+◎　--log-dir=/var/log/kubernetes：日志的存放目录。
+◎　--alsologtostderr=false：将其设置为true时，表示将日志同时输
+出到文件和stderr。
+◎　--v=0：glog的日志级别。
+◎　--vmodule=gfs*=2，test*=4：glog基于模块的详细日志级别。
+在--log_dir设置的目录下可以查看各服务进程生成的日志文件，日
+志文件的数量和大小依赖于日志级别的设置。例如，kube-controller-
+manager可能生成的几个日志文件如下：
+◎　kube-controller-manager.ERROR；
+◎　kube-controller-manager.INFO；
+◎　kube-controller-manager.WARNING；
+◎　kube-controller-manager.kubernetes-
+master.unknownuser.log.ERROR.20200930-173939.9847；
+◎　kube-controller-manager.kubernetes-
+master.unknownuser.log.INFO.20200930-173939.9847；
+◎　kube-controller-manager.kubernetes-
+master.unknownuser.log.WARNING.20200930-173939.9847。
+
+在大多数情况下，我们从WARNING和ERROR级别的日志中就能找
+到问题的成因，但有时还需要排查INFO级别的日志甚至DEBUG级别的
+详细日志。此外，etcd服务也属于Kubernetes集群的重要组成部分，所
+以不能忽略它的日志。
+如果某个Kubernetes对象存在问题，则可以用这个对象的名字作为
+关键字搜索Kubernetes的日志来发现和解决问题。在大多数情况下，我
+们遇到的主要是与Pod对象相关的问题，比如无法创建Pod、Pod启动后
+就停止或者Pod副本无法增加，等等。此时，可以先确定Pod在哪个节点
+上，然后登录这个节点，从kubelet的日志中查询该Pod的完整日志，然
+后进行问题排查。对于与Pod扩容相关或者与RC相关的问题，则很可能
+在kube-controller-manager及kube-scheduler的日志中找出问题的关键点。
+另外，kube-proxy经常被我们忽视，因为即使它意外停止，Pod的状
+态也是正常的，但会导致某些服务访问异常。这些错误通常与每个节点
+上的kube-proxy服务有着密切的关系。遇到这些问题时，首先要排查
+kube-proxy服务的日志，同时排查防火墙服务，要特别留意在防火墙中
+是否有人为添加的可疑规则。
+11.4　常见问题
+本节对Kubernetes系统中的一些常见问题及解决方法进行说明。
+11.4.1　由于无法下载pause镜像导致Pod一直处于
+Pending状态
+以redis-master为例，使用如下配置文件redis-master-controller.yaml
+创建RC和Pod：
+
+运行kubectl create-f redis-master-controller.yaml成功，但在查看Pod
+时，发现其总是无法处于运行状态。通过kubectl 
+get 
+pods命令可以看
+
+到：
+进一步使用kubectl describe pod redis-master-6yy7o命令查看该Pod的
+详细信息：
+
+
+可以看到，该Pod为Pending状态。从Message部分显示的信息可以
+看出，其原因说明是image pull failed for k8s.gcr.io/pause：3.2，即系统在
+创建Pod时无法从gcr.io下载pause镜像，导致创建Pod失败。
+解决方法如下。
+（1）如果服务器可以访问Internet，并且不希望使用HTTPS的安全
+机制来访问gcr.io，则可以在Docker 
+Daemon的启动参数中加上--
+insecure-registry gcr.io，来表示可以匿名下载。
+（2）如果Kubernetes集群在内网环境中无法访问gcr.io网站，则可
+以先通过一台能够访问gcr.io的机器下载pause镜像，将pause镜像导出
+后，再导入内网的Docker私有镜像库，并在kubelet的启动参数中加上--
+pod_infra_container_image，配置如下：
+
+之后重新创建redis-master即可正确启动Pod。
+注意，除了pause镜像，其他Docker镜像也可能存在无法下载的情
+况，与上述情况类似，很可能也是网络配置使得镜像无法下载，解决方
+法同上。
+11.4.2　Pod创建成功，但RESTARTS数量持续增
+加
+创建一个RC之后，通过kubectl get pods命令查看Pod，发现如下情
+况：
+
+可以看到Pod已经创建成功，但Pod一会儿是Running状态，一会儿
+是ExitCode：0状态，在READY列中始终无法变成1/1，而且
+RESTARTS（重启的数量）的数量不断增加。这通常是因为容器的启动
+命令不能保持在前台运行。
+本例中Docker镜像的启动命令如下：
+在Kubernetes中根据RC定义创建Pod，之后启动容器。在容器的启
+动命令运行完成时，认为该容器的运行已经结束，并且成功结束
+
+（ExitCode=0）。根据Pod的默认重启策略定义
+（RestartPolicy=Always），RC将启动这个容器。
+新的容器在运行启动命令后仍然会成功结束，之后RC会再次重启
+该容器，如此往复。其解决方法为将Docker镜像的启动命令设置为一个
+前台运行的命令，例如：
+11.4.3　通过服务名无法访问服务
+在Kubernetes集群中应尽量使用服务名访问正在运行的微服务，但
+有时会访问失败。由于服务涉及服务名的DNS域名解析、kube-proxy组
+件的负载分发、后端Pod列表的状态等，所以可通过以下几方面排查问
+题。
+1.查看Service的后端Endpoint是否正常
+可以通过kubectl get endpoints <service_name>命令查看某个服务的
+后端Endpoint列表，如果列表为空，则可能因为：
+◎　Service的Label Selector与Pod的Label不匹配；
+◎　后端Pod一直没有达到Ready状态（通过kubectl get pods进一步
+查看Pod的状态）；
+◎　Service的targetPort端口号与Pod的containerPort不一致等。
+2.查看Service的名称能否被正确解析为ClusterIP地址
+可以通过在客户端容器中ping <service_name>.<namespace>.svc进行
+检查，如果能够得到Service的ClusterIP地址，则说明DNS服务能够正确
+解析Service的名称；如果不能得到Service的ClusterIP地址，则可能是因
+为Kubernetes集群的DNS服务工作异常。
+3.查看kube-proxy的转发规则是否正确
+我们可以将kube-proxy服务设置为IPVS或iptables负载分发模式。
+
+对于IPVS负载分发模式，可以通过ipvsadm工具查看Node上的IPVS
+规则，查看是否正确设置Service ClusterIP地址的相关规则。
+对于iptables负载分发模式，可以通过查看Node上的iptables规则，
+查看是否正确设置Service ClusterIP地址的相关规则。
+11.5　寻求帮助
+如果通过系统日志和容器日志都无法找到问题的成因，则可以追踪
+源码进行分析，或者通过一些在线途径寻求帮助。下面列出了可给予相
+应帮助的常用网站或社区。
+◎　Kubernetes官方网站。
+◎　Kubernetes官方论坛，可以查看Kubernetes的最新动态并参与讨
+论，如图11.1所示。
+◎　Kubernetes GitHub库问题列表，可以在这里搜索曾经出现过的
+问题，也可以提问，如图11.2所示。
+
+图11.1　Kubernetes官方论坛截图
+
+图11.2　Kubernetes GitHub库问题列表截图
+◎　StackOverflow网站上关于Kubernetes的问题讨论，如图11.3所
+示。
+
+图11.3　StackOverflow网站截图
+◎　Kubernetes Slack聊天群组，其中有许多频道，包括#kubernetes-
+users、#kubernetes-novice、#kubernetes-dev等，读者可以根据自己的兴
+趣加入不同的频道，与聊天室中的网友进行在线交流，如图11.4所示。
+还有针对不同国家的地区频道，例如中国区频道有#cn-users和#cn-
+events。
+
+图11.4　Kubernetes Slack聊天群组截图

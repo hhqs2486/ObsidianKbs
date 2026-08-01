@@ -1,0 +1,247 @@
+28.4 初次实现  417 
+1 
+2 
+3 
+4 
+5 
+15 
+6 
+7 
+8 
+9 
+10 
+11 
+12 
+28 
+14 
+项目9：使用GUI共享文件 
+这个项目较小，因为需要的大部分功能都已经在第27章编写好了。在本章中，你将看到给既
+有Python程序添加GUI非常容易。 
+28.1 问题描述 
+在这个项目中，我们将扩展第27章开发的文件共享系统：添加GUI客户端，让它使用起来更
+容易。这意味着可能有更多的人选择使用它。（当然，这个程序的主旨是让多个用户能够共享文
+件。）这个项目的第二个目标是展示当程序的模块化程度足够高后，扩展起来将非常容易。（这也
+是使用面向对象编程的原因之一。） 
+这个GUI客户端必须满足如下需求。 
+允许用户输入文件名，并将其提交给服务器的方法fecth。
+列出服务器的文件目录当前包含哪些文件。
+就这些。由于系统的大部分功能已经实现，GUI部分是一个相对简单的扩展。 
+28.2 有用的工具 
+除第27章使用的工具外，还需要使用大部分Python版本都自带的工具包Tkinter。有关这个工
+具包的详细信息，请参阅第12章。如果你想使用其他GUI工具包，可以尽管去用。本章的示例将
+让你对如何使用喜欢的工具实现功能有个大致的认识。 
+28.3 准备工作 
+开始这个项目前，应准备好第27章创建的程序，并像前一节指出的那样安装一个GUI工具包。
+除此之外，这个项目无需做其他准备工作。 
+28.4 初次实现 
+如果你想看看初次实现的完整源代码，请参阅本节后面的代码清单28-1，其中的很多功能都
+第28 章
+                          
+
+418  第28 章 项目9：使用GUI 共享文件 
+与前一章的项目相似。这个客户端提供了一个界面（方法fetch），用户可通过它来访问服务器的
+功能。下面来看一下与GUI相关的代码。 
+第27章的客户端是cmd.Cmd的子类，而本章的客户端是tkinter.Frame的子类。虽然并非必须
+从tkinter.Frame派生出子类（你可创建完全独立的Client类），但这是一种比较自然的代码组织方
+式。与GUI相关的设置工作是在一个独立的方法中完成的，这个名为create_widgets的方法被称为
+构造函数。它创建一个用于输入文件名的文本框（Entry）以及一个用于获取指定文件的按钮
+（Button），其中按钮的操作被设置为方法fetch_handler。这个事件处理程序很像第27章的do_fetch，
+它获取self.input（文本框）中的查询，并在一条try/except语句中调用self.server.fetch。 
+初次实现的源代码如代码清单28-1所示。 
+代码清单28-1 一个简单的GUI客户端（simple_guiclient.py） 
+from xmlrpc.client import ServerProxy, Fault 
+from server import Node, UNHANDLED 
+from client import random_string 
+from threading import Thread 
+from time import sleep 
+from os import listdir 
+import sys 
+import tkinter as tk 
+HEAD_START = 0.1 # Seconds 
+SECRET_LENGTH = 100 
+class Client(tk.Frame):  
+   def __init__(self, master, url, dirname, urlfile): 
+ super().__init__(master) 
+ self.node_setup(url, dirname, urlfile) 
+ self.pack() 
+ self.create_widgets() 
+   def node_setup(self, url, dirname, urlfile): 
+ self.secret = random_string(SECRET_LENGTH) 
+ n = Node(url, dirname, self.secret) 
+ t = Thread(target=n._start) 
+ t.setDaemon(1) 
+ t.start() 
+ # 让服务器先行一步： 
+ sleep(HEAD_START) 
+ self.server = ServerProxy(url) 
+ for line in open(urlfile): 
+  line = line.strip() 
+  self.server.hello(line) 
+   def create_widgets(self): 
+ self.input = input = tk.Entry(self) 
+ input.pack(side='left') 
+ self.submit = submit = tk.Button(self) 
+                          
+
+28.5 再次实现  419 
+1 
+2 
+3 
+4 
+5 
+15 
+6 
+7 
+8 
+9 
+10 
+11 
+12 
+28 
+14 
+ submit['text'] = "Fetch" 
+ submit['command'] = self.fetch_handler 
+ submit.pack() 
+   def fetch_handler(self): 
+ query = self.input.get() 
+ try: 
+  self.server.fetch(query, self.secret) 
+ except Fault as f: 
+  if f.faultCode != UNHANDLED: raise 
+  print("Couldn't find the file", query) 
+   def main(): 
+ urlfile, directory, url = sys.argv[1:] 
+ root = tk.Tk() 
+ root.title("File Sharing Client") 
+ client = Client(root, url, directory, urlfile) 
+ client.mainloop() 
+if __name__ == "__main__": main() 
+除前面解释过的相对简单的代码外，这个GUI客户端的工作原理与第27章中基于文本的客户
+端相同，使用方式也类似。要运行这个程序，需要指定包含URL的文件、要共享的文件所在的目
+录以及节点的URL，如下所示： 
+$ python simple_guiclient.py urlfile.txt files/ http://localhost:8000 
+请注意，文件urlfile.txt必须包含其他一些节点的URL，这样这个程序才能发挥作用。为进行
+测试，可在同一台计算机上启动多个程序（使用不同的端口号），也可在不同的计算机上运行它
+们。图28-1显示了这个客户端的GUI。 
+图28-1 简单的GUI客户端 
+这个实现管用，但只实现了部分功能——它还应列出服务器的文件目录包含的文件。为此，
+必须对服务器（节点）本身进行扩展。 
+28.5 再次实现 
+第一个原型非常简单，它确实实现了文件共享功能，但对用户不太友好。如果用户能够知道
+有哪些文件可用（这些文件可能是程序启动时就位于文件目录中，也可能是后来从其他节点那里
+下载的），将大有裨益。再次实现将实现这种列出文件的功能，完整的源代码如代码清单28-2所示。 
+                          
+
+420  第28 章 项目9：使用GUI 共享文件 
+要获取节点包含的文件的列表，必须添加一个方法。你可以像对待方法fetch那样使用密码
+来保护这个方法，但让任何人都可以使用它很有用，而且不会带来任何安全风险。对对象进行扩
+展很容易——只需从它派生出子类即可。因此，你从Node派生出子类ListableNode，并在其中新
+增一个方法list，它调用方法os.listdir来返回一个列表，其中包含指定目录中的所有文件。 
+class ListableNode(Node): 
+   def list(self):  
+ return listdir(self.dirname) 
+为访问这个服务器方法，在客户端中添加方法update_list。 
+def update_list(self): 
+   self.files.Set(self.server.list()) 
+属性self.files指向一个列表框，这个列表框是在方法create_widgets中添加的。在方法
+create_widgets中创建列表框时，调用了方法update_list。另外，每次调用fetch_handler时，也
+调用了方法update_list（因为调用fetch_handler可能导致文件列表发生变化）。 
+代码清单28-2 最终的GUI客户端（guiclient.py） 
+from xmlrpc.client import ServerProxy, Fault 
+from server import Node, UNHANDLED 
+from client import random_string 
+from threading import Thread 
+from time import sleep 
+from os import listdir 
+import sys 
+import tkinter as tk 
+HEAD_START = 0.1 # 单位为秒 
+SECRET_LENGTH = 100 
+class ListableNode(Node):  
+   def list(self): 
+ return listdir(self.dirname) 
+class Client(tk.Frame): 
+   def __init__(self, master, url, dirname, urlfile): 
+ super().__init__(master) 
+ self.node_setup(url, dirname, urlfile) 
+ self.pack() 
+ self.create_widgets() 
+   def node_setup(self, url, dirname, urlfile): 
+ self.secret = random_string(SECRET_LENGTH) 
+ n = ListableNode(url, dirname, self.secret) 
+ t = Thread(target=n._start) 
+ t.setDaemon(1) 
+ t.start() 
+                          
+
+28.5 再次实现  421 
+1 
+2 
+3 
+4 
+5 
+15 
+6 
+7 
+8 
+9 
+10 
+11 
+12 
+28 
+14 
+ # 让服务器先行一步： 
+ sleep(HEAD_START) 
+ self.server = ServerProxy(url) 
+ for line in open(urlfile): 
+  line = line.strip() 
+  self.server.hello(line) 
+   def create_widgets(self): 
+ self.input = input = tk.Entry(self) 
+ input.pack(side='left') 
+ self.submit = submit = tk.Button(self) 
+ submit['text'] = "Fetch" 
+ submit['command'] = self.fetch_handler 
+ submit.pack() 
+ self.files = files = tk.Listbox() 
+ files.pack(side='bottom', expand=True, fill=tk.BOTH) 
+ self.update_list() 
+   def fetch_handler(self): 
+ query = self.input.get() 
+ try: 
+  self.server.fetch(query, self.secret) 
+  self.update_list() 
+ except Fault as f: 
+  if f.faultCode != UNHANDLED: raise 
+  print("Couldn't find the file", query) 
+   def update_list(self): 
+ self.files.delete(0, tk.END) 
+ self.files.insert(tk.END, self.server.list()) 
+def main(): 
+ urlfile, directory, url = sys.argv[1:] 
+   root = tk.Tk() 
+   root.title("File Sharing Client") 
+   client = Client(root, url, directory, urlfile) 
+   client.mainloop() 
+if __name__ == '__main__': main() 
+就这么简单。至此，你创建了一个支持GUI的P2P文件共享程序，要运行它，可使用如下命令： 
+$ python guiclient.py urlfile.txt files/ http://localhost:8000 
+图28-2显示了最终的GUI客户端。 
+                          
+
+422  第28 章 项目9：使用GUI 共享文件 
+图28-2 最终的GUI客户端 
+当然，这个程序存在很大的扩展空间。有关这方面的建议，请参阅下一节。除了这些建议外，
+你还可充分发挥自己的想象力。 
+28.6 进一步探索 
+第27章提出了一些有关如何对文件共享系统进行扩展的建议，这里再列出一些。 
+让用户选择要获取的文件，而不是输入其文件名。
+添加一个状态栏，在其中显示诸如Downloading或Couldn’t find file foo.txt等消息。
+想办法让节点能够共享“好友”。例如，两个节点彼此认识后，它们都可将自己认识的节
+点介绍给对方。另外，也可让节点在关闭前将其知道的节点都告知所有的邻居。
+在GUI中添加一个显示已知节点（URL）的列表，让用户能够添加新的URL并将其保存到
+URL文件中。
+预告
+在本章中，你编写了一个功能齐备的GUI P2P文件共享系统。这项任务看似很难，但实际上
+没多难。接下来，你将迎接最后一个也是最严峻的挑战：自制街机游戏。 
+                          

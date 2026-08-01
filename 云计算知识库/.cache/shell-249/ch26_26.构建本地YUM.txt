@@ -1,0 +1,93 @@
+26.构建本地YUM
+ 
+通过 rsync 的方式同步 yum，通过 nginx 只做 http yum 站点；
+但是 centos6 的镜像最近都不能用了，国内貌似都禁用了，如果找到合适的自行更换地址。
+#!/bin/bash
+diskarray=(`awk -F':' '$NF ~ /\/bin\/bash/||/\/bin\/sh/{print $1}' /etc/passwd`)
+length=${#diskarray[@]}
+printf "{\n"
+printf  '\t'"\"data\":["
+for ((i=0;i<$length;i++))
+do
+    printf '\n\t\t{'
+    printf "\"{#USER_NAME}\":\"${diskarray[$i]}\"}"
+    if [ $i -lt $[$length-1] ];then
+            printf ','
+    fi
+done
+printf  "\n\t]\n"
+printf "}\n"
+检查用户密码过期
+#!/bin/bash
+export LANG=en_US.UTF-8
+SEVEN_DAYS_AGO=$(date -d '-7 day' +'%s')
+user="$1"
+# 将Sep 09, 2018格式的时间转换成unix时间
+expires_date=$(sudo chage -l $user | awk -F':' '/Password expires/{print $NF}' | 
+sed -n 's/^ //p')
+if [[ "$expires_date" != "never" ]];then
+    expires_date=$(date -d "$expires_date" +'%s')
+    if [ "$expires_date" -le "$SEVEN_DAYS_AGO" ];then
+        echo "1"
+    else
+        echo "0"
+    fi
+else
+    echo "0"
+fi
+#!/bin/bash
+# 更新yum镜像
+RsyncCommand="rsync -rvutH -P --delete --delete-after --delay-updates --
+bwlimit=1000"
+DIR="/app/yumData"
+LogDir="$DIR/logs"
+
+Centos6Base="$DIR/Centos6/x86_64/Base"
+Centos7Base="$DIR/Centos7/x86_64/Base"
+Centos6Epel="$DIR/Centos6/x86_64/Epel"
+Centos7Epel="$DIR/Centos7/x86_64/Epel"
+Centos6Salt="$DIR/Centos6/x86_64/Salt"
+Centos7Salt="$DIR/Centos7/x86_64/Salt"
+Centos6Update="$DIR/Centos6/x86_64/Update"
+Centos7Update="$DIR/Centos7/x86_64/Update"
+Centos6Docker="$DIR/Centos6/x86_64/Docker"
+Centos7Docker="$DIR/Centos7/x86_64/Docker"
+Centos6Mysql5_7="$DIR/Centos6/x86_64/Mysql/Mysql5.7"
+Centos7Mysql5_7="$DIR/Centos7/x86_64/Mysql/Mysql5.7"
+Centos6Mysql8_0="$DIR/Centos6/x86_64/Mysql/Mysql8.0"
+Centos7Mysql8_0="$DIR/Centos7/x86_64/Mysql/Mysql8.0"
+MirrorDomain="rsync://rsync.mirrors.ustc.edu.cn"
+# 目录不存在就创建
+check_dir(){
+    for dir in $*
+    do
+        test -d $dir || mkdir -p $dir
+    done
+}
+# 检查rsync同步结果
+check_rsync_status(){
+    if [ $? -eq 0 ];then
+        echo "rsync success" >> $1
+    else
+        echo "rsync fail" >> $1
+    fi
+}
+check_dir $DIR $LogDir $Centos6Base $Centos7Base $Centos6Epel $Centos7Epel 
+$Centos6Salt $Centos7Salt $Centos6Update $Centos7Update $Centos6Docker 
+$Centos7Docker $Centos6Mysql5_7 $Centos7Mysql5_7 $Centos6Mysql8_0 
+$Centos7Mysql8_0
+# Base yumrepo
+#$RsyncCommand "$MirrorDomain"/repo/centos/6/os/x86_64/ $Centos6Base >> 
+"$LogDir/centos6Base.log" 2>&1
+# check_rsync_status "$LogDir/centos6Base.log"
+$RsyncCommand "$MirrorDomain"/repo/centos/7/os/x86_64/ $Centos7Base >> 
+"$LogDir/centos7Base.log" 2>&1
+check_rsync_status "$LogDir/centos7Base.log"
+# Epel yumrepo
+# $RsyncCommand "$MirrorDomain"/repo/epel/6/x86_64/ $Centos6Epel >> 
+"$LogDir/centos6Epel.log" 2>&1
+# check_rsync_status "$LogDir/centos6Epel.log"
+$RsyncCommand "$MirrorDomain"/repo/epel/7/x86_64/ $Centos7Epel >> 
+"$LogDir/centos7Epel.log" 2>&1
+check_rsync_status "$LogDir/centos7Epel.log"
+# SaltStack yumrepo

@@ -1,0 +1,1808 @@
+基准测试与剖析
+就提高代码速度而言，最重要的是找出程序中速度缓慢的部分。所幸在大多数情况下，导致
+应用程序速度缓慢的代码都只占程序的很小一部分。确定这些关键部分后，就可专注于需要改进
+的部分，避免将时间浪费于微优化。
+通过剖析
+（profiling ），可确定应用程序的哪些部分消耗的资源最多。剖析器
+（profiler ）是这
+样一种程序：运行应用程序井监控各个函数的执行时间，以确定应用程序中哪些函数占用的时间
+最多。
+Python 提供了多个工具，可帮助找出瓶颈并度量重要的性能指标。本章将介绍如何使用标准
+模块cPro file 和第三方包line_profiler ，还将介绍如何使用工具I旧nory_profile r 剖析
+应用程序的内存占用情况。本章还将介绍另一个很有用的工具一－Keach巳grind ，使用它能以图
+形化方式显示各种剖析器生成的数据。
+基准测试程序
+（benchmark ）是用于评估应用程序总体执行时间的小型脚本。本章将介绍如
+何编写基准测试程序以及如何准确地测量程序的执行时间。
+本章介绍如下主题：
+口通用的高性能编程原则；
+口编写测试和基准测试程序；
+口Unix 命令time;
+口Python 模块t imeit
+;
+口使用pytest 进行测试和基准测试；
+口剖析应用程序；
+口标准工具cProfile ;
+口使用KCach巳grind 解读剖析结果；
+口工具line_prof iler 和memory_prof 工ler ;
+口使用模块d工S X才Python 代码进行反汇编。
+回
+
+2 
+第
+1 幸基准测试与剖析
+1.1 
+设计应用程序
+就设计高性能程序而言，最重要的是在编写代码期间不进行细微的优化。
+“过早优化是万恶之源。，，
+一一一高德纳
+在开发过程的早期阶段，程序的设计可能瞬息万变，你可能需要大规模地改写和重新组织代
+码。在此阶段，你需要对不同的原型进行测试，而不进行优化，这样可自由地分配时间和精力，
+确保程序能够得到正确的结果，同时具有灵活的设计。归根结底，谁都不想要一个运行速度很快
+但结果却不正确的应用程序。
+优化代码时，必须牢记如下箴言。
+口让它能够运行：必须让软件能够运行，并确保它生成的结果是正确的。这个探索阶段让
+你能够对应用程序有更深入的认识，并在早期发现重大设计问题。
+口确保设计正确：必须确保程序的设计是可靠的。进行任何性能优化前务必先重构，这可
+帮助你将应用程序划分成独立而内聚且易于维护的单元。
+口提高运行速度：确保程序能够运行且结构优良后，就可专注于性能优化了。例如，如果
+内存消耗是个问题，你可能想对此进行优化。
+在本节中，我们将编写一个粒子模拟器测试应用程序并对其进行剖析。这个模拟器程序接受
+一些粒子，并根据我们指定的规则模拟这些粒子随时间流逝的运动情况。这些粒子可能是抽象实
+体，也可能是真实的物体，如运动的桌球、气体中的分子、在太空中移动的星球、烟雾颗粒、液
+体等。
+在物理、化学、天文学等众多学科中，计算机模拟都很有用。对用于模拟系统的应用程序来
+说，性能非常重要，因此科学家和工程师会花费大量时间来优化其代码。为了研究真实的系统，
+通常必须模拟大量的实体，因此即便是细微的性能提升也价值不菲。
+在这个模拟系统示例中，包含的粒子以不同的速度绕中心点不断地旋转，就像钟表的指针
+一样。
+为了模拟这种系统，需要如下信息：粒子的起始位置、速度和旋转方向。我们必须根据这些
+信息计算粒子在下一个时刻的位置。下图说明了这个系统，其中原点为（0, 0），位置用向量x 和y
+表示，而速度用向量vx 和vy 表示。
+
+3 
+设计应用程序
+-A . 
+l 
+. 
+. 
+. 
+. 
+. 
+. 
+. 
+(x, y) 
+。
+圆周运动的基本特征是，粒子的运动方向始终与其当前位置到中心点的线段垂直。要移动粒
+子，只需采取一系列非常小的步骤（对应于系统在很短时间内的变化），并在每个步骤中都根据
+粒子的运动方向修改其位置，如下图所示。
+0万i：沪、厅
+\ 
+我们将以面向对象的方式设计这个应用程序。根据这个应用程序的需求，显然需要设计一个
+寸－(0, 0) 
+。
+
+4 
+第
+l 章基准测试与剖析
+通用的Particle 类，用于存储粒子的位置（x 和y ）以及角速度（ang_vel
+）。
+class Particle : 
+def
+一＿init＿一（self,
+x, y, ang_vel) 
+self . x = x 
+self.y = y 
+self.ang_vel = 
+a口g_vel
+请注意，这里所有的参数都可正可负，其中ang_vel 的符号决定了旋转方向。
+还需要设计另一个类一－ParticleSimulator ，它封装了运动定律，负责随时间流逝修改
+粒子的位置。在这个类中，方法
+init 
+存储一个Particle 实例列表，而方法evolve 根据
+指定的定律修改粒子的位置。
+我们要让粒子绕坐标（0，。）以固定的速度旋转，而运动方向总是与从粒子当前位置到中心点的
+线段垂直（参见本章的第一个图示）。要将运动方向表示为x 和y 向量（Python 变量v_x 和v_y ), 
+使用下面的公式即可。
+v_x = - y I 
+(x**2 + y**2 ）古＊0
+. 5
+v_y = x I 
+(x**2 + y**2 ）食费。
+. 5
+对于特定的粒子，经过时间t 后，它将到达圆周上的下一个位置。我们可以这样近似计算圆
+周轨迹：将时段t 分成一系列很小的时段dt ，在这些很小的时段内，粒子沿圆周的切线移动。这
+样就近似地模拟了圆周运动。为避免误差过大（如下图所示），时段d t 必须非常短。
+~＝：：~二＼
+
+1.1 
+设计应用程序
+5 
+简而言之，为计算经过时间t 后的粒子位置，必须采取如下步骤。
+(I ）计算运动方向
+（v_x 和v_y ）。
+(2）计算位移（d_x 和d_y ），即时段dt 、角速度和移动方向的乘积。
+(3）不断重复第（I ）步和第（2）步，直到时间过去t。
+ParticleSirnulator 类的完整实现代码如下：
+class Part 工cleSimulator
+:
+def 
+工口工t
+(self , particles): 
+self particles = particles 
+def evolve(self, dt) : 
+timestep = 0.00001 
+nsteps = int(dt/t 工mestep)
+for i in range （口steps)
+:
+for p in self .particles 
+# 
+1
+.
+计算方向
+norm= (p .x**2 + p .y**2)**0.5 
+v_x = -p .y/norm 
+v_y = p .x/norm 
+# 2 
+计算位移
+d x = t 工mestep * p . ang_vel * v x 
+d_y = timestep * p.ang_vel * v_y 
+p x += d_x 
+p y += d_y 
+# 3 
+不断重复，直到时间过去t
+为了可视化这里的粒子，可使用matplotlib 库。这个库不包含在Python 标准库中，但可
+使用命令pip install rnatplotlib 轻松地安装它。
+。
+也可使用发行包Anaconda Python ，它包含matplotlib 以及本书使用的其他大
+多数第三方包。
+Anaconda 是免费的，可用于Linux , W i ndows 和Mac 。
+为了创建交互式可视化，我们使用函数matplotl 工b . pyplot
+. plot 以点的方式显示粒子，并
+使用rnatplotlib . animation . FuncAnirnation 类以动画方式显示粒子随时间流逝的移动情况。
+函数visual 工ze 将一个Par ticles 工mulator 实例作为参数，并以动画方式显示粒子的运
+动轨迹。为了使用rnatplotl 出来显示粒子的运动规则，必须采取的步骤如下。
+口创建并设置坐标轴，再使用函数plot 来显示粒子。函数p lot 将x 坐标和y 坐标列表作
+为参数。
+
+6 
+第
+1 幸基准测试与剖析
+口编写初始化函数ini t 和函数animate ，其中后者使用方法l 工口e.set_data 来更新x
+和y 坐标。
+口创建一个FuneAn 工mat ion 实例：传入函数工n工t 和animate 以及参数interval 和blit,
+其中参数interval 指定更新间隔，而bl it 可改善图像的更新速率。
+口使用plt. show （）运行动画。
+from matp lot lib
+工mport pyplot as plt 
+from matplotlib import animat 工on
+def visual ize(s imulator) : 
+X = [p. x for p 
+工口simulator .particles] 
+Y = [p.y for p 
+i口
+Simulator.particles] 
+fig = plt . figure () 
+ax= plt.subplot(lll, aspect= ' equal 『）
+line , = ax . plot (X , Y, 
+' ro ’ ) 
+＃指定坐标轴的取值范围
+plt.xlim(-1, 1) 
+plt .ylim( 1 , 1) 
+＃
+这个方法将在动画开始时运行
+def init () 
+li口e. set_data ( [] , [] ) 
+return line, 
+＃
+这里的逗号必不可少1
+def animate （工）：
+＃我们让粒子运动0.01 个时间单位
+S 工mulator.evolve(0.01)
+X = [p . x for p in s 工mulator .par ticles]
+Y = [p.y for p in s 工mulator .part icles]
+l 工ne
+. set_data(X,
+Y) 
+return line , 
+＃每隔10 毫秒调用一次动画函数
+anim = animation . FuncAnimation(fig , 
+plt . show() 
+animate, 
+工nit_func=init,
+blit=True, 
+工nterval=lO)
+为了测试这些代码，我们定义了一个简短的函数一－test_visualize ，它以动画方式模拟
+一个包含3 个粒子的系统，其中每个粒子的运动方向各不相同。请注意，第三个粒子环绕一周的
+速度是其他两个粒子的3 倍。
+def test _v 工sualize ( ) : 
+part 工cles
+= [Particle(O 3 , 0 5 , 1) , 
+Part 工cle(O 0, -0 .5, -1), 
+
+Particle ( 0 
+1 ，
+。
+. 4' 3) l 
+simulator = ParticleSimulator
+( pa r t 工cles)
+visua lize (simulator) 
+i f
+一＿name_ == 
+’ ＿main一一’
+·
+test_v isualize () 
+1.2 
+编写测试和基准测试程序
+7 
+函数test_v工suali z e 很有用，可帮助你直观地理解系统｜随时间流逝的变化’情况。在下一
+节，我们将再编写一些测试函数，
+以核实这个程序是正确的井测量其性能。
+1.2 
+编写测试和基准测试程序
+编写管用的模拟器后，便可着手测量其性能，并对代码进行优化，让模拟器能够处理尽可能
+多的粒子。首先，我们将编写测试和l基准测试程序。
+我们需要一个检查模拟结果是否正确的测试。为了优化程序，通常必须采取多种策略，但在
+反复重写代码的过程中，很容易引入bug 。可靠的测试集可确保每次迭代后实现都是正确的，这
+让我们能够大胆地进行不同的尝试，并深信只要能够通过测试集，代码就依然是像期望的那样工
+作的。
+我们的测试将接受3 个粒子，模拟0 . 1 个时间单位，并将结果与来自参考实现的结果进行比
+较。为了组织测试，一种不错的方式是，对于应用程序的每个方面（或者说单元）都使用一个不
+同的函数进行测试。鉴于这个应用程序的功能都是在方法evo l ve 中实现的，因此我们将把测试
+函数命名为test_evo l ve 。下面列出了国数test_evol ve 的实现代码。请注意，为了对浮点
+数进行比较，我们使用了函数fequal 来确定它们的差在一定范围内。
+d e f tes t _ evolve() : 
+part icles= [Particle( 0 . 3 , 0 . 5 , +l) , 
+Particle( 0 . 0 , -0 . 5 , -1) , 
+Particle( - 0 1, - 0 . 4 , +3)] 
+s i mul ator = Part i cleSimulator (par ticles) 
+s imu l ator . evolve(O . l) 
+pO, pl, p2 = particles 
+def fequal (a , b , eps=le- 5 ) : 
+r e turn abs(a 
+b) < eps 
+asse r t f equal(pO x , 0 . 210269) 
+ass ert f e qual (pO.y , 0 . 543863) 
+assert f equa l (pl . x , -0 099334) 
+assert f equa l(pl .y , - 0 49 0034 ) 
+
+8 
+第
+1 章基准测试与剖析
+assert f equa l(p2 x , 0 . 191358) 
+assert fequal (p2 y , -0 . 365227 ) 
+工f
+口ame
+== ’
+mai n
+’ · 
+t est_evolve () 
+测试可确保我们正确地实现了功能，但几乎没有提供任何有关运行时间的信息。基准测试程
+序是简单而有代表性的用例，可通过执行它来评估应用程序的运行时间。对于跟踪程序在每次迭
+代后运行速度有多快，基准测出程序很有用。
+为了编写一个有代表性的基准测试程序，我们可实例化
+1000 个坐标和角速度都是随机的
+Par t icle 对象，并将它们提供给Par ticle Simulator 类，然后让系统运行O l 个时间单位。
+f rom random i mport un 工form
+de f benchmar k() : 
+particles = [Particle (uni form ( 1. 0, 1. 0) , 
+unifor m( - 1.0 , 1.0) , 
+uni form ( - 1 . 0 , 1 . 0) ) 
+for i in range(lOOO) ] 
+s imulator = ParticleSimulator(part i cles) 
+simu l ator . evolve(O . l) 
+if 
+name 
+== ’
+main 
+be nchmar k () 
+测量基准测试程序的运行时间
+要计算基准测试程序的运行时间，一种非常简单的方法是使用Unix 命令time 。通过像下面
+这样使用命令time ，可轻松地测量任何进程的执行时间。
+$ time python s imul . py 
+r eal 
+Oml. OS ls 
+user 
+Oml . 022s 
+sys 
+Om0.028s 
+。
+在Windows 系统中，没有命令time 。要在Windows 系统中安装Unix 工具，如命
+令time ，可使用cygwin shell （可从其官网下载）。你也可使用类似的PowerShell
+命令来测量执行时间，如Measure-Command 。
+默认情况下，
+t ime 显示3 个指标。
+口real ：从头到尾运行进程实际花费的时间，与人用秒表测量得到的时间相当。
+口user ：在计算期间，所有CPU 花费的总时间。
+口sys ：在执行与系统相关的任务（如内存分配）期间，所有CPU 花费的总时间。
+请注意，在有些情况下，
+u s er 与sys 的和可能大于real ，这是因为可能有多个处理器在
+
+1.2 
+编写测试和基准测试程序
+9 
+并行地工作。
+＠时还提供了丰叫式设均以方面以情况训用户手册
+（执行命令ma口time ）。如果你妥查看有关所有指标的摘妥，
+可使用选项－v。
+为测量基准测试程序的执行时间，
+U nix 命令是最简单也比较直接的方式之一。为确保测量
+结果是准确的，基准测试程序的执行时间应足够长（为秒级），以确保创建和删除进程的时间相
+比于应用程序的执行时间来说很短。指标user 适合用于监视CPU 的性能，而指标real 也包含
+等待输入／输出操作期间用在其他进程上的时间。
+为了测量Pyth on 脚本的执行时间，另一种方便的方式是使用模块timeit 。这个模块在循环
+中运行代码片段n 次，井测量总执行时间，然后重复这种操作r （默认为3 ）次，并记录其中最
+短的那次时间。鉴于其测量时间的方式，time it 非常适合用于准确地测量少量语句的执行时间。
+可在命令行或！Python 中将模块time it 作为P ython 包执行。
+!P ython 是一个Pyth on sh e ll ，是为改善Python fill?释器的交互性而设计的。它支持按Tab 键进
+行补全，还提供了很多用于对代码进行计时、剖析和调试的工具。本书自始至终都将使用这个s h e ll
+来执行代码片段。
+！Pyth on
+she ll 支持魔法命令
+（magic command ), e r1 以符号2打头的语句，这赋
+予了它特殊行为。以毛毛打头的命名被称为单元格魔法命令，可应用于多行的代码片段（被称为单
+元格）。
+在大多数Linux 系统中，都可通过pip 命令来安装！P yth o n 。另外，Anaco nda 也包含IPython 。
+＠
+可将
+！Python ft :Ji ~规Python
+she ll 使用（ipython ），但叫基于川本
+( ipython qtco口sole ）以及使用基于浏览器的界面的版本（jupyter notebook ）。
+在！Python 和命令行界面中，还可使用选项－n 和－r 分别指定循环次数和重复次数。如果没
+有指定，
+timeit 将自动推断出它们。从命令行调用time此时，还可使用选项－s 传入一些设置
+代码一一在基准测试程序之前执行的代码。下面演示了如何在I Python 和命令行中执行time it 。
+＃工Python 界面
+$ ipython 
+工n
+[ 1]: f r om simul import benchmark 
+工n
+[2]: %timeit benchmark() 
+1 loops, best of 3: 782 ms per loop 
+＃命令行界面
+$ python -m timeit - s 'from simul import benchmark ’’benchmark ()’ 
+10 loops, best of 3: 826 msec per loop 
+# Python 界面
+＃将这个函数放到脚本simul.py 中
+import timeit 
+
+10 
+第
+l 幸基准测试与剖析
+result = timeit.timeit (’ benchmark ()’, 
+setup='from
+一＿main_ import benchmark ’, 
+number=lO) 
+＃结果为整个循环的执行时间（单位为秒）
+result= timeit.repeat('benchmark {)’, 
+setup=’ from _main一＿import benchmark ’, 
+number ＝工0'
+repeat=3) 
+＃结采走一个J1J 求，其中包含每次的执行时间（这里重复3 次）
+请注意，在命令行界面和IPyth on 界面中，会自动确定合理的循环次数（n ），但在Python 界
+面中，必须通过参数numbe r 显式地指定循环次数。
+1.3 
+使用pytest-benchrnark 编写更佳的测试和基准测试程序
+U nix 命令time 是个多功能工具，可在各种平台上用来评估小程序的执行时间。对于较大的
+Pyth on 应用程序和库，要对其进行测试和基准测试，一种更全面的解决方案是结合使用pytest
+及其插件pytest
+benchmark 。
+在本节中，我们将使用测试框架pytest 为应用程序编写一个简单的基准测试程序。如果读
+者想更详细地了解这个框架及其用法，pytest 文档是最佳的资源，其网址为http ://doc.pytest.org/
+en/l atest/。
+。
+可在控制台中使用命令pip install pytest 来安装py te st ，其基准测试插
+件也可以类似的方式安装一一使用命令pip install pyt e st-benchmark 。
+测试框架是一组测试工具，可简化编写、执行和调试测试的工作，还提供了丰富的测试结果
+报告和摘要。使用框架pytest 时，建议将测试和应用程序代码放在不同的文件中。在下面的示
+例中，我们创建了文件tes t_s imul.py ，其中包含函数test_evolve 。
+from simul import Particle, ParticleSimulator 
+,] 
+,)
+) 
+、
+1
+吁
+4
+3
+J
+寸
+－
+4
+－
+＋
++ 
+,, 
+，
+「
+气
+d
+A
+创
+d
+phJ·· 
+-
+nunu 
+nu
+-- 
+飞
+J
+n
+u
+－
+－
+... 
+nununu 
+((( 
+eee 
+－
+－
+币
+’
+《
+1
+I
+A
+CCC 
+’
+l
+a
+l
+工
+←
+」
+←
+」
+←
+」
+rrz 
+aaa 
+:ppp 
+)[ 
+( 
+e
+-- 
+V 
+T
+I
+晶
+n
+b
+oe 
+vl 
+ec 
+-
+l 
+←
+I
+』
+←
+」
+sr 
+ea 
+←
+」
+n
+u
+r
+俨
+L
+e 
+AU 
+s 工mulator = ParticleSimulator(particles) 
+simulator .evolve(O 1) 
+pO, pl , p2 = particles 
+def fequal(a , b, eps=le 5): 
+return abs(a - b) < eps 
+
+1.3 
+使用pytest-benchmark 编写更佳的测试和基准测试程序
+assert fequal(pO .x, 0 . 210269) 
+assert fequal (pO .y , 0.543863) 
+assert fequal (pl . x, -0 099334 ) 
+assert fequal(pl .y, -0 . 490034) 
+assert fequal(p2.x , 0.191358) 
+assert fequal(p2.y, -0 . 365227) 
+11 
+可在命令行中运行可执行文件pytest ，它将找到并运行Python 模块中的测试。要执行特定
+的测试，可使用语法pytest path/to/module. py : : fu口ctio口＿name 。为执行test_evolve,
+可在控制台中输入如下命令，这将获得简单但信息丰富的输出。
+$ pytest test simul.py: :test_ evolve 
+platform linux -- Python 3.5.2, pytest-3.0.5, py-1. 4 .32, pluggy-0 . 4.0 
+rootdir: /home/gabriel e / workspace/hiperf/chapterl, inifile : plugins: 
+collected 2 items 
+test simul.py 
+====== == =================== 1 passed in 0.43 seconds 
+=========================== 
+编写好测试后，就可使用插件pytest-benchrnark 将测试作为基准测试程序来执行。如果
+我们修改函数test_evolve ，使其接受一个名为benchmark 的参数，框架pytest 将自动将资
+源ben chmark 作为参数传递给这个函数。在py test 中，这些资源被称为测试夹具
+（fixture ）。
+为调用基准测试资源，可将要作为测试基准程序的函数作为第一个参数，并在它后面指定其他参
+数。下面演示了为对函数Parti c leSirnul ator
+. evolve 进行基准测试，需要对代码做哪些修改。
+from simul
+工mport Particle, 
+Part 工cleSimulato r
+def test_evolve(benchmark) : 
+＃
+…·－以前的代码
+benchmark(simulator.evolve, 0.1) 
+为运行基准测试，只需再次执行命令pyte st
+出将包含有关函数test_evolve 的详细计时信息，
+test_s 工rnul
+. py : : test_ evol ve 即可。输
+如下所示。
+=-====-============-========== .. ======= t ost 
+sess l。n starts =======-=================================== 
+pl a t f。＇＂Hnux - - Python 3 S 2, pytest-3 .6.S, py 1.4 32. pluggy-6 4.6 
+benchoark: 3 6 .6 (defaults: tloe r=t\Me.pe r f_counter dlsable _gc=Fal se oln_round s = S
+同＼n_tl Me = S.S6u s Max_tlMe=l.66s cal 
+l br atl on_preclslon=16 w a r~up = fal s e war Mop_ i t e ratlons= 166666) 
+r。。tdlr
+:
+/ h。＂e/gabrlel e/ workspace /hlperf / chapter 1, l nlfl le 
+pluglns: be nd、”ark-3.6 e 
+E。ll ect ed 2 tte"s 
+test_ st同ul PY 
+- -- --·-·---
+----
+-- -· 
+----
+• 
+• -- - -- benchMark 
+1 tests - -- -------- ------- ----
+-- - --·---·----
+NaMe ( tlMe \ n MS）”ln
+州a x
+肉ea n
+S tdOev
+例edlan
+IQR 
+Outliers(') Rounds 
+lteratl。n s
+”--- · 
+－·’－－－－－－－－· ·－－－，，－－，－，－－－－－－－－－－－－－－－－－－‘－－，－．－可’－－－－－---- ---------
+·－－－－－－－－－－·年－－，－－－－－－－牛’－．．
+test evol ve 
+2’ .4716 
+41.1791 
+3。. 4622 
+2. 8234 
+2’·’638 
+0 7376 
+2; 2 
+34 
+I 
+－－－－－－－－－－－·· · －－可’－－－－－－－－－－－－’－．．．，－．号’·－－－－－－－－－－－··－－』·．．，』－－－－
+.....巴－，－…....…·－－．·一‘－－－－－－－
+（ηOutllers : 1 Standard Devlatl。n
+f roA
+例ean , 1.5 IQR (InterQuartlle Range) froA 1st Qua rtlle and 3rd Quar定He.
+·::::::: 
+3生＝＝＝＝.. 
+＝··~＝霄拿嘈F舍总＝＝但Z管：：.：：＝：：：当：：：＝i:;:o:臼n 1 p＞＜旦、d ; n 2 '2 second 雪
+，.丘之巳＂注＝＝－”
+:=:::<;-
+i::. = 守军尝2
+= 
+＝＝三中’ 2 
+回
+
+12 
+第
+l 幸基准测试与剖析
+对于收集的每个测试，
+pytest
+benchmark 都将执行基准测试函数多次，并提供有关其运
+行时间的统计摘要。前面的输出很有趣，因为它表明每次运行时执行时间都不同。
+在这个示例中，
+test_evolve 中的基准测试函数运行了34 次
+（见Rounds JU ），它们的执
+行时间为29-41 毫秒不等（见Min 和Max 列），但平均值和中间值很接近，都是30 毫秒左右，
+这与最短的执行时间相当接近。这个示例表明，每次运行时性能差别很大，因此使用只进行单次
+计时的工具（如time ）时，最好运行程序多次，并记录有代表性的结果，如最小值或中间值。
+pytest-benchrnark 还有很多其他的功能和选项，可用来精确地测量时间和分析结果。有
+关这方面的详细信息，可参阅其文档。
+1.4 
+使用cProf ile 找出瓶颈
+核实程序的正确性井测量其执行时间后，便可着手找出需要进行性能优化的代码片段了。与
+整个程序相比，这些代码的规模通常很小。
+在Python 标准库中，有两个剖析模块。
+口模块profile ：这个模块是完全使用Python 编写的，给程序执行增加了很大的开销。这
+个模块之所以出现在标准库中，原因在于其强大的平台支持和易于扩展。
+口模块cPr。file ：这是主要的剖析模块，其接口与profile 相同。这个模块是使用Ci吾
+言编写的，因此开销很小，适合用作通用剖析器。
+可以三种不同的方式使用模块cProfile :
+口在命令行中使用；
+口作为Python 模块使用；
+口在IPython 中使用。
+元须对其源、代码做任何修改，就可对现有Python 脚本或函数执行c Prof ile 。要在命令行中
+使用cPro f ile ，可像下面这样做：
+$ python -m cProfile simul.py 
+这将打印长长的输出，其中包含针对应用程序中调用的所有函数的多个指标。要按特定的指
+标对输出进行排序，可使用选项－s 。在下面的示例中，输出是按后面将介绍的指标tot time 排
+序的。
+$ python -m cProfile -s tottime simul.py 
+要将cProfile 生成的数据保存到输出文件中，可使用选项－o 。cProfile 使用模块stats
+和其他工具能够识别的格式。下面演示了选项一O 的用法。
+
+1.4 
+千史用cProfile 才戈出并瓦颈
+13 
+$ python -rn cProfile - o prof .out sirnul.py 
+要将cProfile 作为Python 模块使用，必须像下面这样调用函数c Profile
+. 四川
+from S 工mul import benchmark 
+import cProfile 
+cP ro f 工l e
+. run
+（” benchmar k ()”) 
+你还可在调用对象cProfile
+. Profile 的方法的代码之间包含一段代码，如下所示。
+from simul import benchmark 
+import cProfile 
+pr = cProfile.Profile() 
+pr . enable () 
+benchmark () 
+pr. disable ( ) 
+pr .print_stats() 
+也可在！Python 中以交互的方式使用cProf ile 。魔法命令军prun 让你能够剖析特定的函数
+调用，如下图所示。
+!Python: chapter1 /c 。des
+(hperf ）
+”’
+ε。de<
+i.pyth。n
+Python 3 5. 2 I c。ntlnuu问
+Analytlcs, Inc. I (default, Jul 
+2 2616 , 17:53:86) 
+Type
+” ζ。pyrlght”，＂＇credlt＜”
+or
+” llcense ”
+for
+~ore
+飞nf。rnatlon.
+!Python 5 1 6 · · An enhanced !nteractlve Pyth。n
+’· 
+> Introductton and overvi.ew of !Python ’ s features 
+l%qui.ckref • > Qui.ck reference 
+help 
+·> Python's own help syste~. 
+!object? 
+·＞。etai.ls about ·。bject ’，
+useιobject ？？’
+for extra de ta\ ls. 
+In [ t ]: froM si.Aul lAport benchMark 
+In [ 2]: %prun benchMark() 
+1e1 fu n ctl。n calls i.n 1.231 seconds 
+} 
+s 
+t 
+、
+J
+C
+se 
+t
+- 
+c
+ι
+D
+ 
+e
+。
+j 
+k
+υ
+．
+ 
+。
+r
+e 
+’
+1 
+mt 
+。
+e
+. 
+d
+。
+n
+「
+a}
+p 
+n
+民
+r
+、
+.ef 
+佣
+川
+曾
+．【
+《
+。
+e
+r
+d
+-
+p 
+、
+，
+n
+s
+s
+n
+}
+an1 
+。
+〉
+r
+‘
+h
+‘
+、
+－
+，
+－
+tp
+>
+Ek
+’
+t
+网
+伺
+、
+J
+’
+1
+「
+、
+, 
+c
+。
+r
+－
+t
+｝
+a
+E
+f
+n
+）
+C
+O
+－
+f
+u
+〉
+m
+－
+。
+uetftobeht 
+fvst11ct· 
+{1tnn
+’dunne 
+ooIutnodet
+- 
+nv<(-ohob-b
+ee
+{ZEtntE 
+n(
+84
+(
+ne
+<
+7
+{
+S
+11138ant
+-Bt 
+Iz
+-
+-1r11Id 
+--··:“,
+:,
+n
+····o 
+e
+y
+y
+p
+y
+t
+、
+，
+y
+y
+nnvnu
+r’”
+vdu
+-
+nMSRVnvdu 
+a
+·
+·
+肉
+’
+o
+t
+n
+o
+n
+－
+－
+。
+－
+h
+I
+t
+－
+－
+h
+euudut1ruut 
+、
+k
+m
+n
+n
+阴
+e
+u
+t
+n
+n
+e
+t
+t
+t
+a
+t
+同
+b
+s
+t
+t
+m
+fssrstf
+<ssf
+10188811168 
+13ee80333ee 
+azeee6222ee 
+c--·· 
+r1eeee
+---
+ee 
+e 
+nv 
+eeIsee
+--
+16e 
+阴
+3
+e
+e
+e
+e
+3
+3
+3
+e
+e
+tzeeeezzzea 
+t
+-
+-···
+·
+·
+·
+· 
+n1eeee
+--
+100 
+u 
+c 
+e 
+向
+1
+8
+8
+8
+e
+e
+e
+e
+e
+e
+a
+t
+-3ageeeeeee 
+tazeeeeeeeee 
+c
+······· 
+-
+r-eeeee8688 
+8e 
+np 
+r 
+e 
+命
+L
+a
+、
+臼
+v
+a
+M
+a
+u
+－
+a
+u
+a
+u
+a
+u
+－
+－
+v
+a
+u
+a
+u
+a
+u
+nm3eeeeeeeee 
+--
+288eee8888 
++‘ 
+..... 
+·t1eeeeeeeee 
+yo 
+bz 
+du 
+es
+--
+eea 
+r
+-
+eee 
+e1313 
+·AUa
+” 
+rc 
+nunH 
+In [ 3]: I 
+cProfile 的输出分成了5 列。
+口ncalls ：函数被调用的次数。
+口tot time ：执行函数花费的总时间，不考虑其他函数调用。
+口curntirne ：执行函数花费的总时间，考虑其他函数调用。
+口percall ：单次函数调用花费的时间一一可通过将总时间除以调用次数得到。
+
+14 
+第
+l 幸基准测试与剖析
+口filename:lineno ：文件名和相应的行号。调用C 语言扩展模块时，不包含这种信息。
+最重要的指标是tot time ，它表示执行函数体花费的实际时间（不包含子调用），让我们能
+够知道瓶颈到底在哪里。
+大部分时间都花在函数evolve 上，这没什么可奇怪的。可以想见，循环是需要进行性能优
+化的那部分代码。
+cProfile 只提供函数级信息，而不会指出导致瓶颈的具体是明陪语句。所幸工具line_profi ler 
+能够提供函数中各行的时间花费信息，这将在下一节介绍。
+对于包含大量调用和子调用的大型程序来说，分析cProfile 的文本输出可能是项令人望而
+却步的任务。有一些可视化工具可帮助完成这些任务，它们使用交互式图形界面，让你能够轻松
+地导航。
+KCachegrind 就是一个这样的图形用户界面
+（GUI ）工具，可帮助你分析cProfile 生成的
+剖析输出。
+。
+Ubuntu 1 6 .04 官方仓库中包含KCachegri nd 。Windows 用户可从http: //so urcefo rge .
+net/proj ects/qcach巳grindw in/下载Qt port一－QCacheGrind 。
+Mac 用户可使用Mac
+Ports 编译
+QCacheG rind ，
+至于如何编译，请参阅博文“ In stall kcachegrind on 
+MacOSX with po归”中的说明。
+KCachegrind 无法直接读取cProfile 生成的输出文件，所幸第三方Pyth on 模块pyprof2-
+cal l tree 能够将cProfile 输出文件转换为KCachegrind 能够读取的格式。
+。
+要安装Python Package Index 中的pyprof2calltree ，可使用命令p ip 工nstall
+pyprof2calltreeo 
+为最大限度地展示KCachegrind 的功能，我们将使用另一个结构更为多样化的示例。我们定义
+一个递归函数factor工al ，还有另外两个使用factorial 的函数一－taylor_e碍和taylor_s in,
+它们分别计算exp(x ）和s 工n(x ）的泰勒展开式的多项式系数。
+def factorial (n) : 
+if n == 0 : 
+return 1 .0 
+else : 
+return n * factorial(n-1) 
+def taylor exp (n) : 
+return (1 Of fac tor 工al(i) for i in ra口ge(n) J 
+def taylor_sin ( n) : 
+res = () 
+
+1.4 
+千史用
+cProfile 才戈出并瓦颈
+for i in range (n) : 
+if i
+宅
+2
+== l : 
+res . append ( ( -1) ＊食（(i - 1) /2) /float (factorial (i))) 
+else : 
+res
+. append(O
+. 。）
+return res 
+def benchmark() : 
+taylor_ exp(500) 
+taylor sin(SOO) 
+if 
+name 
+＝＝
+’
+ma 工n
+benchmark () 
+为访问剖析信息，首先需要生成c Prof ile 输出文件。
+$python -m cProfile -o prof.out taylor.py 
+然后，就可使用pyprof2calltree 对输出文件进行转换井启动KCachegrind 。
+$ pyprof2calltree -i prof.out -o prof.calltree 
+$ kcachegrind prof.calltree ＃
+或使用命令qcachegrind prof.calltree 
+输出如下面的屏幕截图所示。
+毛二三三三三三二三三三三二三三三三三三三之三二三二二y
+prof.calltree [1] h国I Nanoseconds Cost: 93 793 000 
+15 • 
+
+16 
+第
+l 幸基准测试与剖析
+该屏幕截图显示了KCachegrind 的用户界面。左边的输出与cProfile 的输出很像，但列名
+稍有不同：
+lncl 对应于cProf ile 模块中的cumtime ，而Self:X•J应于tot time 。如果你单击菜
+单栏中的Re lat i ve 按钮，将以百分比的方式显示值。通过单击列名，可按相应的属性进行排序。
+在右上方，如果你单击标签Ca ll ee Map ，将显示一个函数开销图。在该图中，函数占用的时
+间百分比与矩形面积成正比。矩形可包含子矩形，而这些子矩形表示对其他函数的子调用。在这
+个示例中，很容易看出有两个表示函数fac torial 的矩形，其中左边那个对应于taylor_exp
+调用的f actorial ，而右边那个对应于taylor
+sin 调用的factorial 。
+你可单击右边底部的标签Ca ll Gra ph 来显示另一个图一一一调用图。调用图是函数间调用关系
+的图形化表示，其中每个矩形都表示一个函数，而箭头表示调用关系。例如，
+taylor_exp 调用
+了factorial
+500 次，而taylor_sin 调用了factorial 250 次。
+KCachegrind 还能够发现递
+归调用：
+factorial 调用了自己
+187 250 次。
+你可双击矩形来切换到Call Graph 或Ca ll er Map 选项卡，在这种情况下，界面将相应地更新，
+指出计时属性是相对于选定函数的。例如，双击
+taylo r_exp 将导致图形发生变化，只显示
+taylor_exp 对总开销的贡献。
+。
+另一个用于生成调用图的流行工具是Gprof2Dot。使用支持的剖析器生成的输出
+文件启动时，
+Gprof2Dot 将生成一个表示调用图的.dot 图。
+1.5 
+使用line_pr。filer 逐行进行剖析
+知道哪个函数需要优化后，就可使用模块line_prof iler 来提供有关时间是如何在各行之
+间分配的信息。在难以确定哪些语句最费时时，这很有用。
+line_prof iler 是Python Packag巳
+Index 提供的一个第三方模块，其安装说明请参阅https: //github.com/rkem/line _profi l er。
+要使用
+l 工ne_prof iler ，需要对要监视的函数应用装饰器＠profil e 。请注意，无须从其
+他模块中导人函数profile ，因为运行剖析j肉体kemp r证PY 时，它将被注入全局命名空间。要
+对我们的程序进行剖析，需要给函数evolve 添加装饰器＠profile 。
+@prof 工le
+def evolve(self, dt ) : 
+＃代码
+脚本kemprof.py 生成一个输出文件，并将剖析结果打印到标准输出。运行这个脚本时，应指
+定两个选项。
+口－1 ：以使用函数l ine_prof 工ler
+口－v ：以立即将结果打印到屏幕
+
+1.6 
+优化代码
+17 
+下面演示了kernprof.py 的用法：
+回
+$ kernprof.py -1 -v simul.py 
+也可在
+IPyth on she I I 中运行这个剖析器，这样可以进行交互式编辑。你应首先加载
+l i ne_profiler 扩展，它提供了魔法命令lprun 。使用这个命令，就无须添加装饰器＠profile 。
+l二二」叭。n: chapter1 /codes 
+~I 
+In [ l ): ~load_ext \lne四ρrofller 
+In [ ]: fr。”
+sl问ul
+l”p。rt benchMark, Part飞ζleSlMulator
+In [ 3) . Xtprun -f PartlcteSlMulator .evotve benchMark() 
+Tl Mer untt: !e-66 s 
+vd 
+nv 
+- 
+I 
+u 
+m 
+t 
+s 
+/ 
+s 
+e 
+du 
+。
+ζ
+ 
+/ 
+l r 
+e 
+t 
+p 
+a 
+h 
+c 
+/ 
+f 
+r 
+e 
+nv 
+t 
+h 
+/ 
+e 
+c 
+a 
+pz 
+sz 
+k 
+re 
+on 
+w‘‘ 
+S/
+1 
+e 
+51t 
+7ea 
+61 
+6re 
+6bv 
+81 
+890 
+/
+v 
+ee 
+e
+阴
+”
+。
+：
+thn 
+t/
+o 
+t 
+-
+t 
+aec 
+tln 
+otu 
+TFF 
+Li.ne # 
+Hi.ts 
+TlMe 
+Per Hl t 
+X
+丁t伺e
+L<ne E。ntents
+21 
+def evolve( self, dt): 
+22 
+2.e 
+e . e 
+ti Mes tep = e. eeee1 
+23 
+4.6 
+... 
+nsteps ＝飞nt(dt/ti.Aestep)
+24 
+25 
+16661 
+12561 
+1.3 
+。1
+for l \n range(nsteps) 
+26 
+1616666 
+867457 
+6.9 
+16.6 
+for p ln self. pa 「tlctes:
+27 
+28 
+1666666 
+1859312 
+1.9 
+21 5 
+nor凹＝(p.x .. 2 t p.y••2)“6 .5 
+29 
+1666666 
+972628 
+1 e 
+11. 2 
+v_x = (-p.y)/norM 
+36 
+1666666 
+921668 
+e 9 
+16.6 
+v_y = p.x/norM 
+31 
+32 
+1666666 
+982441 
+1.6 
+11. 3 
+~：＝； = ti.Mestep ’ p.ang_vel • v_x 
+33 
+1666666 
+974838 
+1 6 
+11. 2 
+= tlMestep ’
+p.ang_vet • v_y 
+34 
+35 
+1668666 
+1858183 
+1 I 
+12 . 2 
+p .x += d『X
+36 
+1666666 
+1818915 
+1.6 
+11.8 
+p.y += d_y 
+In
+『
+·ll:
+输出非常直观，分成了6 列。
+口L ine
+＃：运行的代码行号。
+口Hits ：代码行运行的次数。
+口T工me ：代码行的执行时间，单位为微秒。
+口Per Hit : Ti me/Hits 。
+口
+% Time ：代码行总执行时间所占的百分比。
+口L工口e
+Contents ：代码行的内容。
+只需查看宅
+Time 列，就可清楚地知道时间都花在了什么地方。在这个示例中，
+for 循环中
+几条语句占用的时间百分比都在
+1 0%～20% 。
+1.6 
+优化代码
+确定应用程序的大部分时间都花在什么地方后，就可做些修改，并评估修改对性能的影响。
+要优化纯粹的Python 代码，方式有多种，其中效果最显著的方式是对使用的算法进行改进。
+就这个示例而言，相比于计算速度并逐步累积位移，效率更高（而且绝对准确而不是近似）的方
+
+18 
+第
+l 章基准测试与剖析
+式是，使用半径（r ）和角度（alpha ）来表示运动方程，再使用下面的方程来计算粒子在圆周
+上的位置。
+x = r * cos(alpha) 
+Y = r * S 工口（alpha)
+另一种方式是最大限度地减少指令数。例如，可预先计算不随时间变换的因子times tep 女
+p . ang_vel factor 。为此，我们可交换循环顺序（先迭代粒子，再迭代时段），并将计算前述
+因子的代码放在迭代粒子的循环外面。
+逐行剖析结果还表明，即便是简单的赋值操作，也可能消耗大量的时间。例如，下面的语句
+占用的时间超过了总时间的10% 。
+v x = (-p .y ) /norm 
+可通过减少赋值操作数量来改善这个循环的性能，为此可将这个表达式改写为单条更复杂些
+的语句，以消除中间变量（请注意，将先计算等号右边的部分，再将结果赋给变量）。
+p . x , p .y = p . x -
+t _x_ang*p .y/norm, p .y + t_x_ang * p .x/norm 
+这样修改后的代码如下所示。
+def evolve_ fast (self, dt) : 
+t 工mestep = 0 00001 
+nsteps = int(dt/timestep) 
+＃
+调整了循环顺序
+for p 
+l口
+self
+. pare 工cles : 
+t _x_ang = 
+t 工mestep * p . ang_vel 
+for
+工
+in
+ra口ge(nsteps)
+:
+norm= (p.x**2 + p.y**2)**0.5 
+p.x, p y = (p . x -
+t_x_ang * p.y/norm, 
+p . y + t_x_ang * p.x/norm) 
+修改代码后，应运行测试以核实结果与以前相同，再使用基准测试对执行时间进行比较。
+$ time python simul.py ＃优化性能后
+real 
+Om0 . 756 s 
+user 
+Om0.714s 
+sys 
+Om0.036s 
+$ time python simul.py ＃原来的代码
+real 
+Om0.863s 
+user 
+Om0 . 831s 
+sys 
+Om0.028s 
+如你所见，进行纯粹而细微的P）咄on 优化后，速度有所提高，但并不显著。
+
+仅供非商业用途或交流学习使用
+1.8 
+使用memo可_profi l e r 剖析内存使用情况
+19 
+1.7 
+模块dis
+在某些情况下，要估计Pytho n 语句将执行多少操作并不容易。在本节中，我们将深入Python
+内部，以估计各条语句的性能。在CPyth on 解释器中，
+Pyth o n 代码首先被转换为中间表示一一字
+节码，再由Python 解释器执行。
+要了解代码是如何转换为字节码的，可使用Python 模块d工s
+( d is 表示di sassernbl巳，
+即反汇
+编）。这个模块的用法非常简单，只需对目标代码（这里是方法ParticleSirnu l ator . evolve)
+调用函数dis .d 工s
+e 11可。
+工mport dis 
+from simul import ParticleSimulator 
+dis
+. dis(Part 工cleS 工mula tor
+. evolve)
+这将打印每行代码对应的字节码指令列表。例如，语句v_ x = ( -p . y ) I ηorrn 被转换为下
+面一组指令。
+29 
+85 LOAD FAST 
+5 (p) 
+88 LOAD ATTR 
+4 (y) 
+91 UNARY NEGATIVE 
+92 LOAD FAST 
+6 (norm) 
+95 BINARY TRUE 
+D工VIDE
+96 STORE_FAST 
+7 (v_x ) 
+其中LOAD_FAST 将指向变量p 的引用加载到钱中，而LOAD_ATTR 加载枝顶元素的属性y 。其
+他指令（UNARY
+NEGATIVE 和B工NARY_TRUE_DIVIDE ）只是对战顶元素执行算术运算。最后，
+结果被存储到v_x 中（STORE
+FAST ）。
+通过分析dis 的输出可知，循环的第一个版本被转换为5 1 个字节码指令，而第二个版本被
+转换为3 5 个指令。
+模块dis 能够让你知道语句是如何被转换的，但主要用作探索和学习Python 字节码的工具。
+要进一步改善性能，可继续尝试找出其他减少指令数量的方法。然而，这种方法显然最终受
+制于Python 解释器的速度，而对有些工作来说，
+Python 解释器可能不是合适的工具。在后续章
+节中，我们将介绍如何提高那些受制于解释器的计算的速度一一执行使用C 或Fortan 等低级语
+言编写的快速专用版本。
+1.8 
+使用memory_profiler 剖析内存使用情况
+在有些情况下，消耗大量的内存是个问题。例如，如果我们要处理大量的粒子，就需要创建
+大量的Particle 实例，这将带来很大的内存开销。
+
+仅供非商业用途或交流学习使用
+20 
+第
+1 幸基准测试与剖析
+模块memory_p rof iler 以类似于line_prof iler 的方式，提供有关进程内存使用情况的
+摘要。
+。
+Python Package Index 也提供了
+memory_profiler
+包。你应同时安装模块
+psutil ，这样将极大地提高memory_profiler 的速度。
+与line_profiler 一样，
+memory_p rofiler 也要求对源代码进行处理：给要监视的函数
+加上装饰器＠profile 。在这个示例中，我们要分析的是函数民nchmark 。
+我们可稍微修改函数benchmark ，以实例化大量（100 000 个）Particle 实例，并缩短模
+t以时间。
+def benchmark memory() : 
+particles= [Particle(uniform(-1.0 , 1.0) , 
+un 工form ( -1 . 0 , 1. 0) , 
+uniform(-1 . 0 , 1.0)) 
+for i in range(100000)] 
+simulator = Part 工C leS 工mulator(part 工cles)
+simulator . evolve(0 . 001) 
+我们可在！Python s hell 中使用memory_profiler ，为此可使用魔法命令%mpru口，如下面的
+屏幕截图所示。
+………Ill去’回π理刮目＂＂胃霄哥霄富，哩’市~…………………………………………………………·
+s 
+、
+’
+’
+‘
+、
+2 0 
+t 
+e 
+d 
+.
+a 
+s
+「
+et 
+rx 
+ue 
+t ar 
+e
+。
+ff 
+s· 
+目
+，
+－
+n
+? 
+-ot 
+nhc 
+。
+t
+e
+hyj 
+tpb 
+yIO 
+P
+’
+『
+f eoe 
+vs 
+twu 
+ten 
+cte
+- 
+avt
+’ 
+rrst 
+eeyc 
+tvse 
+noj 
+TAhVLO 
+d
+-10 
+dnee
+’ 
+each 
+ζ
+n
+t
+ 
+nnenu 
+a
+。
+r
+w
+o
+h
+t
+e
+。
+b
+ntfa 
+eces 
+ur
+,
+s 
+ndn
+- 
+A
+。
+k
+0
+1
+rCha 
+.tttt 
+-nuye 
+Iqpo 
+a 
+〉
+、
+，
+、
+，
+〉
+1
+---- 
+5f 
+e 
+nr
+’ 
+。
+k
+t
+hcc 
+ttpe 
+u
+y
+U
+唱
+k
+4
+J
+Pqeb 
+I
+，
+活
+h
+o
+In [ ] . noad ext MOM。ry_profller
+In ( ) 
+fr。”
+st"ut
+t伺por~ benchMark_MeAOry 
+In ［可］
+%Mprun -f benchMark_Me例。ry benchMark_MeMory() 
+F\lenaMe ＂
+川、。”e/gabrlele/workspace /h lperf /chapterl/codes/sl伺u\ .py 
+Line # 
+HeM usage 
+IncreMent 
+Line E。ntents
+142 
+37 .8
+州i8
+143 
+61. S Mi.B 
+14•’ 
+145 
+146 
+61 S HlB 
+147 
+148 
+61. 5 ”iB 
+149 
+61.5 ”lB 
+In 
+B.B
+问iB
+def benchMark_MeMory(). 
+23 
+7
+例lB
+parti.c\es = (Parti.c\e( unlforA( -1. 6, 1.6), 
+uniforM(-1.6, 1 B), 
+unlf。rM(-1 e, I B)) 
+ea Mi.B 
+for i. i.n range(1eaeee)] 
+6 e
+例iB
+Si.Mu\at。r = Part飞cleSi.Mulator(parti.c\es)
+B B HiB 
+Si.Mutator ev。lve(B.661)
+@ 
+在！Python
+shell 中，也可使用命令mprof
+run 来运行memory_profiler ，但
+这样做之前必须先给妥监视的函数添加＠profile 装饰器。
+从Increme口t 列可知，
+100 000 个Particle 对象占用了23.7MiB 的内存。
+
+仅供非商业用途或交流学习使用
+1.9 
+1J 、结
+21
+。
+lMiB （兆字节）相当于
+l 048 576 字节，这不同于IMB
+（百万字节），后者相当
+于
+l 000 000 字节。
+回
+为减少内存消耗，可在
+Particl e 类中使用＿slots一。这将避免将实例的变量存储在内部
+字典中，从而节省一些内存。然而，这种策略也有缺点：不能添加＿slo ts＿中没有指定的属性。
+cl ass Particle : 
+一＿slots一一= ( ’x ’, ’ y ' ' ’ang_vel ' ) 
+def _ init_ (self, x, y, 
+a口g_vel)
+self .x = x 
+self.y = y 
+sel f .ang_vel = ang_vel 
+现在可以再次运行基准测试，以评估内存消耗的变化情况，结果如下面的屏幕截图所示。
+－冒冒”’”””’”’………………………….
+s 
+、
+L
+eL 
+a 
+t 
+e 
+AU 
+a 
+sr 
+et 
+rx 
+ue 
+t ar 
+e
+。
+ff 
+so 
+A,, 
+nF 
+eot 
+nhc 
+ote 
+L
+n
+u
+g
+a
+币
+，
+tpb 
+yIO 
+P
+’ 
+ss 
+eoe 
+vs 
+twu 
+ten 
+ctep 
+avtF 
+rrst 
+eeycr 
+tvsee 
+noj1 
+1pbt 
+dlo
+f 
+d
+n
+e
+e
+－
+。
+eachr 
+cntp 
+nnenu
+- 
+a
+。
+r
+w
+o
+y
+h
+H
+e
+飞
+e
+o
+k
+u
+r
+nt
+fao 
+ecesn 
+ur
+,se 
+n
+d
+u
+n
+－
+也
+同
+Aokot 
+rchat 
+噜
+t
+t
+t
+t
+x
+-nuyace 
+lqpo
+- 
+ed 
+〉
+〉
+、
+，
+〉
+a
+－
+－
+－
+－
+－
+。
+-
+l 
+sf% 
+e 
+nr
+,
+. 
+okt
+] 
+hcc
+- 
+ttpe
+[ 
+”zu
+’-73 
+pqebn 
+I
+?
+%
+h
+o
+I 
+In P l 
+f俨。同
+st""'
+t例port
+benchr咱ark＿~eAory
+In [ J ] 
+%M pru1、
+·f benchMark Meoory benchMark_MeMory() 
+H l enaAe : 
+/h。Me/gabrte l e /workspace /hlperf / chapterl/codes/ st Mu t py 
+Llne g事例e肉
+usage
+tnc reMent 
+Llne Contents 
+1"2 
+38 e
+间＼B
+143 
+51 
+7
+问＼B
+144 
+145 
+146 
+51 
+7
+问i.B
+147 
+148 
+51. 7 Mi.B 
+149 
+51. 7 Hi.B 
+I n
+『4 1
+B B M\6 
+def benchMark_Me例。ry():
+13 7 M\B 
+partlcles = [Part\cle(uni.f。r叫·l.B,
+l B). 
+uni.f。rM( ·l.B, 1.6). 
+uni.for同（1.6, 1 6)) 
+6 8
+间i.B
+f。r l \n ronge(IBBB66)] 
+6 e 问i.B
+s ＼阴ulat。r = Part\cleS\Mulat。r(part\cles)
+6 .6 Mi.B 
+s\Mulator ev。lve （ι661)
+通过使用＿slots一直写Particle 类，节省了大约IOMiB 内存。
+1.9 
+小结
+本章介绍了基本的优化原则，井将这些原则应用于一个测试应用程序。优化时，首先要做的是
+测试，并找出应用程序的瓶颈。你学会了如何编写基准测试程序，以及如何使用Unix 命令time 、
+Python 模块t im ei t 和功能齐备的pytest - benchmark 包来测量基准测试程序的执行时间。你
+还学习了如何使用cPro f ile 、
+1 工n e_profiler 和I阳nory_profiler 对应用程序进行剖析，
+以及如何使用KCachegrind 以图形化方式分析和导航剖析数据。
+下一章将探索如何使用
+Python 标准库中的算法和数据结构来改善’性能，你将学习可伸缩性
+(scaling ）、多个数据结构的用法以及缓存和memoization 等技巧。

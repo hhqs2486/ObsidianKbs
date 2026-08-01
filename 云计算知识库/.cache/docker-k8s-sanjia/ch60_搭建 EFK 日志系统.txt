@@ -1,0 +1,869 @@
+62. 搭建 EFK ⽇志系统
+上节课和⼤家介绍了 Kubernetes 集群中的⼏种⽇志收集⽅案，Kubernetes 中⽐较流⾏的⽇志收集解
+决⽅案是 Elasticsearch、Fluentd 和 Kibana（EFK）技术栈，也是官⽅现在⽐较推荐的⼀种⽅案。
+ Elasticsearch  是⼀个实时的、分布式的可扩展的搜索引擎，允许进⾏全⽂、结构化搜索，它通常⽤
+于索引和搜索⼤量⽇志数据，也可⽤于搜索许多不同类型的⽂档。
+Elasticsearch 通常与  Kibana  ⼀起部署，Kibana 是 Elasticsearch 的⼀个功能强⼤的数据可视化
+Dashboard，Kibana 允许你通过 web 界⾯来浏览 Elasticsearch ⽇志数据。
+ Fluentd 是⼀个流⾏的开源数据收集器，我们将在 Kubernetes 集群节点上安装 Fluentd，通过获取容
+器⽇志⽂件、过滤和转换⽇志数据，然后将数据传递到 Elasticsearch 集群，在该集群中对其进⾏索引
+和存储。
+我们先来配置启动⼀个可扩展的 Elasticsearch 集群，然后在 Kubernetes 集群中创建⼀个 Kibana 应
+⽤，最后通过 DaemonSet 来运⾏ Fluentd，以便它在每个 Kubernetes ⼯作节点上都可以运⾏⼀个
+Pod。
+创建 Elasticsearch 集群
+在创建 Elasticsearch 集群之前，我们先创建⼀个命名空间，我们将在其中安装所有⽇志相关的资源对
+象。
+新建⼀个 kube-logging.yaml ⽂件：
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: logging
+然后通过 kubectl 创建该资源清单，创建⼀个名为 logging 的 namespace：
+$ kubectl create -f kube-logging.yaml
+namespace/logging created
+$ kubectl get ns
+NAME           STATUS    AGE
+default        Active    244d
+istio-system   Active    100d
+kube-ops       Active    179d
+kube-public    Active    244d
+kube-system    Active    244d
+logging        Active    4h
+monitoring     Active    35d
+现在创建了⼀个命名空间来存放我们的⽇志相关资源，接下来可以部署 EFK 相关组件，⾸先开始部署
+⼀个3节点的 Elasticsearch 集群。
+搭建 EFK ⽇志系统
+461
+
+这⾥我们使⽤3个 Elasticsearch Pod 来避免⾼可⽤下多节点集群中出现的“脑裂”问题，当⼀个或多个节
+点⽆法与其他节点通信时会产⽣“脑裂”，可能会出现⼏个主节点。
+了解更多 Elasticsearch 集群脑裂问题，可以查看⽂
+档https://www.elastic.co/guide/en/elasticsearch/reference/current/modules-node.html#split-
+brain
+⼀个关键点是您应该射在参数 discover.zen.minimum_master_nodes=N/2+1 ，其中 N 是 Elasticsearch
+集群中符合主节点的节点数，⽐如我们这⾥3个节点，意味着 N 应该设置为2。这样，如果⼀个节点暂
+时与集群断开连接，则另外两个节点可以选择⼀个新的主节点，并且集群可以在最后⼀个节点尝试重
+新加⼊时继续运⾏，在扩展 Elasticsearch 集群时，⼀定要记住这个参数。
+⾸先创建⼀个名为 elasticsearch 的⽆头服务，新建⽂件 elasticsearch-svc.yaml，⽂件内容如下：
+kind: Service
+apiVersion: v1
+metadata:
+  name: elasticsearch
+  namespace: logging
+  labels:
+    app: elasticsearch
+spec:
+  selector:
+    app: elasticsearch
+  clusterIP: None
+  ports:
+    - port: 9200
+      name: rest
+    - port: 9300
+      name: inter-node
+定义了⼀个名为 elasticsearch 的 Service，指定标签 app=elasticsearch ，当我们将 Elasticsearch
+StatefulSet 与此服务关联时，服务将返回带有标签 app=elasticsearch 的 Elasticsearch Pods 的 DNS
+A 记录，然后设置 clusterIP=None ，将该服务设置成⽆头服务。最后，我们分别定义端⼝9200、
+9300，分别⽤于与 REST API 交互，以及⽤于节点间通信。
+使⽤ kubectl 直接创建上⾯的服务资源对象：
+$ kubectl create -f elasticsearch-svc.yaml
+service/elasticsearch created
+$ kubectl get services --namespace=logging
+Output
+NAME            TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)             AGE
+elasticsearch   ClusterIP   None         <none>        9200/TCP,9300/TCP   26s
+现在我们已经为 Pod 设置了⽆头服务和⼀个稳定的域
+名 .elasticsearch.logging.svc.cluster.local ，接下来我们通过 StatefulSet 来创建具体的
+Elasticsearch 的 Pod 应⽤。
+Kubernetes StatefulSet 允许我们为 Pod 分配⼀个稳定的标识和持久化存储，Elasticsearch 需要稳定
+的存储来保证 Pod 在重新调度或者重启后的数据依然不变，所以需要使⽤ StatefulSet 来管理 Pod。
+搭建 EFK ⽇志系统
+462
+
+要了解更多关于 StaefulSet 的信息，可以查看官⽹关于 StatefulSet 的相关⽂
+档：https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/。
+新建名为 elasticsearch-statefulset.yaml 的资源清单⽂件，⾸先粘贴下⾯内容：
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: es-cluster
+  namespace: logging
+spec:
+  serviceName: elasticsearch
+  replicas: 3
+  selector:
+    matchLabels:
+      app: elasticsearch
+  template:
+    metadata:
+      labels:
+        app: elasticsearch
+该内容中，我们定义了⼀个名为 es-cluster 的 StatefulSet 对象，然后定
+义 serviceName=elasticsearch 和前⾯创建的 Service 相关联，这可以确保使⽤以下 DNS 地址访问
+StatefulSet 中的每⼀个 Pod： es-cluster-[0,1,2].elasticsearch.logging.svc.cluster.local ，其中
+[0,1,2]对应于已分配的 Pod 序号。
+然后指定3个副本，将 matchLabels 设置为 app=elasticsearch ，所以 Pod 的模板部
+分 .spec.template.metadata.lables 也必须包含 app=elasticsearch 标签。
+然后定义 Pod 模板部分内容：
+...
+  spec:
+    containers:
+    - name: elasticsearch
+      image: docker.elastic.co/elasticsearch/elasticsearch-oss:6.4.3
+      resources:
+        limits:
+          cpu: 1000m
+        requests:
+          cpu: 100m
+      ports:
+      - containerPort: 9200
+        name: rest
+        protocol: TCP
+      - containerPort: 9300
+        name: inter-node
+        protocol: TCP
+      volumeMounts:
+      - name: data
+        mountPath: /usr/share/elasticsearch/data
+      env:
+      - name: cluster.name
+        value: k8s-logs
+      - name: node.name
+        valueFrom:
+搭建 EFK ⽇志系统
+463
+
+          fieldRef:
+            fieldPath: metadata.name
+      - name: discovery.zen.ping.unicast.hosts
+        value: "es-cluster-0.elasticsearch,es-cluster-1.elasticsearch,es-cluster-2.elastic
+search"
+      - name: discovery.zen.minimum_master_nodes
+        value: "2"
+      - name: ES_JAVA_OPTS
+        value: "-Xms512m -Xmx512m"
+该部分是定义 StatefulSet 中的 Pod，我们这⾥使⽤⼀个 -oss 后缀的镜像，该镜像是 Elasticsearch
+的开源版本，如果你想使⽤包含 X-Pack 之类的版本，可以去掉该后缀。然后暴露了9200和9300两个
+端⼝，注意名称要和上⾯定义的 Service 保持⼀致。然后通过 volumeMount 声明了数据持久化⽬录，
+下⾯我们再来定义 VolumeClaims。最后就是我们在容器中设置的⼀些环境变量了：
+cluster.name：Elasticsearch 集群的名称，我们这⾥命名成 k8s-logs。
+node.name：节点的名称，通过 metadata.name 来获取。这将解析为 es-cluster-[0,1,2]，取决于节
+点的指定顺序。
+discovery.zen.ping.unicast.hosts：此字段⽤于设置在 Elasticsearch 集群中节点相互连接的发现
+⽅法。我们使⽤ unicastdiscovery ⽅式，它为我们的集群指定了⼀个静态主机列表。由于我们之
+前配置的⽆头服务，我们的 Pod 具有唯⼀的 DNS 域 es-cluster-
+[0,1,2].elasticsearch.logging.svc.cluster.local ，因此我们相应地设置此变量。由于都在同⼀
+个 namespace 下⾯，所以我们可以将其缩短为 es-cluster-[0,1,2].elasticsearch 。要了解有关
+Elasticsearch 发现的更多信息，请参阅 Elasticsearch 官⽅⽂
+档：https://www.elastic.co/guide/en/elasticsearch/reference/current/modules-discovery.html。
+discovery.zen.minimum_master_nodes：我们将其设置为 (N/2) + 1 ， N 是我们的群集中符合
+主节点的节点的数量。我们有3个 Elasticsearch 节点，因此我们将此值设置为2（向下舍⼊到最接
+近的整数）。要了解有关此参数的更多信息，请参阅官⽅ Elasticsearch ⽂
+档：https://www.elastic.co/guide/en/elasticsearch/reference/current/modules-node.html#split-
+brain。
+ES_JAVA_OPTS：这⾥我们设置为 -Xms512m -Xmx512m ，告诉 JVM 使⽤ 512 MB 的最⼩和最⼤
+堆。您应该根据群集的资源可⽤性和需求调整这些参数。要了解更多信息，请参阅设置堆⼤⼩的
+相关⽂档：https://www.elastic.co/guide/en/elasticsearch/reference/current/heap-size.html。
+接下来添加关于 initContainer 的内容：
+...
+    initContainers:
+    - name: fix-permissions
+      image: busybox
+      command: ["sh", "-c", "chown -R 1000:1000 /usr/share/elasticsearch/data"]
+      securityContext:
+        privileged: true
+      volumeMounts:
+      - name: data
+        mountPath: /usr/share/elasticsearch/data
+    - name: increase-vm-max-map
+      image: busybox
+      command: ["sysctl", "-w", "vm.max_map_count=262144"]
+      securityContext:
+        privileged: true
+搭建 EFK ⽇志系统
+464
+
+    - name: increase-fd-ulimit
+      image: busybox
+      command: ["sh", "-c", "ulimit -n 65536"]
+      securityContext:
+        privileged: true
+这⾥我们定义了⼏个在主应⽤程序之前运⾏的 Init 容器，这些初始容器按照定义的顺序依次执⾏，执
+⾏完成后才会启动主应⽤容器。
+第⼀个名为 fix-permissions 的容器⽤来运⾏ chown 命令，将 Elasticsearch 数据⽬录的⽤户和组更改
+为 1000:1000 （Elasticsearch ⽤户的 UID）。因为默认情况下，Kubernetes ⽤ root ⽤户挂载数据⽬
+录，这会使得 Elasticsearch ⽆法⽅法该数据⽬录，可以参考 Elasticsearch ⽣产中的⼀些默认注意事
+项相关⽂档说
+明：https://www.elastic.co/guide/en/elasticsearch/reference/current/docker.html#_notes_for_producti
+on_use_and_defaults。
+第⼆个名为 increase-vm-max-map 的容器⽤来增加操作系统对 mmap 计数的限制，默认情况下该值可
+能太低，导致内存不⾜的错误，要了解更多关于该设置的信息，可以查看 Elasticsearch 官⽅⽂档说
+明：https://www.elastic.co/guide/en/elasticsearch/reference/current/vm-max-map-count.html。
+最后⼀个初始化容器是⽤来执⾏ ulimit 命令增加打开⽂件描述符的最⼤数量的。
+此外 Elastisearch Notes for Production Use ⽂档还提到了由于性能原因最好禁⽤ swap，当然对
+于 Kubernetes 集群⽽⾔，最好也是禁⽤ swap 分区的。
+现在我们已经定义了主应⽤容器和它之前运⾏的 Init Containers 来调整⼀些必要的系统参数，接下来
+我们可以添加数据⽬录的持久化相关的配置，在 StatefulSet 中，使⽤ volumeClaimTemplates 来定义
+volume 模板即可：
+...
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+      labels:
+        app: elasticsearch
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: es-data-db
+      resources:
+        requests:
+          storage: 50Gi
+我们这⾥使⽤ volumeClaimTemplates 来定义持久化模板，Kubernetes 会使⽤它为 Pod 创建
+PersistentVolume，设置访问模式为 ReadWriteOnce ，这意味着它只能被 mount 到单个节点上进⾏读
+写，然后最重要的是使⽤了⼀个名为 es-data-db 的 StorageClass 对象，所以我们需要提前创建该对
+象，我们这⾥使⽤的 NFS 作为存储后端，所以需要安装⼀个对应的 provisioner 驱动，前⾯关于
+StorageClass 的课程中已经和⼤家介绍过⽅法，新建⼀个 elasticsearch-storageclass.yaml 的⽂件，
+⽂件内容如下：
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+搭建 EFK ⽇志系统
+465
+
+metadata:
+  name: es-data-db
+provisioner: fuseim.pri/ifs  # 该值需要和 provisioner 配置的保持⼀致
+最后，我们指定了每个 PersistentVolume 的⼤⼩为 50GB，我们可以根据⾃⼰的实际需要进⾏调整该
+值。最后，完整的 Elasticsearch StatefulSet 资源清单⽂件内容如下：
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: es-cluster
+  namespace: logging
+spec:
+  serviceName: elasticsearch
+  replicas: 3
+  selector:
+    matchLabels:
+      app: elasticsearch
+  template:
+    metadata:
+      labels:
+        app: elasticsearch
+    spec:
+      containers:
+      - name: elasticsearch
+        image: docker.elastic.co/elasticsearch/elasticsearch-oss:6.4.3
+        resources:
+            limits:
+              cpu: 1000m
+            requests:
+              cpu: 100m
+        ports:
+        - containerPort: 9200
+          name: rest
+          protocol: TCP
+        - containerPort: 9300
+          name: inter-node
+          protocol: TCP
+        volumeMounts:
+        - name: data
+          mountPath: /usr/share/elasticsearch/data
+        env:
+          - name: cluster.name
+            value: k8s-logs
+          - name: node.name
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          - name: discovery.zen.ping.unicast.hosts
+            value: "es-cluster-0.elasticsearch,es-cluster-1.elasticsearch,es-cluster-2.ela
+sticsearch"
+          - name: discovery.zen.minimum_master_nodes
+            value: "2"
+          - name: ES_JAVA_OPTS
+            value: "-Xms512m -Xmx512m"
+      initContainers:
+      - name: fix-permissions
+        image: busybox
+搭建 EFK ⽇志系统
+466
+
+        command: ["sh", "-c", "chown -R 1000:1000 /usr/share/elasticsearch/data"]
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: data
+          mountPath: /usr/share/elasticsearch/data
+      - name: increase-vm-max-map
+        image: busybox
+        command: ["sysctl", "-w", "vm.max_map_count=262144"]
+        securityContext:
+          privileged: true
+      - name: increase-fd-ulimit
+        image: busybox
+        command: ["sh", "-c", "ulimit -n 65536"]
+        securityContext:
+          privileged: true
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+      labels:
+        app: elasticsearch
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: es-data-db
+      resources:
+        requests:
+          storage: 100Gi
+现在直接使⽤ kubectl ⼯具部署即可：
+$ kubectl create -f elasticsearch-storageclass.yaml
+storageclass.storage.k8s.io "es-data-db" created
+$ kubectl create -f elasticsearch-statefulset.yaml
+statefulset.apps/es-cluster created
+添加成功后，可以看到 logging 命名空间下⾯的所有的资源对象：
+$ kubectl get sts -n logging
+NAME         DESIRED   CURRENT   AGE
+es-cluster   3         3         20h
+$ kubectl get pods -n logging
+NAME                      READY     STATUS    RESTARTS   AGE
+es-cluster-0              1/1       Running   0          20h
+es-cluster-1              1/1       Running   0          20h
+es-cluster-2              1/1       Running   0          20h
+$ kubectl get svc -n logging
+NAME            TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)             AGE
+elasticsearch   ClusterIP   None             <none>        9200/TCP,9300/TCP   20h
+Pods 部署完成后，我们可以通过请求⼀个 REST API 来检查 Elasticsearch 集群是否正常运⾏。使⽤
+下⾯的命令将本地端⼝9200转发到 Elasticsearch 节点（如es-cluster-0）对应的端⼝：
+$ kubectl port-forward es-cluster-0 9200:9200 --namespace=logging
+Forwarding from 127.0.0.1:9200 -> 9200
+Forwarding from [::1]:9200 -> 9200
+搭建 EFK ⽇志系统
+467
+
+然后，在另外的终端窗⼝中，执⾏如下请求：
+$ curl http://localhost:9200/_cluster/state?pretty
+正常来说，应该会看到类似于如下的信息：
+{
+  "cluster_name" : "k8s-logs",
+  "compressed_size_in_bytes" : 348,
+  "cluster_uuid" : "QD06dK7CQgids-GQZooNVw",
+  "version" : 3,
+  "state_uuid" : "mjNIWXAzQVuxNNOQ7xR-qg",
+  "master_node" : "IdM5B7cUQWqFgIHXBp0JDg",
+  "blocks" : { },
+  "nodes" : {
+    "u7DoTpMmSCixOoictzHItA" : {
+      "name" : "es-cluster-1",
+      "ephemeral_id" : "ZlBflnXKRMC4RvEACHIVdg",
+      "transport_address" : "10.244.4.191:9300",
+      "attributes" : { }
+    },
+    "IdM5B7cUQWqFgIHXBp0JDg" : {
+      "name" : "es-cluster-0",
+      "ephemeral_id" : "JTk1FDdFQuWbSFAtBxdxAQ",
+      "transport_address" : "10.244.2.215:9300",
+      "attributes" : { }
+    },
+    "R8E7xcSUSbGbgrhAdyAKmQ" : {
+      "name" : "es-cluster-2",
+      "ephemeral_id" : "9wv6ke71Qqy9vk2LgJTqaA",
+      "transport_address" : "10.244.40.4:9300",
+      "attributes" : { }
+    }
+  },
+...
+看到上⾯的信息就表明我们名为 k8s-logs 的 Elasticsearch 集群成功创建了3个节点：es-cluster-0，
+es-cluster-1，和es-cluster-2，当前主节点是 es-cluster-0。
+创建 Kibana 服务
+Elasticsearch 集群启动成功了，接下来我们可以来部署 Kibana 服务，新建⼀个名为 kibana.yaml 的⽂
+件，对应的⽂件内容如下：
+apiVersion: v1
+kind: Service
+metadata:
+  name: kibana
+  namespace: logging
+  labels:
+    app: kibana
+spec:
+  ports:
+  - port: 5601
+搭建 EFK ⽇志系统
+468
+
+  type: NodePort
+  selector:
+    app: kibana
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kibana
+  namespace: logging
+  labels:
+    app: kibana
+spec:
+  selector:
+    matchLabels:
+      app: kibana
+  template:
+    metadata:
+      labels:
+        app: kibana
+    spec:
+      containers:
+      - name: kibana
+        image: docker.elastic.co/kibana/kibana-oss:6.4.3
+        resources:
+          limits:
+            cpu: 1000m
+          requests:
+            cpu: 100m
+        env:
+          - name: ELASTICSEARCH_URL
+            value: http://elasticsearch:9200
+        ports:
+        - containerPort: 5601
+上⾯我们定义了两个资源对象，⼀个 Service 和 Deployment，为了测试⽅便，我们将 Service 设置为
+了 NodePort 类型，Kibana Pod 中配置都⽐较简单，唯⼀需要注意的是我们使⽤
+ELASTICSEARCH_URL 这个环境变量来设置Elasticsearch 集群的端点和端⼝，直接使⽤ Kubernetes
+DNS 即可，此端点对应服务名称为 elasticsearch，由于是⼀个 headless service，所以该域将解析为3
+个 Elasticsearch Pod 的 IP 地址列表。
+配置完成后，直接使⽤ kubectl ⼯具创建：
+$ kubectl create -f kibana.yaml
+service/kibana created
+deployment.apps/kibana created
+创建完成后，可以查看 Kibana Pod 的运⾏状态：
+$ kubectl get pods --namespace=logging
+NAME                      READY     STATUS    RESTARTS   AGE
+es-cluster-0              1/1       Running   0          20h
+es-cluster-1              1/1       Running   0          20h
+es-cluster-2              1/1       Running   0          20h
+kibana-7558d4dc4d-5mqdz   1/1       Running   0          20h
+$ kubectl get svc --namespace=logging
+搭建 EFK ⽇志系统
+469
+
+NAME            TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)             AGE
+elasticsearch   ClusterIP   None             <none>        9200/TCP,9300/TCP   20h
+kibana          NodePort    10.105.208.253   <none>        5601:31816/TCP      20h
+如果 Pod 已经是 Running 状态了，证明应⽤已经部署成功了，然后可以通过 NodePort 来访问 Kibana
+这个服务，在浏览器中打开 http://<任意节点IP>:31816 即可，如果看到如下欢迎界⾯证明 Kibana 已
+经成功部署到了 Kubernetes集群之中。
+kibana welcome
+部署 Fluentd
+ Fluentd  是⼀个⾼效的⽇志聚合器，是⽤ Ruby 编写的，并且可以很好地扩展。对于⼤部分企业来
+说，Fluentd ⾜够⾼效并且消耗的资源相对较少，另外⼀个⼯具 Fluent-bit 更轻量级，占⽤资源更
+少，但是插件相对 Fluentd 来说不够丰富，所以整体来说，Fluentd 更加成熟，使⽤更加⼴泛，所以我
+们这⾥也同样使⽤ Fluentd 来作为⽇志收集⼯具。
+⼯作原理
+Fluentd 通过⼀组给定的数据源抓取⽇志数据，处理后（转换成结构化的数据格式）将它们转发给其他
+服务，⽐如 Elasticsearch、对象存储等等。Fluentd ⽀持超过300个⽇志存储和分析服务，所以在这⽅
+⾯是⾮常灵活的。主要运⾏步骤如下：
+搭建 EFK ⽇志系统
+470
+
+⾸先 Fluentd 从多个⽇志源获取数据
+结构化并且标记这些数据
+然后根据匹配的标签将数据发送到多个⽬标服务去
+fluentd 架构
+配置
+⼀般来说我们是通过⼀个配置⽂件来告诉 Fluentd 如何采集、处理数据的，下⾯简单和⼤家介绍下
+Fluentd 的配置⽅法。
+⽇志源配置
+⽐如我们这⾥为了收集 Kubernetes 节点上的所有容器⽇志，就需要做如下的⽇志源配置：
+<source>
+@id fluentd-containers.log
+@type tail
+path /var/log/containers/*.log
+pos_file /var/log/fluentd-containers.log.pos
+time_format %Y-%m-%dT%H:%M:%S.%NZ
+tag raw.kubernetes.*
+format json
+read_from_head true
+</source>
+搭建 EFK ⽇志系统
+471
+
+上⾯配置部分参数说明如下：
+id：表示引⽤该⽇志源的唯⼀标识符，该标识可⽤于进⼀步过滤和路由结构化⽇志数据
+type：Fluentd 内置的指令， tail 表示 Fluentd 从上次读取的位置通过 tail 不断获取数据，另外
+⼀个是 http 表示通过⼀个 GET 请求来收集数据。
+path： tail 类型下的特定参数，告诉 Fluentd 采集 /var/log/containers ⽬录下的所有⽇志，这
+是 docker 在 Kubernetes 节点上⽤来存储运⾏容器 stdout 输出⽇志数据的⽬录。
+pos_file：检查点，如果 Fluentd 程序重新启动了，它将使⽤此⽂件中的位置来恢复⽇志数据收
+集。
+tag：⽤来将⽇志源与⽬标或者过滤器匹配的⾃定义字符串，Fluentd 匹配源/⽬标标签来路由⽇志
+数据。
+路由配置
+上⾯是⽇志源的配置，接下来看看如何将⽇志数据发送到 Elasticsearch：
+<match **>
+@id elasticsearch
+@type elasticsearch
+@log_level info
+include_tag_key true
+type_name fluentd
+host "#{ENV['OUTPUT_HOST']}"
+port "#{ENV['OUTPUT_PORT']}"
+logstash_format true
+<buffer>
+@type file
+path /var/log/fluentd-buffers/kubernetes.system.buffer
+flush_mode interval
+retry_type exponential_backoff
+flush_thread_count 2
+flush_interval 5s
+retry_forever
+retry_max_interval 30
+chunk_limit_size "#{ENV['OUTPUT_BUFFER_CHUNK_LIMIT']}"
+搭建 EFK ⽇志系统
+472
+
+queue_limit_length "#{ENV['OUTPUT_BUFFER_QUEUE_LIMIT']}"
+overflow_action block
+</buffer>
+match：标识⼀个⽬标标签，后⾯是⼀个匹配⽇志源的正则表达式，我们这⾥想要捕获所有的⽇志
+并将它们发送给 Elasticsearch，所以需要配置成 ** 。
+id：⽬标的⼀个唯⼀标识符。
+type：⽀持的输出插件标识符，我们这⾥要输出到 Elasticsearch，所以配置成 elasticsearch，这
+是 Fluentd 的⼀个内置插件。
+log_level：指定要捕获的⽇志级别，我们这⾥配置成 info ，表示任何该级别或者该级别以上
+（INFO、WARNING、ERROR）的⽇志都将被路由到 Elsasticsearch。
+host/port：定义 Elasticsearch 的地址，也可以配置认证信息，我们的 Elasticsearch 不需要认
+证，所以这⾥直接指定 host 和 port 即可。
+logstash_format：Elasticsearch 服务对⽇志数据构建反向索引进⾏搜索，将 logstash_format 设
+置为 true ，Fluentd 将会以 logstash 格式来转发结构化的⽇志数据。
+Buffer： Fluentd 允许在⽬标不可⽤时进⾏缓存，⽐如，如果⽹络出现故障或者 Elasticsearch 不
+可⽤的时候。缓冲区配置也有助于降低磁盘的 IO。
+安装
+要收集 Kubernetes 集群的⽇志，直接⽤ DasemonSet 控制器来部署 Fluentd 应⽤，这样，它就可以
+从 Kubernetes 节点上采集⽇志，确保在集群中的每个节点上始终运⾏⼀个 Fluentd 容器。当然可以直
+接使⽤ Helm 来进⾏⼀键安装，为了能够了解更多实现细节，我们这⾥还是采⽤⼿动⽅法来进⾏安
+装。
+⾸先，我们通过 ConfigMap 对象来指定 Fluentd 配置⽂件，新建 fluentd-configmap.yaml ⽂件，⽂件
+内容如下：
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: fluentd-config
+  namespace: logging
+  labels:
+    addonmanager.kubernetes.io/mode: Reconcile
+data:
+  system.conf: |-
+    <system>
+      root_dir /tmp/fluentd-buffers/
+    </system>
+  containers.input.conf: |-
+    <source>
+      @id fluentd-containers.log
+      @type tail
+      path /var/log/containers/*.log
+      pos_file /var/log/es-containers.log.pos
+      time_format %Y-%m-%dT%H:%M:%S.%NZ
+      localtime
+      tag raw.kubernetes.*
+搭建 EFK ⽇志系统
+473
+
+      format json
+      read_from_head true
+    </source>
+    # Detect exceptions in the log output and forward them as one log entry.
+    <match raw.kubernetes.**>
+      @id raw.kubernetes
+      @type detect_exceptions
+      remove_tag_prefix raw
+      message log
+      stream stream
+      multiline_flush_interval 5
+      max_bytes 500000
+      max_lines 1000
+    </match>
+  system.input.conf: |-
+    # Logs from systemd-journal for interesting services.
+    <source>
+      @id journald-docker
+      @type systemd
+      filters [{ "_SYSTEMD_UNIT": "docker.service" }]
+      <storage>
+        @type local
+        persistent true
+      </storage>
+      read_from_head true
+      tag docker
+    </source>
+    <source>
+      @id journald-kubelet
+      @type systemd
+      filters [{ "_SYSTEMD_UNIT": "kubelet.service" }]
+      <storage>
+        @type local
+        persistent true
+      </storage>
+      read_from_head true
+      tag kubelet
+    </source>
+  forward.input.conf: |-
+    # Takes the messages sent over TCP
+    <source>
+      @type forward
+    </source>
+  output.conf: |-
+    # Enriches records with Kubernetes metadata
+    <filter kubernetes.**>
+      @type kubernetes_metadata
+    </filter>
+    <match **>
+      @id elasticsearch
+      @type elasticsearch
+      @log_level info
+      include_tag_key true
+      host elasticsearch
+      port 9200
+      logstash_format true
+      request_timeout    30s
+      <buffer>
+        @type file
+        path /var/log/fluentd-buffers/kubernetes.system.buffer
+搭建 EFK ⽇志系统
+474
+
+        flush_mode interval
+        retry_type exponential_backoff
+        flush_thread_count 2
+        flush_interval 5s
+        retry_forever
+        retry_max_interval 30
+        chunk_limit_size 2M
+        queue_limit_length 8
+        overflow_action block
+      </buffer>
+    </match>
+上⾯配置⽂件中我们配置了 docker 容器⽇志⽬录以及 docker、kubelet 应⽤的⽇志的收集，收集到数
+据经过处理后发送到 elasticsearch:9200 服务。
+然后新建⼀个 fluentd-daemonset.yaml 的⽂件，⽂件内容如下：
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fluentd-es
+  namespace: logging
+  labels:
+    k8s-app: fluentd-es
+    kubernetes.io/cluster-service: "true"
+    addonmanager.kubernetes.io/mode: Reconcile
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: fluentd-es
+  labels:
+    k8s-app: fluentd-es
+    kubernetes.io/cluster-service: "true"
+    addonmanager.kubernetes.io/mode: Reconcile
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - "namespaces"
+  - "pods"
+  verbs:
+  - "get"
+  - "watch"
+  - "list"
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: fluentd-es
+  labels:
+    k8s-app: fluentd-es
+    kubernetes.io/cluster-service: "true"
+    addonmanager.kubernetes.io/mode: Reconcile
+subjects:
+- kind: ServiceAccount
+  name: fluentd-es
+  namespace: logging
+搭建 EFK ⽇志系统
+475
+
+  apiGroup: ""
+roleRef:
+  kind: ClusterRole
+  name: fluentd-es
+  apiGroup: ""
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: fluentd-es
+  namespace: logging
+  labels:
+    k8s-app: fluentd-es
+    version: v2.0.4
+    kubernetes.io/cluster-service: "true"
+    addonmanager.kubernetes.io/mode: Reconcile
+spec:
+  selector:
+    matchLabels:
+      k8s-app: fluentd-es
+      version: v2.0.4
+  template:
+    metadata:
+      labels:
+        k8s-app: fluentd-es
+        kubernetes.io/cluster-service: "true"
+        version: v2.0.4
+      # This annotation ensures that fluentd does not get evicted if the node
+      # supports critical pod annotation based priority scheme.
+      # Note that this does not guarantee admission on the nodes (#40573).
+      annotations:
+        scheduler.alpha.kubernetes.io/critical-pod: ''
+    spec:
+      serviceAccountName: fluentd-es
+      containers:
+      - name: fluentd-es
+        image: cnych/fluentd-elasticsearch:v2.0.4
+        env:
+        - name: FLUENTD_ARGS
+          value: --no-supervisor -q
+        resources:
+          limits:
+            memory: 500Mi
+          requests:
+            cpu: 100m
+            memory: 200Mi
+        volumeMounts:
+        - name: varlog
+          mountPath: /var/log
+        - name: varlibdockercontainers
+          mountPath: /data/docker/containers
+          readOnly: true
+        - name: config-volume
+          mountPath: /etc/fluent/config.d
+      nodeSelector:
+        beta.kubernetes.io/fluentd-ds-ready: "true"
+      tolerations:
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+        effect: NoSchedule
+搭建 EFK ⽇志系统
+476
+
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: varlog
+        hostPath:
+          path: /var/log
+      - name: varlibdockercontainers
+        hostPath:
+          path: /data/docker/containers
+      - name: config-volume
+        configMap:
+          name: fluentd-config
+我们将上⾯创建的 fluentd-config 这个 ConfigMap 对象通过 volumes 挂载到了 Fluentd 容器中，另外
+为了能够灵活控制哪些节点的⽇志可以被收集，所以我们这⾥还添加了⼀个 nodSelector 属性：
+nodeSelector:
+  beta.kubernetes.io/fluentd-ds-ready: "true"
+意思就是要想采集节点的⽇志，那么我们就需要给节点打上上⾯的标签，⽐如我们这⾥3个节点都打上
+了该标签：
+$ kubectl get nodes --show-labels
+NAME      STATUS    ROLES     AGE       VERSION   LABELS
+master    Ready     master    245d      v1.10.0   beta.kubernetes.io/arch=amd64,beta.kuber
+netes.io/fluentd-ds-ready=true,beta.kubernetes.io/os=linux,kubernetes.io/hostname=master,n
+ode-role.kubernetes.io/master=
+node02    Ready     <none>    165d      v1.10.0   beta.kubernetes.io/arch=amd64,beta.kuber
+netes.io/fluentd-ds-ready=true,beta.kubernetes.io/os=linux,com=youdianzhishi,course=k8s,ku
+bernetes.io/hostname=node02
+node03    Ready     <none>    225d      v1.10.0   beta.kubernetes.io/arch=amd64,beta.kuber
+netes.io/fluentd-ds-ready=true,beta.kubernetes.io/os=linux,jnlp=haimaxy,kubernetes.io/host
+name=node03
+另外由于我们的集群使⽤的是 kubeadm 搭建的，默认情况下 master 节点有污点，所以要想也收集
+master 节点的⽇志，则需要添加上容忍：
+tolerations:
+- key: node-role.kubernetes.io/master
+  operator: Exists
+  effect: NoSchedule
+另外需要注意的地⽅是，我这⾥的测试环境更改了 docker 的根⽬录：
+$ docker info
+...
+Docker Root Dir: /data/docker
+...
+所以上⾯要获取 docker 的容器⽬录需要更改成 /data/docker/containers ，这个地⽅⾮常重要，当然
+如果你没有更改 docker 根⽬录则使⽤默认的 /var/lib/docker/containers ⽬录即可。
+搭建 EFK ⽇志系统
+477
+
+分别创建上⾯的 ConfigMap 对象和 DaemonSet：
+$ kubectl create -f fluentd-configmap.yaml
+configmap "fluentd-config" created
+$ kubectl create -f fluentd-daemonset.yaml
+serviceaccount "fluentd-es" created
+clusterrole.rbac.authorization.k8s.io "fluentd-es" created
+clusterrolebinding.rbac.authorization.k8s.io "fluentd-es" created
+daemonset.apps "fluentd-es" created
+创建完成后，查看对应的 Pods 列表，检查是否部署成功：
+$ kubectl get pods -n logging
+NAME                      READY     STATUS    RESTARTS   AGE
+es-cluster-0              1/1       Running   0          1d
+es-cluster-1              1/1       Running   0          1d
+es-cluster-2              1/1       Running   0          1d
+fluentd-es-2z9jg          1/1       Running   1          35s
+fluentd-es-6dfdd          1/1       Running   0          35s
+fluentd-es-bfkg7          1/1       Running   0          35s
+kibana-7558d4dc4d-5mqdz   1/1       Running   0          1d
+Fluentd 启动成功后，我们可以前往 Kibana 的 Dashboard ⻚⾯中，点击左侧的 Discover ，可以看到
+如下配置⻚⾯：
+create index
+搭建 EFK ⽇志系统
+478
+
+在这⾥可以配置我们需要的 Elasticsearch 索引，前⾯ Fluentd 配置⽂件中我们采集的⽇志使⽤的是
+logstash 格式，这⾥只需要在⽂本框中输⼊ logstash-* 即可匹配到 Elasticsearch 集群中的所有⽇志
+数据，然后点击下⼀步，进⼊以下⻚⾯：
+index config
+在该⻚⾯中配置使⽤哪个字段按时间过滤⽇志数据，在下拉列表中，选择 @timestamp 字段，然后点
+击 Create index pattern ，创建完成后，点击左侧导航菜单中的 Discover ，然后就可以看到⼀些直
+⽅图和最近采集到的⽇志数据了：
+搭建 EFK ⽇志系统
+479
+
+log data
+测试
+现在我们来将上⼀节课的计数器应⽤部署到集群中，并在 Kibana 中来查找该⽇志数据。
+新建 counter.yaml ⽂件，⽂件内容如下：
+apiVersion: v1
+kind: Pod
+metadata:
+  name: counter
+spec:
+  containers:
+  - name: count
+    image: busybox
+    args: [/bin/sh, -c,
+            'i=0; while true; do echo "$i: $(date)"; i=$((i+1)); sleep 1; done']
+该 Pod 只是简单将⽇志信息打印到 stdout，所以正常来说 Fluentd 会收集到这个⽇志数据，在 Kibana
+中也就可以找到对应的⽇志数据了，使⽤ kubectl ⼯具创建该 Pod：
+$ kubectl create -f counter.yaml
+Pod 创建并运⾏后，回到 Kibana Dashboard ⻚⾯，在上⾯的 Discover ⻚⾯搜索栏中输
+⼊ kubernetes.pod_name:counter ，就可以过滤 Pod 名为 counter 的⽇志数据：
+搭建 EFK ⽇志系统
+480
+
+counter log data
+我们也可以通过其他元数据来过滤⽇志数据，⽐如 您可以单击任何⽇志条⽬以查看其他元数据，如容
+器名称，Kubernetes 节点，命名空间等。
+到这⾥，我们就在 Kubernetes 集群上成功部署了 EFK ，要了解如何使⽤ Kibana 进⾏⽇志数据分
+析，可以参考 Kibana ⽤户指南⽂档：https://www.elastic.co/guide/en/kibana/current/index.html
+当然对于在⽣产环境上使⽤ Elaticsearch 或者 Fluentd，还需要结合实际的环境做⼀系列的优化⼯作，
+本⽂中涉及到的资源清单⽂件都可以在https://github.com/cnych/kubernetes-
+learning/tree/master/efkdemo找到。
+点击查看本⽂视频
+扫描下⾯的⼆维码(或微信搜索 k8s技术圈 )关注我们的微信公众帐号，在微信公众帐号中回复 加群 即
+可加⼊到我们的 kubernetes 讨论群⾥⾯共同学习。
+搭建 EFK ⽇志系统
+481
+
+k8s技术圈⼆维码
+Copyright © qikqiak.com 2018 all right reserved，powered by GitbookUpdated: 2019-04-24 15:29:51
+搭建 EFK ⽇志系统
+482

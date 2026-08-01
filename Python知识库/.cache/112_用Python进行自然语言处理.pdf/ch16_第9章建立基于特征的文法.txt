@@ -1,0 +1,1337 @@
+287
+第9 章建立基于特征的文法
+自然语言具有范围广泛的文法结构，用第8 章中所描述的简单的方法很难处理的如此广
+泛的文法结构。为了获得更大的灵活性，我们改变我们对待文法类别如S、NP 和V 的方式。
+我们将这些原子标签分解为类似字典的结构，以便可以提取一系列的值作为特征。
+本章的目的是要回答下列问题：
+1.
+我们怎样用特征扩展上下文无关文法框架，以获得更细粒度的对文法类别和产生式
+的控制？
+2.
+特征结构的主要形式化属性是什么，我们如何使用它们来计算？
+3.
+我们现在用基于特征的文法能捕捉到什么语言模式和文法结构？
+一路上，我们将介绍更多的英语句法主题，包括：约定、子类别和无限制依赖成分等现
+象。
+9.1
+9.1
+9.1
+9.1 文法特征
+文法特征
+文法特征
+文法特征
+在第6 章，我们描述了如何通过检测文本的特征建立分类器。那些特征可能非常简单，
+如提取一个单词的最后一个字母，或者更复杂一点儿，如分类器自己预测的词性标签。在本
+章中，我们将探讨在建立基于规则的文法中特征的作用。对比特征提取，记录已经自动检测
+到的特征，我们现在要声明词和短语的特征。我们以一个很简单的例子开始，使用字典存储
+特征和它们的值。
+>>> kim = {'CAT': 'NP', 'ORTH': 'Kim', 'REF': 'k'}
+>>> chase = {'CAT': 'V', 'ORTH': 'chased', 'REL': 'chase'}
+对象kim 和chase 有几个共同的特征，CAT（文法类别）和ORTH（正字法，即拼写）。
+此外，每一个还有更面向语义的特征：kim['REF']意在给出kim 的指示物，而chase['RE
+L']给出chase 表示的关系。在基于规则的文法上下文中，这样的特征和特征值对被称为特
+征结构，我们将很快看到它们的替代符号。
+特征结构包含各种有关文法实体的信息。这些信息不需要详尽无遗，我们可能要进一步
+增加属性。例如：一个动词，知道它扮演的“语义角色”往往很有用。对于chase，主语扮
+演“agent（施事）”的角色，而宾语扮演“patient（受事）”角色。让我们添加这些信息，使
+用'sbj'（主语）和'obj'（宾语）作为占位符，它会被填充，当动词和它的文法参数结合时：
+>>> chase['AGT'] = 'sbj'
+>>> chase['PAT'] = 'obj'
+如果我们现在处理句子：Kim chased Lee，我们要“绑定”动词的施事角色和主语，受
+事角色和宾语。我们可以通过链接到相关的NP 的REF 特征做到这个。在下面的例子中，
+我们做一个简单的假设：在动词直接左侧和右侧的NP 分别是主语和宾语。我们还在例子结
+尾为Lee 添加了一个特征结构。
+>>> sent = "Kim chased Lee"
+>>> tokens = sent.split()
+>>> lee = {'CAT': 'NP', 'ORTH': 'Lee', 'REF': 'l'}
+>>> def lex2fs(word):
+
+288
+...
+for fs in [kim, lee, chase]:
+...
+if fs['ORTH'] == word:
+...
+return fs
+>>> subj, verb, obj = lex2fs(tokens[0]), lex2fs(tokens[1]), lex2fs(tokens[2])
+>>> verb['AGT'] = subj['REF'] # agent of 'chase' is Kim
+>>> verb['PAT'] = obj['REF']
+# patient of 'chase' is Lee
+>>> for k in ['ORTH', 'REL', 'AGT', 'PAT']: # check featstruct of 'chase'
+...
+print "%-5s => %s" % (k, verb[k])
+ORTH
+=> chased
+REL
+=> chase
+AGT
+=> k
+PAT
+=> l
+同样的方法可以适用不同的动词——say，surprise——虽然在这种情况下，主语将扮演
+“source（源事）”（SRC）的角色，宾语扮演“experiencer（体验者）”（EXP）的角色：
+>>> surprise = {'CAT': 'V', 'ORTH': 'surprised', 'REL': 'surprise',
+...
+'SRC': 'sbj', 'EXP': 'obj'}
+特征结构是非常强大的，但我们操纵它们的方式是极其特别的。我们本章接下来的任务
+是，显示上下文无关文法和分析如何能扩展到合适的特征结构，使我们可以一种更通用的和
+有原则的方式建立像这样的分析。我们将通过查看句法协议的现象作为开始；我们将展示如
+何使用特征典雅的表示协议约束，并在一个简单的文法中说明它们的用法。
+由于特征结构是表示任何形式的信息的通用的数据结构，我们将从更形式化的视点简要
+地看着它们，并演示NLTK 提供的特征结构的支持。在本章的最后一部分，我们将表明，
+特征的额外表现力开辟了一个用于描述语言结构的复杂性的广泛的可能性。
+句法协议
+下面的例子展示词序列对，其中第一个是符合语法的而第二个不是。（我们在词序列的
+开头用星号表示它是不符合语法的。）
+(1)
+a. this dog
+b. *these dog
+(2)
+a. these dogs
+b. *this dogs
+在英语中，名词通常被标记为单数或复数。范例中的形式也各不相同：this（单数），t
+hese（复数）。例（1）和（2）显示在名词短语中使用指示词和名词是有限制的。要么两个
+都是单数要么都是复数。主语和谓词间也存在类似的约束：
+(3)
+a. the dog runs
+b. *the dog run
+(4)
+a. the dogs run
+b. *the dogs runs
+这里我们可以看到，动词的形态属性与主语名词短语的句法属性一起变化。这种一起变
+化被称为协议（agreement
+agreement
+agreement
+agreement）。如果我们进一步看英语动词协议，我们将看到动词的现在时态
+通常有两种屈折形式：一为第三人称单数，另一个为人称和数量的所有其他组合，如表9-1
+所示。
+表9-1. 英语规则动词的协议范式
+
+289
+我们可以让形态学特性的作用更加明确一点儿，如（5）和（6）所示。这些例子表明动
+词与它的主语在人称和数量上保持一致。（我们用3 作为第三人称的缩写，SG 表示单数，P
+L 表示复数。）
+(5) the
+dog
+run-s
+dog.3.SG run-3.SG
+(6) the
+dog-s
+run
+dog.3.PL run-3.PL
+让我们看看当我们在一个上下文无关文法中编码这些协议约束会发生什么。我们将以
+（7）中简单的CFG 开始。
+(7)
+S
+->
+NP VP
+NP
+->
+Det N
+VP
+->
+V
+Det
+->
+'this'
+N
+->
+'dog'
+V
+->
+'runs'
+文法（7）使我们能够产生句子this dog runs；然而，我们真正想要做的是也能产生th
+ese dogs run，而同时阻止不必要的序列，如*this dogs run 和*these dog runs。最简单的方
+法是为文法添加新的非终结符和产生式：
+(8)
+S -> NP_SG VP_SG
+S -> NP_PL VP_PL
+NP_SG -> Det_SG N_SG
+NP_PL -> Det_PL N_PL
+VP_SG -> V_SG
+VP_PL -> V_PL
+Det_SG -> 'this'
+Det_PL -> 'these'
+N_SG -> 'dog'
+N_PL -> 'dogs'
+V_SG -> 'runs'
+V_PL -> 'run'
+在唯一的扩展S 的产生式的地方，我们现在有两个产生式，一个覆盖单数主语NP 和V
+P 的句子，另一个覆盖复数主语NP 和VP 的句子。事实上，（7）中的每个产生式在（8）中
+都有两个与之对应。在小规模的文法中这不是什么真的问题，虽然它在审美上不那么吸引人。
+然而，在一个更大的涵盖了一定量的英语成分子集的文法中，这样将文法规模增加一倍的前
+景是非常缺乏吸引力。让我们假设现在我们用同样的方法处理第一，第二和第三人称，还有
+单数和复数。这将导致原有的文法被乘以因子6，这是我们一定要避免的。我们可以做得比
+这更好吗？在下一节，我们将显示遵从数量和人称协议不必以“爆炸式”的产生式数目为代
+价。
+单数
+复数
+第一人称
+I run
+we run
+第二人称
+you run
+you run
+第三人称
+he/she/it runs
+they run
+
+290
+使用属性和约束
+我们说过非正式的语言类别具有属性，例如：名词具有复数的属性。让我们把这个弄的
+更明确：
+(9) N[NUM=pl]
+（9）中，我们介绍了一些新的符号，它的意思是类别N 有一个（文法）特征叫做NU
+M（“number 数字”的简写），此特征的值是pl（“plural 复数”的简写）。我们可以添加类似
+的注解给其他类别，在词汇条目中使用它们：
+(10) Det[NUM=sg] -> 'this'
+Det[NUM=pl] -> 'these'
+N[NUM=sg] -> 'dog'
+N[NUM=pl] -> 'dogs'
+V[NUM=sg] -> 'runs'
+V[NUM=pl] -> 'run'
+这确实有帮助吗？迄今为止，它看起来就像（8）中指定内容的一个稍微更详细的替代。
+当我们允许使用特征值变量，并利用这些表示限制时，事情变得更有趣：
+(11) S -> NP[NUM=?n] VP[NUM=?n]
+NP[NUM=?n] -> Det[NUM=?n] N[NUM=?n]
+VP[NUM=?n] -> V[NUM=?n]
+我们使用?n 作为NUM 值上的变量；它可以在给定的产生式中被实例化为sg 或pl。我
+们可以读取第一条产生式就像再说不管NP 为特征NUM 取什么值，VP 必须取同样的值。
+为了介绍这些特征限制如何工作，思考如何去建立一个树是有益的。词汇产生式将承认
+下面的树（树的深度为1）：
+现在NP[NUM=?n] -> Det[NUM=?n] N[NUM=?n]表示无论N 和Det 的NUM 的
+值是什么，它们都是相同的。因此，这个产生式允许(12a)和(13a)组合成一个NP，如（14a）
+所示，它也将允许（12b）和（13b）组合，如（14b）中所示。相比之下，（15a）和（15b）
+被禁止因为它们子树的根的NUM 值不同；这种值的不相容可以用顶端节点的值FAIL 非正
+
+291
+式的表示。
+产生式VP[NUM=?n] -> V[NUM=?n]表示核心动词的NUM 必须与它的VP 父母的
+NUM 值相同。结合扩展S 的产生式，我们得出结论：如果主语核心名词的NUM 值是pl，
+那么VP 核心动词的NUM 值也是pl。
+文法（10）演示了如this 和these 这样的限定词的词汇产生式分别需要一个单数或复数
+的核心名词。然而，英语中其他限定词对与它们结合的名词的文法上的数量并不挑剔。一个
+描述这个的方法将是添加两个词汇条目到文法中，单数和复数版本的限定词如the 一样一个。
+Det[NUM=sg] -> 'the' | 'some' | 'several'
+Det[NUM=pl] -> 'the' | 'some' | 'several'
+然而，一个更优雅的解决办法是保留NUM 的值为未指定，让它匹配与它结合的任何名
+词的数量。为NUM 分配一个变化的值是解决的方法之一：
+Det[NUM=?n] -> 'the' | 'some' | 'several'
+但事实上我们可以更简单些，在这样的产生式中不给NUM 任何指定。我们只需要在这
+个限制制约同一个产生式的其他地方的值时才明确地输入一个变量的值。
+
+292
+例9-1 中的文法演示到目前为止我们已经在本章中介绍过的大多数想法，再加上几个新
+的想法。
+例9-1. 基于特征的文法的例子。
+>>> nltk.data.show_cfg('grammars/book_grammars/feat0.fcfg')
+% start S
+# ###################
+# Grammar Productions
+# ###################
+# S expansion productions
+S -> NP[NUM=?n] VP[NUM=?n]
+# NP expansion productions
+NP[NUM=?n] -> N[NUM=?n]
+NP[NUM=?n] -> PropN[NUM=?n]
+NP[NUM=?n] -> Det[NUM=?n] N[NUM=?n]
+NP[NUM=pl] -> N[NUM=pl]
+# VP expansion productions
+VP[TENSE=?t, NUM=?n] -> IV[TENSE=?t, NUM=?n]
+VP[TENSE=?t, NUM=?n] -> TV[TENSE=?t, NUM=?n] NP
+# ###################
+# Lexical Productions
+# ###################
+Det[NUM=sg] -> 'this' | 'every'
+Det[NUM=pl] -> 'these' | 'all'
+Det -> 'the' | 'some' | 'several'
+PropN[NUM=sg]-> 'Kim' | 'Jody'
+N[NUM=sg] -> 'dog' | 'girl' | 'car' | 'child'
+N[NUM=pl] -> 'dogs' | 'girls' | 'cars' | 'children'
+IV[TENSE=pres,
+NUM=sg] -> 'disappears' | 'walks'
+TV[TENSE=pres, NUM=sg] -> 'sees' | 'likes'
+IV[TENSE=pres,
+NUM=pl] -> 'disappear' | 'walk'
+TV[TENSE=pres, NUM=pl] -> 'see' | 'like'
+IV[TENSE=past] -> 'disappeared' | 'walked'
+TV[TENSE=past] -> 'saw' | 'liked'
+注意一个句法类别可以有多个特征，例如：V[TENSE=pres, NUM=pl]。在一般情况
+下，我们喜欢多少特征就可以添加多少。
+关于例9-1 的最后的细节是语句%start S。这个“指令”告诉分析器以S 作为文法的
+开始符号。
+一般情况下，即使我们正在尝试开发很小的文法，把产生式放在一个文件中我们可以编
+辑、测试和修改是很方便的。我们将例9-1 以NLTK 的数据格式保存为文件feat0.fcfg。你可
+以使用nltk.data.load()制作你自己的副本进行进一步的实验。
+NLTK 中使用Earley 图表分析器分析基于特征的文法（关于这个的更多信息见9.5 节），
+例9-2 演示这个是如何实施的。为输入分词之后，我们导入load_parser 函数c，以文法
+文件名为输入，返回一个图表分析器cpd。调用分析器的nbest_parse()方法将返回一个
+分析树的trees 链表；如果文法无法分析输入，trees 将为空，否则会包含一个或多个分析
+
+293
+树，取决于输入是否有句法歧义。
+例9-2. 跟踪基于特征的图表分析器.
+>>> tokens = 'Kim likes children'.split()
+>>> from nltk import load_parser c
+>>> cp = load_parser('grammars/book_grammars/feat0.fcfg', trace=2) d
+>>> trees = cp.nbest_parse(tokens)
+|.Kim .like.chil.|
+|[----]
+.
+.| PropN[NUM='sg'] -> 'Kim' *
+|[----]
+.
+.| NP[NUM='sg'] -> PropN[NUM='sg'] *
+|[---->
+.
+.| S[] -> NP[NUM=?n] * VP[NUM=?n] {?n: 'sg'}
+|.
+[----]
+.| TV[NUM='sg', TENSE='pres'] -> 'likes' *
+|.
+[---->
+.| VP[NUM=?n, TENSE=?t] -> TV[NUM=?n, TENSE=?t] * NP[]
+{?n: 'sg', ?t: 'pres'}
+|.
+.
+[----]| N[NUM='pl'] -> 'children' *
+|.
+.
+[----]| NP[NUM='pl'] -> N[NUM='pl'] *
+|.
+.
+[---->| S[] -> NP[NUM=?n] * VP[NUM=?n] {?n: 'pl'}
+|.
+[---------]| VP[NUM='sg', TENSE='pres']
+-> TV[NUM='sg', TENSE='pres'] NP[] *
+|[==============]| S[] -> NP[NUM='sg'] VP[NUM='sg'] *
+分析过程中的细节对于当前的目标并不重要。然而，有一个实施上的问题与我们前面的
+讨论文法的大小有关。分析包含特征限制的产生式的一种可行的方法是编译出问题中特征的
+所有可接受的值，是我们最终得到一个大的完全指定的（8）中那样的CFG。相比之下，前
+面例子中显示的分析器过程直接与给定文法的未指定的产生式一起运作。特征值从词汇条目
+“向上流动”，变量值于是通过如{?n: 'sg', ?t: 'pres'}这样的绑定（即字典）与那些值关
+联起来。当分析器装配有关它正在建立的树的节点的信息时，这些变量绑定被用来实例化这
+些节点中的值；从而通过查找绑定中?n 和?t 的值，未指定的VP[NUM=?n, TENSE=?t]
+-> TV[NUM=?n, TENSE=?t] NP[]实例化为VP[NUM='sg', TENSE='pres'] -> TV
+[NUM='sg', TENSE='pres'] NP[]。
+最后，我们可以检查生成的分析树（在这种情况下，只有一个）。
+>>> for tree in trees: print tree
+(S[]
+(NP[NUM='sg'] (PropN[NUM='sg'] Kim))
+(VP[NUM='sg', TENSE='pres']
+(TV[NUM='sg', TENSE='pres'] likes)
+(NP[NUM='pl'] (N[NUM='pl'] children))))
+术语
+到目前为止，我们只看到像sg 和pl 这样的特征值。这些简单的值通常被称为原子——
+也就是，它们不能被分解成更小的部分。原子值的一种特殊情况是布尔值，也就是说，值仅
+仅指定一个属性是真还是假。例如：我们可能要用布尔特征AUX 区分助动词，如：can、m
+ay、will 和do。那么产生式V[TENSE=pres,aux=+] -> 'can'意味着can 接受TENSE
+的值为pres 并且AUX 的值为+或true。有一个广泛采用的约定用缩写表示布尔特征f；不
+用aux=+或aux=-，我们分别用+aux 和-aux。这些都是缩写，然而，分析器就像+和-
+
+294
+是其他原子值一样解释它们。（17）显示了一些有代表性的产生式：
+(17) V[TENSE=pres, +aux] -> 'can'
+V[TENSE=pres, +aux] -> 'may'
+V[TENSE=pres, -aux] -> 'walks'
+V[TENSE=pres, -aux] -> 'likes'
+我们说过分配“特征注释”给句法类别。表示整个类别的更激进的做法——也就是，非
+终结符加注释——作为一个特征的绑定。例如：N[NUM=sg]包含词性信息，可以表示为P
+OS=N。因此，这个类别的替代符号是[POS=N, NUM=sg]。
+除了原子值特征，特征可能需要本身就是特征结构的值。例如：我们可以将协议特征组
+合在一起（例如：人称、数量和性别）作为一个类别的不同部分，表示为AGR 的值。这种
+情况中，我们说AGR 是一个复杂值。（18）描述的结构，在格式上称为属性值矩阵（attribu
+te value matrix，AVM）。
+(18) [POS = N
+]
+[
+]
+[AGR = [PER = 3
+]]
+[
+[NUM = pl
+]]
+[
+[GND = fem ]]
+在传递中，我们应该指出有显示AVM 的替代方法；图9-1 显示了一个例子。虽然特征
+结构呈现的（18）中的风格不太悦目，我们将坚持用这种格式，因为它对应我们将会从NL
+TK 得到的输出。
+图9-1. 以属性值矩阵呈现一个特征结构。
+关于表示，我们也注意到特征结构，像字典，对特征的顺序没有指定特别的意义。因此，
+（18）等价于：
+(19) [AGR = [NUM = pl
+]]
+[
+[PER = 3
+]]
+[
+[GND = fem ]]
+[
+]
+[POS = N
+]
+当我们有可能使用像AGR 这样的特征时，我们可以重构像例9-1 这样的文法，使协议
+特征捆绑在一起。一个微小的文法演示了这个想法，如（20）所示。
+(20) S -> NP[AGR=?n] VP[AGR=?n]
+NP[AGR=?n] -> PropN[AGR=?n]
+VP[TENSE=?t, AGR=?n] -> Cop[TENSE=?t, AGR=?n] Adj
+Cop[TENSE=pres,
+AGR=[NUM=sg, PER=3]] -> 'is'
+PropN[AGR=[NUM=sg, PER=3]] -> 'Kim'
+Adj -> 'happy'
+
+295
+9.2
+9.2
+9.2
+9.2 处理特征结构
+处理特征结构
+处理特征结构
+处理特征结构
+在本节中，我们将展示如何构建特征结构，并在NLTK 中操作。我们还将讨论统一的
+基本操作，这使我们能够结合两个不同的特征结构中的信息。
+NLTK 中的特征结构使用构造函数FeatStruct()声明。原子特征值可以是字符串或整
+数。
+>>> fs1 = nltk.FeatStruct(TENSE='past', NUM='sg')
+>>> print fs1
+[ NUM
+= 'sg'
+]
+[ TENSE = 'past' ]
+一个特征结构实际上只是一种字典，所以我们可以平常的方式通过索引访问它的值。我
+们可以用我们熟悉的方式指定值给特征：
+>>> fs1 = nltk.FeatStruct(PER=3, NUM='pl', GND='fem')
+>>> print fs1['GND']
+fem
+>>> fs1['CASE'] = 'acc'
+我们还可以为特征结构定义更复杂的值，如前所述。
+>>> fs2 = nltk.FeatStruct(POS='N', AGR=fs1)
+>>> print fs2
+[
+[ CASE = 'acc' ] ]
+[ AGR = [ GND
+= 'fem' ] ]
+[
+[ NUM
+= 'pl'
+] ]
+[
+[ PER
+= 3
+] ]
+[
+]
+[ POS = 'N'
+]
+>>> print fs2['AGR']
+[ CASE = 'acc' ]
+[ GND
+= 'fem' ]
+[ NUM
+= 'pl'
+]
+[ PER
+= 3
+]
+>>> print fs2['AGR']['PER']
+3
+指定特征结构的另一种方法是使用包含feature=value 格式的特征-值对的方括号括
+起的字符串，其中值本身可能是特征结构：
+>>> print nltk.FeatStruct("[POS='N', AGR=[PER=3, NUM='pl', GND='fem']]")
+[
+[ PER = 3
+] ]
+[ AGR = [ GND = 'fem' ] ]
+[
+[ NUM = 'pl'
+] ]
+[
+]
+[ POS = 'N'
+]
+特征结构本身并不依赖于语言对象；它们是表示知识的通用目的的结构。例如：我们可
+以将一个人的信息用特征结构编码：
+>>> print nltk.FeatStruct(name='Lee', telno='01 27 86 42 96', age=33)
+[ age
+= 33
+]
+
+296
+[ name
+= 'Lee'
+]
+[ telno = '01 27 86 42 96' ]
+在接下来的几页中，我们会使用这样的例子来探讨特征结构的标准操作。这将使我们暂
+时从自然语言处理转移，因为在我们回来谈论文法之前需要打下基础。坚持！
+将特征结构作为图来查看往往是有用的，更具体的，作为有向无环图（directed acyclic
+graphs，DAGs）。（21）相当于前面的AVM。
+特征名称作为弧上的标签出现，特征值作为弧指向的节点的标签出现。
+像以前一样，特征值可以是复杂的：
+标签的元组表示路径。于是，('ADDRESS', 'STREET')就是一个特征路径，它在（22）
+中的值是标签为'rue Pascal'的节点。
+现在让我们思考一种情况：Lee 有一个配偶叫做Kim，Kim 的地址与Lee 的相同。我们
+可能会像（23）那样表示这个。
+
+297
+然而，不是重复特征结构中的地址信息，我们可以“共享”不同的弧之间的同一子图：
+换句话说，（24）中路径('ADDRESS')的值与路径('SPOUSE', 'ADDRESS')的值相同。
+如（24）的DAG 被称为包含结构共享或重入。当两条路径具有相同的值时，它们被称为是
+等价的。
+为了在我们的矩阵式表示中表示重入，我们将在共享的特征结构第一次出现的地方加一
+个括号括起的数字前缀，例如（1）。以后任何对这个结构的引用将使用符号->(1)，如下所
+示。
+>>> print nltk.FeatStruct("""[NAME='Lee', ADDRESS=(1)[NUMBER=74, STREET='rue Pascal'],
+...
+SPOUSE=[NAME='Kim', ADDRESS->(1)]]""")
+[ ADDRESS = (1) [ NUMBER = 74
+] ]
+[
+[ STREET = 'rue Pascal' ] ]
+[
+]
+[ NAME
+= 'Lee'
+]
+[
+]
+[ SPOUSE
+= [ ADDRESS -> (1)
+]
+]
+[
+[ NAME
+= 'Kim' ]
+]
+括号内的整数有时也被称为标记或同指标志（coindex）。整数的选择并不重要。可以有
+任意数目的标记在一个单独的特征结构中。
+>>> print nltk.FeatStruct("[A='a', B=(1)[C='c'], D->(1), E->(1)]")
+[ A = 'a'
+]
+[
+]
+[ B = (1) [ C = 'c' ] ]
+[
+]
+[ D -> (1)
+]
+[ E -> (1)
+]
+包含和统一
+认为特征结构提供一些对象的部分信息是很正常的，在这个意义上，我们可以根据它们
+通用的程度给特征结构排序。例如：（25a）比（25b）更一般（更少特征），（25b）比（25c）
+更一般。
+(25) a.
+[NUMBER = 74]
+
+298
+b.
+[NUMBER = 74
+]
+[STREET = 'rue Pascal']
+c.
+[NUMBER = 74
+]
+[STREET = 'rue Pascal']
+[CITY = 'Paris'
+]
+这个顺序被称为包含（subsumption
+subsumption
+subsumption
+subsumption）；一个更一般的特征结构包含（subsumes
+subsumes
+subsumes
+subsumes）一个
+较少一般的。如果FS0 包含FS1（正式的，我们写成FS0  FS1），那么FS1 必须具备FS0
+所有路径和等价路径，也可能有额外的路径和等价路径。因此，（23）包括（24）因为后者
+有额外的等价路径。包含只提供了特征结构上的偏序，这应该是显而易见的，因为一些特征
+结构是不可比较的。例如：（26）既不包含（25a）也不被（25a）包含。
+(26) [TELNO = 01 27 86 42 96]
+所以，我们已经看到了，一些特征结构比其他的更具体。我们如何去具体化一个给定的
+特征结构？例如：我们可能决定地址应包括的不只是一个门牌号码和街道名称，还应该包括
+城市。也就是说，我们可能要用（27b）合并图（27a）去产生（27c）。
+合并两个特征结构的信息被称为统一，由方法unify()支持。
+>>> fs1 = nltk.FeatStruct(NUMBER=74, STREET='rue Pascal')
+>>> fs2 = nltk.FeatStruct(CITY='Paris')
+>>> print fs1.unify(fs2)
+[ CITY
+= 'Paris'
+]
+[ NUMBER = 74
+]
+[ STREET = 'rue Pascal' ]
+统一被正式定义为一个二元操作：FS0  FS1。统一是对称的，所以FS0  FS1=FS1  F
+S0。Python 中也是如此：
+>>> print fs2.unify(fs1)
+
+299
+[ CITY
+= 'Paris'
+]
+[ NUMBER = 74
+]
+[ STREET = 'rue Pascal' ]
+如果我们统一两个具有包含关系的特征结构，那么统一的结果是两个中更具体的那个：
+(28) If FS0  
+FS1, then FS0  
+FS1 = FS1
+例子中统一（25b）和（25c）的结果是（25c）。
+FS0 和FS1 之间的统一将失败，如果这两个特征结构共享路径π，但在FS0 中的π值
+与在FS1 中的π值是不同的原子值。这通过设置统一的结果为None 来实现。
+>>> fs0 = nltk.FeatStruct(A='a')
+>>> fs1 = nltk.FeatStruct(A='b')
+>>> fs2 = fs0.unify(fs1)
+>>> print fs2
+None
+现在，如果我们看一下统一如何与结构共享相互作用，事情就变得很有趣。首先，让我
+们在Python 中定义（23）：
+>>> fs0 = nltk.FeatStruct("""[NAME=Lee,
+...
+ADDRESS=[NUMBER=74,
+...
+STREET='rue Pascal'],
+...
+SPOUSE= [NAME=Kim,
+...
+ADDRESS=[NUMBER=74,
+...
+STREET='rue Pascal']]]""")
+>>> print fs0
+[ ADDRESS = [ NUMBER = 74
+]
+]
+[
+[ STREET = 'rue Pascal' ]
+]
+[
+]
+[ NAME
+= 'Lee'
+]
+[
+]
+[
+[ ADDRESS = [ NUMBER = 74
+] ] ]
+[ SPOUSE
+= [
+[ STREET = 'rue Pascal' ] ] ]
+[
+[
+] ]
+[
+[ NAME
+= 'Kim'
+] ]
+我们为Kim 的地址指定一个CITY 作为参数会发生什么？请注意，fs1 需要包括从特征
+结构的根到CITY 的整个路径。
+>>> fs1 = nltk.FeatStruct("[SPOUSE = [ADDRESS = [CITY = Paris]]]")
+>>> print fs1.unify(fs0)
+[ ADDRESS = [ NUMBER = 74
+]
+]
+[
+[ STREET = 'rue Pascal' ]
+]
+[
+]
+[ NAME
+= 'Lee'
+]
+[
+]
+[
+[
+[ CITY
+= 'Paris'
+] ] ]
+[
+[ ADDRESS = [ NUMBER = 74
+] ] ]
+[ SPOUSE
+= [
+[ STREET = 'rue Pascal' ] ] ]
+[
+[
+] ]
+
+300
+[
+[ NAME
+= 'Kim'
+] ]
+通过对比，如果fs1 与fs2 的结构共享版本统一，结果是非常不同的（如图（24）所示）：
+>>> fs2 = nltk.FeatStruct("""[NAME=Lee, ADDRESS=(1)[NUMBER=74, STREET='rue Pascal'],
+...
+SPOUSE=[NAME=Kim, ADDRESS->(1)]]""")
+>>> print fs1.unify(fs2)
+[
+[ CITY
+= 'Paris'
+] ]
+[ ADDRESS = (1) [ NUMBER = 74
+] ]
+[
+[ STREET = 'rue Pascal' ] ]
+[
+]
+[ NAME
+= 'Lee'
+]
+[
+]
+[ SPOUSE
+= [ ADDRESS -> (1)
+]
+]
+[
+[ NAME
+= 'Kim' ]
+]
+不是仅仅更新Kim 的Lee 的地址的“副本”，我们现在同时更新他们两个的地址。更一
+般的，如果统一包含指定一些路径π的值，那么统一同时指定与π等价的所有路径的值。
+正如我们已经看到的，结构共享也可以使用变量表示，如?x。
+>>> fs1 = nltk.FeatStruct("[ADDRESS1=[NUMBER=74, STREET='rue Pascal']]")
+>>> fs2 = nltk.FeatStruct("[ADDRESS1=?x, ADDRESS2=?x]")
+>>> print fs2
+[ ADDRESS1 = ?x ]
+[ ADDRESS2 = ?x ]
+>>> print fs2.unify(fs1)
+[ ADDRESS1 = (1) [ NUMBER = 74
+] ]
+[
+[ STREET = 'rue Pascal' ] ]
+[
+]
+[ ADDRESS2 -> (1)
+9.3
+9.3
+9.3
+9.3 扩展基于特征的文法
+扩展基于特征的文法
+扩展基于特征的文法
+扩展基于特征的文法
+在本节中，我们回到基于特征的文法，探索各种语言问题，并展示将特征纳入文法的好
+处。
+子类别
+第8 章中，我们增强了类别标签表示不同类别的动词，分别用标签IV 和TV 表示不及
+物动词和及物动词。这使我们能编写如下的产生式：
+(29) VP -> IV
+VP -> TV NP
+虽然我们知道IV 和TV 是两种V，它们只是一个CFG 中的原子非终结符，与任何其他
+符号对之间的区别是一样的。这个符号不会告诉我们任何有关一般动词的信息；例如：我们
+不能说“V 类的所有词汇都按时态标记”，因为walk 是IV 类的项目，不是V 类的，所以，
+我们能替换如TV 和IV 类别标签为带着告诉我们这个动词是否与后面的NP 对象结合或者
+它是否能不带补语等特征的V？
+
+301
+一个简单的方法，最初为文法框架开发的称为广义短语结构文法（Generalized Phrase
+Structure Grammar，GPSG），通过允许词汇类别支持子类别特征尝试解决这个问题，它告诉
+我们该项目所属的子类别。相比GPSG 使用的整数值表示SUBCAT，下面的例子采用更容
+易记忆的值，即intrans、trans 和clause：
+(30) VP[TENSE=?t, NUM=?n] -> V[SUBCAT=intrans, TENSE=?t, NUM=?n]
+VP[TENSE=?t, NUM=?n] -> V[SUBCAT=trans, TENSE=?t, NUM=?n] NP
+VP[TENSE=?t, NUM=?n] -> V[SUBCAT=clause, TENSE=?t, NUM=?n] SBar
+V[SUBCAT=intrans, TENSE=pres, NUM=sg] -> 'disappears' | 'walks'
+V[SUBCAT=trans, TENSE=pres, NUM=sg] -> 'sees' | 'likes'
+V[SUBCAT=clause, TENSE=pres, NUM=sg] -> 'says' | 'claims'
+V[SUBCAT=intrans, TENSE=pres, NUM=pl] -> 'disappear' | 'walk'
+V[SUBCAT=trans, TENSE=pres, NUM=pl] -> 'see' | 'like'
+V[SUBCAT=clause, TENSE=pres, NUM=pl] -> 'say' | 'claim'
+V[SUBCAT=intrans, TENSE=past] -> 'disappeared' | 'walked'
+V[SUBCAT=trans, TENSE=past] -> 'saw' | 'liked'
+V[SUBCAT=clause, TENSE=past] -> 'said' | 'claimed'
+当我们看到一个词汇类别，如V[SUBCAT=trans]，我们可以解释SUBCAT 指向一个
+产生式，其中的V[SUBCAT=trans]作为一个VP 产生式中的核心词引入。按照约定，SU
+BCAT 值和引入核心词的产生式之间存在对应关系。对这种做法，SUBCAT 只能出现在词
+汇类别中，它是没有意义的，例如：要在VP 上指定SUBCAT。与要求的一样，walk 和lik
+e 都属于类别V，然而walk 将只出现在被具有特征SUBCAT=intrans 在右侧的产生式扩展
+的VP 中，而like 相反，它需要一个SUBCAT=trans。
+在（30）中的动词的第三个类别中，我们指定了一个类SBar。这是一个从句标签，就
+像例子You claim that you like children 中的claim 的补语。我们需要两个进一步的产生式
+来分析这样的句子：
+(31) SBar -> Comp S
+Comp -> 'that'
+产生的结构如下。
+由于原本是用于称为文法类别的框架中的，子类别的一个替代方式被表示在基于特征的
+框架中，如PATR 和核心驱动短语结构文法（Head-driven Phrase Structure Grammar）。不是
+用SUBCAT 值作为索引产生式的方式，SUBCAT 值直接为中心词的配价（它能结合的参数
+的列表）编码。例如：动词put 带NP 和PP 补语（put the book on the table）可以表示为
+（33）：
+(33) V[SUBCAT=<NP, NP, PP>]
+这是说动词可以结合三个参数。列表最左边元素是主语NP，而其它所有的——这个例
+子中的后面跟着PP 的NP——包括了补语子类别。当动词如put 与适当的补语结合时，SU
+
+302
+BCAT 中指定的要求被免除，只需要一个主语NP。这个类别相当于传统上被认为的VP，可
+以表示如下：
+(34) V[SUBCAT=<NP>]
+最后，一个句子成为一种不需要更多参数的动词类别，因此有一个值为空列表的SUB
+CAT。树（35）显示了在短语Kim put the book on the table 中这些类别是如何组合的。
+核心词回顾
+我们注意到，在上一节中，通过从主类别标签分解出子类别信息，我们可以表达有关动
+词属性的更多概括。类似的另一个属性如下：V 类的表达式是VP 类的短语的核心。同样，
+N 是NP 的核心词，A（即形容词）是AP 的核心词，P（即介词）是PP 的核心词。并非所
+有的短语都有核心词——例如：一般认为连词短语（如：the book and the bel）缺乏核心
+词。然而，我们希望我们的文法形式能表达它所持有的父母/核心子女关系。现在，V 和VP
+只是原子符号，我们需要找到一种方法用特征将它们关联起来（就像我们以前关联IV 和T
+V 那样）。
+X-bar 句法通过抽象出短语级别的概念，解决了这个问题。它通常认为有三个这样的级
+别。如果N 表示的词汇级别，那么N'表示更高一层级别，对应较传统的级别Nom，N''表
+示短语级别，对应类别NP。（36a）演示了这种表示结构，而（36b）是更传统的对应。
+结构（36a）的核心词是N，而N'和N''被称为N 的（短语的）投影。N''是最大的投影，
+N 有时也被称为零投影。X-bar 文法一个中心思想是所有成分都有结构的类似性。使用X 作
+为N、V、A 和P 上的变量，我们说一个词汇核心X 的直接补语子类别总是位于核心词的兄
+弟的位置，而修饰成分位于中间类别X'的兄弟的位置。因此，（37）中两个P''修饰成分的
+配置与（36a）中补语P''的形成对比。
+
+303
+（38）中的产生式演示X-bar 的级别用特征结构如何编码。（37）中嵌入结构通过扩展
+N[BAR=1]的递归规则的两个应用来实现。
+(38) S -> N[BAR=2] V[BAR=2]
+N[BAR=2] -> Det N[BAR=1]
+N[BAR=1] -> N[BAR=1] P[BAR=2]
+N[BAR=1] -> N[BAR=0] P[BAR=2]
+助动词与倒装
+倒装从句——其中的主语和动词顺序互换——出现在英语疑问句，也出现在“否定”副词
+之后：
+(39) a. Do you like children?
+b. Can Jody walk?
+(40) a. Rarely do you see Kim.
+b. Never have I seen this dog.
+然而，我们不能仅仅把任意动词放在主语前面：
+(41) a. *Like you children?
+b. *Walks Jody?
+(42) a. *Rarely see you Kim.
+b. *Never saw I this dog.
+可以放置在倒装的从句开头的动词术语叫做助动词的类别，如：do、can 和have，也包
+括be、will 和shall。捕捉这种结构的方法之一是使用以下产生式：
+(43) S[+INV] -> V[+AUX] NP VP
+也就是说，标记有[+inv]的从句包含一个助动词，其后跟着一个VP。（在更详细的文
+法中，我们需要在VP 的形式上加一些限制，取决于选择的助动词。）（44）演示了一个倒装
+从句的结构。
+
+304
+无限制依赖成分
+考虑下面的对比：
+(45) a. You like Jody.
+b. *You like.
+(46) a. You put the card into the slot.
+b. *You put into the slot.
+c. *You put the card.
+d. *You put.
+动词like 需要一个NP 补语，而put 需要一个跟随其后的NP 和PP。（45）和（46）表
+明，这些补语是必须的：省略它们会导致不符合语法。然而，有些上下文中强制性的补语可
+以省略，如（47）和（48）所示。
+(47) a. Kim knows who you like.
+b. This music, you really like.
+(48) a. Which card do you put into the slot?
+b. Which slot do you put the card into?
+也就是说，一个强制性补语可以被省略，如果句子中有是适当的填充，例如(47a)中的
+疑问词who，（47b）中的前置的主题this music，或（48）中的wh 短语which card/slot。通
+常说类似(47)和(48)中的句子包含一个缺口，在那里强制性补语被省略了，这些缺口有时被
+用下划线标出：
+(49) a. Which card do you put __ into the slot?
+b. Which slot do you put the card into __?
+所以，如果填充词许可，缺口就能出现。相反，填充词只会出现在句子希望有缺口的某
+个地方，如下面的例子所示：
+(50) a. *Kim knows who you like Jody.
+b. *This music, you really like hip-hop.
+(51) a. *Which card do you put this into the slot?
+b. *Which slot do you put the card into this one?
+填充词和缺口之间的相互共同出现有时被称为“依赖”。在理论语言学中相当重视的一
+个问题一直是一个填充词和它许可的缺口之间可以相互作用的原因；特别的，我们能简单地
+列出一个分开这两个的序列的有限集合吗？答案是否定的：填充词和缺口之间的距离没有上
+界。这一事实可以很容易地使用包含句子补语的成分来说明，如（52）所示。
+(52) a. Who do you like __?
+b. Who do you claim that you like __?
+c. Who do you claim that Jody says that you like __?
+因为我们可以无限加深句子补语的递归，在整个句子中缺口可以无限远的被填充。这一
+属性导致无限依赖成分的概念，也就是填充词-缺口依赖，在那里填充词和缺口之间的距离
+没有上界
+已经提出了各种各样的机制处理形式化文法中的无限依赖；在这里我们说明广义短语结
+构文法中使用的方法，其中包含斜线类别。一个斜线类别的形式是Y/XP；我们解释为：类
+别Y 的短语缺少一个类别XP 的子成分。例如：S/NP 是缺少一个NP 的S。斜线类别的使
+用说明如（53）所示。
+
+305
+树的顶端部分引入了填充词who（作为NP[+wh]类表达式对待）和相应的包含成分S
+/NP 的缺口一起。缺口信息于是被向着树的下方通过VP/NP 类别“预填充”，直到到达类
+别VP/NP。这时，由于意识到缺口信息为空字符串直接受控于NP/NP，依赖被排除。
+我们需要将斜线类别认为完全是一种新的对象吗？幸运的是，我们可以将它们纳入我们
+现有的基于特征的框架，通过将斜线作为一个特征，它右边的类别作为值；也就是说，S/
+NP 可变为S[SLASH=NP]。在实践中，这也是分析器如何解释斜线类别的。
+例9-3 中的文法演示了斜线类别的主要原则，而且还包括倒装从句的产生式。为了简化
+演示，我们省略了动词上的任何时态规范。
+例9-3. 具有倒装从句和长距离依赖的产生式的文法，使用斜线类别。
+>>> nltk.data.show_cfg('grammars/book_grammars/feat1.fcfg')
+% start S
+# ###################
+# Grammar Productions
+# ###################
+S[-INV] -> NP VP
+S[-INV]/?x -> NP VP/?x
+S[-INV] -> NP S/NP
+S[-INV] -> Adv[+NEG] S[+INV]
+S[+INV] -> V[+AUX] NP VP
+S[+INV]/?x -> V[+AUX] NP VP/?x
+SBar -> Comp S[-INV]
+SBar/?x -> Comp S[-INV]/?x
+VP -> V[SUBCAT=intrans, -AUX]
+VP -> V[SUBCAT=trans, -AUX] NP
+VP/?x -> V[SUBCAT=trans, -AUX] NP/?x
+VP -> V[SUBCAT=clause, -AUX] SBar
+VP/?x -> V[SUBCAT=clause, -AUX] SBar/?x
+VP -> V[+AUX] VP
+VP/?x -> V[+AUX] VP/?x
+# ###################
+# Lexical Productions
+# ###################
+V[SUBCAT=intrans, -AUX] -> 'walk' | 'sing'
+V[SUBCAT=trans, -AUX] -> 'see' | 'like'
+V[SUBCAT=clause, -AUX] -> 'say' | 'claim'
+V[+AUX] -> 'do' | 'can'
+NP[-WH] -> 'you' | 'cats'
+
+306
+NP[+WH] -> 'who'
+Adv[+NEG] -> 'rarely' | 'never'
+NP/NP ->
+Comp -> 'that'
+例9-3 中的文法包含一个“缺口引进”产生式，即S[-INV] -> NP S/NP。为了正确
+的预填充斜线特征，我们需要为扩展S、VP 和NP 的产生式中箭头两侧的斜线添加变量值。
+例如：VP/?x -> V SBar/?x 是VP -> V SBar 的斜线版本，也就是说，可以为一个成
+分的父母VP 指定斜线值，只要也为孩子SBar 指定同样的值。最后，NP/NP ->允许NP
+上的斜线信息为空字符串。使用例9-3 中的文法，我们可以分析序列：who do you claim t
+hat you like：
+>>> tokens = 'who do you claim that you like'.split()
+>>> from nltk import load_parser
+>>> cp = load_parser('grammars/book_grammars/feat1.fcfg')
+>>> for tree in cp.nbest_parse(tokens):
+...
+print tree
+(S[-INV]
+(NP[+WH] who)
+(S[+INV]/NP[]
+(V[+AUX] do)
+(NP[-WH] you)
+(VP[]/NP[]
+(V[-AUX, SUBCAT='clause'] claim)
+(SBar[]/NP[]
+(Comp[] that)
+(S[-INV]/NP[]
+(NP[-WH] you)
+(VP[]/NP[] (V[-AUX, SUBCAT='trans'] like) (NP[]/NP[] )))))))
+这棵树的一个更易读的版本如（54）所示。
+例9-3 中的文法也可以分析没有缺口的句子：
+>>> tokens = 'you claim that you like cats'.split()
+>>> for tree in cp.nbest_parse(tokens):
+...
+print tree
+(S[-INV]
+(NP[-WH] you)
+(VP[]
+(V[-AUX, SUBCAT='clause'] claim)
+(SBar[]
+
+307
+(Comp[] that)
+(S[-INV]
+(NP[-WH] you)
+(VP[] (V[-AUX, SUBCAT='trans'] like) (NP[-WH] cats))))))
+此外，它还允许没有wh 结构的倒装句：
+>>> tokens = 'rarely do you sing'.split()
+>>> for tree in cp.nbest_parse(tokens):
+...
+print tree
+(S[-INV]
+(Adv[+NEG] rarely)
+(S[+INV]
+(V[+AUX] do)
+(NP[-WH] you)
+(VP[] (V[-AUX, SUBCAT='intrans'] sing))))
+德语中的格和性别
+与英语相比，德语的协议具有相对丰富的形态。例如：在德语中定冠词根据格、性别和
+数量变化，如表9-2 所示。
+表9-2. 德语定冠词的形态范式
+格
+男性
+女性
+中性
+复数
+主格
+der
+die
+das
+die
+所有格
+des
+der
+des
+der
+与格
+dem
+der
+dem
+den
+宾格
+den
+die
+das
+die
+德语中的主语采用主格，大多数动词采用宾格支配它们的宾语。不过，也有例外，例如：
+helfen 支配与格：
+(55)a. Die
+Katze
+sieht
+den
+Hund
+the.NOM.FEM.SG
+cat.3.FEM.SG
+see.3.SG the.ACC.MASC.SG dog.3.MASC.SG
+‘the cat sees the dog’
+b. *Die
+Katze
+sieht
+dem
+Hund
+the.NOM.FEM.SG cat.3.FEM.SG see.3.SG the.DAT.MASC.SG dog.3.MASC.SG
+c. Die
+Katze
+hilft
+dem
+Hund
+the.NOM.FEM.SG cat.3.FEM.SG help.3.SG the.DAT.MASC.SG dog.3.MASC.SG
+‘the cat helps the dog’
+d. *Die
+Katze
+hilft
+den
+Hund
+the.NOM.FEM.SG cat.3.FEM.SG help.3.SG the.ACC.MASC.SG dog.3.MASC.SG
+例9-4 中的文法演示带格的协议（包括人称、数量和性别）的相互作用。
+例9-4. 基于特征的文法的例子。
+>>> nltk.data.show_cfg('grammars/book_grammars/german.fcfg')
+% start S
+# Grammar Productions
+
+308
+S -> NP[CASE=nom, AGR=?a] VP[AGR=?a]
+NP[CASE=?c, AGR=?a] -> PRO[CASE=?c, AGR=?a]
+NP[CASE=?c, AGR=?a] -> Det[CASE=?c, AGR=?a] N[CASE=?c, AGR=?a]
+VP[AGR=?a] -> IV[AGR=?a]
+VP[AGR=?a] -> TV[OBJCASE=?c, AGR=?a] NP[CASE=?c]
+# Lexical Productions
+# Singular determiners
+# masc
+Det[CASE=nom, AGR=[GND=masc,PER=3,NUM=sg]] -> 'der'
+Det[CASE=dat, AGR=[GND=masc,PER=3,NUM=sg]] -> 'dem'
+Det[CASE=acc, AGR=[GND=masc,PER=3,NUM=sg]] -> 'den'
+# fem
+Det[CASE=nom, AGR=[GND=fem,PER=3,NUM=sg]] -> 'die'
+Det[CASE=dat, AGR=[GND=fem,PER=3,NUM=sg]] -> 'der'
+Det[CASE=acc, AGR=[GND=fem,PER=3,NUM=sg]] -> 'die'
+# Plural determiners
+Det[CASE=nom, AGR=[PER=3,NUM=pl]] -> 'die'
+Det[CASE=dat, AGR=[PER=3,NUM=pl]] -> 'den'
+Det[CASE=acc, AGR=[PER=3,NUM=pl]] -> 'die'
+# Nouns
+N[AGR=[GND=masc,PER=3,NUM=sg]] -> 'Hund'
+N[CASE=nom, AGR=[GND=masc,PER=3,NUM=pl]] -> 'Hunde'
+N[CASE=dat, AGR=[GND=masc,PER=3,NUM=pl]] -> 'Hunden'
+N[CASE=acc, AGR=[GND=masc,PER=3,NUM=pl]] -> 'Hunde'
+N[AGR=[GND=fem,PER=3,NUM=sg]] -> 'Katze'
+N[AGR=[GND=fem,PER=3,NUM=pl]] -> 'Katzen'
+# Pronouns
+PRO[CASE=nom, AGR=[PER=1,NUM=sg]] -> 'ich'
+PRO[CASE=acc, AGR=[PER=1,NUM=sg]] -> 'mich'
+PRO[CASE=dat, AGR=[PER=1,NUM=sg]] -> 'mir'
+PRO[CASE=nom, AGR=[PER=2,NUM=sg]] -> 'du'
+PRO[CASE=nom, AGR=[PER=3,NUM=sg]] -> 'er' | 'sie' | 'es'
+PRO[CASE=nom, AGR=[PER=1,NUM=pl]] -> 'wir'
+PRO[CASE=acc, AGR=[PER=1,NUM=pl]] -> 'uns'
+PRO[CASE=dat, AGR=[PER=1,NUM=pl]] -> 'uns'
+PRO[CASE=nom, AGR=[PER=2,NUM=pl]] -> 'ihr'
+PRO[CASE=nom, AGR=[PER=3,NUM=pl]] -> 'sie'
+# Verbs
+IV[AGR=[NUM=sg,PER=1]] -> 'komme'
+IV[AGR=[NUM=sg,PER=2]] -> 'kommst'
+IV[AGR=[NUM=sg,PER=3]] -> 'kommt'
+IV[AGR=[NUM=pl, PER=1]] -> 'kommen'
+IV[AGR=[NUM=pl, PER=2]] -> 'kommt'
+IV[AGR=[NUM=pl, PER=3]] -> 'kommen'
+
+309
+TV[OBJCASE=acc, AGR=[NUM=sg,PER=1]] -> 'sehe' | 'mag'
+TV[OBJCASE=acc, AGR=[NUM=sg,PER=2]] -> 'siehst' | 'magst'
+TV[OBJCASE=acc, AGR=[NUM=sg,PER=3]] -> 'sieht' | 'mag'
+TV[OBJCASE=dat, AGR=[NUM=sg,PER=1]] -> 'folge' | 'helfe'
+TV[OBJCASE=dat, AGR=[NUM=sg,PER=2]] -> 'folgst' | 'hilfst'
+TV[OBJCASE=dat, AGR=[NUM=sg,PER=3]] -> 'folgt' | 'hilft'
+TV[OBJCASE=acc, AGR=[NUM=pl,PER=1]] -> 'sehen' | 'moegen'
+TV[OBJCASE=acc, AGR=[NUM=pl,PER=2]] -> 'sieht' | 'moegt'
+TV[OBJCASE=acc, AGR=[NUM=pl,PER=3]] -> 'sehen' | 'moegen'
+TV[OBJCASE=dat, AGR=[NUM=pl,PER=1]] -> 'folgen' | 'helfen'
+TV[OBJCASE=dat, AGR=[NUM=pl,PER=2]] -> 'folgt' | 'helft'
+TV[OBJCASE=dat, AGR=[NUM=pl,PER=3]] -> 'folgen' | 'helfen'
+正如你可以看到的，特征objcase 被用来指定动词支配它的对象的格。下一个例子演示
+了包含支配与格的动词的句子的分析树：
+>>> tokens = 'ich folge den Katzen'.split()
+>>> cp = load_parser('grammars/book_grammars/german.fcfg')
+>>> for tree in cp.nbest_parse(tokens):
+...
+print tree
+(S[]
+(NP[AGR=[NUM='sg', PER=1], CASE='nom']
+(PRO[AGR=[NUM='sg', PER=1], CASE='nom'] ich))
+(VP[AGR=[NUM='sg', PER=1]]
+(TV[AGR=[NUM='sg', PER=1], OBJCASE='dat'] folge)
+(NP[AGR=[GND='fem', NUM='pl', PER=3], CASE='dat']
+(Det[AGR=[NUM='pl', PER=3], CASE='dat'] den)
+(N[AGR=[GND='fem', NUM='pl', PER=3]] Katzen))))
+在开发文法时，排除不符合语法的词序列往往与分析符合语法的词序列一样具有挑战
+性。为了能知道在哪里和为什么序列分析失败，设置load_parser()方法的trace 参数可
+能是至关重要的。思考下面的分析故障：
+>>> tokens = 'ich folge den Katze'.split()
+>>> cp = load_parser('grammars/book_grammars/german.fcfg', trace=2)
+>>> for tree in cp.nbest_parse(tokens):
+...
+print tree
+|.ich.fol.den.Kat.|
+|[---]
+.
+.
+.| PRO[AGR=[NUM='sg', PER=1], CASE='nom'] -> 'ich' *
+|[---]
+.
+.
+.| NP[AGR=[NUM='sg', PER=1], CASE='nom']
+-> PRO[AGR=[NUM='sg', PER=1], CASE='nom'] *
+|[--->
+.
+.
+.| S[] -> NP[AGR=?a, CASE='nom'] * VP[AGR=?a]
+{?a: [NUM='sg', PER=1]}
+|.
+[---]
+.
+.| TV[AGR=[NUM='sg', PER=1], OBJCASE='dat'] -> 'folge' *
+|.
+[--->
+.
+.| VP[AGR=?a] -> TV[AGR=?a, OBJCASE=?c]
+* NP[CASE=?c] {?a: [NUM='sg', PER=1], ?c: 'dat'}
+|.
+.
+[---]
+.| Det[AGR=[GND='masc', NUM='sg', PER=3], CASE='acc'] -> 'den' *
+|.
+.
+[---]
+.| Det[AGR=[NUM='pl', PER=3], CASE='dat'] -> 'den' *
+
+310
+|.
+.
+[--->
+.| NP[AGR=?a, CASE=?c] -> Det[AGR=?a, CASE=?c]
+* N[AGR=?a, CASE=?c] {?a: [NUM='pl', PER=3], ?c: 'dat'}
+|.
+.
+[--->
+.| NP[AGR=?a, CASE=?c] -> Det[AGR=?a, CASE=?c] * N[AGR=?a, CASE=?c]
+{?a: [GND='masc', NUM='sg', PER=3], ?c: 'acc'}
+|.
+.
+.
+[---]| N[AGR=[GND='fem', NUM='sg', PER=3]] -> 'Katze' *
+跟踪中的最后两个Scanner 行显示den 被识别为两个可能的类别：Det[AGR=[GND
+='masc', NUM='sg', PER=3], CASE='acc']和Det[AGR=[NUM='pl', PER=3], CA
+SE='dat']。我们从例9-4 中的文法知道Katze 的类别是N[AGR=[GND=fem, NUM=s
+g, PER=3]]。然而，产生式中的变量?a 没有绑定：
+NP[CASE=?c, AGR=?a] -> Det[CASE=?c, AGR=? a] N[CASE=?c, AGR=?a]
+这将满足这些限制，因为Katze 的AGR 值将不与den 的任何一个AGR 值统一，也就
+是[GND='masc', NUM='sg', PER=3]或[NUM='pl', PER=3]。
+9.4
+9.4
+9.4
+9.4 小结
+小结
+小结
+小结
+z
+上下文无关文法的传统分类是原子符号。特征结构的一个重要的作用是捕捉精细的区
+分，否则将需要数量翻倍的原子类别。
+z
+通过使用特征值上的变量，我们可以表达文法产生式中的限制，允许不同的特征规格的
+实现可以相互依赖。
+z
+通常情况下，我们在词汇层面指定固定的特征值，限制短语中的特征值与它们的孩子中
+的对应值统一。
+z
+特征值可以是原子的或复杂的。原子值的一个特定类别是布尔值，按照惯例用[+/- fe
+at]表示。
+z
+两个特征可以共享一个值（原子的或复杂的）。具有共享值的结构被称为重入。共享的
+值被表示为AVM 中的数字索引（或标记）。
+z
+一个特征结构中的路径是一个特征的元组，对应从图的根开始的弧的序列上的标签。
+z
+两条路径是等价的，如果它们共享一个值。
+z
+包含的特征结构是偏序的。FS0 包含FS1，当FS0 比FS1 更一般（较少信息）。
+z
+两种结构FS0 和FS1 的统一，如果成功，就是包含FS0 和FS1 的合并信息的特征结构
+FS2。
+z
+如果统一在FS 中指定一条路径π，那么它也指定等效与π的每个路径π'。
+z
+我们可以使用特征结构建立对大量广泛语言学现象的简洁的分析，包括动词子类别，倒
+装结构，无限制依赖结构和格支配。
+9.5
+9.5
+9.5
+9.5 进一步阅读
+进一步阅读
+进一步阅读
+进一步阅读
+本章进一步的材料请参考http://www.nltk.org/，包括特征结构的HOWTO、特征文法、E
+arley 分析和文法测试套件。
+协议现象的一个很好的介绍，请参阅(Corbett, 2006)。
+理论语言学中最初使用特征的目的是捕捉语音的音素特性。例如：音/b/可能会被分解
+成结构[+labial, +voice]（[+唇，+语音]）。一个重要的动机是捕捉分割的类别之间的一般
+性，例如：/n/在任一+labial（唇）辅音前面被读作/m/。在乔姆斯基文法中，对一些现象，
+如：协议，使用原子特征是很标准的，原子特征也用来捕捉跨句法类别的概括，通过类比与
+
+311
+音韵。句法理论中使用特征的一个激进的扩展是广义短语结构语法（GPSG; [Gazdar et al.,
+1985]），特别是在使用带有复杂值的特征。
+从计算语言学的角度来看，(Kay, 1985)提出语言的功能方面可以被属性-值结构的统一
+捕获，一个类似的方法由(Grosz & Stickel, 1983)在PATR-II 形式体系中精心设计完成。词
+汇功能文法（Lexical-Functional grammar，LFG; [Kaplan & Bresnan, 1982]）的早期工作介
+绍了f-structure 概念，它的主要目的是表示文法关系和与成分结构短语关联的谓词参数结构。
+（Shieber，1986）提供了研究基于特征文法方面的一个极好的介绍。
+当研究人员试图为反面例子建模时，特征结构的代数方法的一个概念上的困难出现了。
+另一种观点，由(Kasper & Rounds, 1986) and (Johnson, 1988)开创，认为文法涉及结构功
+能的描述而不是结构本身。这些描述使用逻辑操作如合取相结合，而否定仅仅是特征描述上
+的普通的逻辑运算。这种面向描述的观点对LFG 从一开始就是不可或缺的（Kaplan, 1989），
+也被中心词驱动短语结构文法的较高版本采用（HPSG; [Sag & Wasow, 1999]）。http://www.
+cl.uni-bremen.de/HPSG-Bib/上有HPSG 文献的全面的参考书目。
+本章介绍的特征结构无法捕捉语言信息中重要的限制。例如：有没有办法表达NUM 的
+值只允许是sg 和pl，而指定[NUM=masc]是反常的。同样，我们不能说AGR 的复合值
+必须包含特征PER、NUM 和GND 的指定，但不能包含如[SUBCAT=trans]这样的指定。
+指定类型的特征结构被开发出来弥补这方面的不足。一个早期的关于指定类型的特征结构的
+很好的总结是(Emele & Zajac, 1990)。一个形式化基础的更全面的检查可以在(Carpenter, 1
+992)中找到，(Copestake, 2002)重点关注为面向HPSG 的方法实现指定类型的特征结构。
+有很多著作是关于德语的基于特征文法框架上的分析的。(Nerbonne, Netter & Pollard,
+1994)是这个主题的HPSG 著作的一个好的起点，而(Müller, 2002)给出HPSG 中的德语句法
+非常广泛和详细的分析。
+(Jurafsky & Martin, 2008)的第15 章讨论了特征结构、统一的算法和将统一整合到分析
+算法中。
+9.6
+9.6
+9.6
+9.6 练习
+练习
+练习
+练习
+1.
+○需要什么样的限制才能正确分析词序列，如I am happy 和she is happy 而不是*you
+is happy 或*they am happy？实现英语中动词be 的现在时态范例的两个解决方案，首
+先以文法（8）作为起点，然后以文法（20）为起点。
+2.
+○开发例9-1 中文法的变体，使用特种COUNT 来区分下面显示的句子：
+(56) a. The boy sings.
+b. *Boy sings.
+(57) a. The boys sing.
+b. Boys sing.
+(58) a. The water is precious.
+b. Water is precious.
+3.
+○写函数subsumes()判断两个特征结构fs1 和fs2 是否fs1 包含fs2。
+4.
+○修改（30）中所示的文法纳入特征BAR 来处理短语投影。
+5.
+○修改例9-4 中的德语文法，加入9.3 节中介绍的子类别的处理。
+6.
+◑开发一个基于特征的文法，能够正确描述下面的西班牙语名词短语：
+(59) un
+cuadro hermos-o
+INDEF.SG.MASC
+picture beautiful-SG.MASC
+‘a beautiful picture’
+
+312
+(60) un-os
+cuadro-s
+hermos-os
+INDEF-PL.MASC
+picture-PL
+beautiful-PL.MASC
+‘beautiful pictures’
+(61) un-a
+cortina hermos-a
+INDEF-SG.FEM
+curtain beautiful-SG.FEM
+‘a beautiful curtain’
+(62) un-as
+cortina-s hermos-as
+INDEF-PL.FEM
+curtain
+beautiful-PL.FEM
+‘beautiful curtains’
+7.
+◑开发earley_parser 的包装程序，只在输入序列分析出错时才输出跟踪。
+8.
+◑思考例9-5 的特征结构。
+例9-5. 探索特征结构。
+fs1 = nltk.FeatStruct("[A = ?x, B= [C = ?x]]")
+fs2 = nltk.FeatStruct("[B = [D = d]]")
+fs3 = nltk.FeatStruct("[B = [C = d]]")
+fs4 = nltk.FeatStruct("[A = (1)[B = b], C->(1)]")
+fs5 = nltk.FeatStruct("[A = (1)[D = ?x], C = [E -> (1), F = ?x] ]")
+fs6 = nltk.FeatStruct("[A = [D = d]]")
+fs7 = nltk.FeatStruct("[A = [D = d], C = [F = [D = d]]]")
+fs8 = nltk.FeatStruct("[A = (1)[D = ?x, G = ?x], C = [B = ?x, E -> (1)] ]")
+fs9 = nltk.FeatStruct("[A = [B = b], C = [E = [G = e]]]")
+fs10 = nltk.FeatStruct("[A = (1)[B = b], C -> (1)]")
+在纸上计算下面的统一的结果是什么。（提示：你可能会发现绘制图结构很有用。）
+a. fs1 and fs2
+b. fs1 and fs3
+c. fs4 and fs5
+d. fs5 and fs6
+e. fs5 and fs7
+f. fs8 and fs9
+g. fs8 and fs10
+用NLTK 检查你的答案。
+9.
+◑列出两个包含[A=?x, B=?x]的特征结构。
+10. ◑忽略结构共享，给出一个统一两个特征结构的非正式算法。
+11. ◑扩展例9-4 中的德语语法，使它能处理所谓的动词第二顺位结构，如下所示：
+(63) Heute sieht der Hund die Katze.
+12. ◑同义动词的句法属性看上去略有不同(Levin,1993)。思考下面的动词loaded、filled 和
+dumped 的文法模式。你能写文法产生式处理这些数据吗？
+(64) a. The farmer loaded the cart with sand
+b. The farmer loaded sand into the cart
+c. The farmer filled the cart with sand
+d. *The farmer filled sand into the cart
+e. *The farmer dumped the cart with sand
+f. The farmer dumped sand into the cart
+13. ●形态范例很少是完全正规的，矩阵中的每个单元的意义有不同的实现。例如：词位w
+
+313
+alk 的现在时态词性变化只有两种不同形式：第三人称单数的walks 和所有其他人称和
+数量的组合的walk。一个成功的分析不应该额外要求6 个可能的形态组合中有5 个有
+相同的实现。设计和实施一个方法处理这个问题。
+14. ●所谓的核心特征在父节点和核心孩子节点之间共享。例如：TENSE 是核心特征，在
+一个VP 和它的核心孩子V 之间共享。更多细节见(Gazdar et al., 1985)。我们看到的结
+构中大部分是核心结构——除了SUBCAT 和SLASH。由于核心特征的共享是可以预
+见的，它不需要在文法产生式中明确表示。开发一种方法自动计算核心结构的这种规则
+行为的比重。
+15. ●扩展NLTK 中特征结构的处理，允许统一值为链表的特征，使用这个来实现一个HP
+SG 风格的子类别分析，核心类别的SUBCAT 是它的补语的类别和它直接父母的SUB
+CAT 值的连结。
+16. ●扩展NLTK 的特征结构处理，允许带未指定类别的产生式，例如：S[-INV] -> ?x
+S/?x。
+17. ●扩展NLTK 的特征结构处理，允许指定类型的特征结构。
+18. ●挑选一些(Huddleston & Pullum,2002)中描述的文法结构，建立一个基于特征的文法
+计算它们的比例。

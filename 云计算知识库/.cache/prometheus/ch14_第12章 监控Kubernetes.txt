@@ -1,0 +1,310 @@
+第12章　监控Kubernetes
+现已经掌握如何构建Prometheus的各个模块，让我们把它们组合在一起，以监控现实世界中的现
+代应用程序堆栈。为此，我们将监控名为Tornado的API服务应用程序。Tornado是用Clojure语言编写
+的，它运行在JVM上，并且有一个Redis数据存储和一个MySQL数据库。我们最终会把Tornado[1]部署
+到Kubernetes集群中，这里首先看看如何使用Prometheus监控Kubernetes。
+在本章中，我们将研究堆栈的Kubernetes部分以及如何对它进行监控。
+为了简化监控示例，我们将Prometheus也部署到了Kubernetes集群中。
+[1] https://github.com/turnbullpress/tornado-api。
+
+12.1　Kubernetes集群
+我们的Kubernetes集群名为tornado.quicknuke.com，该集群是在AWS环境中运行的Kubernetes，版
+本为1.8.7。我们使用kops[1]构建了该集群，你可以在GitHub上找到集群配置。它有3个主节点和6个工
+作节点，所有节点都在三个可用区之间分布。
+可使用以下kops命令来创建集群。
+代码清单12-1　kops创建集群命令
+本章假设你已经安装了Kubernetes并对其工作原理有所了解。如果需要了解有关Kubernetes的
+更多信息，则建议阅读《Kubernetes:Up and Running》一书。
+[1] https://github.com/kubernetes/kops。
+
+12.2　在Kubernetes上运行Prometheus
+在Kubernetes上部署Prometheus有多种方法，其中哪一种方法最适合很大程度上取决于你的环境。
+比如，你可以构建自己的部署然后通过服务的形式暴露Prometheus，这种方法已经有一些配置可供参
+考[1]，或者可以使用CoreOS的Prometheus Operator[2]。
+我们选择了手动创建部署和服务的方法[3]。我们使用ConfigMaps[4]来配置Prometheus服务器和管
+理规则，并在部署中将它们作为卷挂载。此外，我们还会使用AWS Load Balancer服务来暴露
+Prometheus的WebUI。
+我们在Kubernetes上部署了包含3个Alertmanager节点的集群[5]，并将所有这些资源都放在名为
+monitoring的命名空间中。
+你可以使用本书在GitHub上的代码[6]找到所有这些配置。但是，我们不会详细介绍如何将
+Prometheus部署到Kubernetes上；相反，我们将专注于使用Prometheus监控Kubernetes和在Kubernetes上
+运行的应用程序。
+其中一个原因是Kubernetes发展迅速，这里记录的任何部署都可能很快过时。因此，这里提
+供的配置不能保证适用于以后的Kubernetes版本。
+[1] https://github.com/kayrus/prometheus-kubernetes。
+[2] https://github.com/coreos/prometheus-operator。
+[3] https://github.com/turnbullpress/prometheusbook-code/blob/master/12-13/prometheus.yml。
+[4] 
+https://github.com/turnbullpress/prometheusbook-code/blob/master/12-13/prometheus-config-map-
+v1.yml。
+[5] https://github.com/turnbullpress/prometheusbook-code/blob/master/12-13/alertmanager.yml。
+[6] https://github.com/turnbullpress/prometheusbook-code/tree/master/12-13。
+
+12.3　监控Kubernetes
+让我们首先谈谈监控Kubernetes本身。尽管它可能会经常更新迭代，但作为一个主题，很多知识
+和内容是通用的。Kubernetes是一个容器编排和调度程序，有很多灵活的组件。我们将展示如何使用
+Prometheus作业监控Kubernetes的各个方面，并且将这些作业与一些记录规则和警报规则匹配。
+本章将分步讲解如何处理每个组件，如何收集时间序列，以及从这些时间序列生成的规则和警
+报。我们不打算提供明确的监控方法，而是触及一些关键的要点，特别是延伸Prometheus概念中值得
+探索的地方。
+为了确定需要监控的内容，我们还将利用Prometheus为Kubernetes提供的内置服务发现机制[1]。
+让我们从监控运行Kubernetes的节点开始。
+[1] https://prometheus.io/docs/prometheus/latest/configuration/configuration/#kubernetes_sd_config。
+
+12.4　监控Kubernetes节点
+我们的Kubernetes集群由9个AWS EC2实例组成。为了监控它们，我们将使用Node Exporter，可以
+通过多种方式将Node Exporter部署到这些实例上。就像我们在第4章所做的，可以在配置时将Node
+Exporter安装到实例上，或者可以将Node Exporter安装到每个节点上的Kubernetes pod中。我们可以利
+用Kubernetes DaemonSet[1]控制器在集群中的每个节点上自动部署pod。当你无法控制实例时，这个方
+法很有用——例如，如果你使用托管的Kubernetes解决方案。
+使用这种方法需要特别注意！Node Exporter可访问许多root级别的资源，在Docker容器中运
+行它需要将这些资源挂载到容器中，对于systemd收集器来说，需要以root身份运行容器。这带来了潜
+在的安全风险，如果你无法接受该风险，则应将Node Exporter直接安装到实例上。
+[1] https://kubernetes.io/docs/concepts/workloads/controllers/daemonset/。
+
+12.4.1　Node Exporter DaemonSet
+DaemonSet使用toleration（容忍）[1]确保pod在所有节点上运行，可能也包含主节点。它非常适合
+监控或日志代理等项目。让我们看一下DaemonSet的元素。
+可以在GitHub上找到Node Exporter的完整配置[2]。
+代码清单12-2　Node Exporter DaemonSet toleration
+首先，可以看到我们给DaemonSet指定了一个名称node-exporter，并且使用toleration来确保pod也
+会被调度到Kubernetes主节点，而不仅是工作节点。
+这里就可以看到刚刚警告中提到的情况。我们以用户0或root运行pod（这允许访问systemd），并
+且还启用了hostNetwork、hostPID和hostIPC，以指定实例的网络、进程和IPC命名空间在容器中可
+用。这些都是潜在的安全风险，你必须考虑是否可以承担此风险。如果这种风险是不可接受的，那么
+将Node Exporter放到实例的镜像中可能是一种更好的方法。
+让我们来看看pod中的容器。
+代码清单12-3　Node Exporter DaemonSet容器
+
+这里，我们使用DockerHub中的Node Exporter镜像prom/node_exporter[3]，并获取最新版本。我们
+还为实例上的目录/run/systemd/private挂载了一个卷，这允许Node Exporter访问systemd并在实例上收
+集systemd管理服务的服务状态。
+我们还为node_exporter二进制文件指定了一些参数，这些参数在第4章都有介绍：启用systemd收
+集器，并指定要监控的特定服务的正则表达式，而不是主机上的所有服务。
+我们还指定了希望暴露指标的端口9100，它也是默认端口。
+为了帮助Node Exporter pod保持健康并提高它们的正常运行时间，我们还在Node Exporter容器中
+添加了liveness和readiness探针[4]，其中liveness探针检测容器内应用程序的状态。
+代码清单12-4　Node Exporter的liveness和readiness探针
+在示例中，我们对端口9100上的/metrics路径使用HTTP GET探测，以确认Node Exporter是否正常
+
+工作。探针每隔periodSeconds时间运行一次，在示例中是1秒。如果liveness检查失败，那么Kubernetes
+将重新启动容器。
+我们也会在监控的应用程序中看到这些探针。它们通过减少可能的监控误报来帮助管理应用
+程序的运行状况，例如服务在启动时没有达到就绪要求而触发警报。这些检查还可以重新启动有问题
+的容器，可能会帮助在触发警报之前修复问题。
+readiness探针可确认应用程序正常运行。这意味着，在将容器标记为可用并发送流量之前，HTTP
+GET可以连接到端口9100上的/metrics路径。其余设置控制探针的行为，在检查准备就绪之前，它将等
+待10秒（initialDelaySecond），然后，它会每隔2秒（periodSeconds）检查一次。如果探针在10秒
+（timeoutSeconds）后超时超过5次（failureThreshold），则容器将被标记为Unready。
+可以在GitHub上找到Node Exporter的完整配置。
+[1] https://kubernetes.io/docs/concepts/configuration/taint-and-toleration/。
+[2] https://github.com/turnbullpress/prometheusbook-code/blob/master/12-13/node-exporter.yml。
+[3] https://hub.docker.com/r/prom/node-exporter/。
+[4] https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-probes/。
+
+12.4.2　Node Exporter服务
+我们还需要创建一个服务来暴露Node Exporter，以便进行指标抓取。
+代码清单12-5　Node Exporter服务
+服务相对来说比较简单。我们添加了一个注解[1]prometheus.io/scrape:'true'作为服务的元数据，它
+将告诉Prometheus应该抓取这个服务。后面我们将看到它是如何在Prometheus作业中抓取Node Exporter
+的。
+我们还将端口9100作为ClusterIP暴露，这意味着它仅用于内部集群网络。由于Prometheus位于本
+地Kubernetes集群，能够在内部抓取Node Exporter，因此无须对外暴露。
+可以在GitHub上找到完整的Node Exporter服务配置。
+[1] https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/。
+
+12.4.3　部署Node Exporter
+让我们使用kubectl命令在Kubernetes集群上创建DaemonSet和服务。我们将在monitoring命名空间内
+创建它们。
+代码清单12-6　部署Node Exporter DaemonSet和服务
+如果你不想继续指定-n monitoring命名空间，则可以将其指定为默认值。
+代码清单12-7　默认命名空间
+现在查看我们的pod是否正在运行。
+代码清单12-8　检查Node Exporter窗格
+可以看到总共有9个pod，集群中每个实例1个：3个主节点和6个工作节点。我们还可以看到
+Prometheus服务和Alertmanager的pod，分别是prometheus-core和alertmanager。
+我们可以通过捕捉日志来检查Node Exporter pod是否正常运行。
+代码清单12-9　Node Exporter pod日志
+
+可以看到我们的Node Exporter守护进程正在运行，也可以确认服务已经就绪。
+代码清单12-10　检查Node Exporter服务
+这里，可以看到node-exporter服务是ClusterIP类型的，并且暴露9100端口给内部Kubernetes集群，
+随时可以被抓取。然而，我们还没有开始抓取，因为还没有添加Prometheus作业。
+
+12.4.4　Node Exporter作业
+在Prometheus配置中，我们现在想添加一个作业来抓取Node Exporter端点。通过定义一项抓取
+Kubernetes暴露的所有服务端点的作业，这将会一举多得。我们还会控制Prometheus仅抓取具有特定注
+解prometheus.io/scrape（设置为'true'）的端点。然后，我们使用内置的Kubernetes服务发现来查找端
+点，并将它们作为Prometheus的潜在目标返回。
+所有这些工作都是基于Prometheus自带的Kubernetes作业案例[1]。感谢该项目的贡献者开发了
+它们。
+现在让我们来看看这个作业内容。
+代码清单12-11　Kubernetes服务端点作业
+
+我们称这个作业为kubernetes-service-endpoints，指定服务发现使用kubernetes_sd_discovery机制
+——这是内置的服务发现机制，专门用于监控Kubernetes。它向Kubernetes API查询符合特定搜索条件
+的目标。
+由于Prometheus服务器在Kubernetes内部运行，因此我们能够以最少的配置自动获取与特定角色匹
+配的Kubernetes目标。节点、pod、服务和入口都有不同的角色，由参数role指定，我们要求服务发现
+返回所有Kubernetes端点。endpoints角色[2]返回服务的所有已列出端点的目标，每个端点地址的每个
+端口都是一个目标。如果端点也是由pod提供，就像Node Exporter服务那样，那么任何其他容器端口也
+会作为目标被发现。在示例中，我们只暴露了9100端口。
+服务发现还会填充各种元数据[3]，可以使用元数据重新标记并标识每个端点。首先我们看看重新
+标记规则的作用并进一步探索元数据。
+第一条规则检查我们在Node Exporter服务中设置的注解prometheus.io/scrape:'true'。在服务发现过
+程中，prometheus.io/scrape注解会被转换为prometheus_io_scrape，以创建一个有效的标签名称，这是
+因为在Prometheus指标标签中点和斜杠不是合法字符。由于这是Kubernetes服务的注解，因此
+Prometheus服务进程还会在标签中添加__meta_kubernetes_service_annotation_前缀。
+我们的作业只保留具有元数据标签的目标，即__meta_kubernetes_service_annotation_（设置为
+true）。所有其他目标都会被丢弃，这使得你只抓取所需的端点。
+接下来的三个规则检查是否存在其他注解：prometheus.io/scheme、prometheus.io/path和
+prometheus.io/port。如果这些标签存在，那么它将使用这些注解的内容作为要抓取的scheme、path和
+port。这使我们能够从服务端点精确控制要抓取的内容，进而使作业变得更加灵活。
+我们的下一个规则使用labelmap操作将服务上的标签映射到同名的Prometheus标签。在示例中，这
+会将__meta_kubernetes_service_label_app元数据标签映射为一个简单的app标签。下一个规则将
+__meta_kubernetes_namespace标签复制到kubernetes_namespace，将__meta_kubernetes_service_name元数
+据标签复制到kubernetes_name。
+我们现在将作业添加到用于Prometheus服务器配置的ConfigMap[4]中，然后替换现有的配置。
+代码清单12-12　替换ConfigMap
+通常我们必须删除Prometheus pod，以便重新创建并加载新配置。稍后我们将在Prometheus表达式
+浏览器上看到一些新的目标（如图12-1所示）。
+
+图12-1　Kubernetes端点目标
+可以看到我们列出了13个目标，其中9个是实例上的Node Exporter端点，第10个和第11个分别是
+Prometheus和Alertmanager。Prometheus和Alertmanager目标被自动发现，是因为它们的接口也作为服务
+[5]暴露了出来。
+代码清单12-13　监控服务
+这个作业非常有价值，因为我们只需要定义一次，未来所有Kubernetes服务端点都将被自动发现
+和监控。
+我们将在本章剩余部分和下一章中看到这些价值。在作业加载后，我们还会看到node_时间序列开
+
+始出现在表达式浏览器中。
+[1] 
+https://github.com/prometheus/prometheus/blob/master/documentation/examples/prometheus-
+kubernetes.yml。
+[2] https://prometheus.io/docs/prometheus/latest/configuration/configuration/#endpoints。
+[3] https://prometheus.io/docs/prometheus/latest/configuration/configuration/#endpoints。
+[4] https://github.com/turnbullpress/prometheusbook-code/blob/master/7/prom-config-map-v1.yml
+[5] https://github.com/turnbullpress/prometheusbook-code/blob/master/12-13/prometheus.yml
+
+12.4.5　Node Exporter规则
+我们不会为Kubernetes节点添加任何新的记录规则或警报规则。相反，我们将在第4章创建的规则
+添加到ConfigMap[1]，用以填充Prometheus规则文件。所以我们添加了之前创建的所有CPU、内存和
+磁盘规则，并且还为Kubernetes服务添加了一些可用性警报规则。让我们来看看这些规则。
+代码清单12-14　Kubernetes可用性警报规则
+当kubernetes-service-endpoints作业的up指标值为0时，将触发第一个警报，它表示Prometheus未能
+抓取服务。第二个警报检查服务是否消失，并使用absent函数检查up指标是否存在。
+我们还使用node_systemd_unit_state指标为各个节点上监控的服务添加了警报规则，该指标跟踪
+systemd服务的状态。
+代码清单12-15　Kubernetes可用性警报规则
+当它检测到Node Exporter正在监控的任何服务（Docker、Kubelet、RSyslog和SSH）处于故障状态
+时，它将发出警报。
+
+配置中还有其他规则和警报[2]，你可以进一步探索，以了解更多关于节点监控的信息。
+接下来，让我们看看如何监控Kubernetes的组件。
+[1] 
+https://github.com/turnbullpress/prometheusbook-code/blob/master/12-13/prometheus-config-rules-map-
+v1.yml。
+[2] 
+https://github.com/turnbullpress/prometheusbook-code/blob/master/12-13/prometheus-config-rules-map-
+v1.yml。
+
+12.5　Kubernetes
+有很多种方法可以监控Kubernetes本身，其中包括开源Kubernetes生态系统中的工具，如
+Heapster[1]和Kube-state-metrics[2]，以及其他商业化和基于SaaS的工具。在本章中，我们将重点关注如
+何使用Kube-state-metrics来进行监控。
+[1] https://github.com/kubernetes-retired/heapster。
+[2] https://github.com/kubernetes/kube-state-metrics。
+
+12.5.1　Kube-state-metrics
+我们将在Kubernetes集群上使用部署和服务[1]来安装Kube-state-metrics。部署使用Docker镜像
+Kube-state-metrics，并在集群的一个节点上运行。服务在端口8080上暴露指标，由于它是一项服务，
+因此我们可以利用在上一节中创建的Prometheus服务作业[2]。当作业运行时，Prometheus将自动发现
+新的服务端点并开始抓取Kube-state-metrics。
+一旦添加了服务，我们将在http://prometheus.quicknuke.com:9090/targets列表内的kubernetes-service-
+endpoints作业中看到一个新目标（如图12-2所示）。
+图12-2　Kube-state-metrics端点目标
+有了Kube-state-metrics，我们将专注于部署到Kubernetes的工作负载的成功和失败，以及节点状
+态。让我们看看一些警报，了解如何充分利用Kube-state-metrics时间序列。
+你可以在文档[3]中查看Kube-state-metrics生成的指标的完整列表。
+代码清单12-16　Kube-state-metrics部署版本警报
+第一条规则检测部署是否成功。它将部署的运行版本与元数据中的版本进行比较。如果两者在5分
+钟内不相等，则会发出警报，指示部署失败。
+我们的第二条规则与第一条类似，但目的却是检查部署副本。
+代码清单12-17　Kube-state-metrics部署副本未更新警报
+
+这里执行了一个更复杂的表达式，假设部署没有暂停，确认更新或可用的副本是否与部署规范中
+的副本数相匹配。
+下一个规则会检查pod的重启情况。
+代码清单12-18　Kube-state-metrics pod重启警报
+这里，我们使用increase函数[4]测量pod重启次数。increase函数测量范围向量中时间序列的增长
+率，这里是1小时。如果数值持续10分钟超过5，则会触发警报。
+我们还可以使用许多其他时间序列来监控Kubernetes。例如，可以使用kube_node_status_condition
+来确定Kubernetes节点的可用性。你可以在我们为本章创建的警报规则示例[5]中找到一些其他警报。
+[1] https://github.com/turnbullpress/prometheusbook-code/blob/master/12-13/kube-state-metrics.yml。
+[2] https://github.com/turnbullpress/prometheusbook-code/blob/master/12-13/prom-config-map-v1.yml#L34。
+[3] https://github.com/kubernetes/kube-state-metrics/tree/master/Documentation
+[4] https://prometheus.io/docs/prometheus/latest/querying/functions/#increase()。
+[5] 
+https://github.com/turnbullpress/prometheusbook-code/blob/master/12-13/prometheus-config-rules-map-
+v1.yml。
+
+12.5.2　Kube API
+我们还想创建一个作业来监控Kubernetes API本身。与API相关的指标将构成Kubernetes监控的核
+心，使我们能够监控集群的延迟、错误率和可用性。我们将专门监控Kubernetes API，以查看延迟、错
+误和可用性。让我们创建一个作业来监控API。
+代码清单12-19　API服务器作业
+我们将作业命名为kubernetes-apiservers，使用https来抓取指标，并指定证书颁发机构和一个本地
+令牌文件，以对Kubernetes进行身份验证。我们再次使用Kubernetes发现，这次会返回Kubernetes
+endpoints列表。我们不会使用所有端点，并且重新标记配置使用keep操作，以在default命名空间中仅
+保留名为kubernetes的服务，即运行API的Kubernetes主节点。
+现在我们收集API服务器指标，并创建一些记录规则来计算API服务器的延迟。
+代码清单12-20　API服务器记录规则
+
+这里使用apiserver_request_latencies_bucket指标来计算延迟，该指标包含特定API资源、子资源和
+谓词的维度，用于衡量请求延迟。我们为第50、90和99百分位数创建了三个规则，将quantile设置为特
+定百分位数，然后使用histogram_quantile函数[1]从指标桶中创建百分位数。我们已经指定了正在寻找
+的百分位数，例如0.99，然后计算了5分钟向量的速率rate，并将结果除以1e+06或1 000 000以获得微秒
+延迟。
+然后，可以使用记录规则创建的延迟直方图来创建警报。让我们从检测API高延迟警报开始。
+代码清单12-21　API高延迟警报
+警报使用了刚刚创建的apiserver_latency_seconds:quantile指标。我们使用标签来选择第99百分位
+数，不是log的子资源，以及任何不是WATCH、WATCHLIST、PROXY或CONNECT的谓词。如果任何
+指标的延迟持续10分钟超过4，则会触发警报。
+下一个警报会检测API服务器中的高错误率。
+代码清单12-22　API高错误率警报
+
+此警报计算API请求的错误率，使用正则表达式来匹配任何以5xx开头的错误。如果5分钟向量的百
+分比超过5％，则会触发警报。
+最后两个警报会监控API服务器的可用性，检查up指标值以及up指标是否存在。
+代码清单12-23　API服务器故障或不存在
+最后，我们可以监控Kubernetes节点以及在节点上运行的Docker守护进程和容器。
+[1] https://prometheus.io/docs/prometheus/latest/querying/functions/#histogram_quantile。
+
+12.5.3　cAdvisor和节点
+Kubernetes默认提供cAdvisor和特定节点的时间序列。我们可以创建一个作业来从每个节点的
+Kubernetes API中抓取这些时间序列。我们可以使用这些时间序列（就像在第4章所做的）来监控节
+点，以及每个节点上的Docker守护进程和容器。
+首先为cAdvisor添加一个作业。
+代码清单12-24　cAdvisor作业
+这里将作业命名为kubernetes-cadvisor，并使用服务发现来返回node角色的Kubernetes节点列表。我
+们使用https来抓取指标，并指定证书颁发机构和一个本地令牌文件以对Kubernetes进行身份验证。
+然后我们重新标记时间序列，以便从使用labelmap发现的元数据标签中创建标签，将__address__
+标签替换为Kubernetes API服务器的默认DNS名称。然后，我们使用其中一个元数据标签，一个带有节
+点名称的标签，在API上创建一个新标签__metrics_path__，它将节点名称传递给路径。
+这将为作业发现的每个节点抓取所需的时间序列。在我们的配置中也有一个监控节点本身的作
+业[1]，它暴露了一些Kubernetes节点级指标。
+我们可以使用这些指标来监控底层容器、Docker守护进程和Kubernetes级节点性能。
+[1] 
+https://github.com/turnbullpress/prometheusbook-code/blob/master/12-13/prometheus-config-map-
+v1.yml。
+
+12.6　小结
+在本章中，我们开始研究如何监控应用程序堆栈，首先从计算平台Kubernetes开始。我们将
+Prometheus部署到Kubernetes集群中，以便更轻松地进行监控。我们研究了如何在Kubernetes中部署
+Node Exporter以及如何使用Node Exporter监控Kubernetes节点。
+我们创建了几个Prometheus作业，包括几个使用Kubernetes服务发现来自动发现构成我们环境的节
+点、API服务器和服务的作业。通过使用注解选择正确的地址、端口和路径，服务发现还允许我们配
+置作业，自动开始抓取特定的Kubernetes服务或应用程序服务。
+在下一章，我们将监控在Kubernetes集群之上运行的多服务应用程序，研究如何监控某些特定服
+务，如MySQL和Redis，以及应用程序。

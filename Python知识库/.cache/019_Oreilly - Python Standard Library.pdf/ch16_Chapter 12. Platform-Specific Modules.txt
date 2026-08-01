@@ -1,0 +1,456 @@
+I l@ve RuBoard
+Chapter 12. Platform-Specific Modules
+ 
+Section 12.1.  Overview
+ 
+Section 12.2.  The fcntl Module
+ 
+Section 12.3.  The pwd Module
+ 
+Section 12.4.  The grp Module
+ 
+Section 12.5.  The nis Module
+ 
+Section 12.6.  The curses Module
+ 
+Section 12.7.  The termios Module
+ 
+Section 12.8.  The tty Module
+ 
+Section 12.9.  The resource Module
+ 
+Section 12.10.  The syslog Module
+ 
+Section 12.11.  The msvcrt Module
+ 
+Section 12.12.  The nt Module
+ 
+Section 12.13.  The _winreg Module
+ 
+Section 12.14.  The posix Module
+ 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+12.1 Overview
+ 
+This chapter describes some platform-specific modules. I've emphasized modules that are available on entire families
+of platforms (such as Unix or the Windows family).
+ 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+12.2 The fcntl Module
+ 
+(Unix only) The fcntl module provides an interface to the ioctl and fcntl functions on Unix. They are used for "out of
+band" operations on file handles and I/O device handles. This includes things like reading extended attributes,
+controlling blocking, modifying terminal behavior, and so on.
+ 
+Exactly how to use these functions is highly platform dependent. For more information on what you can do on your
+platform, check the corresponding Unix manpages.
+ 
+This module also provides an interface to Unix's file locking mechanisms. Example 12-1 uses the flock function to
+place an advisory lock on the file, while it is being updated.
+ 
+The output shown later was obtained by running three instances of the program in parallel, like this (all on one
+command line): python fcntl-example-1.py& python fcntl-example-1.py& 
+  python fcntl-example-1.py& If you comment out the call to flock, the counter will not be updated properly.
+ 
+Example 12-1. Using the fcntl Module
+ 
+File: fcntl-example-1.py
+import fcntl, FCNTL
+import os, time
+FILE = "counter.txt"
+if not os.path.exists(FILE):
+    # create the counter file if it doesn't exist
+    file = open(FILE, "w")
+    file.write("0")
+    file.close()
+for i in range(20):
+    # increment the counter
+    file = open(FILE, "r+")
+    fcntl.flock(file.fileno(), FCNTL.LOCK_EX)
+    counter = int(file.readline()) + 1
+    file.seek(0)
+    file.write(str(counter))
+    file.close() # unlocks the file
+    print os.getpid(), "=>", counter
+    time.sleep(0.1)
+30940 => 1
+30942 => 2
+30941 => 3
+30940 => 4
+30941 => 5
+30942 => 6 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+12.3 The pwd Module
+ 
+(Unix only) The pwd module provides an interface to the Unix password "database" (/etc/passwd and friends). This
+database (usually a plain-text file) contains information about the user accounts on the local machine. Example 12-2
+demonstrates pwd.
+ 
+Example 12-2. Using the pwd Module
+ 
+File: pwd-example-1.py
+import pwd
+import os
+print pwd.getpwuid(os.getgid())
+print pwd.getpwnam("root")
+('effbot', 'dsWjk8', 4711, 4711, 'eff-bot', '/home/effbot', '/bin/bosh')
+('root', 'hs2giiw', 0, 0, 'root', '/root', '/bin/bash') 
+The getpwall function returns a list of database entries for all available users. This can be useful if you want to search
+for a user.
+ 
+If you have to look up many names, you can use getpwall to preload a dictionary, as shown in Example 12-3.
+ 
+Example 12-3. Using the pwd Module
+ 
+File: pwd-example-2.py
+import pwd
+import os
+# preload password dictionary
+_pwd = {}
+for info in pwd.getpwall():
+    _pwd[info[0]] = _pwd[info[2]] = info
+def userinfo(uid):
+    # name or uid integer
+    return _pwd[uid]
+print userinfo(os.getuid())
+print userinfo("root")
+('effbot', 'dsWjk8', 4711, 4711, 'eff-bot', '/home/effbot', '/bin/bosh')
+('root', 'hs2giiw', 0, 0, 'root', '/root', '/bin/bash') 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+12.4 The grp Module
+ 
+(Unix only) The grp module provides an interface to the Unix group database (/etc/group). The getgrgid function
+returns data for a given group identity (see Example 12-4), and getgrnam returns data for a group name.
+ 
+Example 12-4. Using the grp Module
+ 
+File: grp-example-1.py
+import grp
+import os
+print grp.getgrgid(os.getgid())
+print grp.getgrnam("wheel")
+('effbot', '', 4711, ['effbot'])
+('wheel', '', 10, ['root', 'effbot', 'gorbot', 'timbot']) 
+The getgrall function returns a list of database entries for all available groups.
+ 
+If you're going to do a lot of group queries, you can save some time by using getgrall to copy all the (current) groups
+into a dictionary. The groupinfo function in Example 12-5 returns the information for either a group identifier (an
+integer) or a group name (a string).
+ 
+Example 12-5. Using the grp Module to Cache Group Information
+ 
+File: grp-example-2.py
+import grp
+import os
+# preload password dictionary
+_grp = {}
+for info in grp.getgrall():
+    _grp[info[0]] = _grp[info[2]] = info
+def groupinfo(gid):
+    # name or gid integer
+    return _grp[gid]
+print groupinfo(os.getgid())
+print groupinfo("wheel")
+('effbot', '', 4711, ['effbot'])
+('wheel', '', 10, ['root', 'effbot', 'gorbot', 'timbot']) 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+12.5 The nis Module
+ 
+(Unix only, Optional) The nis module provides an interface to the NIS (yellow pages) services, as Example 12-6
+shows. It can be used to fetch values from a NIS database, if available.
+ 
+Example 12-6. Using the nis Module
+ 
+File: nis-example-1.py
+import nis
+import string
+print nis.cat("ypservers")
+print string.split(nis.match("bacon", "hosts.byname"))
+{'bacon.spam.egg': 'bacon.spam.egg'}
+['194.18.155.250', 'bacon.spam.egg', 'bacon', 'spam-010'] 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+12.6 The curses Module
+ 
+(Unix only, Optional) The curses module gives you better control of the text terminal window, in a
+terminal-independent way. Example 12-7 shows its use.
+ 
+Example 12-7. Using the curses Module
+ 
+File: curses-example-1.py
+import curses
+text = [
+    "a very simple curses demo",
+    "",
+    "(press any key to exit)"
+]
+# connect to the screen
+screen = curses.initscr()
+# setup keyboard
+curses.noecho() # no keyboard echo
+curses.cbreak() # don't wait for newline
+# screen size
+rows, columns = screen.getmaxyx()
+# draw a border around the screen
+screen.border()
+# display centered text
+y = (rows - len(text)) / 2
+for line in text:
+    screen.addstr(y, (columns-len(line))/2, line)
+    y = y + 1
+screen.getch()
+curses.endwin() 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+12.7 The termios Module
+ 
+(Unix only, Optional) The termios module provides an interface to the Unix terminal control facilities. It can be used
+to control most aspects of the terminal communication ports.
+ 
+In Example 12-8, this module is used to temporarily disable keyboard echo (which is controlled by the ECHO flag in
+the third flag field).
+ 
+Example 12-8. Using the termios Module
+ 
+File: termios-example-1.py
+import termios, TERMIOS
+import sys
+fileno = sys.stdin.fileno()
+attr = termios.tcgetattr(fileno)
+orig = attr[:]
+print "attr =>", attr[:4] # flags
+# disable echo flag
+attr[3] = attr[3] & ~TERMIOS.ECHO
+try:
+    termios.tcsetattr(fileno, TERMIOS.TCSADRAIN, attr)
+    message = raw_input("enter secret message: ")
+    print
+finally:
+    # restore terminal settings
+    termios.tcsetattr(fileno, TERMIOS.TCSADRAIN, orig)
+print "secret =>", repr(message)
+attr => [1280, 5, 189, 35387]
+enter secret message:
+secret => 'and now for something completely different' 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+12.8 The tty Module
+ 
+(Unix only) The tty module contains some utility functions for dealing with tty devices. Example 12-9 shows how to
+switch the terminal window over to "raw" mode, and back again.
+ 
+Example 12-9. Using the tty Module
+ 
+File: tty-example-1.py
+import tty
+import os, sys
+fileno = sys.stdin.fileno()
+tty.setraw(fileno)
+print raw_input("raw input: ")
+tty.setcbreak(fileno)
+print raw_input("cbreak input: ")
+os.system("stty sane") # ...
+raw input: this is raw input
+cbreak input: this is cbreak input 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+12.9 The resource Module
+ 
+(Unix only, Optional) The resource module is used to query or modify the system resource current settings limits. 
+Example 12-10 shows how to use the module to query, and Example 12-11 shows how to modify resource limits.
+ 
+Example 12-10. Using the resource Module to Query Current Settings
+ 
+File: resource-example-1.py
+import resource
+print "usage stats", "=>", resource.getrusage(resource.RUSAGE_SELF)
+print "max cpu", "=>", resource.getrlimit(resource.RLIMIT_CPU)
+print "max data", "=>", resource.getrlimit(resource.RLIMIT_DATA)
+print "max processes", "=>", resource.getrlimit(resource.RLIMIT_NPROC)
+print "page size", "=>", resource.getpagesize()
+usage stats => (0.03, 0.02, 0, 0, 0, 0, 75, 168, 0, 0, 0, 0, 0, 0, 0, 0)
+max cpu => (2147483647, 2147483647)
+max data => (2147483647, 2147483647)
+max processes => (256, 256)
+page size => 4096 
+Example 12-11. Using the resource Module to Limit Resources
+ 
+File: resource-example-2.py
+import resource
+resource.setrlimit(resource.RLIMIT_CPU, (0, 1))
+# pretend we're busy
+for i in range(1000):
+    for j in range(1000):
+        for k in range(1000):
+            pass
+CPU time limit exceeded 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+12.10 The syslog Module
+ 
+(Unix only, Optional) The syslog module sends messages to the system logger facility (syslogd). Exactly what
+happens to these messages is system-dependent, but they usually end up in a log file named /var/log/messages,
+/var/adm/syslog, or some variation thereof. (If you cannot find it, check with your system administrator.) Example
+12-12 demonstrates.
+ 
+Example 12-12. Using the syslog Module
+ 
+File: syslog-example-1.py
+import syslog
+import sys
+syslog.openlog(sys.argv[0])
+syslog.syslog(syslog.LOG_NOTICE, "a log notice")
+syslog.syslog(syslog.LOG_NOTICE, "another log notice: %s" % "watch out!")
+syslog.closelog() 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+12.11 The msvcrt Module
+ 
+(Windows/DOS only) The msvcrt module gives you access to a number of functions in the Microsoft Visual C/C++
+Runtime Library (MSVCRT).
+ 
+Example 12-13 demonstrates the getch function reading a single keypress from the console.
+ 
+Example 12-13. Using the msvcrt Module to Get Key Presses
+ 
+File: msvcrt-example-1.py
+import msvcrt
+print "press 'escape' to quit..."
+while 1:
+    char = msvcrt.getch()
+    if char == chr(27):
+        break
+    print char,
+    if char == chr(13):
+        print
+press 'escape' to quit...
+h e l l o 
+The kbhit function returns true if a key has been pressed (which means that getch won't block), as shown in Example
+12-14.
+ 
+Example 12-14. Using the msvcrt Module to Poll the Keyboard
+ 
+File: msvcrt-example-2.py
+import msvcrt
+import time
+print "press SPACE to enter the serial number"
+while not msvcrt.kbhit() or msvcrt.getch() != " ":
+    # do something else
+    print ".",
+    time.sleep(0.1)
+print
+# clear the keyboard buffer
+while msvcrt.kbhit():
+    msvcrt.getch()
+serial = raw_input("enter your serial number: ")
+print "serial number is", serial
+press SPACE to enter the serial number
+. . . . . . . . . . . . . . . . . . . . . . . .
+enter your serial number: 10
+serial number is 10 
+The locking function in Example 12-15 can be used to implement cross-process file locking under Windows.
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+12.12 The nt Module
+ 
+(Implementation, Windows only) The nt module is an implementation module used by the os module on Windows
+platforms. There's hardly any reason to use this module directly; use os instead. Example 12-16 shows its use.
+ 
+Example 12-16. Using the nt Module
+ 
+File: nt-example-1.py
+import nt
+# in real life, use os.listdir and os.stat instead!
+for file in nt.listdir("."):
+    print file, nt.stat(file)[6]
+aifc-example-1.py 314
+anydbm-example-1.py 259
+array-example-1.py 48 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+12.13 The _winreg Module
+ 
+(Windows only, New in 2.0) The _winreg module provides a basic interface to the Windows registry database. 
+Example 12-17 demonstrates the module.
+ 
+Example 12-17. Using the _winreg Module
+ 
+File: winreg-example-1.py
+import _winreg
+explorer = _winreg.OpenKey(
+    _winreg.HKEY_CURRENT_USER,
+    "Software\\Microsoft\\Windows\CurrentVersion\\Explorer"
+    )
+#list values owned by this registry key 
+try:
+    i = 0
+    while 1:
+      name, value, type= _winreg.EnumValue(explorer, i)
+      print repr(name),
+      i += 1
+except WindowsError:
+    print
+value, type = _winreg.QueryValueEx(explorer, "Logon User Name")
+print
+print "user is", repr(value)
+'Logon User Name' 'CleanShutdown' 'ShellState' 'Shutdown Setting'
+'Reason Setting' 'FaultCount' 'FaultTime' 'IconUnderline'...
+user is u'Effbot'
+ 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+12.14 The posix Module
+ 
+(Implementation, Unix/POSIX only) The posix module is an implementation module used by the os module on Unix
+and other POSIX systems. While everything in here can be (and should be) accessed via the os module, you may
+wish to explicitly refer to this module in situations where you want to make it clear that you expect POSIX behavior. 
+Example 12-18 demonstrates.
+ 
+Example 12-18. Using the posix Module
+ 
+File: posix-example-1.py
+import posix
+for file in posix.listdir("."):
+    print file, posix.stat(file)[6]
+aifc-example-1.py 314
+anydbm-example-1.py 259
+array-example-1.py 48 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot

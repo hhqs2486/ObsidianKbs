@@ -1,0 +1,178 @@
+第10章　探针监控
+在第1章，我们讨论了监控应用程序主要有两种方法：探针和内省。而本章我们将讨论探针监控。
+探针监控可以在应用程序的外部进行探测。你可以查询应用程序的外部特征：它是否响应开放端口上
+的轮询请求并返回正确的数据或响应码？探针监控的一个示例是执行ICMP ping或echo检查并确认你已
+收到响应。这种类型的探针监控也称为黑盒监控，因为我们将内部应用程序视为黑盒。
+我们将使用探针监控来查看应用程序的外部状态，这对网络外部的环境特别有用。我们将使用一
+个名为Blackbox的exporter来进行此监控。
+
+10.1　探针架构
+Prometheus通过运行Blackbox exporter来进行探测，该exporter会探测远程目标并暴露在本地端点上
+收集的任何时间序列，然后Prometheus作业将从这些端点中抓取指标（如图10-1所示）。
+监控探针有三个约束：
+·它们需要能够访问到被探测的资源。
+·探针需要放置在可以测试资源的正确位置上。例如，如果你正在测试对应用程序的外部访问，那
+么在防火墙后运行探针将不会验证此访问权限。
+·探针exporter的位置能够被Prometheus服务器抓取。
+通常会将探针放置在企业网络之外分散的地理位置，以确保可以最大限度地覆盖故障检测和应用
+程序用户体验的数据收集。
+
+图10-1　探针架构
+由于在外部部署探针的复杂性以及分布的广泛性，通常我们将这些探针交给第三方服务实现。目
+前有各种商业供应商提供该服务，其中一些商业供应商在其平台上暴露指标，另一些供应商则允许导
+出指标以供使用。
+但是，对于示例来说，我们会把Blackbox exporter部署到外部主机并使用它来监控应用程序的外
+部。
+
+10.2　Blackbox exporter
+Blackbox exporter[1]是一个在Apache 2.0许可下的二进制Go语言应用程序。exporter允许通过
+HTTP、HTTPS、DNS、TCP和ICMP来探测端点。它的架构与其他exporter略有不同。在exporter内
+部，我们定义了一系列执行特定检查的模块，例如，检查Web服务器是否正在运行，或者DNS记录是
+否解析。在exporter运行时，它会在URL上暴露这些模块和API。Prometheus将目标和特定模块作为该
+URL的参数传递给这些目标。exporter执行检查并将生成的指标返回给Prometheus。
+我们先来看看如何安装它。
+[1] https://github.com/prometheus/blackbox_exporter。
+
+10.3　安装exporter
+Prometheus.io下载页面[1]提供了不同平台上的zip文件，其中包含exporter二进制文件。目前，支
+持的平台包括：
+·Linux：32位、64位和ARM。
+·Max OS X：32位和64位。
+·FreeBSD：32位、64位和ARM。
+·OpenBSD：32位、64位和ARM。
+·NetBSD：32位、64位和ARM。
+·Microsoft Windows：32位和64位。
+·DragonFly：64位。
+旧版本的exporter可以从GitHub发布页面[2]获得。
+在撰写本书时，Blackbox exporter的版本为0.12.0。
+[1] https://prometheus.io/download/#blackbox_exporter。
+[2] https://github.com/prometheus/blackbox_exporter/releases。
+
+10.3.1　在Linux上安装exporter
+要在64位Linux主机上安装Blackbox exporter，可以下载压缩过的tar包。我们可以使用wget或curl从
+下载站点获取文件。
+代码清单10-1　下载Blackbox exporter zip文件
+接下来从tar包中解压缩blackbox_exporter二进制文件并将其移动到其他可执行路径中。
+代码清单10-2　解压缩blackbox_exporter二进制文件
+现在我们可以通过检查其版本来测试exporter是否已安装以及是否位于可执行路径中。
+代码清单10-3　在Linux上检查Blackbox exporter版本
+同样的方法适用于Mac OS X和Darwin版本的Blackbox exporter二进制文件。
+
+10.3.2　在Windows上安装exporter
+要在Microsoft Windows上安装Blackbox exporter，我们需要下载blackbox_exporter.exe可执行文件并
+将其放在目录中。首先使用Powershell为可执行文件创建一个目录。
+代码清单10-4　在Windows上创建目录
+然后从GitHub下载blackbox_exporter.exe可执行文件到C:\blackbox_exporter目录中。
+代码清单10-5　下载Windows版Blackbox exporter
+使用7-Zip等工具将这个可执行文件解压缩到C:\blackbox_exporter目录中。最后，将
+C:\blackbox_exporter目录添加到系统的可执行路径中，这将允许Windows查找到该文件。你需要在
+Powershell中运行如下命令。
+代码清单10-6　设置Windows路径
+现在你应该可以运行blackbox_exporter.exe可执行文件了。
+代码清单10-7　在Windows上检查Blackbox exporter版本
+
+10.3.3　通过配置管理工具安装exporter
+我们也可以使用第3章介绍的配置管理工具来安装Blackbox exporter：
+·Puppet的Prometheus模块[1]
+·Chef的Prometheus cookbook[2]
+·Ansible的Prometheus role[3]
+·SaltStack的Prometheus formula[4]
+本书推荐使用配置管理工具来安装和管理Prometheus及其组件！
+[1] https://forge.puppet.com/puppet/prometheus。
+[2] https://supermarket.chef.io/cookbooks/prometheus-platform。
+[3] https://github.com/cloudalchemy/ansible-prometheus。
+[4] https://github.com/arnisoph/saltstack-prometheus-formula。
+
+10.4　配置exporter
+exporter通过基于YAML的配置文件进行配置，并使用命令行参数指定。命令行参数指定配置文件
+的位置、要绑定的端口和日志记录。可以通过运行添加-h参数的blackbox_exporter二进制文件来查看可
+用的命令行参数。
+让我们创建一个配置文件来运行exporter。
+代码清单10-8　文件prober.yml
+接下来用一些基本配置来填充这个文件。exporter使用模块来定义各种检查，每个模块都有一个名
+称和一个特定的探针，例如，用于检查HTTP服务和网页的http探针，以及用于检查ICMP连接的icmp
+探针。Prometheus作业为模块内的每个检查提供目标，exporter返回指标然后被Prometheus抓取。
+代码清单10-9　文件/etc/prober/prober.yml
+我们定义了三个检查：HTTP检查用于确保Web服务器在查询时返回2XX状态码；ICMP检查用于
+查看ping目标的结果；DNS检查用于查看DNS查询。让我们逐一研究每一个检查。
+exporter示例配置[1]对于帮助解释exporter的工作方式也很有用。
+[1] https://github.com/prometheus/blackbox_exporter/blob/master/example.yml。
+
+10.4.1　HTTP检查
+HTTP状态检查使用http探针[1]。这个探针使用各种方法（如GET或POST）发出HTTP请求。我
+们为所有请求指定5秒的超时，然后将探针配置为发出GET请求。我们将valid_status_codes留空，它默
+认为任何2XX状态码。如果想验证是否返回了不同的状态码，则需要在此字段中指定数组形式的状态
+码。
+代码清单10-10　验证状态码
+这里我们将检查状态码是否为200或304。此外，还可以检查有效的HTTP版本，HTTP连接是否为
+SSL加密，或者内容是否与正则表达式匹配。
+[1] https://github.com/prometheus/blackbox_exporter/blob/master/CONFIGURATION.md#http_probe。
+
+10.4.2　ICMP检查
+第二项检查是通过ICMP查看ping目标的结果。我们将探针设置为icmp[1]并指定超时为5秒，并将
+协议配置为ip4。
+ICMP需要一些额外的权限。在Windows上，它需要管理员权限，在Linux上需要root或
+CAP_NET_RAW权限，而在BSD或OS X上则需要root用户。
+[1] https://github.com/prometheus/blackbox_exporter/blob/master/CONFIGURATION.md#icmp_probe。
+
+10.4.3　DNS检查
+最后一项检查使用dns探针[1]来确定DNS条目是否解析。在这种情况下，目标是我们想要解析的
+DNS服务器。同样我们配置协议为ip4，然后指定了一个查询。
+这将检查www.example.com网站的DNS是否会解析。接着会向目标发送一个ANY查询类型的请
+求，DNS探针结果取决于查询返回的状态码。默认的成功条件是收到NOERROR响应代码。我们可以
+使用选项query_type和valid_rcodes来配置其他查询类型和响应代码。
+[1] https://github.com/prometheus/blackbox_exporter/blob/master/CONFIGURATION.md#dns_probe。
+
+10.5　启动exporter
+现在已经定义了三项检查，接下来启动exporter。我们将在一个AWS EC2实例（名为
+prober.example.com的Ubuntu主机）上运行exporter。首先运行blackbox_exporter二进制文件，并将刚刚
+创建的配置文件通过参数形式传递。
+代码清单10-11　启动exporter
+exporter在端口9115上运行，你可以在http://localhost:9115上浏览控制台页面（如图10-2所示）。
+图10-2　Blackbox exporter控制台
+控制台包含exporter自身的指标，以便同时监控exporter本身，你可以在http://localhost:9115/metrics
+
+路径上找到这些指标。控制台上还包含最近执行的检查列表、它们的状态以及调试日志，这对故障排
+查非常有帮助。
+
+10.6　创建Prometheus作业
+现在我们可以创建一些Prometheus作业来抓取exporter的指标。正如之前提到的，Blackbox exporter
+的运行方式略有不同，它使用定义好的检查来抓取传递给它的目标。我们将为每项检查创建单独的作
+业。
+首先创建一个名为http_probe的作业来查询http_2xx_check模块。
+代码清单10-12　http_probes作业
+然后设置指标路径为exporter上的/probe，将模块名称作为参数传递。我们使用基于文件的服务发
+现来列出作业的目标。
+代码清单10-13　http_probes目标
+在这里我们监控目标网站www.example.com的HTTP和HTTPS两种协议访问。
+那么Prometheus如何找到exporter呢？我们使用relabel_configs覆盖目标的__address__标签以指定
+exporter的主机名。我们使用了以下三个重新标记：
+·第一个重新标记通过将__address__标签（当前目标的地址）写入__param_target标签来创建参
+数。
+
+·第二个重新标记将__param_target标签写入instance标签。
+·最后，我们使用exporter的主机名（和端口）来重新标记__address__标签，在示例中为
+prober.example.com。
+重新标记会为抓取构造如下的URL：
+我们可以浏览到此URL以查看返回的指标，如下所示（已去除注释）。
+代码清单10-14　http_2xx_check指标
+这里的关键指标是probe_http_status_code，它显示了HTTP请求返回的状态码。如果这是2xx状态
+码，则认为探测结果是成功，并将probe_success指标设置为1。其他指标也提供了有用的信息，如探测
+时间和HTTP版本。
+其他作业的运行方式与HTTP检查类似，也使用相同的重新标记规则来查找正确的目标和exporter
+的地址。
+你可以在GitHub上找到本章的源代码[1]，其中也包括Prometheus作业。
+ICMP作业获取主机名或IP地址，执行ICMP ping并获得结果。DNS检查的目标是希望测试解析的
+DNS服务器。
+如果现在重新加载或重新启动Prometheus，则将在控制台中看到这些作业的指标（如图10-3所
+示）。
+
+图10-3　Prometheus的探针指标
+[1] https://github.com/turnbullpress/prometheusbook-code/tree/master/10。
+
+10.7　小结
+在本章中，我们使用Blackbox exporter来探测一些资源。我们了解到探针架构的基础知识，学习了
+如何安装、配置一些基本的探针检查，并使用参数运行exporter。我们还了解了如何创建Prometheus作
+业以启动探针，以及如何使用重新标记规则通过exporter抓取目标。
+在下一章，我们将学习如何使用Pushgateway将指标推送到Prometheus，特别是对于像作业和部署
+这样短期运行的进程。

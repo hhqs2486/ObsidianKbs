@@ -1,0 +1,2495 @@
+第10章　Kubernetes运维管理
+10.1　Node管理
+本节讲解Node管理方面的内容。
+10.1.1　Node的隔离与恢复
+在硬件升级、维护等情况下，我们需要将某些Node隔离，使其脱离
+Kubernetes集群的调度范围。Kubernetes提供了一种机制，既可以将
+Node纳入调度范围，也可以将Node脱离调度范围。我们可以使用
+YAML文件或者kubectl命令进行调整，示例如下。
+1.使用YAML文件
+创建配置文件unschedule_node.yaml，在spec部分指定unschedulable
+为true：
+
+执行kubectl replace命令，完成对Node状态的修改：
+查看Node的状态，可以观察到其中增加了一项
+SchedulingDisabled：
+这样，系统就不会将后续创建的Pod调度向该Node了。
+如果需要将某个Node重新纳入集群调度范围，则将unschedulable设
+置为false，再次运行kubectl replace命令，就能恢复系统对该Node的调度
+了。
+2.使用kubectl patch命令
+我们也可以直接运行kubectl patch命令实现Node隔离调度的效果，
+不使用配置文件：
+3.使用kubectl cordon和uncordon命令
+
+另外，使用kubectl子命令cordon和uncordon也可以实现Node的隔离
+调度和恢复调度。例如，运行kubectl cordon <node_name>命令对某个
+Node进行隔离调度操作：
+又如，运行kubectl uncordon <node_name>命令对某个Node进行恢复
+调度操作：
+需要注意的是，某个Node脱离调度范围时，其上运行的Pod并不会
+自动停止，用户需要对其手动停止。
+10.1.2　Node的扩容
+在实际生产系统中经常会出现服务器容量不足的情况，这时就需要
+
+购买新的服务器，然后将应用系统进行水平扩展来完成对系统的扩容。
+在Kubernetes集群中，一个新Node的加入是非常简单的。在新的
+Node上安装docker、kubelet和kube-proxy服务，然后配置kubelet和kube-
+proxy服务的启动参数，将Master URL指定为当前Kubernetes集群Master
+的地址，最后启动这些服务。通过kubelet服务默认的自动注册机制，新
+的Node将自动加入现有的Kubernetes集群中，如图10.1所示。
+图10.1　新Node自动注册并加入现有的Kubernetes集群中
+Kubernetes Master在接受新Node的注册之后，会自动将其纳入当前
+集群的调度范围，之后创建容器时就可以对新的Node进行调度了。
+通过这种机制，Kubernetes实现了集群中Node的扩容。
+
+10.2　更新资源对象的Label
+Label（标签）是用户可灵活定义的对象属性，对于正在运行的资
+源对象，我们随时可以通过kubectl label命令进行增加、修改、删除等操
+作，示例如下。
+（1）给已创建的Pod“redis-master-bobr0”添加一个
+Lable“role=backend”：
+（2）查看该Pod的Label：
+（3）删除一个Label，只需在命令行最后指定Label的key名并与一
+个减号相连即可：
+（4）修改一个Label的值，需要加上--overwrite参数：
+
+10.3　Namespace：集群环境共享与隔离
+在一个组织内部，不同的工作组可以在同一个Kubernetes集群中工
+作，Kubernetes通过Namespace（命名空间）和Context的设置对不同的
+工作组进行区分，使得它们既可以共享同一个Kubernetes集群的服务，
+也可以互不干扰，如图10.2所示。
+图10.2　集群环境共享和隔离
+假设在我们的组织中有两个工作组：开发组和生产运维组。开发组
+在Kubernetes集群中需要不断创建、修改及删除各种Pod、RC、Service
+等资源对象，以便实现敏捷开发。生产运维组则需要通过严格的权限设
+置来确保生产系统中的Pod、RC、Service处于正常运行状态且不会被误
+操作。
+10.3.1　创建Namespace
+
+为了在Kubernetes集群中实现这两个分组，首先需要创建两个命名
+空间。
+创建命名空间1：
+创建命名空间2：
+使用kubectl create命令完成命名空间的创建：
+
+查看系统中的命名空间：
+10.3.2　定义Context
+接下来，需要为这两个工作组分别定义一个Context，即运行环境。
+这个运行环境将属于某个特定的命名空间。
+通过kubectl config set-context命令定义Context，并将Context置于之
+前创建的命名空间中：
+
+通过kubectl config view命令查看已定义的Context：
+
+通过kubectl 
+config命令在${HOME}/.kube目录下生成了一个名
+
+为“config”的文件，文件的内容即kubectl config view命令显示的内容。
+所以，也可以通过手工编辑该文件的方式来设置Context。
+10.3.3　设置工作组在特定Context中工作
+我们可以通过kubectl config use-context <context_name>命令设置当
+前运行环境。通过下面的命令将把当前运行环境设置为ctx-dev：
+运行这个命令后，当前运行环境被设置为开发组所需的环境。之后
+的所有操作都将在名为development的命名空间中完成。
+现在，以redis-slave RC为例创建两个Pod：
+
+
+查看创建好的Pod：
+可以看到容器被正确创建并运行起来了。而且，由于当前运行环境
+是ctx-dev，所以不会影响生产运维组的工作。
+切换到生产运维组的运行环境中：
+查看RC和Pod：
+结果为空，说明看不到开发组创建的RC和Pod了。
+现在也为生产运维组创建两个redis-slave的Pod：
+
+查看创建好的Pod：
+可以看到容器被正确创建并运行起来了，并且当前运行环境是ctx-
+prod，也不会影响开发组的工作。
+至此，我们为两个工作组分别设置了两个运行环境，设置好当前运
+行环境时，各工作组之间的工作将不会相互干扰，并且都能在同一个
+Kubernetes集群中同时工作。
+10.4　Kubernetes资源管理
+本节从计算资源管理（Compute 
+Resources）、服务质量管理
+（QoS）、资源配额管理（LimitRange、ResourceQuota）等方面对
+Kubernetes集群中的资源管理进行详细说明，并结合实践操作、常见问
+题分析和一个完整示例，对Kubernetes集群资源管理相关的运维工作提
+供参考。
+Kubernetes集群里的节点提供的资源主要是计算资源，计算资源是
+可计量的能被申请、分配和使用的基础资源，这使之区别于API资源
+（API Resources，例如Pod和Services等）。当前Kubernetes集群中的计
+算资源主要包括CPU、GPU及Memory，绝大多数常规应用是用不到
+GPU的，因此这里重点介绍CPU与Memory的资源管理问题。在一般情
+
+况下，我们在定义Pod时并没有限制Pod所占用的CPU和内存数量，此时
+Kubernetes会认为该Pod所需的资源很少，可以将其调度到任何可用的节
+点上，这样一来，当集群中的计算资源不很充足时，比如集群中的Pod
+负载突然加大，就会使某个节点的资源严重不足。为了避免系统挂掉，
+该节点（操作系统）会选择“杀掉”某些用户进程来释放资源，避免操作
+系统崩溃，若操作系统崩溃，则每个Pod都可能成为牺牲品。因此，
+Kubernetes需要有一套完备的资源配额限制及对应的Pod服务等级机制，
+来避免这种灾难的发生。Kubernetes给出了如下解决思路。
+（1）可以全面限制一个应用及其中的Pod所能占用的资源配额。具
+体包括三种方式：
+◎　定义每个Pod上资源配额相关的参数，比如CPU/Memory
+Request/Limit；
+◎　自动为每个没有定义资源配额的Pod添加资源配额模板
+（LimitRange）；
+◎　从总量上限制一个租户（应用）所能使用的资源配额的
+ResourceQuota。
+（2）允许集群的资源被超额分配，以提高集群的资源利用率，同
+时允许用户根据业务的优先级，为不同的Pod定义相应的服务保障等级
+（QoS）。我们可以将Qos理解为“活命优先级”，当系统资源不足时，
+低等级的Pod会被操作系统自动清理，以确保高等级的Pod稳定运行。
+我们知道，一个程序所使用的CPU与Memory是一个动态的量，确
+切地说，是一个范围，跟它的负载密切相关：负载增加时，CPU和
+Memory的使用量也会增加。因此最准确的说法是，某个进程的CPU使
+用量为0.1个CPU（Request）～1个CPU（Limit），内存占用则为
+500MB（Reuqest）～1GB（Limit）。对应到Kubernetes的Pod容器上，
+就是如下4个参数。
+◎　spec.container[].resources.requests.cpu：容器初始要求的CPU数
+量。
+◎　spec.container[].resources.limits.cpu：容器所能使用的最大CPU
+数量。
+
+◎　spec.container[].resources.requests.memory：容器初始要求的内
+存数量。
+◎　spec.container[].resources.limits.memory：容器所能使用的最大
+内存数量。
+其中，limits对应资源量的上限，即最多允许使用这个上限的资源
+量。由于CPU资源是可压缩的，进程无论如何也不可能突破上限，因此
+设置起来比较容易。对于Memory这种不可压缩的资源来说，它的Limit
+设置是一个问题，如果设置得小了，则进程在业务繁忙期试图请求超过
+Limit限制的Memory时会被操作系统“杀掉”。因此，Memory的Request
+与Limit的值需要结合进程的实际需求谨慎设置。如果不设置CPU或
+Memory的Limit值，则会怎样呢？在这种情况下，该Pod的资源使用量
+有一个弹性范围，我们不用绞尽脑汁去思考这两个Limit的合理值，但
+问题也来了，考虑下面的例子：
+Pod A的Memory Request被设置为1GB，Node A当时空闲的Memory为1.2GB，符合
+Pod A的需求，因此Pod A被调度到Node A上。运行3天后，Pod A的访问请求大增，内
+存需要增加到1.5GB，此时Node A的剩余内存只有200MB，由于Pod A新增的内存已经
+超出系统资源范围，所以Pod A在这种情况下会被Kubernetes“杀掉”。
+没有设置Limit的Pod，或者只设置了CPU Limit或者Memory Limit两
+者之一的Pod，看起来都是很有弹性的，但实际上，与4个参数都被设置
+了的Pod相比，它们处于一种不稳定状态，只是稳定一点儿而已。理解
+了这一点，就很容易理解Resource QoS问题了。
+如果我们有成百上千个不同的Pod，那么先手动设置每个Pod的这4
+个参数，再检查并确保这些参数的设置，都是合理的。比如不能出现内
+存超过2GB或者CPU占据两个核心的Pod。最后还得手工检查不同租户
+（命名空间）下的Pod资源使用量是否超过限额。为此，Kubernetes提供
+了另外两个相关对象：LimitRange及ResourceQuota，前者解决了没有设
+置配额参数的Pod的默认资源配额问题，同时是Pod资源配额设置的合法
+性校验参考；后者则约束租户的资源总量配额问题。
+10.4.1　计算资源管理
+1.详解Requests和Limits参数
+
+以CPU为例，图10.3显示了未设置Limits与设置了Requests和Limits
+的CPU使用率的区别。
+图10.3　未设置Limits与设置了Requests和Limits的CPU使用率的区别
+尽管Requests和Limits只能被设置到容器上，但是设置了Pod级别的
+Requests和Limits能大大提高管理Pod的便利性和灵活性，因此在
+Kubernetes中提供了对Pod级别的Requests和Limits的配置。对于CPU和
+内存而言，Pod的Requests或Limits指该Pod中所有容器的Requests或
+Limits的总和（对于Pod中没有设置Requests或Limits的容器，该项的值
+被当作0或者按照集群配置的默认值来计算）。下面对CPU和内存这两
+种计算资源的特点进行说明。
+1）CPU
+CPU的Requests和Limits是通过CPU数（cpus）来度量的。CPU的资
+源值是绝对值，而不是相对值，比如0.1CPU在单核或多核机器上是一样
+的，都严格等于0.1 CPU core。
+
+2）Memory
+内存的Requests和Limits计量单位是字节数。使用整数或者定点整
+数加上国际单位制（International System of Units）来表示内存值。国际
+单位制包括十进制的E、P、T、G、M、K、m，或二进制的Ei、Pi、
+Ti、Gi、Mi、Ki。KiB与MiB是以二进制表示的字节单位，常见的KB与
+MB则是以十进制表示的字节单位，比如：
+◎　1 KB（KiloByte）=1000 Bytes=8000 Bits；
+◎　1 KiB（KibiByte）=210 Bytes=1024 Bytes=8192 Bits。
+因此，128974848、129e6、129M、123Mi的内存配置是一样的。
+Kubernetes的计算资源单位是大小写敏感的，因为 m可以表示千分
+之一单位（milli 
+unit），而M可以表示十进制的1000，二者的含义不
+同；同理，小写的k不是一个合法的资源单位。
+以某个Pod中的资源配置为例：
+
+
+如上所示，该Pod包含两个容器，每个容器配置的Requests都是
+0.25CPU和64MiB（226 
+Bytes）内存，而配置的Limits都是0.5CPU和
+128MiB（227 Bytes）内存。
+这个Pod的Requests和Limits等于Pod中所有容器对应配置的总和，
+所以Pod的Requests是0.5CPU和128MiB（227 
+Bytes）内存，Limits是
+1CPU和256MiB（228 Bytes）内存。
+2.基于Requests和Limits的Pod调度机制
+当一个Pod创建成功时，Kubernetes调度器（Scheduler）会为该Pod
+选择一个节点来执行。对于每种计算资源（CPU和Memory）而言，每
+个节点都有一个能用于运行Pod的最大容量值。调度器在调度时，首先
+要确保调度后该节点上所有Pod的CPU和内存的Requests总和，不超过该
+节点能提供给Pod使用的CPU和Memory的最大容量值。
+例如，某个节点上的CPU资源充足，而内存为4GB，其中3GB可以
+运行Pod，而某Pod的Memory Requests为1GB、Limits为2GB，那么在这
+个节点上最多可以运行3个这样的Pod。
+这里需要注意：可能某节点上的实际资源使用量非常低，但是已运
+行Pod配置的Requests值的总和非常高，再加上需要调度的Pod的
+Requests值，会超过该节点提供给Pod的资源容量上限，这时Kubernetes
+仍然不会将Pod调度到该节点上。如果Kubernetes将Pod调度到该节点
+上，之后该节点上运行的Pod又面临服务峰值等情况，就可能导致Pod资
+源短缺。
+接着上面的例子，假设该节点已经启动3个Pod实例，而这3个Pod的
+实际内存使用都不足 
+500MB，那么理论上该节点的可用内存应该大于
+1.5GB。但是由于该节点的Pod Requests总和已经达到节点的可用内存上
+限，因此Kubernetes不会再将任何Pod实例调度到该节点上。
+3.Requests和Limits的背后机制
+kubelet在启动Pod的某个容器时，会将容器的Requests和Limits值转
+化为相应的容器启动参数传递给容器执行器（Docker或者rkt）。
+如果容器的执行环境是Docker，那么容器的4个参数传递给Docker
+
+的过程如下。
+1）spec.container[].resources.requests.cpu
+这个参数值会被转化为core数（比如配置的100m会转化为0.1），
+然后乘以1024，再将这个结果作为--cpu-shares参数的值传递给docker
+run命令。在docker 
+run命令中，--cpu-share参数是一个相对权重值
+（Relative Weight），这个相对权重值会决定Docker在资源竞争时分配
+给容器的资源比例。
+这里举例说明--cpu-shares参数在Docker中的含义：比如将两个容器
+的CPU Requests分别设置为1和2，那么容器在docker run启动时对应的--
+cpu-shares参数值分别为1024和2048，在主机CPU资源产生竞争时，
+Docker会尝试按照1∶2的配比将CPU资源分配给这两个容器使用。
+这里需要区分清楚的是：这个参数对于Kubernetes而言是绝对值，
+主要用于Kubernetes调度和管理，Kubernetes同时会将这个参数的值传递
+给docker run的--cpu-shares参数。--cpu-shares参数对于Docker而言是相对
+值，主要用于设置资源分配比例。
+2）spec.container[].resources.limits.cpu
+这个参数值会被转化为millicore数（比如配置的1被转化为1000，而
+配置的100m被转化为100），将此值乘以100000，再除以1000，然后将
+结果值作为--cpu-quota参数的值传递给docker run命令。docker run命令
+中的另一个参数--cpu-period默认被设置为100000，表示Docker重新计量
+和分配CPU的使用时间间隔为100000μs（100ms）。
+Docker的--cpu-quota参数和--cpu-period参数一起配合完成对容器
+CPU的使用限制：比如在Kubernetes中配置容器的CPU Limits为0.1，那
+么计算后--cpu-quota为10000，而--cpu-period为100000，这意味着Docker
+在100ms内最多给该容器分配10ms×core的计算资源用量，10/100=0.1
+core的结果与Kubernetes配置的意义是一致的。
+注意：如果kubelet服务的启动参数--cpu-cfs-quota被设置为true，那
+么kubelet会强制要求所有Pod都必须配置CPU 
+Limits（如果没有配置
+Pod，则集群提供了默认配置也可以）。从Kubernetes 1.2版本开始，这
+个--cpu-cfs-quota启动参数的默认值就是true。
+
+3）spec.container[].resources.requests.memory
+这个参数值只提供给Kubernetes调度器作为调度和管理的依据，不
+会作为任何参数传递给Docker。
+4）spec.container[].resources.limits.memory
+这个参数值会被转化为单位为Bytes的整数，值作为--memory参数
+传递给docker run命令。
+如果一个容器在运行过程中使用了超出了其内存Limits配置的内存
+限制值，那么它可能会被“杀掉”；如果这个容器是一个可重启的容器，
+那么它在之后会被kubelet重新启动。因此对容器的Limits配置需要进行
+准确测试和评估。
+与内存Limits不同的是，CPU在容器技术中属于可压缩资源，因此
+对CPU的Limits配置一般不会因为偶然超标使用而导致容器被系统“杀
+掉”。
+4.计算资源使用情况监控
+Pod的资源用量会作为Pod的状态信息一同上报给Master。如果在集
+群中配置了Heapster来监控集群的性能数据，那么还可以从Heapster中查
+看Pod的资源用量信息。
+5.计算资源常见问题分析
+（1）Pod状态为Pending，错误信息为FailedScheduling。如果
+Kubernetes调度器在集群中找不到合适的节点来运行Pod，那么这个Pod
+会一直处于未调度状态，直到调度器找到合适的节点为止。每次调度器
+尝试调度失败时，Kubernetes都会产生一个事件，我们可以通过下面这
+种方式来查看事件的信息：
+
+在上面这个例子中，名为frontend的Pod由于节点的CPU资源不足而
+调度失败（Pod ExceedsFreeCPU），同样，如果内存不足，则也可能导
+致调度失败（PodExceedsFreeMemory）。
+如果一个或者多个Pod调度失败且有这类错误，那么可以尝试以下
+几种解决方法。
+◎　添加更多的节点到集群中。
+◎　停止一些不必要的运行中的Pod，释放资源。
+◎　检查Pod的配置，错误的配置可能导致该Pod永远无法被调度执
+行。比如整个集群中的所有节点都只有1 
+CPU，而Pod配置的CPU
+Requests为2，该Pod就不会被调度执行。
+我们可以使用kubectl describe nodes命令来查看集群中节点的计算资
+源容量和已使用量：
+
+
+超过可用资源容量上限（Capacity）和已分配资源量（Allocated
+resources）差额的Pod无法运行在该Node上。在这个例子中，如果一个
+Pod的Requests超过90 millicpus或者1646MiB内存，就无法运行在这个节
+点上。
+（2）容器被强行终止（Terminated）。如果容器使用的资源超过了
+它配置的Limits，那么该容器可能被强制终止。我们可以通过kubectl
+describe pod命令来确认容器是否因为这个原因被终止：
+
+
+
+Restart Count：5说明这个名为simmemleak的容器被强制终止并重启
+了5次。
+我们可以在使用kubectl get pod命令时添加-o go-template=...格式的
+参数来读取已终止容器之前的状态信息：
+可以看到这个容器因为reason：OOM Killed而被强制终止，说明这
+个容器的内存超出了限制（Out of Memory）。
+6.对大内存页（Huge Page）资源的支持
+在计算机发展的早期阶段，程序员是直接对内存物理地址编程的，
+需要自己管理内存，所以很容易由于内存地址错误导致操作系统崩溃，
+而且存在一些恶意程序对操作系统进行破坏。后来人们将硬件和软件
+（操作系统）结合，推出虚拟地址和内存页的概念，以及CPU的逻辑内
+存地址与物理内存（条）地址的映射关系。
+在现代操作系统中，内存是以Page（页，有时也可以称之为
+Block）为单位进行管理的，而不以字节为单位，包括内存的分配和回
+收都基于Page进行。典型的Page大小为4KB，因此用户进程申请1MB内
+存，就需要操作系统分配256个Page，而1GB内存对应26万多个Page！
+为了实现快速内存寻址，CPU内部以硬件方式实现了一个高性能的
+
+内存地址映射的缓存表——TLB（Translation Lookaside Buffer），用来
+保存逻辑内存地址与物理内存的对应关系。若目标地址的内存页物理地
+址不在TLB的缓存中或者TLB中的缓存记录失效，CPU就需要切换到低
+速的以软件方式实现的内存地址映射表进行内存寻址，这将大大降低
+CPU的运算速度。针对缓存条目有限的TLB缓存表，提高TLB效率的最
+佳办法就是将内存页增加，这样一来，一个进程所需的内存页数量会相
+应地减少很多。如果把内存页从默认的4KB改为2MB，那么1GB内存就
+只对应512个内存页了，TLB的缓存命中率会大大增加。这是不是意味
+着我们可以任意指定内存页的大小，比如1314MB的内存页？答案是否
+定的，因为这是由CPU来决定的，比如常见的Intel x86处理器可以支持
+的大内存页通常是2MB，个别型号的高端处理器则支持1GB的大内存
+页。
+在Linux平台下，对于那些需要大量内存（1GB以上内存）的程序
+来说，大内存页的优势是很明显的，因为Huge 
+Page大大提升了TLB的
+缓存命中率，又因为Linux对Huge Page提供了更为简单、便捷的操作接
+口，所以可以把它当作文件进行读写操作。Linux使用Huge Page文件系
+统hugetlbfs支持巨页，这种方式更为灵活，我们可以设置Huge Page的大
+小，比如1GB、2GB甚至2.5GB（前提是硬件和操作系统支持），然后
+设置有多少物理内存用于分配Huge 
+Page，这样就设置了一些预先分配
+好的Huge Page。可以将hugetlbfs文件系统挂载到/mnt/huge目录下，通过
+执行下面的指令完成设置：
+在完成设置后，用户进程就可以使用mmap映射Huge Page目标文件
+来使用大内存页了，Intel DPDK便采用了这种做法。有测试表明，应用
+使用大内存页比使用4KB的内存页，性能提高了10%～15%。
+我们可以将Huge 
+Page理解为一种特殊的计算资源：拥有大内存页
+的资源。而拥有Huge Page资源的Node也与拥有GPU资源的Node一样，
+属于一种新的可调度资源节点（Schedulable Resource Node），其上的
+kubelet进程需要报告自身的Huge 
+Page相关的资源信息到Kubernetes
+
+Master，以供Scheduler调度器使用，将需要Huge Page资源的Pod调度到
+符合要求的目标节点上。在Kubernetes 1.14中，对Linux Huge Page的支
+持正式更新为GA稳定版本。
+Huge 
+Page类似于CPU或者Memory资源，但不同于CPU或者
+Memory，Huge 
+Page资源属于不可超限使用的资源，也支持
+ResourceQuota实现配额限制。为此，Kubernetes引入了一个新的资源类
+型hugepages-<size>，来表示大内存页这种特殊的资源，比如hugepages-
+2Mi表示2MiB规格的大内存页资源。一个能提供2MiB规格Huge Page的
+Node，会上报自己拥有Hugepages-2Mi的大内存页资源属性，供需要这
+种规格的大内存页资源的Pod使用。
+需要Huge Page资源的Pod只要给出相关Huge Page的声明，就可以
+被正确调度到匹配的目标Node上了，如下所示：
+
+
+在上面的定义中有以下几个关键点：
+◎　Huge Page需要被映射到Pod的文件系统中；
+◎　Huge 
+Page申请的request与limit必须相同，即申请固定大小的
+Huge Page，不能是可变的；
+◎　在目前的版本中，Huge Page属于Pod级别的资源，未来计划成
+为Container级别的资源，即实现更细粒度的资源管理；
+◎　存储卷emptyDir（挂载到容器内的/hugepages目录）的后台是
+由Huge Page支持的，因此应用不能使用超过request声明的内存大小。
+如果需要更大的Huge 
+Page，则可以在Pod的Voume声明中用
+medium：HugePages-<size>来表明，比如在下面这段代码中分别申请了
+2Mi与1Gi的Huge Page：
+在Kubernetes未来的版本中计划继续实现下面的一些高级特性：
+
+◎　支持容器级别的Huge Page的隔离能力；
+◎　支持NUMA亲和能力，以提升服务的质量；
+◎　支持LimitRange配置Huge Page资源限额。
+10.4.2　资源配置范围管理（LimitRange）
+在默认情况下，Kubernetes不会对Pod加上CPU和内存限制，这意味
+着Kubernetes系统中的任何Pod都可以使用其所在节点所有可用的CPU和
+内存。通过配置Pod的计算资源Requests和Limits，我们可以限制Pod的
+资源使用，但对于Kubernetes集群管理员而言，配置每一个Pod的
+Requests和Limits是很烦琐的，而且很受限制。更多时候，我们需要对
+集群内Requests和Limits的配置做一个全局限制。常见的配置场景如
+下。
+◎　集群中的每个节点都有2GB内存，集群管理员不希望任何Pod
+申请超过2GB的内存，因为在整个集群中都没有任何节点能满足超过
+2GB内存的请求。如果某个Pod的内存配置超过2GB，那么该Pod将永远
+无法被调度到任何节点上执行。为了防止这种情况的发生，集群管理员
+希望能在系统管理功能中设置禁止Pod申请超过2GB内存。
+◎　集群由同一个组织中的两个团队共享，分别运行生产环境和开
+发环境。生产环境最多可以使用8GB内存，而开发环境最多可以使用
+512MB内存。集群管理员希望通过为这两个环境创建不同的命名空间，
+并为每个命名空间都设置不同的限制来满足这个需求。
+◎　用户创建Pod时使用的资源可能会刚好比整个机器资源的上限
+稍小，而恰好剩下的资源大小非常尴尬，不足以运行其他任务，但整个
+集群加起来又非常浪费。因此，集群管理员希望将每个Pod都设置为必
+须至少使用集群平均资源值（CPU和内存）的20%，这样集群就能够提
+供更好的资源一致性调度，从而减少资源浪费。
+针对这些需求，Kubernetes提供了LimitRange机制对Pod和容器的
+Requests和Limits配置做进一步限制。在下面的示例中首先说明如何将
+LimitsRange应用到一个Kubernetes的命名空间中，然后说明LimitRange
+的几种限制方式，比如最大及最小范围、Requests和Limits的默认值、
+
+Limits与Requests的最大比例上限，等等。下面通过LimitRange的设置和
+应用对其进行说明。
+1.创建一个命名空间
+创建一个名为limit-example的Namespace：
+2.为命名空间设置LimitRange
+为命名空间limit-example创建一个简单的LimitRange。创建
+limits.yaml配置文件，内容如下：
+
+
+创建该LimitRange：
+查看namespace limit-example中的LimitRange：
+下面解释LimitRange中各项配置的意义和特点。
+（1）不论是CPU还是内存，在LimitRange中，Pod和Container都可
+以设置Min、Max和Max Limit/Requests Ratio参数。Container还可以设置
+Default Request和Default Limit参数，而Pod不能设置Default Request和
+Default Limit参数。
+
+（2）对Pod和Container的参数解释如下。
+◎　Container的Min（上面的100m和3Mi）是Pod中所有容器的
+Requests值下限；Container的Max（上面的2和1Gi）是Pod中所有容器的
+Limits值上限；Container的Default 
+Request（上面的200m和100Mi）是
+Pod中所有未指定Requests值的容器的默认Requests值；Container的
+Default Limit（上面的300m和200Mi）是Pod中所有未指定Limits值的容
+器的默认Limits值。对于同一资源类型，这4个参数必须满足以下关系：
+Min≤Default Request≤Default Limit≤Max。
+◎　Pod的Min（上面的200m和6Mi）是Pod中所有容器的Requests
+值的总和下限；Pod的Max（上面的4和2Gi）是Pod中所有容器的Limits
+值的总和上限。容器未指定Requests值或者Limits值时，将使用Container
+的Default Request值或者Default Limit值。
+◎　Container的Max Limit/Requests Ratio（上面的5和4）限制了Pod
+中所有容器的Limits值与Requests值的比例上限；而Pod的Max
+Limit/Requests Ratio（上面的3和2）限制了Pod中所有容器的Limits值总
+和与Requests值总和的比例上限。
+（3）如果设置了Container的Max，那么对于该类资源而言，整个
+集群中的所有容器都必须设置Limits，否则无法成功创建。Pod内的容器
+未配置Limits时，将使用Default 
+Limit的值（本例中的300m 
+CPU和
+200MiB内存），如果也未配置Default，则无法成功创建。
+（4）如果设置了Container的Min，那么对于该类资源而言，整个集
+群中的所有容器都必须设置Requests。如果创建Pod的容器时未配置该类
+资源的Requests，那么在创建过程中会报验证错误。Pod里容器的
+Requests在未配置时，可以使用默认值defaultRequest（本例中的200m
+CPU和100MiB内存）；如果未配置而且没有使用默认值
+defaultRequest，那么默认等于该容器的Limits；如果容器的Limits也未
+定义，就会报错。
+（5）对于任意一个Pod而言，该Pod中所有容器的Requests总和都
+必须大于或等于6MiB，而且所有容器的Limits总和都必须小于或等于
+1GiB；同样，所有容器的CPU 
+Requests总和都必须大于或等于200m，
+而且所有容器的CPU Limits总和都必须小于或等于2。
+
+（6）Pod里任何容器的Limits与Requests的比例都不能超过
+Container的Max Limit/Requests Ratio；Pod里所有容器的Limits总和与
+Requests总和的比例都不能超过Pod的Max Limit/Requests Ratio。
+3.创建Pod时触发LimitRange限制
+最后，让我们看看LimitRange生效时对容器的资源限制效果。
+命名空间中的LimitRange只会在Pod创建或者更新时执行检查。如
+果手动修改LimitRange为一个新的值，那么这个新的值不会去检查或限
+制之前已经在该命名空间中创建好的Pod。
+如果在创建Pod时配置的资源值（CPU或者内存）超出了
+LimitRange的限制，那么该创建过程会报错，在错误信息中会说明详细
+的错误原因。
+下面通过创建一个单容器Pod来展示默认限制是如何被配置到Pod上
+的：
+查看已创建的Pod：
+查看该Pod的resources相关信息：
+
+由于该Pod未配置资源Requests和Limits，所以使用了namespace
+limit-example中的默认CPU和内存定义的Requests和Limits值。
+
+下面创建一个超出资源限制的Pod（使用3 CPU）：
+创建该Pod，可以看到系统报错，并且提供的错误原因为超过资源
+限制：
+接下来的例子展示了LimitRange对maxLimitRequestRatio的限制过
+
+程：
+由于limit-test-nginx这个Pod的全部内存Limits总和与Requests总和的
+比例为512∶250，大于在LimitRange中定义的Pod的最大比率
+
+2（maxLimitRequestRatio.memory=2），因此创建失败：
+下面的例子为满足LimitRange限制的Pod：
+
+创建Pod将会成功：
+查看该Pod的资源信息：
+可以看到该Pod配置了明确的Limits和Requests，因此该Pod不会使
+用在namespace limit-example中定义的default和defaultRequest。
+
+需要注意的是，CPU 
+Limits强制配置这个选项在Kubernetes集群中
+默认是开启的；除非集群管理员在部署kubelet服务时通过设置参数--
+cpu-cfs-quota=false来关闭该限制：
+如果集群管理员希望对整个集群中容器或者Pod配置的Requests和
+Limits做限制，就可以通过配置Kubernetes命名空间中的LimitRange来达
+到该目的。在Kubernetes集群中，如果Pod没有显式定义Limits和
+Requests，那么Kubernetes系统会将该Pod所在的命名空间中定义的
+LimitRange的default和defaultRequests配置到该Pod上。
+10.4.3　资源服务质量管理（Resource QoS）
+本节对Kubernetes如何根据Pod的Requests和Limits配置来实现针对
+Pod的不同级别的资源服务质量控制（QoS）进行说明。
+在Kubernetes的QoS体系中，需要保证高可靠性的Pod可以申请可靠
+资源，而一些非高可靠性的Pod可以申请可靠性较低或者不可靠的资
+源。在10.4.1节中讲到了容器的资源配置分为Requests和Limits，其中
+Requests是Kubernetes调度时能为容器提供的完全、可保障的资源量（最
+低保障），而Limits是系统允许容器运行时可能使用的资源量的上限
+（最高上限）。Pod级别的资源配置是通过计算Pod内所有容器的资源配
+置的总和得出来的。
+Kubernetes中Pod的Requests和Limits资源配置有如下特点。
+
+（1）如果Pod配置的Requests值等于Limits值，那么该Pod可以获得
+的资源是完全可靠的。
+（2）如果Pod的Requests值小于Limits值，那么该Pod获得的资源可
+分为两部分：
+◎　完全可靠的资源，资源量的大小等于Requests值；
+◎　不可靠的资源，资源量最大等于Limits与Requests的差额，这
+份不可靠的资源能够申请到多少，取决于当时主机上容器可用资源的余
+量。
+通过这种机制，Kubernetes可以实现节点资源的超售（Over
+Subscription），比如在CPU完全充足的情况下，某机器共有32GiB内存
+可供容器使用，容器配置为Requests值1GiB、Limits值2GiB，那么在该
+机器上最多可以同时运行32个容器，每个容器最多可以使用2GiB内存，
+如果这些容器的内存使用峰值能错开，那么所有容器都可以正常运行。
+超售机制能有效提高资源的利用率，也不会影响容器申请的完全可
+靠资源的可靠性。
+1.Requests和Limits对不同计算资源类型的限制机制
+根据前面的内容可知，容器的资源配置满足以下两个条件：
+◎　Requests≤节点可用资源；
+◎　Requests≤Limits。
+Kubernetes根据Pod配置的Requests值来调度Pod，Pod在成功调度之
+后会得到Requests值定义的资源来运行；如果Pod所在机器上的资源有空
+余，则Pod可以申请更多的资源，最多不能超过Limits的值。下面看一下
+Requests和Limits针对不同计算资源类型的限制机制的差异。这种差异
+主要取决于计算资源类型是可压缩资源还是不可压缩资源。
+1）可压缩资源
+◎　Kubernetes目前支持的可压缩资源是CPU。
+◎　Pod可以得到Requests配置的CPU使用量，而能否使用超过
+Requests值的部分取决于系统的负载和调度。不过由于目前Kubernetes和
+Docker的CPU隔离机制都是在容器级别起作用的，所以Pod级别的资源
+
+配置并不能完全得到保障；Pod级别的cgroups正在紧锣密鼓地开发中，
+如果将来引入，就可以确保Pod级别的资源配置准确运行。
+◎　空闲的CPU资源按照容器Requests值的比例分配。举例说明：
+容器A的CPU配置为Requests 1 Limits 10，容器B的CPU配置为Request 2
+Limits 8，A和B同时运行在一个节点上，初始状态下容器的可用CPU为
+3cores，那么A和B恰好得到在其Requests中定义的CPU用量，即1CPU和
+2CPU。如果A和B都需要更多的CPU资源，而恰好此时系统的其他任务
+释放了1.5CPU，那么这1.5CPU将按照A和B的Requests值的比例1∶2分
+配给A和B，即最终A可使用1.5CPU，B可使用3CPU。
+◎　如果Pod的CPU用量超过了在Limits 
+10中配置的CPU用量，那
+么cgroups会对Pod中容器的CPU用量进行限流（Throttled）；如果Pod没
+有配置Limits 10，那么Pod会尝试抢占所有空闲的CPU资源（Kubernetes
+从1.2版本开始默认开启--cpu-cfs-quota，因此在默认情况下必须配置
+Limits）。
+2）不可压缩资源
+◎　Kubernetes目前支持的不可压缩资源是内存。
+◎　Pod可以得到在Requests中配置的内存。如果Pod的内存用量小
+于它的Requests的配置，那么这个Pod可以正常运行（除非出现操作系统
+级别内存不足等严重问题）；如果Pod的内存用量超过了它的Requests配
+置，那么这个Pod有可能被Kubernetes“杀掉”：比如Pod 
+A使用了超过
+Requests而不到Limits的内存量，此时同一机器上另一个Pod B之前只使
+用了远少于自己的Requests值的内存，此时程序压力增大，Pod B向系统
+申请的总量不超过自己的Requests值的内存，那么Kubernetes可能会直
+接“杀掉”Pod A；另外一种情况是Pod A使用了超过Requests而不到Limits
+的内存，此时Kubernetes将一个新的Pod调度到这台机器上，新的Pod需
+要使用内存，而只有Pod A使用了超过了自己的Requests值的内存，那么
+Kubernetes也可能会“杀掉”Pod A来释放内存资源。
+◎　如果Pod的内存用量超过了它的Limits设置，那么操作系统内核
+会“杀掉”Pod所有容器的所有进程中内存使用量最多的一个，直到内存
+不超过Limits时为止。
+2.对调度策略的影响
+
+◎　Kubernetes的kube-scheduler通过计算Pod中所有容器的Requests
+的总和来决定对Pod的调度。
+◎　不管是CPU还是内存，Kubernetes调度器和kubelet都会确保节
+点上所有Pod的Requests总和不会超过在该节点上可分配给容器使用的资
+源容量上限。
+3.服务质量等级（QoS Classes）
+在一个超用（Over 
+Committed，容器Limits总和大于系统容量上
+限）系统中，容器负载的波动可能导致操作系统的资源不足，最终导致
+部分容器被“杀掉”。在这种情况下，我们当然会希望优先“杀掉”那些不
+太重要的容器，那么如何衡量重要程度呢？Kubernetes将容器划分成3个
+QoS等级：Guaranteed（完全可靠的）、Burstable（弹性波动、较可靠
+的）和BestEffort（尽力而为、不太可靠的），这三种优先级依次递减，
+如图10.4所示。
+图10.4　QoS等级和优先级的关系
+从理论上来说，QoS级别应该作为一个单独的参数来提供API，并
+由用户对Pod进行配置，这种配置应该与Requests和Limits无关。但在当
+前版本的Kubernetes设计中，为了简化模式及避免引入太多的复杂性，
+QoS级别直接由Requests和Limits定义。在Kubernetes中，容器的QoS级
+别等于容器所在Pod的QoS级别，而Kubernetes的资源配置定义了Pod的
+
+三种QoS级别，如下所述。
+1）Guaranteed
+如果Pod中的所有容器对所有资源类型都定义了Limits和Requests，
+并且所有容器的Limits值都和Requests值相等（且都不为0），那么该
+Pod的QoS级别就是Guaranteed。注意：在这种情况下，容器可以不定义
+Requests，因为Requests值在未定义时默认等于Limits。
+在下面这两个例子中定义的Pod QoS级别就是Guaranteed。
+例一，未定义Requests值，所以其默认等于Limits值：
+例二，其中定义的Requests与Limits的值完全相同：
+
+2）BestEffort
+如果Pod中所有容器都未定义资源配置（Requests和Limits都未定
+义），那么该Pod的QoS级别就是BestEffort。例如下面这个Pod定义：
+
+3）Burstable
+当一个Pod既不为Guaranteed级别，也不为BestEffort级别时，该Pod
+的QoS级别就是Burstable。Burstable级别的Pod涉及两种情况。第1种情
+况：Pod中的一部分容器在一种或多种资源类型的资源配置中定义了
+Requests值和Limits值（都不为0），且Requests值小于Limits值；第2种
+情况：Pod中的一部分容器未定义资源配置（Requests和Limits都未定
+义）。注意：在容器未定义Limits时，Limits值默认等于节点资源容量
+的上限。
+下面几个例子中的Pod的QoS等级都是Burstable。
+（1）容器foo的CPU Requests不等于Limits：
+
+（2）容器bar未定义资源配置，而容器foo定义了资源配置：
+
+（3）容器foo未定义CPU，而容器bar未定义内存：
+（4）容器bar未定义资源配置，而容器foo未定义Limits值：
+
+4）Kubernetes QoS的工作特点
+在Pod的CPU 
+Requests无法得到满足（比如节点的系统级任务占用
+过多的CPU导致无法分配足够的CPU给容器使用）时，容器得到的CPU
+会被压缩限流。
+由于内存是不可压缩的资源，所以针对内存资源紧缺的情况，会按
+照以下逻辑处理。
+（1）BestEffort Pod的优先级最低，在这类Pod中运行的进程会在系
+统内存紧缺时被第一优先“杀掉”。当然，从另一个角度来看，BestEffort
+Pod由于没有设置资源Limits，所以在资源充足时，它们可以充分使用所
+有闲置资源。
+（2）Burstable Pod的优先级居中，这类Pod在初始时会被分配较少
+的可靠资源，但可以按需申请更多的资源。当然，如果整个系统内存紧
+缺，又没有BestEffort容器可以被杀掉以释放资源，那么这类Pod中的进
+程可能被“杀掉”。
+（3）Guaranteed Pod的优先级最高，而且一般情况下这类Pod只要
+不超过其资源Limits的限制就不会被“杀掉”。当然，如果整个系统内存
+紧缺，又没有其他更低优先级的容器可以被“杀掉”以释放资源，那么这
+类Pod中的进程也可能会被“杀掉”。
+5）OOM计分规则
+
+OOM（Out Of Memory）计分规则包括如下内容。
+◎　OOM计分的计算方法：计算进程所使用的内存在系统中所占
+的百分比，取其中不含百分号的数值，再乘以 10，该结果是进程OOM
+的基础分；将进程OOM基础分的分值再加上这个进程的
+OOM_SCORE_ADJ（分数调整）值，作为进程OOM的最终分值（除
+root启动的进程外）。在系统发生OOM时，OOM 
+Killer会优先“杀
+掉”OOM计分更高的进程。
+◎　进程的OOM计分的基本分数值范围是0～1000，如果A进程的
+调整值OOM_SCORE_ADJ减去B进程的调整值的结果大于1000，那么A
+进程的OOM计分最终值必然大于B进程，会优先“杀掉”A进程。
+◎　不论调整OOM_SCORE_ADJ值为多少，任何进程的最终分值
+范围也是0～1000。
+在Kubernetes中，不同QoS的OOM计分调整值如表10.1所示。
+表10.1　不同QoS的OOM计分调整值
+对表中内容说明如下。
+◎　BestEffort 
+Pod设置OOM_SCORE_ADJ调整值为1000，因此
+BestEffort Pod中容器里所有进程的OOM最终分肯定是1000。
+◎　Guaranteed 
+Pod设置OOM_SCORE_ADJ调整值为-998，因此
+Guaranteed Pod中容器里所有进程的OOM最终分一般是0或者1（因为基
+础分不可能是1000）。
+◎　对Burstable 
+Pod规则分情况说明：如果Burstable 
+Pod的内存
+
+Requests超过系统可用内存的99.8%，那么这个Pod的OOM_SCORE_ADJ
+调整值固定为2；否则，设置OOM_SCORE_ADJ调整值为1000-10×（%
+of memory requested）；如果内存Requests为0，那么OOM_SCORE_ADJ
+调整值固定为999。这样的规则能确保OOM_SCORE_ADJ调整值的范围
+为2～999，而Burstable 
+Pod中所有进程的OOM最终分数范围为2～
+1000。Burstable Pod进程的OOM最终分数始终大于Guaranteed Pod的进
+程得分，因此它们会被优先“杀掉”。如果一个Burstable Pod使用的内存
+比它的内存Requests少，那么可以肯定的是，它的所有进程的OOM最终
+分数会小于1000，此时能确保它的优先级高于BestEffort Pod。如果在一
+个Burstable 
+Pod的某个容器中某个进程使用的内存比容器的Requests值
+高，那么这个进程的OOM最终分数会是1000，否则它的OOM最终分数
+会小于1000。假设在下面的容器中有一个占用内存非常大的进程，那么
+当一个使用内存超过其Requests的Burstable 
+Pod与另外一个使用内存少
+于其Requests的Burstable 
+Pod发生内存竞争冲突时，前者的进程会被系
+统“杀掉”。如果在一个Burstable Pod内部有多个进程的多个容器发生内
+存竞争冲突，那么此时OOM评分只能作为参考，不能保证完全按照资
+源配置的定义来执行OOM Kill。
+OOM还有一些特殊的计分规则，如下所述。
+◎　kubelet进程和Docker进程的调整值OOM_SCORE_ADJ为-998。
+◎　如果配置进程调整值OOM_SCORE_ADJ为-999，那么这类进
+程不会被OOM Killer“杀掉”。
+6）QoS的演进
+目前Kubernetes基于QoS的超用机制日趋完善，但还有一些限制。
+（1）不支持内存Swap，当前的QoS策略都假定了主机不启用内存
+Swap，Kubernetes从1.8版本开始默认关闭Swap特性，但如果主机启用
+了Swap功能，上面的QoS策略就可能失效。举例说明：如果两个
+Guaranteed 
+Pod都刚好达到了内存Limits，那么由于内存Swap机制，它
+们还可以继续申请使用更多的内存。如果Swap空间不足，那么最终这
+两个Pod中的进程可能被“杀掉”。
+（2）缺乏更丰富的QoS策略，当前的QoS策略都是基于Pod的资源
+配置（Requests和Limits）来定义的，而资源配置本身又承担着对Pod资
+
+源管理和限制的功能。两种不同维度的功能使用同一个参数来配置，可
+能会导致某些复杂需求无法被满足，比如当前Kubernetes无法支持弹性
+的、高优先级的Pod。自定义QoS优先级能提供更大的灵活性，完美地
+实现各类需求，但同时会引入更高的复杂性，而且过于灵活的设置会给
+予用户过高的权限，对系统管理也提出了更大的挑战。
+10.4.4　资源配额管理（Resource Quotas）
+如果一个Kubernetes集群被多个用户或者多个团队共享，就需要考
+虑资源公平使用的问题，因为某个用户可能会使用超过基于公平原则分
+配给其的资源量。
+Resource 
+Quotas就是解决这个问题的工具。通过ResourceQuota对
+象，我们可以定义资源配额，这个资源配额可以为每个命名空间都提供
+一个总体的资源使用限制：它可以限制命名空间中某种类型的对象的总
+数量上限，也可以设置命名空间中Pod可以使用的计算资源的总上限。
+典型的资源配额使用方式如下。
+◎　不同的团队工作在不同的命名空间中，目前这是非约束性的，
+在未来的版本中可能会通过ACL（Access Control List，访问控制列表）
+来实现强制性约束。
+◎　集群管理员为集群中的每个命名空间都创建一个或者多个资源
+配额项。
+◎　当用户在命名空间中使用资源（创建Pod或者Service等）时，
+Kubernetes的配额系统会统计、监控和检查资源用量，以确保使用的资
+源用量没有超过资源配额的配置。
+◎　如果在创建或者更新应用时资源使用超出了某项资源配额的限
+制，那么创建或者更新的请求会报错（HTTP 403 Forbidden），并给出
+详细的出错原因说明。
+◎　如果命名空间中计算资源（CPU和内存）的资源配额已启用，
+那么用户必须为相应的资源类型设置Requests或Limits，否则配额系统
+可能会直接拒绝Pod的创建。这里可以使用LimitRange机制来为没有配
+置资源的Pod提供默认的资源配置。
+
+下面的例子展示了一个非常适合使用资源配额来做资源控制管理的
+场景。
+◎　集群共有32GB内存和16 CPU，两个小组。A小组使用20GB内
+存和10 CPU，B小组使用10GB内存和2 CPU，剩下的2GB内存和2 CPU
+作为预留资源。
+◎　在名为testing的命名空间中限制使用1 
+CPU和1GB内存；在名
+为production的命名空间中，资源使用不受限制。
+在使用资源配额时，需要注意以下两点。
+◎　如果集群中总的可用资源小于各命名空间中资源配额的总和，
+那么可能会导致资源竞争。在发生资源竞争时，Kubernetes系统会遵循
+先到先得的原则。
+◎　不管是资源竞争还是配额修改，都不会影响已创建的资源使用
+对象。
+1.在Master中开启资源配额选型
+资源配额可以通过在kube-apiserver的--admission-control参数值中添
+加ResourceQuota参数进行开启。如果在某个命名空间的定义中存在
+ResourceQuota，那么对于该命名空间而言，资源配额就是开启的。一个
+命名空间可以有多个ResourceQuota配置项。
+1）计算资源配额（Compute Resource Quota）
+资源配额可以限制一个命名空间中所有Pod的计算资源的总和。
+ResourceQuota目前支持闲置的计算资源类型如表10.2所示。
+表10.2　ResourceQuota目前支持限制的计算资源类型
+
+2）存储资源配额（Volume Count Quota）
+可以在给定的命名空间中限制所使用的存储资源（Storage
+Resources）的总量，目前支持的存储资源名称如表10.3所示。
+表10.3　ResourceQuota支持限制的计算资源类型
+
+3）对象数量配额（Object Count Quota）
+指定类型的对象数量可以被限制，例如，我们可以通过资源配额来
+限制在命名空间中创建的Pod的最大数量。这种配置可以防止某些用户
+大量创建Pod而迅速耗尽整个集群的Pod 
+IP和计算资源。表10.4列出了
+ResourceQuota支持限制的对象类型。
+表10.4　ResourceQuota支持限制的对象类型
+
+具体表示如下。
+◎　count/<resource>.<group>：用于非核心（core）组的资源，例
+如count/deployments.apps、count/cronjobs.batch。
+◎　count/<resource>：用于核心组的资源，例如count/services、
+count/pods。
+相同的语法也可用于自定义资源CRD。例如，若要对example.com
+API组中CRD资源widgets对象的数量进行配额设置，则可以使用
+count/widgets.example.com表示。
+2.配额的作用域（Quota Scopes）
+对每项资源配额都可以单独配置一组作用域，配置了作用域的资源
+
+配额只会对符合其作用域的资源使用情况进行计量和限制，作用域范围
+超出了资源配额的请求都会被报验证错误。表10.5列出了ResourceQuota
+的4种作用域。
+表10.5　ResourceQuota的4种作用域
+其中，BestEffort作用域可以限定资源配额来追踪Pod资源的使用；
+而Terminating、NotTerminating、NotBestEffort和PriorityClass除了可以
+追踪Pod，还可以追踪CPU、limits.cpu、limits.memory、memory、
+requests.cpu、requests.memory等资源的使用情况。
+这里特别提一下基于Pod优先级的资源配额（PriorityClass）特性，
+这是Kubernetes 1.17实现的新特性，也是比较实用的特性，配置示例说
+明如下。
+（1）通过Pod的priorityClassName属性将Pod划分为不同的优先级，
+比如low、medium、high：
+
+（2）在ResourceQuota中通过scopeSelector选择匹配的目标Pod的优
+先级，赋予相应的资源配额：
+
+通过PriorityClass的配额机制，我们就可以实现标准的基于Pod优先
+级的资源配额管控方式了，这种方式相对于隐式的QoS来说更为直观、
+明确。
+3.在资源配额（ResourceQuota）中设置Requests和Limits
+在资源配额中也可以设置Requests和Limits。如果在资源配额中指
+定了requests.cpu或requests.memory，那么它会强制要求每个容器都配置
+自己的CPU 
+Requests或CPU 
+Limits（可使用LimitRange提供的默认
+值）。同理，如果在资源配额中指定了limits.cpu或limits.memory，那么
+它也会强制要求每个容器都配置自己的内存Requests或内存Limits（可
+使用LimitRange提供的默认值）。
+4.资源配额的定义
+下面通过几个例子对资源配额进行设置和应用。
+与LimitRange相似，ResourceQuota也被设置在命名空间中。创建名
+为myspace的命名空间：
+创建ResourceQuota配置文件compute-resources.yaml，用于设置计算
+资源的配额：
+
+创建该项的资源配额：
+创建另一个名为object-counts.yaml的文件，用于设置对象数量的配
+额：
+
+创建该ResourceQuota：
+查看各ResourceQuota的详细信息：
+
+
+5.资源配额与集群资源总量的关系
+资源配额与集群资源总量是完全独立的。资源配额是通过绝对的单
+位来配置的，这也就意味着如果在集群中新添加了节点，那么资源配额
+不会自动更新，而该资源配额所对应的命名空间中的对象也不能自动增
+加资源上限。
+在某些情况下，我们可能希望资源配额支持更复杂的策略，如下所
+述。
+◎　对于不同的租户，按照某种比例划分整个集群的资源。
+◎　允许每个租户按照需要来提高资源用量，但是有一个较宽容的
+限制，以防止意外的资源耗尽情况发生。
+◎　探测某个命名空间的需求，添加物理节点并扩大资源配额值。
+这些策略可以这样实现：手动编写一个控制器，持续监控各命名空
+间中的资源使用情况，并按需调整命名空间的资源配额数量。
+资源配额将整个集群中的资源总量做了一个静态划分，但它并没有
+对集群中的节点做任何限制：不同命名空间中的Pod仍然可以运行在同
+一个节点上。
+10.4.5　ResourceQuota和LimitRange实践
+根据前面对资源管理的介绍，这里将通过一个完整的例子说明如何
+通过资源配额和资源配置范围的配合来控制一个命名空间的资源使用。
+
+集群管理员根据集群用户的数量来调整集群配置，以达到这个目
+的：能控制特定命名空间中的资源使用量，最终实现集群的公平使用和
+成本控制。
+需要实现的功能如下。
+◎　限制运行状态的Pod的计算资源用量。
+◎　限制持久存储卷的数量以控制对存储的访问。
+◎　限制负载均衡器的数量以控制成本。
+◎　防止滥用网络端口这类稀缺资源。
+◎　提供默认的计算资源Requests以便系统做出更优化的调度。
+1.创建命名空间
+创建名为quota-example的命名空间，namespace.yaml文件的内容如
+下：
+查看命名空间：
+
+2.设置限定对象数量的资源配额
+通过设置限定对象数量的资源配额，可以控制持久存储卷、负载均
+衡器、NodePort这些资源的数量。
+创建名为object-counts的ResourceQuota：
+
+配额系统会检测到资源项配额的创建，统计和限制该命名空间中的
+资源消耗。
+查看该配额是否生效：
+至此，配额系统会自动阻止那些使资源用量超过资源配额限定值的
+请求。
+3.设置限定计算资源的资源配额
+下面再创建一项限定计算资源的资源配额，以限制该命名空间中计
+算资源的使用总量。
+创建名为compute-resources的ResourceQuota：
+
+查看该配额是否生效：
+
+配额系统会自动防止在该命名空间中同时拥有超过4个非“终止
+态”的Pod。此外，由于该项资源配额限制了CPU和内存的Limits和
+Requests总量，因此会强制要求该命名空间中的所有容器都显式定义
+CPU和内存的Limits、Requests（可使用默认值，Requests默认等于
+Limits）。
+4.配置默认的Requests和Limits
+在命名空间已经配置了限定计算资源的资源配额的情况下，如果尝
+试在该命名空间中创建一个不指定Requests和Limits的Pod，那么Pod的
+创建可能会失败。下面是一个失败的例子。
+创建一个Nginx的Deployment：
+查看创建的Pod，会发现Pod没有创建成功：
+
+再查看Deployment的详细信息：
+该Deployment会尝试创建一个Pod，但是失败，查看其中ReplicaSet
+的详细信息：
+
+可以看到Pod创建失败的原因：Master拒绝这个ReplicaSet创建
+Pod，因为在这个Pod中没有指定CPU和内存的Requests、Limits。
+为了避免这种失败，我们可以使用LimitRange为这个命名空间中的
+
+所有Pod都提供一个资源配置的默认值。下面的例子展示了如何为这个
+命名空间添加一个指定了默认资源配置的LimitRange。
+创建一个名为limits的LimitRange：
+
+在LimitRange创建成功后，若用户在该命名空间中创建了未指定资
+
+源限制的Pod，系统就会自动为该Pod设置默认的资源限制。
+例如，每个新建的未指定资源限制的Pod都等价于使用下面的资源
+限制：
+至此，我们已经为该命名空间配置好默认的计算资源了，我们的
+ReplicaSet应该能够创建Pod了。查看一下，发现创建Pod成功：
+接下来可以随时查看资源配额的使用情况：
+
+可以看到，每个Pod在创建时都会消耗指定的资源量，而这些使用
+量都会被Kubernetes准确跟踪、监控和管理。
+5.指定资源配额的作用域
+
+假设我们并不想为某个命名空间配置默认的计算资源配额，而是希
+望限定在命名空间中运行的QoS为BestEffort的Pod总数，例如让集群中
+的部分资源运行QoS为非BestEffort的服务，并让闲置的资源运行QoS为
+BestEffort的服务，即可避免集群的所有资源仅被大量的BestEffort Pod耗
+尽。这可以通过创建两个资源配额来实现，如下所述。
+创建一个名为quota-scopes的命名空间：
+创建一个名为best-effort的ResourceQuota，指定Scope为BestEffort：
+
+再创建一个名为not-best-effort的ResourceQuota，指定Scope为
+NotBestEffort：
+查看创建成功的ResourceQuota：
+
+之后，没有配置Requests的Pod将被名为best-effort的ResourceQuota
+
+限制；而配置了Requests的Pod会被名为not-best-effort的ResourceQuota限
+制。
+创建两个Deployment：
+名为best-effort-nginx的Deployment因为没有配置Requests和Limits，
+所以它的QoS级别为BestEffort，因此它的创建过程由best-effort资源配额
+项来限制，而not-best-effort资源配额项不会对它进行限制。best-effort资
+源配额项没有限制Requests和Limits，因此best-effort-nginx Deployment可
+以成功创建8个Pod。
+名为not-best-effort-nginx的Deployment因为配置了Requests和
+Limits，且二者不相等，所以它的QoS级别为Burstable，因此它的创建
+过程由not-best-effort资源配额项限制，而best-effort资源配额项不会对它
+进行限制。not-best-effort资源配额项限制了Pod的Requests和Limits的总
+上限，not-best-effort-nginx Deployment并没有超过这个上限，所以可以
+成功创建两个Pod。
+
+查看已经创建的Pod，可以看到10个Pod都创建成功：
+再查看两个资源配额项的使用情况，可以看到best-effort资源配额项
+已经统计了在best-effort-nginx Deployment中创建的8个Pod的资源使用信
+息，not-best-effort资源配额项也已经统计了在not-best-effort-nginx
+Deployment中创建的两个Pod的资源使用信息：
+
+通过这个例子可以发现：资源配额的作用域（Scopes）提供了一种
+
+将资源集合分割的机制，可以使集群管理员更加方便地监控和限制不同
+类型的对象对各类资源的使用情况，同时为资源分配和限制提供更好的
+灵活性和便利性。
+6.资源管理小结
+Kubernetes中资源管理的基础是容器和Pod的资源配置（Requests和
+Limits）。容器的资源配置指定了容器请求的资源和容器能使用的资源
+上限，Pod的资源配置则是Pod中所有容器的资源配置总和上限。
+通过资源配额机制，我们可以对命名空间中所有Pod使用资源的总
+量进行限制，也可以对这个命名空间中指定类型的对象的数量进行限
+制。使用作用域可以让资源配额只对符合特定范围的对象加以限制，因
+此作用域机制可以使资源配额的策略更加丰富、灵活。
+如果需要对用户的Pod或容器的资源配置做更多的限制，则可以使
+用资源配置范围（LimitRange）来达到这个目的。LimitRange可以有效
+限制Pod和容器的资源配置的最大、最小范围，也可以限制Pod和容器的
+Limits与Requests的最大比例上限，LimitRange还可以为Pod中的容器提
+供默认的资源配置。
+Kubernetes基于Pod的资源配置实现了资源服务质量（QoS）。不同
+QoS级别的Pod在系统中拥有不同的优先级：高优先级的Pod有更高的可
+靠性，可以用于运行对可靠性要求较高的服务；低优先级的Pod可以实
+现集群资源的超售，有效提高集群资源利用率。
+上面的多种机制共同组成了当前版本Kubernetes的资源管理体系。
+这个资源管理体系可以满足大部分资源管理需求。同时，Kubernetes的
+资源管理体系仍然在不停地发展和进化，对于目前无法满足的更复杂、
+更个性化的需求，我们可以继续关注Kubernetes未来的发展和变化。
+下面对计算资源以外的其他几种资源的管理方式进行说明，包括
+Pod内多个容器的共享进程命名空间、PID资源管理、节点的CPU资源管
+理策略和拓扑管理器。
+10.4.6　Pod中多个容器共享进程命名空间
+在某些应用场景中，属于同一个Pod的多个容器相互之间希望能够
+
+访问其他容器的进程，例如使用一个debug容器时，需要对业务应用容
+器内的进程进行查错，这对多个容器环境的进程命名空间（Process
+Namespace）的共享提出需求，该机制的支持从Kubernetes 1.10版本开始
+引入，到1.17版本时达到Stable阶段。
+启用进程命名空间共享机制很简单，只需在Pod定义中设置
+shareProcessNamespace=true即可完成。我们通过下面这个例子看看一个
+Pod中两个容器共享进程命名空间的效果，share-process-namespace.yaml
+配置文件的内容如下：
+
+其中，主容器为一个nginx提供的服务，另一个容器为busybox提供
+的查错工具，被命名为“shell”。在shell容器的securityContext.capabilities
+中增加了CAP_SYS_PTRACE能力，用于提供进程跟踪操作能力。
+使用kubectl create命令创建这个Pod：
+
+进入shell的容器环境中，使用ps命令可以查看到nginx和自身容器的
+全部进程：
+由于shell容器具备CAP_SYS_PTRACE能力，所以它还可以对其他
+进程发送操作系统信号，例如对nginx容器中的6号进程发出SIGHUP信
+号用于重启nginx程序：
+
+可以看到，nginx的原worker进程（PID=38）重启后启动了一个新
+的PID=51的worker进程。
+有两个容器共享进程命名空间的Pod环境有以下特性。
+◎　各容器的进程ID（PID）混合在一个环境中，都不再拥有进程
+号PID=1的启动进程，1号进程由Pod的Pause容器使用。对于某些必须以
+进程号1作为启动程序PID的容器来说，将会无法启动，例如以systemd
+作为启动命令的容器。
+◎　进程信息在多个容器间相互可见，这包括/proc目录下的所有信
+息，其中可能有包含密码类敏感信息的环境变量，只能通过UNIX文件
+权限进行访问控制，需要设置容器内的运行用户或组。
+◎　一个容器的文件系统存在于/proc/$pid/root目录下，所以不同的
+容器也能访问其他容器的文件系统的内容，这对于debug查错来说非常
+有用，但也意味着没有容器级别的安全隔离，只能通过UNIX文件权限
+进行访问控制，需要设置容器内的运行用户或组。
+例如，在shell容器内可以查看到nginx容器的配置文件的内容：
+
+10.4.7　PID资源管理
+PID（进程ID）在Linux系统中是最重要的一种基础资源，操作系统
+会设置一台主机可以运行的最大进程数上限。虽然在通常情况下不太容
+易出现PID耗尽的情况，但为了避免存在缺陷的程序耗尽主机PID资源
+（进而导致守护进程如kubelet无法正常工作），Kubernetes在1.10版本
+中开始引入对Pod级别的PID资源管理机制，用于限制单个Pod内可以创
+建的最大进程数量，并在1.14版本中引入Node级别的PID资源管理机
+制，确保Node的PID不会被所有Pod耗尽，以保护在Node上运行的守护
+进程（如kubelet、容器运行时程序等），该PID资源管理机制在1.15版
+本时达到Beta阶段。
+为了使用Pod级别的PID资源管理机制，我们首先需要在kubelet服务
+
+的启动参数中开启SupportPodPidsLimit特性开关（--feature-
+gates=SupportPodPidsLimit=true），然后通过启动参数--pod-max-pids设
+置一个Pod中允许的最大PID数量（将其设置为-1表示继承使用Node系统
+配置的PID数量）。
+为了使用Node级别的PID资源管理，我们首先需要在kubelet服务的
+启动参数中开启SupportNodePidsLimit特性开关（--feature-
+gates=SupportNodePidsLimit=true），开启该特性之后，系统会自动为守
+护进程预留一些PID资源，也会用于kubelet后续判断是否需要驱逐Pod的
+计算逻辑中。
+在一个Node上可分配的PID数量的算法如下：
+10.4.8　节点的CPU管理策略
+kubelet默认使用CFS Quota技术基于Pod的CPU Limit对Node上CPU
+资源的使用进行限制和管理（CFS，Completely Fair Scheduler，即完全
+公平调度算法）。当在一个Node上运行了很多CPU密集型Pod时，容器
+进程可能会被调度到不同的CPU核上进行运算，这取决于调度时哪些
+CPU核是可用的，Pod使用的CPU资源是否达到了上限。许多应用对这
+种CPU的切换不敏感，无须特别的干预也可正常工作。
+然而，有些应用的性能明显受到CPU缓存亲和性及调度延迟的影
+响。针对这类应用，Kubernetes提供了一个可选的CPU管理策略，来确
+定节点上CPU资源调度的优先级，为Pod运行达到更好的性能提供支
+持。该特性从Kubernetes 1.12版本开始引入，目前为Beta阶段。
+CPU管理策略通过Node上的kubelet启动参数--cpu-manager-policy进
+行指定，目前支持两种策略。
+◎　none：使用默认的调度策略。
+◎　static：允许为节点上具有特定资源特征的Pod授予更高的CPU
+
+亲和性和独占性。
+CPU管理器定期通过CRI接口将资源更新写入容器中，以保证内存
+中的CPU分配与cgroupfs保持一致。同步频率通过kubelet启动参数--cpu-
+manager-reconcile-period进行设置，如果不指定，则默认与--node-status-
+update-frequency设置的值相同。
+下面对这两种策略的原理和示例进行说明。
+1.None策略
+None策略使用默认的CPU亲和性方案，即操作系统默认的CPU调度
+策略。对于QoS级别为Guaranteed的Pod，会强制使用CFS Quota机制对
+CPU资源进行限制。
+2.Static策略
+Static策略针对具有特定CPU资源需求的Pod。对于QoS级别为
+Guaranteed的Pod，如果其Container设置的CPU Request为大于等于1的整
+数，Kubernetes就能允许容器绑定节点上的一个或多个CPU核独占运
+行。这种独占是使用cpuset cgroup控制器来实现的。
+注意：容器运行时（Container Runtime）和kubelet等系统服务也可
+以运行在独占的CPU核上，这种独占性是相对于其他Pod而言的；CPU
+管理器不支持在运行时下线和上线CPU。此外，如果节点上的在线CPU
+集合发生了变化，则必须驱逐节点上的Pod，并删除kubelet根目录中的
+状态文件cpu_manager_state来手动重置CPU管理器。
+该策略管理一个共享CPU资源池，该资源池最初包含节点上的所有
+CPU资源。可用的独占性CPU资源数量等于节点的CPU总量减去通过--
+kube-reserved或--system-reserved参数设置保留给系统的CPU资源数量。
+Kubernetes从1.17版本开始，CPU保留列表可以通过kubelet服务的--
+reserved-cpus参数显式地设置。通过--reserved-cpus设置的CPU列表优先
+于使用--kube-reserved和--system-reserved参数设置的CPU保留值。
+启用Static策略时，要求使用--kube-reserved和（或）--system-
+reserved或--reserved-cpus为kubelet保留一部分CPU资源，并且保留的
+CPU资源数量必须大于0。这是因为如果系统保留CPU为0，则共享池有
+变为空的可能，导致kubelet无法正常工作。
+
+通过这些参数预留的CPU单位为整数，按物理内核ID升序从初始共
+享池中获取。共享池是QoS级别为BestEffort和Burstable的Pod运行所需
+的CPU集合。QoS级别为Guaranteed的Pod中的容器，如果声明了非整数
+值的CPU 
+Request，则也将运行在共享池的CPU上，只有声明了整数
+CPU Request的容器才会被分配独占的CPU资源。
+当QoS级别为Guaranteed的Pod被调度到节点上时，如果容器的CPU
+资源需求设置符合静态分配的要求，则所需的CPU核会被从共享池中取
+出并放到容器的cpuset中，供容器独占使用。容器cpuset中的CPU核数与
+Pod定义中指定的整数个CPU limit相等，无须再使用CFS Quota机制分配
+CPU资源。这种静态分配机制增强了CPU的亲和性，减少了CPU上下文
+切换的次数。
+3.节点CPU管理策略示例
+下面是几种不同QoS级别的容器使用CPU资源时的策略示例。
+（1）BestEffort类型。容器如果没有设置CPU 
+Request和CPU
+Limit，则将运行在共享CPU池中。例如：
+（2）Burstable类型。容器如果没有设置CPU资源，或者其他资源
+（如内存）的Request不等于Limit，则将运行在共享CPU池中。例如：
+
+或者
+
+（3）Guaranteed类型。容器如果设置了CPU资源，并且设置
+Request等于Limit且为整数，则将运行在两个独占的CPU核上。例如：
+或者（若未显式设置Request，则系统将默认设置
+Request=Limit）：
+
+（4）Guaranteed类型。若容器设置了CPU资源，并且设置Request
+等于Limit但设置为小数，则将运行在共享CPU池中。例如：
+
+总之，为了能让容器独占CPU资源运行，需要满足以下条件：
+◎　设置kubelet服务的启动参数--cpu-manager-policy=static；
+◎　容器的CPU资源需求QoS级别必须是Guaranteed级别，即
+Request=Limit；
+◎　必须将容器的CPU Limit设置为大于等于1的整数。
+10.4.9　拓扑管理器
+在Kubernetes集群中部署容器应用时，我们常常根据应用的资源需
+求设置资源分配策略，包括CPU、GPU、内存、设备等资源，但是对不
+同类型资源的管理是由单独的组件进行的。随着容器化技术的成熟，越
+来越多的应用系统利用CPU、GPU、硬件加速等资源组合来支持对延迟
+要求更高的任务和高吞吐量并行计算。为了获得最佳性能，需要进行与
+CPU隔离、内存优化、本地设备有关的优化。Kubernetes从1.16版本开
+始引入拓扑管理器（Topology Manager）功能，旨在协调对多种资源进
+行优化的功能组件，为高性能计算应用的多种资源需求组合提供支持，
+目前为Beta阶段。本节对拓扑管理器的工作原理和策略示例进行说明。
+1.拓扑管理器的工作原理
+在引入拓扑管理器之前，Kubernetes中的CPU和设备管理器都需要
+独立做出资源分配决策，这可能导致在多核系统上出现与期望不一致的
+资源分配结果（比如从不同的NUMA节点分配CPU和设备，从而导致更
+长的计算延迟），使得对性能或延迟敏感的应用造成影响。
+拓扑管理器是kubelet中的一个组件，起着信息源的作用，以便
+kubelet的其他组件做出与拓扑结构相对应的资源分配决定。拓扑管理器
+为资源管理组件提供了一个名为建议提供者（Hint Providers）的接口，
+以发送和接收拓扑（Topology）的相关信息。
+拓扑管理器管理着Node级别的一组策略，从建议提供者处接收拓扑
+信息，将其保存为表示可用NUMA节点和首选分配指示的位掩码
+（bitmask）。拓扑管理器对接收到的建议（Hint）执行一组操作，并根
+据策略对建议进行收敛计算以得到最优解。如果拓扑管理器保存了不符
+合预期的建议，则将该建议的优选字段设置为false。在当前策略中，首
+
+选的是最窄的优选掩码。所选建议将被存储为拓扑管理器的一部分。取
+决于所配置的策略，所选建议可用于决定节点是否接受或拒绝Pod。之
+后，建议会被存储在拓扑管理器中，供建议提供者进行资源分配决策时
+使用。
+2.启用拓扑管理器
+要启用拓扑管理器特性，就需要在Kubernetes各个服务的特性开关
+中进行开启：--feature-gates=...，TopologyManager=true，从Kubernetes
+1.18版本开始默认启用。
+3.拓扑管理器策略
+拓扑管理器目前会对所有QoS类的Pod执行对齐（Align）操作，并
+针对建议提供者提供的拓扑建议，对请求的资源进行对齐（Align）操
+作。
+说明：为了将Pod定义中的CPU资源与其他请求资源对齐，需要启
+用CPU管理器并且在节点上配置适当的CPU管理器策略（参考10.4.8节
+的说明）。
+拓扑管理器支持4种分配策略，可以通过kubelet启动参数--topology-
+manager-policy设置分配策略，包括：none（不执行任何拓扑对齐操
+作，默认值为none）、best-effort、restricted和single-numa-node。下面对
+后三种分配策略进行说明。
+（1）best-effort分配策略。对于QoS级别为Guaranteed的Pod中的每
+个容器，kubelet都将调用每个建议提供者以确定资源的可用性。基于这
+些信息，拓扑管理器将为各容器存储首选NUMA节点亲和性。如果亲和
+性不是首选，则拓扑管理器将存储该亲和性，并且无论如何都将Pod调
+度到该节点上。之后建议提供者就可以在做出资源分配决策时使用此信
+息了。
+（2）restricted分配策略。对于QoS级别为Guaranteed的Pod中的每个
+容器，与best-effort相同，即kubelet调用每个建议提供者以确定其资源可
+用性，基于这些信息，拓扑管理器将为各容器存储首选NUMA节点亲和
+性。如果亲和性不是首选，则拓扑管理器将拒绝调度Pod到该节点上。
+这将导致Pod处于Terminated状态，错误信息为准入（admission）失
+败。一旦Pod处于Terminated状态，Kubernetes调度器就将不再尝试重新
+
+调度该Pod。建议使用ReplicaSet或Deployment来重新部署Pod。也可以
+通过实现外部控制器，以对存在Topology Affinity错误信息的Pod进行重
+新部署。如果Pod被允许运行在某节点上，建议提供者就可以在做出资
+源分配决策时使用此信息了。
+（3）single-numa-node分配策略。对于QoS级别为Guaranteed的Pod
+中的每个容器，kubelet调用每个建议提供者以确定其资源可用性。基于
+这些信息，拓扑管理器确定是否可能实现单个NUMA节点的亲和性。如
+果可能，拓扑管理器将存储此信息，之后建议提供者就可以在做出资源
+分配决策时使用此信息了。如果不可能，拓扑管理器将拒绝Pod运行于
+该节点上，这将导致Pod处于Terminated状态，错误信息为准入
+（admission）失败。一旦Pod处于Terminated状态，Kubernetes调度器则
+将不会尝试重新调度该Pod。建议使用ReplicaSet或Deployment来重新部
+署Pod。也可以通过实现外部控制器，以对存在Topology Affinity错误信
+息的Pod进行重新部署。
+4.Pod与拓扑管理器策略的交互示例
+考虑以下两种不同QoS级别的容器配置。
+1）对BestEffort和Burstable类型Pod的拓扑管理机制
+BestEffort类型的Pod定义，未设置CPU 
+Request和CPU 
+Limit，例
+如：
+Burstable类型的Pod定义，设置的资源Request小于Limit，例如：
+
+如果选择的拓扑管理策略是none以外的任何其他策略（best-effort、
+restricted或single-numa-node），则拓扑管理器都会评估这些Pod的定
+义。拓扑管理器会询问建议提供者获取拓扑建议。如果策略为static，则
+CPU管理器策略会返回默认的拓扑建议，因为以上Pod并没有显式地请
+求CPU资源。
+（2）对Guaranteed类型和未设置CPU资源Pod的拓扑管理机制
+Guaranteed类型的Pod定义，设置的资源Request等于Limit，例如：
+
+或者
+
+BestEffort类型的Pod定义，未设置CPU和内存资源，例如：
+
+拓扑管理器对上述几个Pod的管理机制如下。
+拓扑管理器将询问建议提供者，即CPU管理器和设备管理器，以获
+取拓扑建议。
+（1）对于Guaranteed类型的CPU请求数为整数的Pod，在CPU管理
+策略为“static”时将返回与独占CPU请求有关的建议；而设备管理器将返
+回有关所请求设备的建议。
+（2）对于Guaranteed类型的CPU请求可共享的Pod，在CPU管理策
+略为“static”时将返回默认的拓扑建议，因为没有排他性的CPU请求；设
+备管理器则针对所请求的设备返回有关建议。
+在上述Guaranteed 
+Pod情况下，CPU管理策略为none时都会返回默
+认的拓扑建议。
+（3）对于BestEffort类的Pod，由于没有设置CPU Request，CPU管
+理策略为static时将返回默认建议，而设备管理器将为每个请求的设备都
+返回建议。
+
+基于此信息，拓扑管理器将为Pod计算最佳建议并存储该信息，以
+供建议提供者在进行资源分配决策时使用。
+5.拓扑管理器当前的局限性
+拓扑管理器在当前有以下局限性。
+（1）拓扑管理器所能处理的最大NUMA节点数量为8个。如果
+NUMA节点数量超过8个，则尝试枚举所有可能的NUMA亲和性并为之
+生成建议时，可能会发生状态爆炸（State Explosion）。
+（2）调度器无法做到拓扑感知，因此可能会调度Pod到某个节点
+上，但由于拓扑管理器的原因导致Pod无法在该节点上运行。
+（3）目前仅有设备管理器（Device Manager）和CPU管理器（CPU
+Manager）两个组件适配了拓扑管理器的HintProvider接口。这意味着
+NUMA对齐只能针对CPU管理器和设备管理器所管理的资源进行实现。
+内存（Memory）和巨页（Hugepage）在拓扑管理器决定NUMA对齐时
+都还不会被考虑在内。
+10.5　资源紧缺时的Pod驱逐机制
+在Kubernetes集群中，节点最重要的资源包括CPU、内存和磁盘，
+其中，内存和磁盘资源属于不可压缩的资源，如果这类资源不足，则无
+法继续申请新的资源。同时，节点中现存的进程，包括操作系统的进
+程、用户进程（含Pod进程），随时可能申请更多的内存或磁盘资源，
+所以在资源严重不足的情况下，操作系统会触发OOM 
+Killer的终极审
+批。
+为了避免出现这种严重后果，Kubernetes设计和实现了一套自动化
+的Pod驱逐机制，该机制会自动从资源紧张的节点上驱逐一定数量的
+Pod，以保证在该节点上有充足的资源。具体做法是通过kubelet实现Pod
+的驱逐过程，而kubelet也不是随机驱逐的，它有自己的一套驱逐机制，
+每个节点上的kubelet都会通过cAdvisor提供的资源使用指标来监控自身
+节点的资源使用量，并根据这些指标的变化做出相应的驱逐决定和操
+作。kubelet持续监控主机的资源使用情况，尽量防止计算资源被耗尽，
+
+一旦出现资源紧缺的迹象，就会主动终止一个或多个Pod的运行，以回
+收紧缺的资源。当一个Pod被终止时，其中的容器会被全部停止，Pod的
+状态会被设置为Failed。
+10.5.1　驱逐时机
+首先，在磁盘资源不足时会触发Pod的驱逐行为。Kubernetes包括两
+种文件系统：nodefs和imagefs。nodefs是kubelet用于存储卷系统、服务
+程序日志等的文件系统；imagefs是容器运行时使用的可选文件系统，用
+于存储容器镜像和容器可写层数据。cAdvisor提供了这两种文件系统的
+相关统计指标，分别如下。
+◎　available：表示该文件系统中可用的磁盘空间。
+◎　inodesFree：表示该文件系统中可用的inode数量（索引节点数
+量）。
+默认情况下，kubelet检测到下面的任意条件满足时，就会触发Pod
+的驱逐行为。
+◎　nodefs.available<10%。
+◎　nodefs.inodesFree<5%。
+◎　imagefs.available<15%。
+◎　imagefs.available<15%。
+如果nodefs达到驱逐阈值，kubelet就会删除所有已失效的Pod及其容
+器实例对应的磁盘文件。相应地，如果imagefs达到驱逐阈值，则kubelet
+会删除所有未使用的容器镜像。kubelet不关注其他文件系统，不支持所
+有其他类型的配置，例如保存在独立文件系统中的卷和日志。
+然后，当节点的内存不足时也会触发Pod的驱逐行为。
+memory.available代表当前节点的可用内存，默认情况下，
+memory.available<100Mi时会触发Pod的驱逐行为。驱逐Pod的过程：
+①kubelet从cAdvisor中定期获取相关的资源使用量指标数据，通过配置
+的阈值筛选出满足驱逐条件的Pod；②kubelet对这些Pod进行排序，每次
+都选择一个Pod进行驱逐。
+
+最后，从Kubernetes 1.9版本开始，kubelet在驱逐Pod的过程中不会
+参考Pod的QoS等级，只根据Pod的nodefs使用量进行排序，并选择使用
+量最多的Pod进行驱逐。所以即使是QoS等级为Guaranteed的Pod，在这
+个阶段也有可能被驱逐（例如nodefs使用量最大）。
+10.5.2　驱逐阈值
+kubelet可以定义驱逐阈值，一旦超出阈值，就会触发kubelet的资源
+回收行为。
+阈值的定义方式如下：
+其中：①当前仅支持一个operator（运算符）“<”（小于）；
+②quantity需要符合Kubernetes的数量表达方式，也能以%结尾的百分比
+表示。
+例如，如果一个节点有10GiB内存，我们希望在可用内存不足1GiB
+时进行驱逐Pod的操作，就可以这样定义驱逐阈值：
+memory.available<10%或者memory.available<1GiB。
+对驱逐阈值又可以通过软阈值和硬阈值两种方式进行设置，如下所
+述。
+1.驱逐软阈值
+驱逐软阈值由一个驱逐阈值和一个管理员设定的宽限期共同定义。
+当系统资源消耗达到软阈值时，在这一状况的持续时间达到宽限期之
+前，kubelet不会触发驱逐动作。如果没有定义宽限期，则kubelet会拒绝
+启动。
+另外，可以定义终止Pod的宽限期。如果定义了这一宽限期，那么
+kubelet会使用pod.Spec.TerminationGracePeriodSeconds和最大宽限期这两
+个值之间较小的数值进行宽限，如果没有指定，则kubelet会立即“杀
+掉”Pod。
+
+软阈值的定义包括以下几个参数。
+◎　--eviction-soft：描述驱逐阈值（例如
+memory.available<1.5GiB），如果满足这一条件的持续时间超过宽限
+期，就会触发对Pod的驱逐动作。
+◎　--eviction-soft-grace-period：驱逐宽限期（例如
+memory.available=1m30s），用于定义达到软阈值之后持续时间超过多
+久才进行驱逐。
+◎　--eviction-max-pod-grace-period：在达到软阈值后，终止Pod的
+最大宽限时间（单位为s）。
+2.驱逐硬阈值
+硬阈值没有宽限期，如果达到了硬阈值，则kubelet会立即“杀
+掉”Pod并进行资源回收。
+硬阈值的定义包括参数--eviction-hard：驱逐硬阈值，一旦达到阈
+值，就会触发对Pod的驱逐操作。
+kubelet的默认硬阈值定义如下：
+kubelet的--housekeeping-interval参数用于定义了一个时间间隔，
+kubelet每隔一个这样的时间间隔就会对驱逐阈值进行评估。
+10.5.3　节点状态
+kubelet会将一个或多个驱逐信号与节点状态对应起来。无论是触发
+了硬阈值还是触发了软阈值，kubelet都会认为当前节点的压力太大，如
+表10.6所示为节点状态与驱逐信号的对应关系。
+表10.6　节点状态与驱逐信号的对应关系
+
+kubelet会持续向Master报告节点状态的更新过程，这一频率由参数-
+-node-status-update-frequency指定，默认为10s。
+10.5.4　节点状态的振荡
+如果一个节点状态在软阈值的上下振荡，但没有超过宽限期，则会
+导致该节点的相应状态在True和False之间不断变换，可能对调度的决策
+过程产生负面影响。
+要防止这种状态出现，可以使用参数--eviction-pressure-transition-
+period（在脱离压力状态前需要等待的时间，默认值为5m0s）为kubelet
+设置脱离压力状态之前需要等待的时间。
+这样一来，kubelet在把压力状态设置为False之前，会确认在检测周
+期之内该节点没有达到驱逐阈值。
+10.5.5　回收Node级别的资源
+如果达到了驱逐阈值，并且也过了宽限期，kubelet就会回收超出限
+量的资源，直到驱逐信号量回到阈值以内。
+kubelet在驱逐用户Pod之前，会尝试回收Node级别的资源。在观测
+到磁盘压力时，基于服务器是否为容器运行时定义了独立的imagefs，会
+有不同的资源回收过程。
+1.有Imagefs时
+
+（1）如果nodefs文件系统达到了驱逐阈值，则kubelet会删掉已停掉
+的Pod和容器来清理空间。
+（2）如果imagefs文件系统达到了驱逐阈值，则kubelet会删掉所有
+无用的镜像来清理空间。
+2.没有Imagefs时
+如果nodefs文件系统达到了驱逐阈值，则kubelet会这样清理空间：
+首先删除已停掉的Pod、容器；然后删除所有无用的镜像。
+10.5.6　驱逐用户的Pod
+kubelet如果无法在节点上回收足够的资源，就会开始驱逐用户的
+Pod。
+kubelet会按照下面的标准对Pod的驱逐行为进行判断。
+◎　Pod要求的服务质量。
+◎　Pod对紧缺资源的消耗量（相对于资源请求Request）。
+接下来，kubelet会按照下面的顺序驱逐Pod。
+（1）BestEffort：紧缺资源消耗最多的Pod最先被驱逐。
+（2）Burstable：根据相对请求来判断，紧缺资源消耗最多的Pod最
+先被驱逐，如果没有Pod超出它们的请求，则策略会瞄准紧缺资源消耗
+量最大的Pod。
+（3）Guaranteed：根据相对请求来判断，紧缺资源消耗最多的Pod
+最先被驱逐，如果没有Pod超出它们的请求，则策略会瞄准紧缺资源消
+耗量最大的Pod。
+Guaranteed Pod永远不会因为其他Pod的资源消费被驱逐。如果系统
+进程（例如kubelet、docker、journald等）消耗了超出system-reserved或
+者kube-reserved的资源，而在这一节点上只运行了Guaranteed Pod，那么
+为了保证节点的稳定性并降低异常消耗对其他Guaranteed Pod的影响，
+必须选择一个Guaranteed Pod进行驱逐。
+本地磁盘是一种BestEffort资源。如有必要，kubelet会在
+
+DiskPressure的情况下，对Pod进行驱逐以回收磁盘资源。kubelet会按照
+QoS进行评估。如果kubelet判定缺乏inode资源，就会通过驱逐最低QoS
+的Pod方式来回收inodes。如果kubelet判定缺乏磁盘空间，就会在相同
+QoS的Pod中选择消耗最多磁盘空间的Pod进行驱逐。下面针对有Imagefs
+和没有Imagefs的两种情况，说明kubelet在驱逐Pod时选择Pod的排序算
+法，然后按顺序对Pod进行驱逐。
+1.有Imagefs的情况
+如果nodefs触发了驱逐，则kubelet会根据nodefs的使用情况（以Pod
+中所有容器的本地卷和日志所占的空间进行计算）对Pod进行排序。
+如果imagefs触发了驱逐，则kubelet会根据Pod中所有容器消耗的可
+写入层的使用空间进行排序。
+2.没有Imagefs的情况
+如果nodefs触发了驱逐，则kubelet会对各个Pod中所有容器的总体磁
+盘消耗（以本地卷+日志+所有容器的写入层所占的空间进行计算）进行
+排序。
+10.5.7　资源最少回收量
+在某些场景下，驱逐Pod可能只回收了很少的资源，这就导致了
+kubelet反复触发驱逐阈值。另外，回收磁盘这样的资源是需要消耗时间
+的。
+要缓和这种状况，kubelet可以对每种资源都定义minimum-reclaim。
+kubelet一旦监测到了资源压力，就会试着回收不少于minimum-reclaim的
+资源数量，使得资源消耗量回到期望的范围。
+例如，可以配置--eviction-minimum-reclaim如下：
+
+这样配置的效果如下。
+◎　当memory.available超过阈值并触发了驱逐操作时，kubelet会启
+动资源回收，并保证memory.available至少有500MiB。
+◎　当nodefs.available超过阈值并触发了驱逐操作时，kubelet会恢
+复nodefs.available到至少1.5GiB。
+◎　当imagefs.available超过阈值并触发了驱逐操作时，kubelet会保
+证imagefs.available恢复到至少102GiB。
+在默认情况下，所有资源的eviction-minimum-reclaim都为0。
+10.5.8　节点资源紧缺情况下的系统行为
+1.调度器的行为
+在节点资源紧缺的情况下，节点会向Master报告这一状况。在
+Master上运行的调度器（Scheduler）以此为信号，不再继续向该节点调
+度新的Pod。如表10.7所示为节点状况与调度行为的对应关系。
+表10.7　节点状况与调度行为的对应关系
+
+2.Node的OOM行为
+如果节点在kubelet能够回收内存之前遭遇了系统的OOM（内存不
+足），节点则依赖oom_killer的设置进行响应（OOM评分系统详见10.4
+节的说明）。
+kubelet根据Pod的QoS为每个容器都设置了一个oom_score_adj值，
+如表10.8所示。
+表10.8　kubelet根据Pod的QoS为每个容器都设置了一个oom_score_adj值
+如果kubelet无法在系统OOM之前回收足够的内存，则oom_killer会
+根据内存使用比率来计算oom_score，将得出的结果和oom_score_adj相
+加，得分最高的Pod首先被驱逐。
+这个策略的思路是，QoS最低且相对于调度的Request来说消耗最多
+内存的Pod会首先被驱逐，来保障内存的回收。
+与Pod驱逐不同，如果一个Pod的容器被OOM“杀掉”，则可能被
+kubelet根据RestartPolicy重启。
+3.对DaemonSet类型的Pod驱逐的考虑
+通过DaemonSet创建的Pod具有在节点上自动重启的特性，因此我
+们不希望kubelet驱逐这种Pod。然而kubelet目前并没有能力分辨
+DaemonSet的Pod，所以无法单独为其制定驱逐策略，所以强烈建议不
+要在DaemonSet中创建BestEffort类型的Pod，避免产生驱逐方面的问
+题。
+
+10.5.9　可调度的资源和驱逐策略实践
+假设一个集群的资源管理需求如下。
+◎　节点内存容量：10GiB。
+◎　保留10%的内存给系统守护进程（操作系统、kubelet等）。
+◎　在内存使用率达到95%时驱逐Pod，以此降低系统压力并防止
+系统OOM。
+为了满足这些需求，kubelet应该设置如下参数：
+在这个配置方式中隐式包含这样一个设置：系统预留内存也包括资
+源驱逐阈值。
+如果内存占用超出这一设置，则要么是Pod占用了超过其Request的
+内存，要么是系统使用了超过500MiB的内存。在这种设置下，节点一
+旦开始接近内存压力，调度器就不会向该节点部署Pod，并且假定这些
+Pod使用的资源数量少于其请求的资源数量。
+10.5.10　现阶段的问题
+1.kubelet无法及时观测到内存压力
+kubelet目前通过cAdvisor定时获取内存使用状况的统计情况。如果
+内存使用在这个时间段内发生了快速增长，且kubelet无法观察到
+MemoryPressure，则可能会触发OOMKiller。Kubernetes正在尝试将这一
+过程集成到memcg通知API中来减少这一延迟，而不是让内核首先发现
+这一情况。
+对用户来说，一个较为可靠的处理方式就是设置驱逐阈值大约为
+75%，这样就降低了发生OOM的概率，提高了驱逐标准，有助于集群状
+
+态的平衡。
+2.kubelet可能会错误地驱逐更多的Pod
+这也是状态搜集存在时间差导致的。未来可能会通过按需获取根容
+器的统计信息来减少计算偏差。
+10.6　Pod Disruption Budget（主动驱逐保
+护）
+在Kubernetes集群运行过程中，许多管理操作都可能对Pod进行主动
+驱逐，“主动”一词意味着这一操作可以安全地延迟一段时间，目前主要
+针对以下两种场景。
+◎　节点维护或升级时（kubectl drain）。
+◎　对应用的自动缩容操作（autoscaling down）。
+作为对比，由于节点不可用（Not Ready）导致的Pod驱逐就不能被
+称为主动了，但是Pod的主动驱逐行为可能导致某个服务对应的Pod实例
+全部或大部分被“消灭”，从而引发业务中断或业务SLA降级，而这是违
+背Kubernetes的设计初衷的。因此需要一种机制来避免我们希望保护的
+Pod被主动驱逐，这种机制的核心就是PodDisruptionBudget。通过使用
+PodDisruptionBudget，应用可以保证那些会主动移除Pod的集群操作永
+远不会在同一时间停掉太多Pod（从而导致服务中断或者服务降级
+等）。
+PodDisruptionBudget资源对象用于指定一个Pod集合在一段时间内
+存活的最小实例数量或者百分比。一个PodDisruptionBudget作用于一组
+被同一个控制器管理的Pod，例如DeploymentReplicaSet或RC。与通常的
+Pod删除不同，驱逐Pod的控制器将使用/eviction接口对Pod进行驱逐，如
+果这一主动驱逐行为违反了PodDisruptionBudget的约定，就会被API
+Server拒绝。kubectl drain操作将遵循PodDisruptionBudget的设定，如果
+在该节点上运行了属于同一服务的多个Pod，则为了保证最少存活数
+量，系统将确保每终止一个Pod，就一定会在另一台健康的Node上启动
+新的Pod，再继续终止下一个Pod。需要注意的是，Disruption Controller
+
+不能取代Deployment、Statefulset等具备副本控制能力的Controller。
+PodDisruptionBudget对象的保护作用仅仅针对主动驱逐场景，而非所有
+场景，比如针对下面这些场景，PodDisruptionBudget机制完全无效。
+◎　后端节点物理机的硬件发生故障。
+◎　集群管理员错误地删除虚拟机（实例）。
+◎　云提供商或管理程序发生故障，使虚拟机消失。
+◎　内核恐慌（kernel panic）。
+◎　节点由于集群网络分区而从集群中消失。
+◎　由于节点资源不足而将容器逐出。
+对PodDisruptionBudget的定义包括如下几个关键参数。
+◎　Label Selector：用于筛选被管理的Pod。
+◎　minAvailable：指定驱逐过程中需要保障的最少Pod数量。
+minAvailable可以是一个数字，也可以是一个百分比，例如100%就表示
+不允许进行主动驱逐。
+◎　maxUnavailable：要保证最大不可用的Pod数量或者比例。
+◎　minAvailable和maxUnavailable不能被同时定义。
+除了Pod对象，PodDisruptionBudget目前也支持了具备扩容能力的
+CRD对象，即这些CRD拥有Scale子对象资源并支持扩容功能。
+PodDisruptionBudget应用示例如下。
+（1）创建一个Deployment，设置Pod副本数量为3：
+
+
+创建后通过kubectl get pods命令查看Pod的创建情况：
+（2）接下来创建一个PodDisruptionBudget资源对象：
+
+PodDisruptionBudget使用的是和Deployment一样的Label Selector，
+并且设置存活Pod的数量不得少于3个。
+（3）主动驱逐验证。对Pod的主动驱逐操作将通过驱逐
+API（/eviction）来完成。可以将这个API看作受策略控制的对Pod的
+DELETE操作。要实现一次主动驱逐（更准确的说法是创建一个Eviction
+资源），则需要POST一个JSON请求，以eviction.json文件格式表示，例
+如希望驱逐名为“nginx-1968750913-0k01k”的Pod，内容如下：
+
+用curl命令执行驱逐操作：
+由于PodDisruptionBudget设置存活的Pod数量不能少于3个，因此驱
+逐操作会失败，在返回的错误信息中会包含如下内容：
+
+使用kubectl get pods命令查看Pod列表，会看到Pod的数量和名称都
+没有发生变化。
+（4）删除PodDisruptionBudget资源对象，再次验证驱逐Pod。用
+
+kubectl delete pdb nginx命令删除PodDisruptionBudget资源对象：
+再次执行上文中的curl指令，会执行成功。
+通过kubectl get pods命令查看Pod列表，会发现Pod的数量虽然没有
+发生变化，但是指定的Pod已被删除，取而代之的是一个新的Pod。
+
+10.7　Kubernetes集群监控
+Kubernetes的早期版本依靠Heapster来实现完整的性能数据采集和监
+控功能，Kubernetes从1.8版本开始，性能数据开始以Metrics API方式提
+供标准化接口，并且从1.10版本开始将Heapster替换为Metrics 
+Server。
+在Kubernetes新的监控体系中，Metrics Server用于提供核心指标（Core
+Metrics），包括Node、Pod的CPU和内存使用指标。对其他自定义指标
+（Custom Metrics）的监控则由Prometheus等组件来完成。
+10.7.1　使用Metrics Server监控Node和Pod的CPU
+和内存使用数据
+Metrics 
+Server在部署完成后，将通过Kubernetes核心API 
+Server
+的/apis/metrics.k8s.io/v1beta1路径提供Node和Pod的监控数据。Metrics
+Server源代码和部署配置可以在Kubernete官方GitHub代码库中找到。
+Metrics Server提供的数据既可以用于基于CPU和内存的自动水平扩
+缩容（HPA）功能，也可以用于自动垂直扩缩容（VPA）功能，VPA相
+关的内容请参考12.3节的说明。
+Metrics Server的YAML配置主要包括以下内容。
+（1）Deployment和Service的定义及相关RBAC策略：
+
+
+
+
+（2）APIService资源及相关RBAC策略：
+
+
+
+通过kubectl create命令创建metrics-server服务：
+确认metrics-server的Pod启动成功：
+接下来就可以使用kubectl top nodes和kubectl top pods命令监控Node
+和Pod的CPU、内存资源的使用情况了：
+
+10.7.2　Prometheus+Grafana集群性能监控平台搭
+建
+Prometheus是由SoundCloud公司开发的开源监控系统，是继
+Kubernetes之后CNCF第2个毕业的项目，在容器和微服务领域得到了广
+泛应用。Prometheus的主要特点如下。
+◎　使用指标名称及键值对标识的多维度数据模型。
+◎　采用灵活的查询语言PromQL。
+◎　不依赖分布式存储，为自治的单节点服务。
+◎　使用HTTP完成对监控数据的拉取。
+◎　支持通过网关推送时序数据。
+◎　支持多种图形和Dashboard的展示，例如Grafana。
+Prometheus生态系统由各种组件组成，用于功能的扩充。
+◎　Prometheus Server：负责监控数据采集和时序数据存储，并提
+供数据查询功能。
+
+◎　客户端SDK：对接Prometheus的开发工具包。
+◎　Push Gateway：推送数据的网关组件。
+◎　第三方Exporter：各种外部指标收集系统，其数据可以被
+Prometheus采集。
+◎　AlertManager：告警管理器。
+◎　其他辅助支持工具。
+Prometheus的核心组件Prometheus 
+Server的主要功能包括：从
+Kubernetes Master中获取需要监控的资源或服务信息；从各种Exporter中
+抓取（Pull）指标数据，然后将指标数据保存在时序数据库（TSDB）
+中；向其他系统提供HTTP API进行查询；提供基于PromQL语言的数据
+查询；可以将告警数据推送（Push）给AlertManager，等等。
+Prometheus的系统架构图如图10.5所示。
+我们可以直接基于官方提供的镜像部署Prometheus，也可以通过
+Operator模式部署Prometheus。本文以直接部署为例，Operator模式的部
+署案例可以参考3.12.2节的示例。下面对如何部署Prometheus、
+node_exporter、Grafana服务进行说明。
+
+图10.5　Prometheus的系统架构图
+1.部署Prometheus服务
+
+首先，创建一个ConfigMap，用于保存Prometheus的主配置文件
+prometheus.yml，配置需要监控的Kubernetes集群的资源对象或服务（如
+Master、Node、Pod、Service、Endpoint等），更详细的配置说明请参考
+Prometheus官网文档：
+
+
+
+
+
+
+
+
+接下来部署Prometheus Deployment、Service及相关RBAC策略：
+
+
+
+
+
+
+
+
+Prometheus Deployment的关键配置参数如下。
+◎　--config.file：配置文件prometheus.yml的路径。
+◎　--storage.tsdb.path：数据存储目录，对其Volume建议使用高可
+用存储。
+◎　--storage.tsdb.retention：数据保存时长，根据数据保留时间需
+求进行设置。
+通过kubectl create命令创建Prometheus服务：
+
+确认Prometheus Pod运行成功：
+Prometheus提供了一个简单的Web页面用于查看已采集的监控数
+据，上面的Service定义了NodePort为9090，我们可以通过访问Node的
+9090端口访问这个页面，如图10.6所示。
+
+图10.6　Prometheus提供的Web页面
+在Prometheus提供的Web页面上，可以输入PromQL查询语句对指标
+数据进行查询，也可以选择一个指标进行查看，例如选择
+container_network_receive_bytes_total指标查看容器的网络接收字节数，
+如图10.7所示。
+
+图10.7　在Prometheus页面查看指标的值
+单击Graph标签，可以查看该指标的时序图，如图10.8所示。另
+外，在Status菜单下还可以查看当前运行状态、配置内容
+（prometheus.yml）、其他规则等信息。例如，在Target页面可以看到
+Prometheus当前采集的Target列表，如图10.9所示。
+
+图10.8　在Prometheus页面查询指标的时序图
+
+图10.9　Prometheus当前采集的Target列表
+2.部署node_exporter服务
+Prometheus支持对各种系统和服务部署各种Exporter进行指标数据
+的采集。目前Prometheus支持多种开源软件的Exporter，包括数据库、
+硬件系统、消息系统、存储系统、HTTP服务器、日志服务等，可以从
+
+Prometheus官网获取各种Exporter的信息。
+下面以官方维护的node_exporter为例进行部署。node_exporter主要
+用于采集主机相关的性能指标数据，其YAML文件示例如下：
+
+
+
+
+通过kubectl create命令创建Prometheus服务：
+在部署完成后，在每个Node上都运行了一个node-exporter Pod：
+
+从Prometheus的Web页面就可以查看node-exporter采集的Node指标
+数据了，包括CPU、内存、文件系统、网络等信息，通过以node_开头
+的指标名称可以查询，如图10.10所示。
+采集的指标来源于arp、bcache、bonding、conntrack、cpu、diskstats
+等采集器（collector），默认的采集器和可以额外设置的采集器均可在
+node-exporter的GitHub官网进行查询，如图10.11所示。
+
+图10.10　node_exporter提供的Node性能指标
+
+图10.11　查询界面
+3.部署Grafana服务
+最后，部署Grafana用于展示专业的监控页面，其YAML文件如下：
+
+
+
+
+部署完成后，通过Kubernetes Master的proxy接口URL访问Grafana页
+面，例如http：//192.168.18.3：8080/api/v1/namespaces/kube-
+system/services/grafana/proxy。
+在Grafana的设置页面添加类型为Prometheus的数据源，输入
+Prometheus服务的URL（如http：//prometheus：9090）进行保存，如图
+10.12所示。
+在Grafana的Dashboard控制面板中导入预置的Dashboard面板，以显
+示各种监控图表。Grafana官网提供了许多针对Kubernetes集群监控的
+Dashboard面板，可以下载、导入并使用。图10.13显示了一个可以监控
+Kubernetes集群总的CPU、内存、文件系统、网络吞吐率的Dashboard。
+
+图10.12　Grafana配置数据源页面
+
+图10.13　Kubernetes集群监控页面
+至此，基于Prometheus+Grafana的Kubernetes集群监控系统就搭建完
+成了。
+10.8　Kubernetes集群日志管理
+日志对于业务分析和系统分析是非常重要的数据。在一个
+Kubernetes集群中，大量容器应用运行在众多Node上，各容器和Node的
+系统组件都会生成许多日志文件。但是容器具有不稳定性，在发生故障
+时可能被Kubernetes重新调度，Node也可能由于故障无法使用，造成日
+志丢失，这就要求管理员对容器和系统组件生成的日志进行统一规划和
+
+管理。
+10.8.1　容器应用和系统组件输出日志的各种场景
+容器应用和系统组件输出日志的场景如下。
+1.容器应用输出日志的场景
+容器应用可以选择将日志输出到不同的目标位置：
+◎　输出到标准输出和标准错误输出；
+◎　输出到某个日志文件；
+◎　输出到某个外部系统。
+输出到标准输出和标准错误输出的日志通常由容器引擎接管，并保
+存在容器运行的Node上，例如Docker会被保存
+在/var/lib/docker/containers目录下。在Kubernetes中，用户可以通过
+kubectl logs命令查看容器输出到stdout和stderr的日志，例如：
+
+输出到文件中的日志，其保存位置依赖于容器应用使用的存储类
+型。如果未指定特别的存储，则容器内应用程序生成的日志文件由容器
+引擎（例如Docker）进行管理（例如存储为本地文件），在容器退出时
+可能被删除。需要将日志持久化存储时，容器可以选择使用Kubernetes
+提供的某种存储卷（Volume），例如hostpath（保存在Node上）、
+nfs（保存在NFS服务器上）、PVC（保存在某种网络共享存储上）。保
+存在共享存储卷中的日志要求容器应用确保文件名或子目录名称不冲
+
+突。
+某些容器应用也可能将日志直接输出到某个外部系统中，例如通过
+一个消息队列（如Kafka）转发到一个后端日志存储中心。在这种情况
+下，外部系统的搭建方式和应用程序如何将日志输出到外部系统，应由
+容器应用程序的运维人员负责，不应由Kubernetes负责。
+2.系统组件输入日志的场景
+Kubernetes的系统组件主要包括在Master上运行的管理组件（kube-
+apiserver、kube-controller-manager和kube-scheduler），以及在每个Node
+上运行的管理组件（kubelet和kube-proxy）。这些系统组件生成的日志
+对于Kubernetes集群的正常运行和故障排查都非常重要。
+系统组件的日志可以通过--log-dir参数保存到指定的目录下（例
+如/var/log），或者通过--logtostderr参数输出到标准错误输出中
+（stderr）。如果系统管理员将这些服务配置为systemd的系统服务，日
+志则会被journald系统保存。
+Kubernetes从1.19版本开始，开始引入对结构化日志的支持，使日
+志格式统一，便于日志中字段的提取、保存和后续处理。结构化日志以
+JSON格式保存。目前kube-apiserver、kube-controller-manager、kube-
+scheduler和kubelet这4个服务都支持通过启动参数--logging-format=json
+设置JSON格式的日志，需要注意的是，JSON格式的日志在启用systemd
+的系统中将被保存到journald中，在未使用systemd的系统中将在/var/log
+目录下生成*.log文件，不能再通过--log-dir参数指定保存目录。
+例如，查看kube-controller-manager服务的JSON格式日志：
+
+其中一行JSON日志的内容如下：
+Kubernetes应用程序在生成JSON格式日志时，可以设置的字段如
+下。
+
+◎　ts：UNIX格式的浮点数类型的时间戳（必填项）。
+◎　v：日志级别，默认为0（必填项）。
+◎　msg：日志信息（必填项）。
+◎　err：错误信息，字符串类型（可选项）。
+不同的组件也可能输出其他附加字段，例如：
+或
+
+3.审计日志
+Kubernetes的审计日志可通过kube-apiserver服务的--audit-log-*相关
+参数进行设置，关于审计日志的详细说明请参考10.9节的说明。
+对于以上各种日志输出的情况，管理员应该对日志进行以下管理。
+（1）对于输出到主机（Node）上的日志，管理员可以考虑在每个
+Node上都启动一个日志采集工具，将日志采集后汇总到统一日志中心，
+以供日志查询和分析，具体做法如下。
+◎　对于容器输出到stdout和stderr的日志：管理员应该配置容器引
+擎（例如Docker）对日志的轮转（rotate）策略，以免文件无限增长，
+将主机磁盘空间耗尽。
+◎　对于系统组件输出到主机目录上（如/var/log）的日志，管理员
+应该配置各系统组件日志的轮转（rotate）策略，以免文件无限增长等
+将主机磁盘空间耗尽。
+◎　对于容器应用使用hostpath输出到Node上的日志：管理员应合
+理分配主机目录，在满足容器应用存储空间需求的同时，可以考虑使用
+采集工具将日志采集并汇总到统一的日志中心，并定时清理Node的磁盘
+空间。
+
+（2）对于输出到容器内的日志，容器应用可以将日志直接输出到
+容器环境内的某个目录下，这可以减轻应用程序在共享存储中管理不同
+文件名或子目录的复杂度。在这种情况下，管理员可以为应用容器提供
+一个日志采集的sidecar容器，对容器的日志进行采集，并将其汇总到某
+个日志中心，供业务运维人员查询和分析。
+在Kubernetes生态中，推荐采用Fluentd+Elasticsearch+Kibana完成对
+系统组件和容器日志的采集、汇总和查询的统一管理机制。下面对系统
+的部署和应用进行说明。
+10.8.2　Fluentd+Elasticsearch+Kibana日志系统部
+署
+在本节的示例中，我们先对Node上的各种日志进行采集和汇总。
+Fluentd+ Elasticsearch+Kibana系统的逻辑关系架构如图10.14所示。
+图10.14　Fluentd+Elasticsearch+Kibana系统的逻辑关系架构
+
+这里假设将Kubernetes系统组件的日志输出到/var/log目录下，容器
+输出到stdout和stderr的日志由Docker 
+Server保存
+在/var/lib/docker/containers目录下。我们通过在每个Node上都部署一个
+Fluentd容器来采集本节点在这两个目录下的日志文件，然后将其汇总到
+Elasticsearch库中保存，用户通过Kibana提供的Web页面查询日志。
+部署过程主要包括3个组件：Elasticsearch、Fluentd和Kibana。
+1.部署Elasticsearch服务
+Elasticsearch的Deployment和Service定义如下：
+
+
+
+
+关键配置说明如下。
+◎　需要通过一个初始化容器设置系统参数
+vm.max_map_count=262144，这是Elasticsearch的需求。如果在Node的操
+作系统上已设置过，则无须通过初始化容器进行设置。
+
+◎　数据存储目录：在本例中使用hostpath将数据保存在Node上，
+我们应根据实际需求选择合适的存储类型，例如某种高可用的共享存
+储。
+◎　资源限制应根据实际情况进行调整，如果设置得太小，则可能
+会导致OOM Kill。
+◎　将discovery.type设置为single-node意为单节点模式，
+Elasticsearch也可以被部署为高可用集群模式，包括master、client、data
+等节点，详细的部署配置请参考Elasticsearch官方文档的说明。
+这里通过kubectl create命令完成部署，并确认Pod运行成功：
+可以通过访问Elasticsearch服务的URL验证Elasticsearch是否正常运
+行：
+
+
+2.在每个Node上都部署Fluentd
+Fluentd以DaemonSet模式在每个Node上都启动一个Pod进行日志采
+集，对各种日志采集和连接Elasticsearch服务的具体配置使用ConfigMap
+进行设置。Fluentd的YAML定义如下：
+
+
+
+
+关键配置说明如下。
+◎　将宿主机Node的/var/log和/var/lib/docker/containers目录挂载到
+fluentd容器中，用于读取容器输出到stdout和stderr的日志，以及
+Kubernetes组件的日志。
+◎　在以上示例中采集了kube-apiserver服务的WARNING日志，其
+他组件的配置省略。
+◎　资源限制应根据实际情况进行调整，避免Fluentd占用太多资
+源。
+
+◎　hosts elasticsearch：9200：设置Elasticsearch服务的访问地址，
+此处使用了Service名称，由于Fluentd与Elasticsearch处于同一个命名空
+间中，所以此处省略了命名空间的名称。
+◎　logstash_prefix es：Fluentd在Elasticsearch中创建索引（Index）
+的前缀。
+通过kubectl create命令创建Fluentd容器：
+确保Fluentd在每个Node上都正确运行：
+查看Fluentd的容器日志，会看到连接到Elasticsearch服务的记录，
+
+以及后续采集各种日志文件内容的记录：
+
+
+此时通过Elasticsearch服务的API，即可看到已经创建的索引
+（Index）信息：
+至此已经运行了Elasticsearch和Fluentd，数据的采集、汇总和保存
+工作已经完成，接下来部署Kibana服务提供日志查询的Web服务。
+3.部署Kibana服务
+Kibana服务的Deployment和Service定义如下：
+
+
+
+
+关键配置说明如下。
+◎　ELASTICSEARCH_HOSTS：设置Elasticsearch服务的访问地
+址，此处使用服务名称。
+◎　SERVER_BASEPATH：设置Kibana服务通过API Server代理的
+访问路径。
+通过kubectl create命令部署Kibana服务：
+确保Kibana成功运行：
+通过kubectl cluster-info命令查看Kibana服务的访问URL地址：
+在浏览器中输入URL即可打开Kibana页面。
+在Elasticsearch索引管理页面可以看到当前Elasticsearch库中的索引
+
+列表和状态，如图10.15所示。
+图10.15　索引列表和状态
+在Kibana Index Patterns页面创建index pattern“es-*”，如图10.16所
+示。
+
+图10.16　创建index pattern
+
+
+图10.16　创建index pattern（续）
+成功创建index 
+pattern之后，就可以在Discover页面查询日志记录
+了，默认显示过去15min的日志列表，如图10.17所示。
+图10.17　Kibana查询日志页面
+在搜索栏中输入“error”，可以搜索出包含该关键字的日志记录，如
+图10.18所示。
+
+图10.18　Kibana日志关键字的搜索页面
+至此，Kubernetes集群范围内的统一日志管理系统就搭建完成了。
+10.8.3　部署日志采集sidecar工具采集容器日志
+对于容器应用输出到容器目录下的日志，可以为业务应用容器配置
+
+一个日志采集sidecar容器，对业务容器生成的日志进行采集并汇总到某
+个日志中心，供业务运维人员查询和分析，这通常用于业务日志的采集
+和汇总。后端的日志存储可以使用Elasticsearch，也可以使用其他类型
+的数据库（如MongoDB），或者通过消息队列进行转发（如Kafka），
+需要根据业务应用的具体需求进行合理选择。
+日志采集sidecar工具也有多种选择，常见的开源软件包括Fluentd、
+Filebeat、Flume等，在下例中使用Fluentd进行说明。
+为业务应用容器配置日志采集sidecar时，需要在Pod中定义两个容
+器，然后创建一个共享的Volume供业务应用容器生成日志文件，并供
+日志采集sidecar读取日志文件。例如：
+
+
+在这个Pod中创建了一个类型为emptyDir的Volume，挂载到webapp
+容器的/usr/local/tomcat/logs目录下，也挂载到fluentd容器中的/app-logs
+目录下。Volume的类型不限于emptyDir，需要根据业务需求合理选择。
+在Pod创建成功之后，webapp容器会在/usr/local/tomcat/logs目录下
+持续生成日志文件，fluentd容器作为sidecar持续采集应用程序的日志文
+件，并将其保存到后端的日志库中。需要注意的是，webapp容器应负责
+日志文件的清理工作，以免耗尽磁盘空间。
+10.9　Kubernetes的审计机制
+Kubernetes为了加强对集群操作的安全监管，从1.4版本开始引入审
+计机制，主要体现为审计日志（Audit Log）。审计日志按照时间顺序记
+录了与安全相关的各种事件，这些事件有助于系统管理员快速、集中了
+解发生了什么事情、作用于什么对象、在什么时间发生、谁（从哪儿）
+触发的、在哪儿观察到的、活动的后续处理行为是怎样的，等等。
+下面是两条Pod操作的审计日志示例。
+第1条：
+第2条：
+
+API 
+Server把客户端的请求（Request）的处理流程视为一个“链
+条”，这个链条上的每个“节点”就是一个状态（Stage），从开始到结束
+的所有Request Stage如下。
+◎　RequestReceived：在Audit Handler收到请求后生成的状态。
+◎　ResponseStarted：响应Header已经发送但Body还没有发送的状
+态，仅对长期运行的请求（Long-running Requests）有效，例如Watch。
+◎　ResponseComplete：Body已经发送完成。
+◎　Panic：严重错误（Panic）发生时的状态。
+Kubernets从1.7版本开始引入高级审计特性（AdvancedAuditing），
+可以自定义审计策略（选择记录哪些事件）和审计后端存储（日志和
+Webhook）等，开启方法为增加kube-apiserver的启动参数--feature-
+gates=AdvancedAuditing=true。注意：在开启AdvancedAuditing后，日志
+的格式有一些修改，例如新增了上述Stage信息；从Kubernets 1.8版本开
+始，该参数默认为true。
+如图10.19所示，kube-apiserver在收到一个请求后（如创建Pod的请
+求），会根据Audit Policy（审计策略）对此请求做出相应的处理。
+
+图10.19　基于审计策略记录审计日志
+我们可以将Audit Policy视作一组规则，这组规则定义了有哪些事件
+及数据需要记录（审计）。当一个事件被处理时，规则列表会依次尝试
+
+匹配该事件，第1个匹配的规则会决定审计日志的级别（Audit
+Level），目前定义的几种级别如下（按级别从低到高排列）。
+◎　None：不生成审计日志。
+◎　Metadata：只记录Request请求的元数据如requesting 
+user、
+timestamp、resource、verb等，但不记录请求及响应的具体内容。
+◎　Request：记录Request请求的元数据及请求的具体内容。
+◎　RequestResponse：记录事件的元数据，以及请求与应答的具体
+内容。
+None以上的级别会生成相应的审计日志并将审计日志输出到后端，
+当前的后端实现如下。
+（1）Log backend：以本地日志文件记录保存，为JSON日志格式，
+我们需要对API Server的启动命令设置下列参数。
+◎　--audit-log-path：指定日志文件的保存路径。
+◎　--audit-log-maxage：设定审计日志文件保留的最大天数。
+◎　--audit-log-maxbackup：设定审计日志文件最多保留多少个。
+◎　--audit-log-maxsize：设定审计日志文件的单个大小，单位为
+MB，默认为100MB。
+审计日志文件以audit-log-maxsize设置的大小为单位，在写满后，
+kube-apiserver将以时间戳重命名原文件，然后继续写入audit-log-path指
+定的审计日志文件；audit-log-maxbackup和audit-log-maxage参数则用于
+kube-apiserver自动删除旧的审计日志文件。
+（2）Webhook 
+backend：回调外部接口进行通知，审计日志以
+JSON格式发送（POST方式）给Webhook 
+Server，支持batch和blocking
+这两种通知模式，相关配置参数如下。
+◎　--audit-webhook-config-file：指定Webhook 
+backend的配置文
+件。
+◎　--audit-webhook-mode：确定采用哪种模式回调通知。
+◎　--audit-webhook-initial-backoff：指定回调失败后第1次重试的
+
+等待时间，后续重试等待时间则呈指数级递增。
+Webhook backend的配置文件采用了kubeconfig格式，主要内容包括
+远程审计服务的地址和相关鉴权参数，配置示例如下：
+--audit-webhook-mode则包括以下选项。
+
+◎　batch：批量模式，缓存事件并以异步批量方式通知，是默认的
+工作模式。
+◎　blocking：阻塞模式，事件按顺序逐个处理，这种模式会阻塞
+API Server的响应，可能导致性能问题。
+◎　blocking-strict：与阻塞模式类似，不同的是当一个Request在
+RequestReceived阶段发生审计失败时，整个Request请求会被认为失败。
+（3）Batching 
+Dynamic 
+backend：一种动态配置的Webhook
+backend，是通过AuditSink API动态配置的，在Kubernetes 1.13版本中引
+入。
+需要注意的是，开启审计功能会增加API Server的内存消耗量，因
+为此时需要额外的内存来存储每个请求的审计上下文数据，而增加的内
+存量与审计功能的配置有关，比如更详细的审计日志所需的内存更多。
+我们可以通过kube-apiserver中的--audit-policy-file参数指定一个Audit
+Policy文件名来开启API Server的审计功能。如下Audit Policy文件可作参
+考：
+
+
+对于审计日志的采集和存储，一种常见做法是，将审计日志以本地
+日志文件方式保存，然后使用日志采集工具（例如Fluentd）采集该日志
+并存储到Elasticsearch中，用Kibana等UI界面对其进行展示和查询。另
+一种常见做法是用Logstash采集Webhook后端的审计事件，通过Logstash
+将来自不同用户的事件保存为文件或者将数据发送到后端存储（例如
+Elasticsearch）。
+10.10　使用Web UI（Dashboard）管理集
+群
+Kubernetes的Web UI网页管理工具是kubernetes-dashboard，可提供
+部署应用、资源对象管理、容器日志查询、系统监控等常用的集群管理
+功能。为了在页面上显示系统资源的使用情况，需要部署Metrics
+Server，部署方式详见10.7.1节的说明。
+我们可以使用官方GitHub仓库提供的YAML文件一键部署
+kubernetes-dashboard。该配置文件的内容如下，其中包含kubernetes-
+dashboard所需的RBAC、Deployment和Service等资源的定义：
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+使用kubectl create命令进行部署：
+有多种方法访问kubernetes-dashboard，例如设置Service的
+Nodeport，或者通过kubectl proxy命令使用API Server代理访问，访问地
+址为http：//localhost：8001/api/v1/namespaces/kubernetes-
+dashboard/services/https：kubernetes-dashboard：/proxy/。
+首次访问Kubernetes Dashboard页面时需要登录，如图10.20所示。
+
+图10.20　Kubernetes Dashboard登录页面
+管理员需要为不同的用户创建账号，并授之合适的RBAC权限。下
+面以创建一个具有集群管理员权限的用户admin-user为例进行说明。
+首先，创建一个ServiceAccount：
+
+然后，为用户admin-user授予cluster-admin的集群管理员权限：
+
+接着，通过kubectl命令获取其token：
+
+
+最后，将上面的token输入登录页面，即可登录Dashboard查看
+Kubernetes集群的概览信息。概览页面默认显示命名空间default中的资
+源，可以通过上方的下拉列表选择不同的命名空间进行查看，也可以查
+询所有命名空间的资源，如图10.21所示。
+图10.21　Kubernetes Dashboard概览页面
+在概览页面上会显示工作负载（Workload）总的CPU和内存资源使
+
+用数据，以及各种资源对象的列表，例如Daemonset、Deployment、
+Pod、Statefulset、Service等。
+通过单击左侧的菜单项，可以过滤Workloads、Service、Config and
+Storage、Cluster、CRD等各类资源对象的列表和详细信息。例如查看
+Service列表，页面如图10.22所示。
+图10.22　Service列表页面
+在Pod列表中，可以查看Pod的CPU和内存资源使用数据，如图
+10.23所示。
+
+图10.23　Pod列表页面
+单击某个Pod右侧的菜单项，可以查看容器日志、进入控制台、编
+辑或删除，如图10.24所示。
+
+图10.24　Pod菜单
+例如查看容器日志，界面如图10.25所示。
+单击页面右上角的“+”按钮，将跳转到新建资源的页面。在这个页
+面可以输入YAML/JSON文本、选择本地文件或者使用模板来创建某种
+Kubernetes资源对象，如图10.26所示。
+
+图10.25　查看容器日志的页面
+
+
+图10.26　创建Kubernetes资源的页面
+图10.26　创建Kubernetes资源的页面（续图）
+10.11　Helm：Kubernetes应用包管理工具
+随着容器技术和微服务架构逐渐被企业接受，在Kubernetes上已经
+能便捷地部署简单的应用了。但对于复杂的应用或者中间件系统，在
+Kubernetes上进行容器化部署并非易事，通常需要研究Docker镜像的运
+行需求、环境变量等内容，为容器配置依赖的存储、网络等资源，并设
+计和编写Deployment、ConfigMap、Service、Volume、Ingress等YAML
+文件，再将其依次提交给Kubernetes部署。总之，微服务架构和容器化
+给复杂应用的部署和管理都带来了很大的挑战。
+Helm由Deis公司（已被微软收购）发起，用于对需要在Kubernetes
+上部署的复杂应用进行定义、安装和更新，是CNCF基金会的毕业项
+目，由Helm社区维护。Helm将Kubernetes的资源如Deployment、
+Service、ConfigMap、Ingress等，打包到一个Chart（图表）中，而Chart
+被保存到Chart仓库，由Chart仓库存储、分发和共享。Helm支持应用
+
+Chart的版本管理，简化了Kubernetes应用部署的应用定义、打包、部
+署、更新、删除和回滚等操作。
+简单来说，Helm通过将各种Kubernetes资源打包，类似于Linux的
+apt-get或yum工具，来完成复杂软件的安装和部署，并且支持部署实例
+的版本管理等，大大简化了在Kubernetes上部署和管理应用的复杂度。
+10.11.1　Helm的整体架构
+Helm的整体架构如图10.27所示。
+图10.27　Helm的整体架构
+
+Helm主要包括以下组件。
+◎　Chart：Helm软件包，包含一个应用所需资源对象的YAML文
+件，通常以.tgz压缩包形式提供，也可以是文件夹形式。
+◎　Repository（仓库）：用于存放和共享Chart的仓库。
+◎　Config（配置数据）：部署时设置到Chart中的配置数据。
+◎　Release：基于Chart和Config部署到Kubernetes集群中运行的一
+个实例。一个Chart可以被部署多次，每次的Release都不相同。
+基于Helm的工作流程如下。
+（1）开发人员将开发好的Chart上传到Chart仓库。
+（2）运维人员基于Chart的定义，设置必要的配置数据
+（Config），使用Helm命令行工具将应用一键部署到Kubernetes集群
+中，以Release概念管理后续的更新、回滚等。
+（3）Chart仓库中的Chart可以用于共享和分发。
+10.11.2　Helm版本说明
+Helm目前有v2和v3两个版本，v3版本在v2版本的基础上大大简
+化，安全性增强。
+在v2版本中，Helm依赖Tiller组件，其系统架构如图10.28所示。
+Tiller组件用于接收Helm客户端发出的指令，与Kubernetes API Server交
+互，完成资源对象的部署和管理。但是Tiller组件的默认作用范围是整
+个集群，对于多租户在不同命名空间中部署应用的场景，权限管理更加
+复杂。
+
+图10.28　Helm v2的系统架构
+从v3版本开始，Helm不再使用Tiller组件，而是将与Kubernetes API
+Server交互的功能整合到Helm客户端程序中，这样一来，每个Helm 
+v3
+客户端都能独立设置权限管理，更符合多租户环境的要求。管理员只需
+为Helm 
+v3客户端设置正确的RBAC权限，租户就能使用各自独立的
+Helm客户端管理应用了。
+此外，Helm的版本是基于Kubernetes的特定版本编译和发布的，不
+推荐将Helm用于比编译时的Kubernetes版本更高的版本，因为Helm并没
+有做出向前兼容的保证。
+如表10.9所示是Helm版本支持的Kubernetes版本列表。
+表10.9　Helm版本支持的Kubernetes版本列表
+
+续表
+
+
+10.11.3　Helm的安装
+安装Helm的前提条件包括：①Kubernetes集群已就绪；②配置了正
+确权限的kubeconfig，在Helm与API Server通信时使用；③本地kubectl客
+户端工具已就绪。
+Helm的安装方式有多种选择，例如使用二进制文件安装、使用脚
+本安装、使用包管理器安装，等等。
+（1）使用二进制文件安装。从Helm官方GitHub代码库下载合适的
+版本，例如helm-v3.4.1-linux-amd64.tar.gz，解压缩后得到二进制文件
+helm，将其复制到合适的$PATH路径下，例如/usr/bin，即可完成Helm
+的安装。
+（2）使用脚本安装。Helm提供了一个安装脚本来一键安装Helm到
+系统中，命令如下：
+（3）使用包管理器安装。Helm社区为不同的操作系统开发了包管
+理器来安装Helm。
+◎　对macOS使用Homebrew工具安装Helm：
+◎　对Windows使用Chocolatey工具安装Helm：
+◎　对Debian/Ubuntu使用Apt工具安装Helm：
+
+在Helm安装完成之后，就可以使用Helm命令管理Chart、仓库、部
+署和应用了。
+10.11.4　Helm的使用
+本节介绍Helm的常见用法，包括Chart仓库的使用、部署应用、更
+新或回滚Release应用、卸载Release、创建自定义Chart等。
+1.Chart仓库的使用
+安装好Helm之后，通常需要添加一个Chart仓库，一种常见的选择
+是添加Helm官方的稳定版Chart仓库：
+添加完成后，可以使用helm search命令查询可部署的Chart列表：
+
+helm search repo命令用于搜索已加入本地Helm客户端的仓库（通过
+helm repo add命令添加），只搜索本地数据，无须连接网络。
+我们还可以使用helm search hub命令搜索由Artifact Hub提供的来自
+不同仓库的大量Chart列表：
+
+在没有过滤的情况下，通过helm 
+search命令会显示所有可用的
+Chart，也可以加上查询关键字参数来过滤需要查询的Chart列表，例如
+查询包含“mysql”关键字的Chart列表：
+
+对仓库的操作说明
+Helm v3不再提供默认的Chart仓库，用户需要通过helm repo命令来
+添加、查询、删除Chart仓库。
+可以用helm repo list命令查看已经添加的Chart仓库列表，例如：
+使用helm repo add命令添加新的Chart仓库，例如：
+
+由于Chart仓库的内容更新频繁，所以在部署应用之前，都应该运
+行helm repo update命令来确保本地仓库的数据最新，例如：
+最后，可以使用helm 
+repo 
+remove命令从本地删除一个仓库，例
+如：
+2.helm install：部署应用
+在查询到需要的Chart之后，就可以使用helm 
+install命令部署应用
+了，最少需要指定两个命令行参数：Release名称（由用户设置）和
+Chart名称。
+例如部署一个Release名称为“mariadb-1”的MariaDB应用，代码如
+下：
+
+
+
+
+
+helm install命令会显示该应用本次部署的Release状态及与应用相关
+的提示信息，例如Release名称为“mariadb-1”（如果想让Helm生成
+Release名称，则可以不指定名称，并加上--generate-name参数）。
+在安装过程中，Helm客户端会打印资源的创建过程、发布状态及
+需要额外处理的配置步骤等有用信息。
+从上面的输出可以看到，通过本次部署，在Kubernetes集群中创建
+了名为“mariadb-1”和“mariadb-1-slave”的两个Service，并且给出了服务
+访问地址mariadb-1.default.svc.cluster.local：3306和mariadb-1-
+slave.default.svc.cluster.local：3306。
+我们可以通过kubectl命令查询在Kubernetes集群中部署的资源对
+象：
+
+至此，一个MariaDB应用就部署完成了。
+使用helm list命令可以查询部署的Release列表：
+
+helm install命令不会等待所有资源都运行成功后才退出。在部署过
+程中，下载镜像通常需要花费较多时间，为了跟踪Release的部署状态，
+可以使用helm status命令进行查看，例如：
+
+
+上面的输出信息显示了Release当前最新的状态信息。
+在部署之前自定义Chart的配置数据
+前面的安装过程使用的是Chart的默认配置数据。在实际情况下通
+常都需要根据环境信息先修改默认配置，再部署应用。
+通过helm 
+show 
+values命令可以查看Chart的可配置项，例如查看
+MariaDB的可配置项：
+
+
+用户可以编写一个YAML配置文件来覆盖这些内容，然后在安装时
+引用这个配置文件。例如：
+该配置表示创建一个名为“user0”的MariaDB默认用户，并授权该用
+户最新创建的名为“user0db”的数据库的访问权限，对其他配置则使用
+Chart中的默认值。
+然后通过helm install命令，使用-f参数引用该配置文件进行部署：
+在部署应用时有两种方法传递配置数据。
+◎　--values或者-f：使用YAML文件进行参数配置，可以设置多个
+文件，最后一个优先。对多个文件中重复的value会进行覆盖操作，不同
+的value叠加生效。上面的例子使用的就是这种方式。
+◎　--set：在命令行中直接设置参数的值。
+如果同时使用两个参数，则--set会以高优先级合并到--values中。对
+于通过--set设置的值，可以用helm get values <release-name>命令在指定
+的Release信息中查询到。另外，--set指定的值会被helm upgrade运行时--
+reset-values指定的值清空。
+关于--set格式和限制的说明
+--set可以使用0个或多个名称/值对，最简单的方式是--set
+name=value，对应的YAML文件中的语法如下：
+多个值使用逗号分隔，例如--set 
+a=b，c=d，对应的YAML配置如
+下：
+
+还可以用于表达具有多层级结构的变量，例如--set
+outer.inner=value，对应的YAML配置如下：
+大括号{}可以用来表示列表类型的数据，例如--set name={a，b，c}
+会被翻译如下：
+Helm从2.5.0版本开始，允许使用数组索引语法访问列表项，例如--
+set servers[0].port=80会被翻译如下：
+通过这种方式可以设置多个值，例如--set 
+servers[0].port=80，
+servers[0].host=example会被翻译如下：
+
+有时在--set的值里会存在一些特殊字符（例如逗号、双引号等），
+对其可以使用反斜线“\”符号进行转义，例如--set name=value1\，value2
+会被翻译如下：
+类似地，我们可以对点符号“.”进行转义，这样Chart使用toYaml方
+法解析Label、Annotation或者Node 
+Selector时就很方便了，例如：--set
+nodeSelector."kubernetes\.io/role"=master会被翻译如下：
+尽管如此，--set语法的表达能力依然无法与YAML语言相提并论，
+尤其是在处理深层嵌套类型的数据结构时。建议Chart的设计者在设计
+values.yaml文件格式时考虑--set的用法。
+Chart的更多部署方法
+使用helm install命令时，可以通过多种安装源基于Chart部署应用。
+◎　Chart仓库，如前文所述。
+◎　本地的Chart压缩包，例如helm install foo foo-0.1.1.tgz。
+◎　解压缩的Chart目录，例如helm install foo path/to/foo。
+◎　一个完整的URL，例如helm 
+install 
+foo
+https：//example.com/charts/foo-1.2.3.tgz。
+
+3.helm upgrade和helm rollback：应用的更新或回滚
+当一个Chart有新版本发布或者需要修改已部署Release的配置时，
+可以使用helm upgrade命令完成应用的更新。
+helm 
+upgrade命令会利用用户提供的更新信息来对Release进行更
+新。因为Kubernetes 
+Chart可能会很大且很复杂，所以Helm会尝试执行
+最小影响范围的增量更新，只更新相对于上一个Release发生改变的部
+分。
+例如更新默认的用户名，创建user1.yaml配置文件，内容如下：
+使用helm upgrade命令更新当前已部署的Release“mariadb-1”：
+使用helm get values命令可以查看到，基于用户提供的user1.yaml的
+
+新配置内容已被更新到了Release中：
+用helm list命令查看Release的信息，会发现Revision被更新为2：
+当然，也可以使用kubectl命令查看Statefulset、Pod等资源的变化情
+况。
+如果更新后的Release未按预期执行，则可以使用helm 
+rollback
+[RELEASE]命令对Release进行回滚，例如：
+以上命令将把名为“mariadb-1”的Release回滚到第1个版本。
+需要说明的是，Release的修订（Revision）号是持续增加的，每次
+进行安装、升级或者回滚，修订号都会增加1，第1个版本号始终是1。
+用helm list命令查看Release的信息，会发现Revision被更新为3：
+
+另外，使用helm history [RELEASE]命令可以查看Release的修订历
+史记录，例如：
+安装/升级/回滚命令的常用参数
+在运行helm install/upgrade/rollback命令时，有些很有用的参数可帮
+助我们控制这几个操作的行为。注意，以下不是完整的命令行参数列
+表，可以使用helm <command>--help命令查看对全部参数的说明。
+◎　--timeout：等待Kubernetes命令完成的（Golang持续）时间，
+默认值为5m0s。
+◎　--wait：在将Release标记为成功之前，需要等待一些条件达
+
+成。例如，所有Pod的状态都为Ready；PVC完成绑定；Deployment的最
+小Pod数量（Desired-maxUnavailable）的状态为Ready；Service的IP地址
+设置成功（如果是LoadBalancer类型，则Ingress设置成功），等等。等
+待时间与--timeout参数设置的时间一样。超时后该Release的状态会被标
+记为FAILED。注意：当Deployment的replicas被设置为1，且滚动更新策
+略的maxUnavailable不为0时，--wait才会在有最小数量的Pod达到Ready
+状态后返回Ready状态。
+◎　--no-hooks：跳过该命令的运行钩子（Hook）。
+◎　--recreate-pods：会导致所有Pod的重建（属于Deployment的Pod
+除外），仅对upgrade和rollback命令可用。该参数在Helm 
+v3中已被弃
+用。
+4.helm uninstall：卸载一个Release
+需要卸载某个Release时，可以使用helm uninstall命令。例如使用该
+命令从集群中删除名为“mariadb-1”的Release：
+再次使用helm 
+list命令查看Release列表，可以看到名为“mariadb-
+1”的Release已被卸载：
+在Helm v2版本中删除Release后会保留删除记录，在Helm v3版本中
+会同时删除历史记录。如果希望保留删除记录，则可以加上--keep-
+history参数，例如：
+
+使用helm list--uninstalled命令可以查看使用--keep-history保留的卸载
+记录，例如：
+注意，由于Release的状态是已删除，所以不能再回滚已卸载的
+Release到某个版本了。
+5.自定义应用Chart
+用户可以基于Helm 
+Chart模板开发自己的应用Chart，这可以通过
+helm create命令快速创建一个Chart模板，例如：
+helm 
+create命令用于在当前目录下创建名为“deis-workflow”的子目
+录，其中的文件和目录结构如下：
+
+然后就可以基于这个模板编辑其中的YAML配置了。
+编辑之后，可以用helm 
+lint命令验证Chart中的各文件格式是否正
+确，例如：
+
+在Chart准备好之后，使用helm 
+package命令将其打包为一个.tgz文
+件，例如：
+然后就可以基于该Chart的本地.tgz文件用helm 
+install命令部署应用
+了，例如：
+
+用户可以将打包好的Chart上传到Chart仓库中保存，供后续分发和
+部署使用。如何上传，依赖于Chart仓库提供的服务，需要查看Chart仓
+库的文档来了解如何上传。
+10.11.5　Chart说明
+Helm使用的包格式被称为Chart。Chart就是一个描述所有
+Kubernetes资源的文件集合。一个Chart用于部署一个完整的应用，例如
+数据库、缓存、Web服务等。本节对Chart的目录结构、主要文件和关键
+配置信息进行说明。
+
+1.Chart目录结构
+Chart是包含一系列文件的集合，目录名称就是Chart名称（不包含
+版本信息），例如一个WordPress的Chart会被存储在名为“wordpress”的
+目录下。
+对该目录下文件结构和各文件的说明如下：
+Helm保留了charts/、crds/、templates/目录和上面列举的文件名。
+2.Chart.yaml文件说明
+Chart.yaml文件（首字母大写）是Chart必需的主要配置文件，包含
+的关键字段和说明如下：
+
+
+其他字段将忽略。对其中每个字段的详细说明请参考官方文档的说
+明。
+
+10.11.6　搭建私有Chart仓库
+Helm的官方Chart仓库在互联网上由社区维护。同时Helm也很容易
+搭建并运行自己的私有Chart仓库。本节对如何搭建和管理Chart仓库进
+行说明。
+Chart仓库是一个包含一个index.yaml文件和已经打好包的Chart文件
+的HTTP服务器。Chart仓库可以是任何提供YAML和Tar文件并响应GET
+请求的HTTP服务器，在搭建私有Chart仓库时有很多选择，例如可以使
+用公有云服务Google Cloud Storage（GCS）、Amazon S3、GitHub，或
+者搭建自己的Web服务器。
+1.Chart仓库的结构
+Chart仓库由Chart包和包含了仓库中所有Chart索引的特殊文件
+index.yaml组成。例如一个Chart仓库的布局可能如下：
+在index.yaml文件中包含了Alpine这个Chart的信息，并提供了Chart
+包的下载地址：http：//<server-url>/charts/alpine-0.1.2.tgz。
+index.yaml文件不用必须与Chart包放在同一个服务器上，但放在一
+起最方便。
+2.index.yaml文件说明
+index.yaml文件是YAML格式的文件，主要包括Chart包的元数据信
+息，包括Chart中Chart.yaml文件的内容。一个合法的Chart仓库必须有一
+个index.yaml文件，包含Chart仓库中每一个Chart的信息。
+
+helm repo index命令会基于包含Chart包的本地目录生成该index.yaml
+文件。
+index.yaml文件的内容示例如下：
+
+
+3.使用普通的Web服务搭建Chart仓库
+下面使用Apache搭建一个私有Chart仓库，并将自定义的Chart保存
+到仓库中。首先，对Apache设置如下：
+◎　使用/var/web/charts目录存储Chart包和index.yaml文件；
+◎　使用http：//<server-ip>/charts URL地址提供服务；
+◎　确保对index.yaml文件无须认证即可访问。
+然后，将开发、打包好的Chart包文件（例如mymariadb-0.1.1.tgz）
+复制到Apache的/var/web/charts目录下。
+
+接着，使用helm repo index命令创建索引文件，代码如下，Helm将
+根据/var/web/repo目录下的Chart内容创建index.yaml索引文件：
+注意：后续每次在仓库中添加或更新Chart时，都必须使用helm
+repo index命令重新生成index.yaml文件。另外，该命令提供了--merge参
+数向现有index.yaml文件中增量添加新的Chart信息（而不是全部重新生
+成），这对于使用远程仓库很有用。
+最后，启动Web Server。一个私有Chart仓库就搭建完成了。
+准备好分享自建Chart仓库时，只需将仓库的URL地址告诉其他
+人，其他人就可以通过helm repo add [NAME] [URL]命令将仓库添加到
+其Helm客户端，查询Chart列表并部署应用了，例如：
+通过helm install命令部署mymariadb应用，例如：

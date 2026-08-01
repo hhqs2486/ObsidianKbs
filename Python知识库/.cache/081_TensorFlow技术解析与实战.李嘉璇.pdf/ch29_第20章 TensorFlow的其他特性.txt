@@ -1,0 +1,139 @@
+第20 章 
+TensorFlow 的其他特性 
+随着TensorFlow 的版本不断迭代，目前它已经有很多新特性。除了第15 章和第16 章介绍
+的XLA 和Debugger 外，还有一个非常好的生产系统使用模型服务系统—TensorFlow Serving，
+以及支持动态图计算的TensorFlow Fold。此外，还有一些基于硬件的优化方法也是目前人工智
+能发展的趋势。本章就来介绍一下这些内容。
+ 20.1  TensorFlow Serving
+① 
+TensorFlow Serving 是专为生产环境设计的一种灵活、高性能的机器学习模型服务系统。它
+非常适合基于实际情况的数据大规模地运行，会产生多个模型的训练过程。
+TensorFlow Serving 可以用于开发过程和生产过程，有以下两个主要作用。 
+（1）对模型的生命周期进行管理。一个模型一般是先数据训练，然后逐步产生初步的模型，
+随后优化模型。图20-1 所示为持续的模型训练流。 
+图20-1 
+（2）当模型采用多重算法进行试验时，对生成的模型进行管理。当客户端（Client）向
+TensorFlow Serving 请求模型后，TensorFlow Severing 会返回适当的模型给客户端。图20-2 所
+示为TensorFlow Severing 架构关系图。 
+①
+本本本本TensorFlow 官方网站文档：https://tensorflow.github.io/serving/。
+
+280 ff 第三篇 提高篇 
+图20-2 
+另外，TensorFlow 主要支持Python 和C++，最近又增加了对Java、Ruby 和Go 的支持。
+但是，大部分用户可能是基于Python API 来构建图和训练模型的，直接使用其他编程语言访问
+模型比较困难。有了TensorFlow Serving 和gRPC
+①，就可以提供跨语言的RPC 接口，使用Java、
+Go 甚至是Ruby 都可以直接访问这些模型。 
+TensorFlow Serving 的代码位于https://github.com/ tensorflow/serving，安装过程可以采用源代码
+Bazel 编译安装
+②，或者采用Docker 安装。具体的过程可以本本TensorFlow 官方网站
+③。 
+在第17 章我们讲解了通过Kubernetes 来实现TensorFlow 集群，其实还可以结合TensorFlow 
+Serving，为训练好的模型创建一个Docker 镜像，将它推送到Google Container Registry
+④上，这
+样模型就可以在谷歌云平台（Google Cloud Platform）上运行了，也就是说，在Kubernetes 里成
+功部署了模型的服务。详细的安装方法可以本本TensorFlow 官方网站的“Serving Inception 
+Model with TensorFlow Serving and Kubernetes”
+⑤。另外，谷歌还提供了Google ML Engine，这
+是一个全托管的TensorFlow 平台，能把训练的模型一键转换为预测服务。 
+ 20.2  TensorFlow Flod
+⑥ 
+一般的深度学习过程是，先对模型的训练数据进行预处理，把不同结构的数据剪裁成相同
+①
+gRPC 是谷歌公司开源的一个高性能、跨语言的RPC 框架。
+② 与编译安装TensorFlow 类似，安装方法见https://github.com/tensorflow/serving/blob/master/tensorflow_serving/g3doc/
+ setup.md。 
+③ https://tensorflow.github.io/serving/setup
+④ https://cloud.google.com/container-registry/docs/
+⑤ https://tensorflow.github.io/serving/serving_inception
+⑥ 本本本本参文《Deep Learning with Dynamic Computation Graphs》：https://openreview.net/pdf?id=ryrGawqex。 
+
+第20 章 TensorFlow 的其他特性 ee 281 
+的维度和尺寸，划分为一批批的，进入到训练流程里。
+这种训练方式称为“静态图模型”。它的缺点在于，如果输入数据无法进行一般的预处理，
+模型就必须针对不同的输入数据建立不同的计算图（computation graph）分别进行训练，对处
+理器、内存和高速缓存都没有很好地利用。
+TensorFlow Fold
+①可以根据不同结构的输入数据建立动态计算图（dynamic computation 
+graph），根据每个不同的输入数据建立不同的计算图。动态批处理（dynamic batching）功能会
+自动组合这些计算图，实现在输入数据内部的批处理，也就是批处理单个输入图内的不同本点，
+以及不同输入数据之间的批处理，也就是批处理不同输入图之间的运算。同时还可以通过插入
+一些附加指令来在不同批处理操作之间移动数据。这简化了模型训练阶段对输入数据的预处理
+过程。这些批处理操作的优势赋予模型后，在CPU 的模型的运行速度提高了10 倍以上，GPU
+上提高了100 倍。 
+Tensorflow 的动态图计算的提出被认为是第一次清晰地在设计理念上领先其他深度学
+习框架。
+20.3  TensorFlow 计算加速 
+使用TensorFlow 框架训练时使训练加速的方法有很多。例如，可以通过用GPU 的设备来
+实现，可以通过XLA 框架对部分OP 进行融合，还可以采用分布式的方式将计算部分和本数部
+分分布到不同机器上来提升性能。同时，还可以利用硬件来计算，如利用CPU 的更高级的指令
+集，如SSE、AVX 等，用FPGA 编写支持TensorFlow 的计算单元等。这里我们先讲解一下在
+CPU 的情况下如何进行优化，使用CPU 运行时可能出现哪些警告，提出优化的方向，随后讲
+解FPGA 的加速原理。 
+20.3.1 CPU 加速 
+如果是直接采用pip 命令的方式安装的，可能会报出以下警告： 
+2017-02-26 13:27:48.579303: W tensorflow/core/platform/cpu_feature_guard.cc:45]  
+The TensorFlow library wasn't compiled to use SSE4.1 instructions, but these are 
+available on your machine and could speed up CPU computations. 
+2017-02-26 13:27:48.579512: W tensorflow/core/platform/cpu_feature_guard.cc:45]  
+The TensorFlow library wasn't compiled to use SSE4.2 instructions, but these are 
+available on your machine and could speed up CPU computations. 
+2017-02-26 13:27:48.579519: W tensorflow/core/platform/cpu_feature_guard.cc:45]  
+The TensorFlow library wasn't compiled to use AVX instructions, but these are  
+①
+https://github.com/tensorflow/fold
+
+282 ff 第三篇 提高篇 
+available on your machine and could speed up CPU computations. 
+2017-02-26 13:27:48.579524: W tensorflow/core/platform/cpu_feature_guard.cc:45]  
+The TensorFlow library wasn't compiled to use AVX2 instructions, but these are  
+available on your machine and could speed up CPU computations. 
+2017-02-26 13:27:48.579528: W tensorflow/core/platform/cpu_feature_guard.cc:45]  
+The TensorFlow library wasn't compiled to use FMA instructions, but these are  
+available on your machine and could speed up CPU computations. 
+出现上述问题的原因是：为了尽可能与更广泛的机器兼容，TensorFlow 默认仅在x86 机器
+上使用SSE4.1 SIMD 指令，而大多数现代PC 和Mac 都支持更高级的指令。因此，通过源代码
+安装可以获得最大性能，可以开启CPU 的高级指令集（如SSE、AVX）的支持。可以使用bazel
+构建一个只能在自己的机器上运行的二进制文件，如下：
+bazel build -c opt --copt=-mavx --copt=-mavx2 --copt=-mfma --copt=-mfpmath=both 
+--copt=-msse4.2 --config=cuda -k //tensorflow/tools/pip_package:build_pip_package 
+bazel-bin/tensorflow/tools/pip_package/build_pip_package /tmp/tensorflow_pkg 
+此时会在/tmp/tensorflow_pkg 下产生一个wheel 文件，再用pip 命令安装这个wheel
+文件。
+20.3.2 TPU 加速和FPGA 加速 
+谷歌目前为TensorFlow 设计了专用集成芯片—张量处理单元（Tensor Processing Unit，TPU）。 
+我们知道，CPU 进行逻辑运算（如if else）的能力很强，但是纯粹的计算能力与GPU 相比
+就差一些，而深度学习恰恰需要做海量的计算。
+GPU 在一些场景下运算速度比CPU 要快，一方面是因为GPU 有强大的浮点计算单元，GPU
+的着色器（shader）是对一批数据以相同的步调执行相同的指令流水，准确地讲，GPU 在同一
+时钟周期能执行的指令的数量是千级别的，好的GPU 大约是3000 多条，而CPU 在同一时钟周
+期内能执行的指令数量是几十级别的，因此远超CPU 指令集的数据并行能力，作为代价就是
+GPU 做if else 能力很弱，原因就是它流水线并行能力（同一时钟周期并发执行不同逻辑序列的
+能力）很差，它需要这一批数据同步调地执行同样的逻辑。
+而神经网络刚好需要这样的大规模数据并行的能力，尤其是CNN 中卷积、矩阵运算之类
+的操作，都是通过数据并行可大幅提高性能的。
+但是，因为GPU 出厂后架构固定，硬件原生支持的指令就固定了，所以，如果神经网络
+中有GPU 不支持的指令，GPU 就不能直接实现。例如，如果想要计算矩阵乘法，但是若GPU
+只支持加法和乘法，那就只能用软件模拟的方法用加法和乘法来模拟矩阵乘法。
+FPGA 的加速就在于，虽然硬件中可能有不支持的指令，但是开发者可以在FPGA 里编程，
+改变FPGA 的硬件结构来使它支持。 
+那是不是GPU 支持足够多的基础指令，就能打平FPGA 了呢？不是。FPGA 加速在于它和
+
+第20 章 TensorFlow 的其他特性 ee 283 
+GPU 和CPU 的体系结构就不同。FPGA 不是冯·诺伊曼结构的，而是一个代码描述的逻辑电
+路。FPGA 只要片上逻辑门和引脚够多，全部输入、运算和输出都在一个时钟周期内完成。FPGA
+因为一个时钟周期执行一次全部烧好的电路，某种角度来说它一个模块就一句超复杂“指令”，
+所以不同模块也算是不同逻辑序列，并且这个序列里就一条指令。单元间通信这些冯·诺伊曼
+结构的东西对于FPGA 都不是问题，不同运算单元间本身就硬件直连，所以才能做到数据并行
+和流水线并行共存（GPU 流水线并行能力约为0），真的要比单算浮点运算能力，当前常见的
+FPGA 不比GPU 好。因此，如果是需要低延迟的预测推理，每批大小比较小时，FPGA 更合适。 
+而TPU 和FPGA 类似，它是一种专用集成电路（application specific integrated circuit，ASIC），
+但是硬件逻辑一旦烧写完毕就不可以再编程，是专门为TensorFlow 做深度学习开发的。从TPU
+目前的版本来看，还不能完整运行Tensorflow 的功能，它的目的是高效地完成预测推理，还不
+涉及训练。
+ 20.4  小结 
+本章介绍了TensorFlow 的其他新特性，如TensorFlow Serving、TensorFlow Flod，还介绍了
+TensorFlow 的硬件加速方法，例如，当计算机只有CPU 时，开发人员可以利用CPU 的更高级
+的指令集；当有FPGA 时，开发人员可以在FPGA 里编程，改变硬件结构来支持神经网络的指
+令；当有TPU 时，它完美地支持TensorFlow 的所有运算，效率最高。 

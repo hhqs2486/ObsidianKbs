@@ -1,0 +1,142 @@
+第12 章 
+图像与语音的结合 
+斯坦福大学人工智能实验室的李飞飞教授在2017 年极客大会上曾经讲过，实现人工智能
+要有3 个要素：语法（syntax）、语义（semantics）和推理（inference），如图12-1 所示。 
+图12-1 
+语言和视觉是人工智能界非常关注的点，也就是说，在语言和视觉层面，通过语法（对语
+言来说是语法解析，对视觉来说是三维结构的解析）和语义（对语言来说是语义，对视觉来说
+是物体动作的含义）作为模型的输入训练数据，最终实现推理的能力，也就是把训练中学习到
+的能力应用到工作中去，从新的数据中推断出结论。
+① 
+12.1  看图说话模型 
+将图像和语言融合，就是“看图说话”。看图说话的目标是，输入一张图片，希望
+我们训练的看图说话模型能够根据图像给出描述图像内容的自然语言，讲出一个故事。
+这是一个很大的挑战，因为这需要在图像信息和文本信息这两种不同形式的信息之间进
+行“翻译”。
+①
+参参论文《The Syntax, Semantics and Inference Mechanism in Natural Language》：http://www.aaai.org/Papers/Symposia/
+Fall/1996/FS-96-04/FS96-04-010.pdf。 
+
+202 ff 第二篇 实战篇 
+本节我们以TensorFlow 的官方模型
+①为例，讲解如何训练一个看图说话的模型。这个模型
+要达到的目标是：我们给出一张图片，机器要给出“A person on a beach flying a kite”的描述，
+如图12-2 所示。 
+图12-2 
+12.1.1 原理 
+看图说话模型采用的是编码器-解码器框架，先将图像编码成固定的中间矢量，然后解码成
+自然语言的描述。编码器-解码器框架如图12-3 所示。这里编码器采用的是Inception V3 图像识
+别模型，解码器采用的是LSTM 网络。 
+图12-3 
+①
+https://github.com/tensorflow/models/tree/master/im2txt
+
+第12 章 图像与语音的结合 ee 203 
+在图12-3 中，{s0, s1,…, sn-1}是字幕的词，{wes0, wes1,…, wesn-1}是它们对应的词嵌入向量，LSTM
+的输出{p1, p2,…, pn}是由句子中的下一个词生成的概率分布。{log p1(s1), log p2(s2),…, log pn(sn)}是正
+确词在每一个步骤的对数似然，这几个值的总和取负数是我们模型的最小化目标。
+12.1.2 最佳实践 
+这里使用微软的Microsoft COCO Caption 数据集
+①，每张图片有5 个标题文字。Microsoft 
+COCO Caption 数据集有两部分，即2014 年版本和2015 年版本。这里采用的是2014 年版本
+②。 
+为了能够直接使用预训练的Inception V3 模型，这里采用TensorFlow-Slim 图像分类库
+③。 
+这里直接用现成的代码来训练模型，主要讲解构建模型的过程。训练的代码在
+tensormodels/im2txt/im2txt/train.py 中，构建模型的代码在tensormodels/im2txt/im2txt/show_ 
+and_tell_model.py 中。 
+ShowAndTellModel 的build 函数中说明了构建模型的过程： 
+class ShowAndTellModel(object): 
+  def build(self): 
+   self.build_inputs() # 构建输入数据 
+   self.build_image_embeddings()  # 采用Inception V3 构建图像模型，并且输出图片嵌入向量 
+   self.build_seq_embeddings() # 构建输入序列的embeddings 
+   self.build_model() # 将CNN 和LSTM 串联起来，构建完整模型 
+   self.setup_inception_initializer() # 载入Inception V3 预训练模型 
+   self.setup_global_step() # 记录全局的迭代次数 
+我们看看训练时是如何做的：
+def main(unused_argv): 
+  assert FLAGS.input_file_pattern, "--input_file_pattern is required" 
+  assert FLAGS.train_dir, "--train_dir is required" 
+  model_config = configuration.ModelConfig() 
+  model_config.input_file_pattern = FLAGS.input_file_pattern 
+  model_config.inception_checkpoint_file = FLAGS.inception_checkpoint_file 
+  training_config = configuration.TrainingConfig() 
+  # 创建训练结果的存储路径 
+①
+http://mscoco.org/。Microsoft COCO Caption 数据集是建立在Microsoft Common Objects in Context（COCO）数据集
+的工作基础上的。COCO 含有超过30 万张图片，200 万个标记实体。Microsoft COCO Caption 是对原COCO 数据
+集中约33 万张图片，使用亚马逊公司的Mechanical Turk 服务，人工地为每张图片生成了至少5 句标注，标注语
+句总共超过了150 万句。 
+②
+2014 年版本中训练集有82 783 张图片，验证集有40 504 张图片和测试集有40 775 张图片。
+③ https://github.com/tensorflow/models/tree/master/slim 
+
+204 ff 第二篇 实战篇 
+  train_dir = FLAGS.train_dir 
+ if not tf.gfile.IsDirectory(train_dir): 
+ tf.logging.info("Creating training directory: %s", train_dir) 
+    tf.gfile.MakeDirs(train_dir) 
+  # 建立TensorFlow 数据流图 
+ g = tf.Graph() 
+  with g.as_default(): 
+    # 构建模型 
+    model = show_and_tell_model.ShowAndTellModel( 
+   model_config, mode="train", train_inception=FLAGS.train_inception) 
+    model.build() 
+    # 定义学习率 
+    learning_rate_decay_fn = None 
+    if FLAGS.train_inception: 
+learning_rate = tf.constant(training_config.train_inception_learning_rate) 
+    else: 
+learning_rate = tf.constant(training_config.initial_learning_rate) 
+if training_config.learning_rate_decay_factor > 0: 
+num_batches_per_epoch = (training_config.num_examples_per_epoch / 
+model_config.batch_size) 
+decay_steps = int(num_batches_per_epoch * 
+training_config.num_epochs_per_decay) 
+def _learning_rate_decay_fn(learning_rate, global_step): 
+return tf.train.exponential_decay( 
+learning_rate, 
+global_step, 
+decay_steps=decay_steps, 
+decay_rate=training_config.learning_rate_decay_factor, 
+staircase=True) 
+learning_rate_decay_fn = _learning_rate_decay_fn 
+    # 定义训练的操作 
+    train_op = tf.contrib.layers.optimize_loss( 
+loss=model.total_loss, 
+global_step=model.global_step, 
+learning_rate=learning_rate, 
+optimizer=training_config.optimizer, 
+clip_gradients=training_config.clip_gradients, 
+learning_rate_decay_fn=learning_rate_decay_fn) 
+    saver = tf.train.Saver(max_to_keep=training_config.max_checkpoints_to_keep) 
+  # 训练 
+  tf.contrib.slim.learning.train( 
+ train_op, 
+ train_dir, 
+ log_every_n_steps=FLAGS.log_every_n_steps, 
+
+第12 章 图像与语音的结合 ee 205 
+ graph=g, 
+ global_step=model.global_step, 
+ number_of_steps=FLAGS.number_of_steps, 
+ init_fn=model.init_fn, 
+ saver=saver) 
+最后运行tensormodels/im2txt/im2txt/run_inference.py 来预测生成的模型。输入一张图片，
+看看它给出的描述。输入图12-4 所示的图片。 
+图12-4 
+结果如下：
+Captions for image COCO_val2014_000000224477.jpg: 
+0) a man riding a wave on top of a surfboard . (p=0.040413)
+1) a person riding a surf board on a wave (p=0.017452)
+2) a man riding a wave on a surfboard in the ocean . (p=0.005743)
+它给出了3 个带概率分布的句子，意思表达得比较准确，而且语法也合乎自然逻辑。 
+我们也希望今后看图说话能够给出更长的描述。现在有些公司的自动化新闻写作机器人已
+经可以根据视频直播结合一些历史数据，写作关于奥运、体育等类型的稿件了。
+ 12.2  小结 
+本章主要讲述了图像和自然语言相结合的应用—看图说话。这个模型结合了卷积神经网
+络Inception V3 模型和循环神经网络LSTM 模型。实现过程中，首先将图像转换成图像嵌入向
+量，然后用类似于词嵌入的方法来训练。关于图像和语言相结合的例子还有图像语义标注、图
+像语义分析等，读者可以自行实践。

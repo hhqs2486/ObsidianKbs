@@ -1,0 +1,134 @@
+632 附录D  利用Python 2.6+向Python 3 迁移 
+ 
+D.8  编写兼容版本2.x 和3.x 的代码 
+当我们处于从Python 2 转换到Python 3 的交叉口时，你可能会想知道否有可能编写无须
+修改就能同时运行于Python 2 和3 上的代码。这似乎是一个合理的请求，但是你应该如何开
+始呢？当用3.x 解释器执行Python 2 代码时，什么破坏了大部分Python 2 代码呢？ 
+D.8.1  对比print 和print() 
+如果你跟我想的一样，那么你将会说前面问题的答案就是print 语句。这是开始的一个好
+地方，所以让我们解决它吧。棘手的部分是，在版本2.x 中它是一个语句，因此是一个关键
+字或保留字；而在版本3.x 中，它只是一个内置函数。换句话说，因为涉及了语言语法，所
+以你不能使用if 语句，而Python 还没有#ifdef 宏。 
+让我们尝试把圆括号放在print 参数的两侧。 
+ 
+>>> print('Hello World!') 
+Hello World! 
+ 
+太酷了，这可以同时在Python 2 和Python 3 上工作了。这就结束了吗？对不起，还没完
+全结束。 
+ 
+>>> print(10, 20) # Python 2 
+(10, 20) 
+ 
+这一次你将不会那么幸运，因为前者是一个元组，而在Python 3 中，你向print()中传入
+的是多个参数。 
+ 
+>>> print(10, 20) # Python 3 
+10 20 
+ 
+如果你思考得再多一点，也许我们可以检查print 是否是一个关键字。你可能还记得，有
+一个包含关键字列表的keyword 模块。因为Python 3.x 中print 不是关键字，所以你可能认为
+它可以像下面这么简单。 
+ 
+>>> import keyword 
+>>> 'print' in keyword.kwlist 
+False 
+ 
+作为一名聪明的程序员，你可能会在2.x 版本中尝试它，并期待会返回一个True。尽管
+你可能是正确的，但你还是会因一个不同的原因而失败。 
+ 
+ >>> import keyword 
+>>> if 'print' in keyword.kwlist: 
+本文档由Linux公社 www.linuxidc.com 收集整理
+
+附录D  利用Python 2.6+向Python 3 迁移 633 
+ 
+... from __future__ import print_function 
+... 
+  File "<stdin>", line 2 
+SyntaxError: from __future__ imports must occur at the beginning of 
+the file 
+ 
+一种可行的解决方案要求你使用一个具有与print 功能类似的函数，其中一个就是
+sys.stdout.write()。另一个解决方案是distutils.log.warn()。不管出于什么原因，我们决定在本书
+的很多章节中都使用后者。如果你需要无缓冲的输出，那么我认为sys.stderr.write()也可行。 
+“Hello World !“示例如下所示。 
+ 
+# Python 2.x 
+print 'Hello World!' 
+# Python 3.x 
+print('Hello World!') 
+ 
+下面这行在两个版本下都能够工作。 
+ 
+# Python 2.x & 3.x compatible 
+from distutils.log import warn as printf 
+printf('Hello World!') 
+ 
+这让我想起了为什么我们没有使用sys.stdout.write()，因为我们将需要在字符串末尾添加
+一个换行符来匹配行为。 
+ 
+# Python 2.x & 3.x compatible 
+import sys 
+sys.stdout.write('Hello World!\n') 
+ 
+真正的问题不是这个小干扰，但因为这一点这些函数将不再是print 或print()真正的代理。
+只有当你给出单个代表你输出的字符串时，它们才会工作。任何更复杂的功能都需要你更多
+的工作量。 
+D.8.2  将你的方法导入解决方案中 
+在其他情况下，生活更简单，你可以导入正确的解决方案。在后面的代码中，我们想导
+入urlopen()函数。在Python 2 中，它存在于urllib 和urllib2（我们将使用后者）模块中。在
+Python 3 中，它集成到了urllib.request 中。在这里，你的适用于版本2.x 和3.x 的解决方案很
+整洁和简单。 
+ 
+try: 
+    from urllib2 import urlopen 
+except ImportError: 
+    from urllib.request import urlopen 
+ 
+本文档由Linux公社 www.linuxidc.com 收集整理
+
+634 附录D  利用Python 2.6+向Python 3 迁移 
+ 
+考虑到内存保护，也许你会对一个如zip()等知名的内置迭代器（Python 3）版本感兴趣。
+在Python 2 中，迭代器版本是itertools.izip()。Python 3 中将这个函数重命名来取代zip()。换
+句话说，itertools.izip()替换zip()和它的名字。如果你坚持这个迭代器版本，那么你的导入语
+句也是相当简单的。 
+ 
+try: 
+    from itertools import izip as zip 
+except ImportError: 
+    pass 
+ 
+一个看起来不美观的例子就是StringIO 类。在Python 2 中，纯粹的Python 版本就是
+StringIO 模块，意味着你通过StringIO.StringIO 访问它。考虑到执行速度，还有一个C 语言
+版本，它位于cStringIO.StringIO 中。根据Python 安装情况，你可能会更加喜欢cStringIO，
+而如果cStringIO 不可用才选择StringIO 作为后备。 
+在Python 3 中，Unicode 是默认字符串类型，但是如果你做任何类型的网络通信，那么
+很有可能你必须操作ASCII/bytes 字符串。因此相对于StringIO，你更加想要io.BytesIO。为
+了得到你想要的，下面这种导入方式将有一点丑陋。 
+ 
+try: 
+    from io import BytesIO as StringIO 
+except ImportError: 
+    try: 
+        from cStringIO import StringIO 
+    except ImportError: 
+        from StringIO import StringIO 
+D.8.3  整合在一起 
+如果你够幸运，这些都将是你需要做出的改变，而剩下的其他代码会比开始时的设置更
+简单。如果你安装了distutils.log.warn()（类似printf()）url * .urlopen()、*.StringIO 的导入，
+以及正常导入xml.etree.ElementTree（2.5 及更新版本），那么利用下面的约8 行代码，你就可
+以编写一个很短的解析器来显示谷歌新闻服务的头条新闻。 
+ 
+g = urlopen('http://news.google.com/news?topic=h&output=rss') 
+f = StringIO(g.read()) 
+g.close() 
+tree = xml.etree.ElementTree.parse(f) 
+f.close() 
+for elmt in tree.getiterator(): 
+    if elmt.tag == 'title' and not \ 
+            elmt.text.startswith('Top Stories'): 
+        printf('- %s' % elmt.text) 
+ 
+本文档由Linux公社 www.linuxidc.com 收集整理

@@ -1,0 +1,587 @@
+340  第22 章 项目3：万能的XML 
+项目3：万能的XML 
+第20章提到过XML，现在该更详细地讨论它了。在这个项目中，你将看到XML可用来表示
+各种类型的数据，以及如何使用Simple API for XML（SAX）来处理XML文件。这个项目的目标
+是，根据描述各种网页和目录的单个XML文件生成完整的网站。 
+本章假设你知道XML是什么以及如何编写。如果你对HTML有些了解，就已经熟悉了这些基
+本知识。不像HTML那样是一种特定的语言，XML是一组定义一类语言的规则。大致而言，你依
+然像使用HTML那样编写标签，但在XML中，还可自定义标签名。这些标签名及其结构关系可使
+用文档类型定义（document type definition）或XML架构（XML Schema）来描述，但这里不讨论
+这些。 
+有关XML的简洁描述，请参阅万维网联盟（W3C）网站的文章“XML in10 points”
+（https://www. 
+w3.org/XML/1999/XML-in-10-points-19990327）。有关XML的详尽教程，请参阅W3Schools网站
+（http://www.w3schools.com/xml）。有关SAX的详细信息，请参阅SAX官网（http://www.saxproject.org）。 
+22.1 问题描述 
+在这个项目中，要解决的通用问题是解析（读取并处理）XML文件。鉴于XML几乎可用来
+表示任何信息，而你可对其中的数据做任何处理，因此正如标题指出的，本章介绍的技巧拥有非
+常广泛的用途。本章要解决的具体问题是，根据一个XML文件生成完整的网站，而这个文件描
+述了网站的结构以及每个网页的基本内容。 
+着手处理这个项目前，建议你花点时间了解XML及其用途。这样你可能有更深入的认识，
+知道在什么情况下使用这种格式很有用，什么情况下使用它犹如大炮打蚊子。（毕竟，有时使用
+纯文本文件足够了。） 
+XML可用来表示任何信息 
+你可能对此持怀疑态度，下面来看几个有关其用途的示例。 
+标记文本以便进行普通的文档处理，如XHTML（http://www.w3.org/TR/xhtml1）或
+DocBook XML（http://www.docbook.org）。
+表示音乐（http://musicxml.org）。
+第22 章
+                          
+
+22.3 准备工作  341 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+7 
+8 
+9 
+10 
+11 
+12 
+13 
+14 
+表示人的心情、情感和性格特征（http://xml.coverpages.org/humanML.html）。
+描述任何物体（http://xml.coverpages.org/pml-ons.html）。
+通过网络调用Python方法（使用XML-RPC，这将在第27章演示）。
+XML Cover Pages（http://xml.coverpages.org/xml.html#applications）提供了一些现有的XML
+应用示例。 
+下面来确定这个项目的具体目标。 
+整个网站由单个XML文件描述，该文件包含有关各个网页和目录的信息。
+程序应根据需要创建目录和网页。
+应能够轻松地修改整个网站的设计并根据新的设计重新生成所有网页。
+仅考虑到最后一点，就值得创建这样的XML文件了，但还有其他的好处。通过将所有的内
+容放在一个XML文件中，可轻松地编写其他程序，以使用同样的XML处理技术来提取各种信息，
+如目录和供自定义搜索引擎使用的索引等。另外，就算不用来创建网站，也可使用这种文件来创
+建基于HTML的幻灯片或PDF幻灯片（方法是使用前一章讨论的ReportLab）。 
+22.2 有用的工具 
+Python本身提供了对XML的支持，但如果你使用的版本较旧，可能需要安装额外的模块。在
+这个项目中，需要一个管用的SAX解析器。要确定是否已经有这样的SAX解析器，可尝试执行如
+下代码： 
+>>> from xml.sax import make_parser 
+>>> parser = make_parser() 
+当你这样做时，很可能不会发生异常。如果是这样，就说明万事俱备，可以接着阅读下一
+节了。 
+提示 有很多Python XML工具，除标准框架PyXML外，另一个很有趣的工具是Fredrik Lundh开
+发的ElementTree（及其C语言实现cElementTree）。在较新的Python版本中，标准库包含这
+个工具，它位于xml.etree包中。如果你使用的Python版本较旧，可从http://effbot.org/zone
+获取ElementTree。这个工具功能强大却易于使用，如果你很重视使用Python处理XML，
+就值得花时间去研究它。 
+如果出现异常，就必须安装PyXML。只要在网上搜索一下，就应该能够找到安装指南（但
+除非你使用的Python版本很古老，否则应提供了XML支持）。 
+22.3 准备工作 
+要编写处理XML文件的程序，必须先设计要使用的XML格式。需要哪些标签？这些标签应
+                          
+
+342  第22 章 项目3：万能的XML 
+包含哪些属性？各个标签都用来做什么？为回答这些问题，首先需要考虑你要使用这种XML格
+式来描述什么。 
+主要的概念包括网站、目录、页面、名称、标题和内容。 
+你不会存储有关网站本身的任何信息，因此网站只是一个顶级元素，包含所有的文件和
+目录。
+目录主要用作文件和其他目录的容器。
+页面是单个网页。
+目录和网页都得有名称。这些名称就是目录名和文件名，将出现在文件系统和相应的
+URL中。
+每个网页都必须有标题（不同于文件名）。
+每个网页都包含一些内容。在这里，我们只使用普通的XHTML来表示内容。这样可直接
+将内容放在最终的网页中，并让浏览器进行解读。
+总之，XML文档只包含一个website元素，这个元素包含多个directory和page元素，其中每
+个directory元素都可能包含page和directory元素。directory和page元素都包含属性name，而该
+属性包含目录或页面的名称。另外，page元素还有属性title。page元素包含XHTML代码（这种
+代码的类型是在XHTML body标签中指定的）。代码清单22-1是一个这样的示例文件。 
+代码清单22-1 一个表示简单网站的XML文件（website.xml） 
+<website> 
+ <page name="index" title="Home Page">  
+    <h1>Welcome to My Home Page</h1> 
+   <p>Hi, there. My name is Mr. Gumby, and this is my home page. 
+   Here are some of my interests:</p> 
+   <ul> 
+  <li><a href="interests/shouting.html">Shouting</a></li> 
+  <li><a href="interests/sleeping.html">Sleeping</a></li> 
+  <li><a href="interests/eating.html">Eating</a></li> 
+   </ul> 
+  </page> 
+  <directory name="interests"> 
+ <page name="shouting" title="Shouting"> 
+  <h1>Mr. Gumby's Shouting Page</h1> 
+  <p>...</p> 
+   </page> 
+ <page name="sleeping" title="Sleeping"> 
+  <h1>Mr. Gumby's Sleeping Page</h1> 
+  <p>...</p> 
+   </page> 
+ <page name="eating" title="Eating"> 
+  <h1>Mr. Gumby's Eating Page</h1> 
+                          
+
+22.4 初次实现  343 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+7 
+8 
+9 
+10 
+11 
+12 
+13 
+14 
+  <p>...</p> 
+   </page> 
+  </directory> 
+</website> 
+22.4 初次实现 
+到目前为止，还没有介绍XML解析的工作原理。这里使用的方法名为SAX，它要求我们编
+写一系列事件处理程序（与GUI编程中一样），并让XML解析器在读取XML文档时调用这些处理
+程序。 
+使用DOM如何 
+在Python（和其他编程语言）中，处理XML的常见方式有两种：SAX和文档对象模式
+（DOM）。SAX解析器读取XML文件并指出发现的内容（文本、标签和属性），但每次只存储
+文档的一小部分。这让SAX简单、快捷且占用的内存较少，也就是我在本章中选择使用它的
+原因所在。DOM采用的是另一种方法：创建一个表示整个文档的数据结构（文档树）。这种
+方法的速度更慢，需要的内存更多，但在需要操作文档的结构时很有用。 
+22.4.1 创建简单的内容处理程序 
+使用SAX进行解析时，可供使用的事件很多，但这里只使用其中的三个：元素开始（遇到起
+始标签）、元素结束（遇到结束标签）和普通文本（字符）。为解析XML文件，我们将使用模块
+xml.sax中的函数parse。这个函数负责读取文件并生成事件，但生成事件时，它需要调用一些事
+件处理程序。这些事件处理程序将实现为内容处理程序对象的方法。你将从模块xml.sax.handler
+中的ContentHandler类派生出一个子类，因为这个类实现了所有必要的事件处理程序（什么都不
+做的伪操作），而你只需重写需要的事件处理程序。 
+下面首先来创建一个极简的XML解析器（这里假设要解析的XML文件名为website.xml）。 
+from xml.sax.handler import ContentHandler 
+from xml.sax import parse 
+class TestHandler(ContentHandler): pass 
+parse('website.xml', TestHandler()) 
+如果执行这个程序，将看起来什么都没有发生，但也不会出现任何错误消息。然而，在幕后
+对这个XML文件进行了解析，但由于调用的是什么都不做的默认事件处理程序，因此没有任何
+输出。 
+下面来尝试进行简单的扩展。为此，在TestHandler类中添加如下方法： 
+def startElement(self, name, attrs):  
+ print(name, attrs.keys()) 
+                          
+
+344  第22 章 项目3：万能的XML 
+这重写了默认事件处理程序startElement，其中的参数为相关标签的名称和属性（这些属性
+存储在一个类似于字典的对象中）。如果你再次运行这个程序（对代码清单22-1所示的website.xml
+进行解析），将看到如下输出： 
+website [] 
+page [u'name', u'title'] 
+h1 [] 
+p [] 
+ul [] 
+li [] 
+a [u'href'] 
+li [] 
+a [u'href'] 
+li [] 
+a [u'href'] 
+directory [u'name'] 
+page [u'name', u'title'] 
+h1 [] 
+p [] 
+page [u'name', u'title'] 
+h1 [] 
+p [] 
+page [u'name', u'title'] 
+h1 [] 
+p [] 
+其中的工作原理应该非常清晰。除startElement外，我们还将使用事件处理程序endElement
+（它只将标签名作为参数）和characters（它将一个字符串作为参数）。 
+下面的示例使用这三个事件处理程序来创建一个列表，其中包含网站描述文件中的所有标题
+（h1元素）： 
+from xml.sax.handler import ContentHandler 
+from xml.sax import parse 
+class HeadlineHandler(ContentHandler):  
+ in_headline = False 
+def __init__ (self, headlines):
+ super().__init__() 
+ self.headlines = headlines 
+ self.data = [] 
+   def startElement(self, name, attrs): 
+ if name == 'h1': 
+  self.in_headline = True 
+   def endElement(self, name): 
+ if name == 'h1': 
+  text = ''.join(self.data) 
+  self.data = [] 
+  self.headlines.append(text) 
+  self.in_headline = False 
+                          
+
+22.4 初次实现  345 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+7 
+8 
+9 
+10 
+11 
+12 
+13 
+14 
+   def characters(self, string): 
+ if self.in_headline: 
+  self.data.append(string) 
+headlines = [] 
+parse('website.xml', HeadlineHandler(headlines)) 
+print('The following <h1> elements were found:') 
+for h in headlines: 
+   print(h) 
+请注意，HeadlineHandler跟踪当前解析的文本是否位于一对h1标签内，其实现如下：在
+startElement发现标签为h1时将self.in_headline设置为True，并在endElement发现标签为h1时将
+self.in_headline设置为False。方法characters在解析器遇到文本时自动被调用。只要当前位于
+两个h1标签之间（self.in_headline为True），characters就将传递给它的字符串（可能只是这两
+个标签之间的文本的一部分）附加到字符串列表self.data的末尾。将这些文本片段合并为单个
+字符串，将结果附加到self.headlines末尾并将self.data重置为空列表的任务也是由endElement
+完成的。在SAX编程中，这种做法（使用布尔变量来指出当前是否在特定标签类型内）很常见。 
+现在如果运行这个程序（仍然是对代码清单22-1所示的文件website.xml进行解析），将得到
+如下输出： 
+The following <h1> elements were found: 
+Welcome to My Home Page 
+Mr. Gumby's Shouting Page 
+Mr. Gumby's Sleeping Page 
+Mr. Gumby's Eating Page 
+22.4.2 创建HTML 页面 
+现在可以创建原型了。我们暂时不考虑目录，而是专注于创建HTML页面。你需要稍微修改
+事件处理程序，使其执行如下任务。 
+在每个page元素的开头，打开一个给定名称的新文件，并在其中写入合适的HTML首部（包
+括指定的标题）。
+在每个page元素的末尾，将合适的HTML尾部写入文件，再将文件关闭。
+在page元素内部，遍历所有的标签和字符而不修改它们（将其原样写入文件）。
+在page元素外部，忽略所有的标签（如website和directory）。
+这些任务大都非常容易理解（至少在你对HTML文档的组织结构有所了解时如此）。然而，
+有两个问题可能不那么显而易见。 
+你不能将标签原样写入当前创建的HTML文件中，因为只给你提供了标签的名称（可能还
+有一些属性）。因此，你必须自己重建这些标签（如加上尖括号等）。
+SAX本身无法告诉你当前是否在page元素内，因此你必须自己跟踪这一点（就像在示例
+HeadlineHandler中那样）。就这个示例而言，你只关心是否要原样写入标签和字符，因此
+将使用一个名为passthrough的布尔变量，并在进入和离开page元素时修改这个变量的值。 
+                          
+
+346  第22 章 项目3：万能的XML 
+这个简单程序的代码如代码清单22-2所示。 
+代码清单22-2 一个简单的页面创建脚本（pagemaker.py） 
+from xml.sax.handler import ContentHandler 
+from xml.sax import parse 
+class PageMaker(ContentHandler):  
+ passthrough = False 
+   def startElement(self, name, attrs): 
+ if name == 'page': 
+  self.passthrough = True 
+  self.out = open(attrs['name'] + '.html', 'w') 
+  self.out.write('<html><head>\n') 
+  self.out.write('<title>{}</title>\n'.format(attrs['title'])) 
+  self.out.write('</head><body>\n') 
+ elif self.passthrough: 
+  self.out.write('<' + name) 
+  for key, val in attrs.items(): 
+   self.out.write(' {}="{}"'.format(key, val)) 
+  self.out.write('>') 
+   def endElement(self, name): 
+ if name == 'page': 
+  self.passthrough = False 
+  self.out.write('\n</body></html>\n') 
+  self.out.close() 
+ elif self.passthrough: 
+  self.out.write('</{}>'.format(name)) 
+   def characters(self, chars): 
+ if self.passthrough: self.out.write(chars) 
+parse('website.xml', PageMaker()) 
+要将文件存储到哪个目录，就应在哪个目录中执行这个脚本。请注意，即便两个页面位于不
+同的directory元素中，它们最终也将存储到同一个目录中。（再次实现时将修复这种问题。） 
+同样，对代码清单22-1所示的文件website.xml进行解析。这将得到4个HTML文件，其中的
+index.html包含如下内容： 
+<html><head> 
+<title>Home Page</title> 
+</head><body> 
+<h1>Welcome to My Home Page</h1> 
+<p>Hi, there. My name is Mr. Gumby, and this is my home page. Here are some of my 
+interests:</p> 
+<ul>  
+  <li><a href="interests/shouting.html">Shouting</a></li> 
+                          
+
+22.5 再次实现  347 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+7 
+8 
+9 
+10 
+11 
+12 
+13 
+14 
+  <li><a href="interests/sleeping.html">Sleeping</a></li> 
+   <li><a href="interests/eating.html">Eating</a></li> 
+</ul> 
+</body></html> 
+图22-1显示了在浏览器中查看这个页面的结果。 
+图22-1 生成的网页之一 
+从上述代码可知，它有两个显而易见的主要缺点。 
+它使用if语句来处理各种事件。如果要处理的事件种类很多，if语句将很长，变得难以
+理解。
+HTML代码是硬编码的。这应该很容易解决。
+这两个缺点在再次实现中都将得到解决。 
+22.5 再次实现 
+鉴于SAX机制低级而简单，编写一个混合类来处理管理性细节通常很有帮助。这些管理性细
+节包括收集字符数据，管理布尔状态变量（如passthrough），将事件分派给自定义事件处理程序，
+等等。就这个项目而言，状态和数据处理非常简单，因此这里将专注于事件分派。 
+22.5.1 分派器混合类 
+与其在标准通用事件处理程序（如startElement）中编写长长的if语句，不如只编写自定义
+的具体事件处理程序（如startPage）并让它们自动被调用。你可在一个混合类中实现这种功能，
+再通过继承这个混合类和ContentHandler来创建一个子类。 
+注意 第7章说过，混合类的功能有限，旨在与其他更重要的类一起用作父类。 
+                          
+
+348  第22 章 项目3：万能的XML 
+你希望程序具有如下功能。 
+startElement被调用时，如果参数name为'foo'，它应尝试查找事件处理程序startFoo，并
+使用提供给它的属性调用这个处理程序。
+同样，endElement被调用时，如果参数name为'foo'，它应尝试调用endFoo。
+如果没有找到相应的处理程序，这些方法应调用方法defaultStart或defaultEnd。如果没
+有这些默认处理程序，就什么都不做。
+再来说一下参数的问题。自定义处理程序（如startFoo）无需将标签名作为参数，而自定义
+默认处理程序（如defaultStart）需要这样做。另外，只有起始处理程序需要将属性作为参数。 
+一头雾水？先来编写这个类最简单的部分。 
+class Dispatcher:  
+   # ... 
+   def startElement(self, name, attrs): 
+    self.dispatch('start', name, attrs) 
+   def endElement(self, name): 
+ self.dispatch('end', name) 
+这里实现了基本的事件处理程序，它们只是调用方法dispatch，而dispatch将负责查找合适
+的处理程序、创建参数元素并使用这些参数调用处理程序。方法dispatch的代码如下： 
+def dispatch(self, prefix, name, attrs=None):  
+ mname = prefix + name.capitalize() 
+ dname = 'default' + prefix.capitalize() 
+   method = getattr(self, mname, None) 
+ if callable(method): args = () 
+   else: 
+ method = getattr(self, dname, None) 
+    args = name, 
+   if prefix == 'start': args += attrs, 
+ if callable(method): method(*args) 
+这个方法所做的工作如下。 
+(1) 根据前缀（'start'或'end'）和标签名（如'page'），生成处理程序的名称（如'startPage'）。 
+(2) 根据前缀生成默认处理程序的名称（如'defaultStart'）。 
+(3) 尝试使用getattr获取处理程序，并将默认值设置为None。 
+(4) 如果结果是可调用的，就将args设置为一个空元组。 
+(5) 否则，就尝试使用getattr获取默认处理程序，并将默认值也设置为None。另外，将args
+设置为一个只包含标签名的元组（因为默认处理程序只需要标签名）。 
+(6) 如果要调用的是起始处理程序，就将属性添加到参数元组（args）中。 
+(7) 如果获得的处理程序是可调用的（即为可行的具体处理程序或默认处理程序），就使用正
+确的参数调用它。 
+明白了吗？这大致意味着你现在可以像下面这样编写内容处理程序： 
+                          
+
+22.5 再次实现  349 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+7 
+8 
+9 
+10 
+11 
+12 
+13 
+14 
+class TestHandler(Dispatcher, ContentHandler):  
+   def startPage(self, attrs): 
+    print('Beginning page', attrs['name']) 
+   def endPage(self): 
+ print('Ending page') 
+鉴于这个分派器混合类负责完成了大部分管理工作，因此内容处理程序非常简单、易于理解。
+当然，稍后我们将再添加一些功能。 
+22.5.2 将首部和尾部写入文件的方法以及默认处理程序 
+本节比前一节容易得多。我们将编写专门用于将首部和尾部写入文件的方法，而不在事件处
+理程序中直接调用self.out.write。这样就可通过继承来轻松地重写这些方法。我们让将首部和
+尾部写入文件的方法尽可能简单。 
+def writeHeader(self, title): 
+   self.out.write("<html>\n <head>\n <title>") 
+   self.out.write(title) 
+ self.out.write("</title>\n </head>\n <body>\n") 
+def writeFooter(self): 
+   self.out.write("\n </body>\n</html>\n") 
+在初次实现中，处理XHTML内容的代码还与处理程序耦合得太紧，现在它们将由
+defaultStart和defaultEnd处理。 
+def defaultStart(self, name, attrs):  
+ if self.passthrough: 
+ self.out.write('<' + name) 
+ for key, val in attrs.items(): 
+  self.out.write(' {}="{}"'.format(key, val)) 
+ self.out.write('>') 
+def defaultEnd(self, name): 
+ if self.passthrough: 
+ self.out.write('</{}>'.format(name)) 
+这些代码与前面相同，只是移到了独立的方法中。（这通常是件好事。）现在就余下最后一块
+拼图了。 
+22.5.3 支持目录 
+为创建必要的目录，需要使用函数os.makedirs，它在指定的路径中创建必要的目录。例如，
+os.makedirs('foo/bar/baz')在当前目录下创建目录foo，再在目录foo下创建目录bar，然后在目
+录bar下创建目录baz。如果目录foo已经存在，将只创建目录bar和baz。同样，如果目录bar也已经
+存在，将只创建目录baz。然而，如果目录baz也已经存在，通常将引发异常。为避免出现这种情
+况，我们将关键字参数exist_ok设置为True。另一个很有用的函数是os.path.join，它使用正确
+的分隔符（例如，在UNIX中为/）将多条路径合而为一。 
+                          
+
+350  第22 章 项目3：万能的XML 
+在整个处理期间，都把当前目录路径存储在变量directory包含的目录名列表中。进入某个
+目录时，就将其名称附加到这个列表末尾；而离开某个目录时，就将其名称从目录列表中弹出。
+你可定义一个函数，来确保当前目录已创建好。 
+def ensureDirectory(self): 
+   path = os.path.join(*self.directory) 
+ os.makedirs(path, exist_ok=True) 
+请注意，将目录列表传递给os.path.join时，我使用了星号运算符*进行了参数拆分。 
+可通过参数将网站的根目录（如public_html）传递给构造函数，如下所示： 
+def __init__(self, directory):
+ self.directory = [directory] 
+   self.ensureDirectory() 
+22.5.4 事件处理程序 
+终于要实现事件处理程序了。需要4个事件处理程序，其中2个用于处理目录，另外2个用于
+处理页面。目录处理程序只使用了列表directory和方法ensureDirectory。 
+def startDirectory(self, attrs): 
+   self.directory.append(attrs['name']) 
+   self.ensureDirectory() 
+def endDirectory(self): 
+   self.directory.pop() 
+页面处理程序使用了方法writeHeader和writeFooter。另外，它们还设置了变量passthrough
+（以便将XHTML代码直接写入文件），而且打开和关闭与页面相关的文件（这可能是最重要的）。 
+def startPage(self, attrs):  
+ filename = os.path.join(*self.directory + [attrs['name'] + '.html']) 
+   self.out = open(filename, 'w') 
+   self.writeHeader(attrs['title']) 
+   self.passthrough = True 
+def endPage(self): 
+   self.passthrough = False 
+   self.writeFooter() 
+   self.out.close() 
+startPage的第一行代码看起来有点吓人，但与ensureDirectory的第一行代码大致相同，只
+是加上了文件名（和文件扩展名.html）。 
+这个程序的完整源代码如代码清单22-3所示。 
+代码清单22-3 网站生成器（website.py） 
+from xml.sax.handler import ContentHandler 
+from xml.sax import parse 
+import os 
+class Dispatcher: 
+                          
+
+22.5 再次实现  351 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+7 
+8 
+9 
+10 
+11 
+12 
+13 
+14 
+   def dispatch(self, prefix, name, attrs=None):  
+ mname = prefix + name.capitalize() 
+ dname = 'default' + prefix.capitalize() 
+ method = getattr(self, mname, None) 
+ if callable(method): args = () 
+ else: 
+  method = getattr(self, dname, None) 
+  args = name, 
+ if prefix == 'start': args += attrs, 
+ if callable(method): method(*args) 
+   def startElement(self, name, attrs): 
+ self.dispatch('start', name, attrs) 
+   def endElement(self, name): 
+ self.dispatch('end', name) 
+class WebsiteConstructor(Dispatcher, ContentHandler): 
+ passthrough = False 
+def __init__(self, directory):
+ self.directory = [directory] 
+ self.ensureDirectory() 
+   def ensureDirectory(self): 
+ path = os.path.join(*self.directory) 
+ os.makedirs(path, exist_ok=True) 
+   def characters(self, chars): 
+ if self.passthrough: self.out.write(chars) 
+   def defaultStart(self, name, attrs): 
+ if self.passthrough: 
+  self.out.write('<' + name) 
+  for key, val in attrs.items(): 
+   self.out.write(' {}="{}"'.format(key, val)) 
+  self.out.write('>') 
+   def defaultEnd(self, name): 
+ if self.passthrough: 
+  self.out.write('</{}>'.format(name)) 
+   def startDirectory(self, attrs): 
+ self.directory.append(attrs['name']) 
+ self.ensureDirectory() 
+   def endDirectory(self): 
+ self.directory.pop() 
+   def startPage(self, attrs): 
+ filename = os.path.join(*self.directory + [attrs['name'] + '.html']) 
+ self.out = open(filename, 'w') 
+ self.writeHeader(attrs['title']) 
+                          
+
+352  第22 章 项目3：万能的XML 
+ self.passthrough = True 
+   def endPage(self): 
+ self.passthrough = False 
+ self.writeFooter() 
+ self.out.close() 
+   def writeHeader(self, title): 
+ self.out.write('<html>\n <head>\n   <title>') 
+ self.out.write(title) 
+ self.out.write('</title>\n </head>\n <body>\n') 
+   def writeFooter(self): 
+ self.out.write('\n </body>\n</html>\n') 
+parse('website.xml', WebsiteConstructor('public_html')) 
+代码清单22-3将生成如下文件和目录： 
+public_html/
+public_html/index.html
+public_html/interests/
+public_html/interests/shouting.html
+public_html/interests/sleeping.html
+public_html/interests/eating.html
+22.6 进一步探索 
+至此，你创建了一个基本程序，可对其做哪些扩展呢？下面是一些建议。 
+创建一个新的ContentHandler，用于创建由链接组成的网站目录或菜单。
+在网页中添加导航帮助，让用户知道自己身在何处（在哪个目录中）。
+创建一个WebsiteConstructor的子类，并在其中重写方法writeHeader和writeFooter，以
+实现自定义设计。
+再创建一个ContentHandler，使其根据XML文件创建单个网页。
+创建一个以某种方式（如RSS）提供网站内容摘要的ContentHandler。
+研究其他XML转换工具，尤其是XML转换（XSLT）。
+使用ReportLab中的Platypus（http://www.reportlab.org）等工具根据XML文件创建一个或多
+个PDF文档。
+实现通过Web界面编辑XML文件的功能（参见第25章）。 
+预告
+简单地介绍XML解析后，我们来做些网络编程工作吧。在下一章，你将创建一个程序，它
+能够从各种网络来源收集新闻，并生成自定义的新闻汇总。 
+                          

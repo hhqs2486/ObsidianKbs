@@ -1,0 +1,419 @@
+第8章
+Helm插件和启动程序
+正如我们在本书中所看到的，Helm有很多特性和方法可以帮助我
+们在Kubernetes上交付应用程序。此外，也可以对Helm提供的功能进
+行自定义和扩展。
+在本章中，我们将讨论两种进一步增强和定制Helm的用途的方
+法：插件和启动程序。
+插件允许你向Helm添加额外的功能，并与CLI无缝集成，这使它们
+成为具有独特工作流需求的用户的热门选择。网上有许多第三方插件
+可用于常见用例，如secret管理。此外，非常容易针对独特的一次性
+任务来构建插件。
+启动程序扩展了使用helm create为不同类型的应用程序生成新的
+Helm chart的可能性。例如，你可能有一个为内部微服务构建的Helm
+chart，它非常适合作为未来微服务的示例。那么你可以将chart转换
+为启动程序，然后每次出现具有类似需求的新项目时都可以使用它。
+通过利用插件和启动程序，我们可以在Helm的开箱即用功能的基
+础上进行构建，以简化和自动化日常的工作流任务。
+更多IT书籍请关注：www.cmsblogs.cn
+
+8.1　插件
+Helm插件是可以直接从Helm CLI访问的外部工具。它们允许你向
+Helm添加自定义子命令，而无须对Helm的Go源代码进行任何修改。这
+在设计上类似于在其他工具中实现插件系统的方法，比如
+kubectl（Kubernetes CLI）。
+此外，downloader（下载器）插件允许你指定与chart存储库通信
+的自定义协议。如果你有一些自定义的身份验证方法，或者你需要以
+某种方式修改Helm从存储库获取chart的方法，那么这将非常有用。
+8.1.1　安装第三方插件
+许多第三方插件都是开源的，可以在GitHub上公开获得。许多插
+件使用“helm-plugin”这样的标签使它们易于查找。请参阅GitHub上
+的Helm插件文档（https://oreil.ly/3KwNb）。
+示例公共可用插件
+下面是一些GitHub上的Helm插件：
+helm/helm-2to3
+将Helm 2版本转换为Helm 3版本的插件。
+jkroepke/helm-secrets
+在YAML格式中有效管理secret的插件。
+maorfr/helm-backup
+更多IT书籍请关注：www.cmsblogs.cn
+
+用文本文件备份/恢复Helm版本的插件。
+karuppiah7890/helm-schema-gen
+基于values.yaml生成values.schema.json的插件（参见第6章以了解更
+多关于模式化值的信息）。
+hickeyma/helm-mapkubeapis
+更新包含弃用的Kubernetes API的Helm发布版本元数据的插件。
+找到要安装的插件后，获取其版本控制URL。这是获取正确版本的
+plugin.yaml以及其余的插件源代码的方法。
+目前支持Git、SVN、Bazaar（Bzr）和Mercurial（Hg）URL。对于
+Git，版本控制URL类似于https://example.com/myorg/myrepo.git。
+例如，有一个简单的用于管理启动程序的插件，位于
+https://github.com/salesforce/helm-starter。此插件的版本控制
+URL为https://github.com/salesforce/helm-starter.git。
+要安装此插件，可运行helm plugin install，并将版本控制URL
+作为第一个参数传入：
+如果安装成功，你可以继续使用这个插件：
+更多IT书籍请关注：www.cmsblogs.cn
+
+要列出所有已安装的插件，可以使用helm plugin list命令：
+要尝试更新插件，可以使用helm plugin update命令：
+如果希望从系统中卸载插件，可以使用helm plugin remove命
+令：
+更多IT书籍请关注：www.cmsblogs.cn
+
+除非另有规定，否则Helm将使用plugin.yaml以及安装插件时位于
+Git repo的默认分支上的源代码。如果希望指定要使用的Git标记，可
+在安装时使用--version标志：
+也可以直接从tar压缩包的URL安装插件。Helm将下载tar压缩包并
+将其解压到插件目录：
+此外，还可以从本地目录安装插件：
+Helm不会复制这个文件，而是创建指向原始文件的符号链接：
+更多IT书籍请关注：www.cmsblogs.cn
+
+这个功能可能是有用的。例如，如果你正在积极开发一个插件，
+当调用符号链接的插件时，对plugin.yaml和其他源文件的更改将立即
+被识别。
+8.1.2　自定义子命令
+插件有许多有用的特性，可以实现与现有Helm用户体验的无缝集
+成。Helm插件最显著的特点是每个插件都为Helm提供了一个自定义的
+顶级子命令。这些子命令甚至可以利用shell完成（本章后面将介
+绍）。
+Helm插件的历史
+Helm插件的一个原始特性是为它们提供了连接到Tiller的环境设
+置，Tiller是Helm 2中弃用的Helm服务器端组件。对于需要与Helm紧密
+集成的插件子命令来说，这是一个重要的概念，因为任何涉及Helm发
+布版本的东西都需要经过Tiller。
+在Helm 3中，Tiller已被移除了，所有与Kubernetes API的通信都由
+Helm客户端自己执行。然而，插件系统仍然存在。
+安装一个插件后，一个新的命令就将提供给你使用，它按照插件
+的名称来命名。这个新的命令直接与Helm集成，甚至会出现在helm
+help中。
+例如，假设我们安装了一个名为inspect-templates的插件，它提
+供了有关在chart中找到的YAML模板的额外信息。这个插件将为你提供
+一个额外的Helm命令：
+这将执行inspect templates插件，并把提供的任何参数或标志传
+递给插件被调用时执行的底层工具。插件的作者指定了一些命令，
+Helm应该在每次调用插件时将其作为子进程运行（关于如何指定此命
+令的更多信息见8.1.3节）。
+更多IT书籍请关注：www.cmsblogs.cn
+
+插件提供了一个很好的替代方案来扩充Helm现有的特性集，而无
+须对Helm本身进行任何修改。
+8.1.3　构建插件
+构建Helm插件是一个相当简单的过程。根据插件的需求和总体复
+杂性，这可能需要一些编程知识。然而，许多插件只运行一个基本的
+shell命令。
+底层实现
+考虑下面的Bash脚本inspect-templates.sh，我们的示例
+inspect-templates插件的底层实现为：
+更多IT书籍请关注：www.cmsblogs.cn
+
+更多IT书籍请关注：www.cmsblogs.cn
+
+当用户运行helm inspect-templates时，Helm将在后台执行此脚
+本。
+底层插件实现不需要用Bash、Go或任何特定的编程语言编
+写。对于这个插件的最终用户来说，它应该只是Helm CLI的另一部
+分。
+插件清单
+每个插件都由一个名为plugin.yaml的YAML文件定义，此文件包含
+插件元数据和有关调用插件时要运行的命令的信息。
+下面是一个用于inspect-templates插件的plugin.yaml示例：
+更多IT书籍请关注：www.cmsblogs.cn
+
+❶　插件的名称。
+❷　插件的版本。
+❸　插件的基本描述。
+❹　调用此插件时要运行的命令。
+手动安装
+首先检查插件存储根目录的配置路径：
+对插件使用自定义根目录
+通过为当前环境中的HELM_PLUGINS环境变量提供自定义路径，可
+以覆盖插件的根目录。
+在插件存储根目录中创建一个与插件名称（inspect-templates）
+匹配的目录：
+更多IT书籍请关注：www.cmsblogs.cn
+
+下一步，将plugin.yaml和inspect-templates.sh复制到新目录，
+并确保脚本是可执行的：
+最终结果
+下面是inspect templates插件的运行结果：
+更多IT书籍请关注：www.cmsblogs.cn
+
+更多IT书籍请关注：www.cmsblogs.cn
+
+注意所提供的命令行参数（即mychart/）是如何直接传递给脚本
+的。这使得插件作者可以轻松地构建接受任意数量的参数或自定义标
+志的独立工具。
+8.1.4　plugin.yaml
+plugin.yaml是描述插件、插件的调用命令和其他重要细节的插件
+清单文件的名称。
+下面是一个plugin.yaml示例，包含所有你可能为插件指定的选
+项：
+更多IT书籍请关注：www.cmsblogs.cn
+
+更多IT书籍请关注：www.cmsblogs.cn
+
+❶　插件的名称。
+❷　插件的版本。
+❸　插件的使用说明。
+❹　插件的描述。
+❺　平台特定命令。如果客户端匹配某os/arch组合，则运行该命
+令，而不是运行默认的命令。
+❻　调用此插件时运行的命令。
+❼　当作为参数传递给插件时，是否抑制传递的Helm全局标志（例
+如，--debug）。
+⑧　插件钩子（参见8.1.5节）。
+⑨　下载程序和相关协议（参见8.1.6节）。
+插件的名称（name）将是用于从Helm CLI调用该插件的子命令
+（例如，helm myplugin）。因此，插件名称不应与任何现有的Helm子
+命令（install、repo等）重名。而且名称只能包含字符a–z、A–Z、
+0–9、_和-。
+插件的version应该是有效的SemVer 2版本。
+运行helm help和helm help myplugin将显示插件的用法
+（usage）和说明（description）。但是，插件本身必须处理自己的
+标志解析，比如helm myplugin--help。
+command是当这个插件被调用时，Helm将在子进程中执行的命令。
+如果定义了platformCommands部分，Helm将首先检查系统是否与提供
+的os（操作系统）和arch（架构）匹配，如果匹配，Helm将使用匹配
+条目中定义的命令（command）。arch字段是可选的，如果缺少，则只
+检查os。
+更多IT书籍请关注：www.cmsblogs.cn
+
+下面是Helm根据插件的plugin.yaml内容以及运行时环境确定在调
+用插件时运行哪个命令的确切顺序：
+1.如果platformCommand存在，将首先搜索它。
+2.如果os和arch都匹配当前的平台，搜索将停止并执行特定于平
+台的命令。
+3.如果os匹配，并且没有更具体的匹配，则将执行特定于平台的
+命令。
+4.如果找不到匹配的os/arch，将执行默认的顶级命令。
+5.如果没有顶级命令，并且在platformCommand中找不到匹配项，
+Helm将退出并返回错误。
+8.1.5　钩子
+插件钩子允许你在安装、更新或删除插件时执行其他操作。
+例如，插件的底层实现可能是必须从Internet下载的特定于平台
+的二进制文件。二进制文件的URL因用户的操作系统而异。
+基于操作系统处理此逻辑的脚本可能如下所示：
+更多IT书籍请关注：www.cmsblogs.cn
+
+更多IT书籍请关注：www.cmsblogs.cn
+
+通过为我们的插件定义一个安装钩子，可以让它在用户安装这个
+插件时运行这个脚本。
+要定义钩子，可以将hooks部分添加到plugin.yaml中，为要响应
+的每个事件定义命令：
+❶　在helm plugin install上运行的命令。
+❷　在helm plugin update上运行的命令。
+❸　在helm plugin remove上运行的命令。
+8.1.6　下载程序插件
+有些插件有特殊的功能，可以作为下载chart的替代品。
+如果你以不同于纯chart存储库的方式存储chart，或者你的chart
+存储库实现有额外的要求，那么这将非常有用。
+下载程序插件（downloader plugin）定义了一个（或多个）协
+议，如果在命令行中检测到，它将指示Helm使用插件而不是Helm的内
+部下载机制来下载index.yaml或者chart.tgz包。
+下面是一个名为“super-secure”的下载程序插件的plugin.yaml
+示例，它注册了ss://协议：
+更多IT书籍请关注：www.cmsblogs.cn
+
+❶　此插件作为下载程序调用时要运行的命令。
+❷　此插件声明的自定义协议。
+记住，所有插件（包括下载程序插件）都定义了一个自定义
+的顶级命令（即helm super-secure）。用于下载程序插件的命令可以
+与command字段相同，但要注意，如果你希望将该插件同时用作标准插
+件和下载程序，那么确定它的使用方式可能会变得很困难。确定插件
+是否用作下载程序的一种方法是检查是否使用四个命令行参数调用该
+命令。
+下载程序命令总是使用以下参数调用：
+certFile、keyFile和caFile参数派生自YAML配置文件中的条目，
+其路径由$(helm env helm_REPOSITORY_CONFIG)返回，并在使用helm
+repo add添加存储库时设置（更多信息请参阅第7章）。full-URL参数
+更多IT书籍请关注：www.cmsblogs.cn
+
+是正在下载的资源的完整URL，可以是index.yaml或chart.tgz/.prov
+文件。
+让我们看看super-secure插件定义的ss://协议下载程序的具体实
+现：
+此下载程序允许我们使用受令牌/承载身份验证保护的chart存储
+库。它期望设置环境变量SUPER_SECURE_TOKEN，该环境变量将用于制
+定从chart存储库请求资源时使用的头
+Authorization:Bearer<token>。
+虽然super-secure插件是一个很好的例子，但Helm的未来版
+本实际上可能支持bearer token auth开箱即用。
+更多IT书籍请关注：www.cmsblogs.cn
+
+下载程序插件需要将资源的内容输出到stdout，因此任何额外的
+日志等都应该打印到stderr。这就是在以echo开头的行中，我们使用
+1>&2将此消息重定向到stderr的原因。
+安装了这个插件后，我们将添加一个受token auth保护的chart存
+储库：
+此存储库URL现在将显示在本地存储库列表中，其中包含ss://协
+议：
+现在，此存储库可以像其他存储库一样用于下载远程chart包：
+更多IT书籍请关注：www.cmsblogs.cn
+
+下载程序插件为Helm用户提供了一种方法，通过定义自定义协议
+来扩展使用chart存储库的传输机制。当Helm检测到正在使用一个自定
+义协议时，它将尝试定位一个可以处理它的已安装插件，然后将资源
+请求推送到该插件中。
+8.1.7　执行环境
+由于插件是为了扩展Helm的功能，它们可能需要访问Helm的一些
+内部配置文件，或者命令行上提供的全局标志。
+为了让插件访问此类信息，在运行时，Helm向插件提供了一系列
+已知的环境变量。
+以下是插件可用的所有环境变量的最新列表，按字母顺序排列：
+HELM_BIN
+正在执行的Helm命令的路径。
+HELM_DEBUG
+为全局布尔--debug选项（“true”或“false”）设置的值。
+HELM_KUBECONTEXT
+为全局--kube-context<context>选项设置的值。
+HELM_NAMESPACE
+为全局--namespace<namespace>选项设置的值。
+HELM_PLUGIN_DIR
+当前插件的根目录。
+HELM_PLUGIN_NAME
+当前插件的名称。
+更多IT书籍请关注：www.cmsblogs.cn
+
+HELM_PLUGINS
+包含所有插件的顶级目录。
+HELM_REGISTRY_CONFIG
+登记站配置的根目录。
+HELM_REPOSITORY_CACHE
+存储库的根目录。
+HELM_REPOSITORY_CONFIG
+存储库配置的根目录。
+8.1.8　Shell完成
+Helm内置了对Bash和Z shell（Zsh）的shell自动完成的支持（参
+见helm completion--help）。当你忘记要使用的子命令或标志的名称
+时，这会很有帮助。
+插件还可以使用两种方法之一提供自己的自定义shell完成：静态
+自动完成和动态完成。
+静态自动完成
+通过在插件目录的根目录中包含一个名为completion.yaml的文
+件，Helm插件可以静态地指定插件可用的所有预期标志和命令。
+下面是一个用于虚构的zoo插件的示例completion.yaml：
+更多IT书籍请关注：www.cmsblogs.cn
+
+更多IT书籍请关注：www.cmsblogs.cn
+
+❶　此完成文件使用的插件的名称。
+❷　可用标志的列表（注意，这些不应包括-或--前缀）。
+❸　可用的子命令列表。
+❹　单个子命令的名称。
+更多IT书籍请关注：www.cmsblogs.cn
+
+❺　子命令后面第一个参数的有效选项列表。
+在顶层commands部分下面，可以为嵌套的子命令指定另一个
+commands部分（并根据需要递归多次）。commands部分中的每个命令
+都可以包含自己的标志（flags）和有效值（validArgs）的列表。
+Helm的全局标志（如--debug或--namespace）已经由Helm的内置
+shell完成，因此不必在flags下列出这些标志。
+如果我们开始尝试运行示例zoo插件，然后按Tab键，它将显示所
+有可用的子命令：
+现在，如果我们做同样的操作，但是在按下Tab键之前添加--
+disable-s前缀（原文后缀错），则应该看到标志如下：
+使用静态完成，我们能够实现与Helm的现有shell完成对等的功
+能，使插件感觉与Helm用户体验更紧密地集成在一起。
+如果你正在开发一个插件，则必须打开一个新的终端窗口，
+以便刷新静态shell完成。
+或者，你可以运行以下命令之一以获取当前终端中的最新完成：
+更多IT书籍请关注：www.cmsblogs.cn
+
+动态完成
+在某些情况下，可能无法提前知道给定命令的有效参数。例如，
+你可能希望在集群中提供一个Helm发布版本名称列表来作为插件的有
+效参数。这可以通过使用动态完成来实现。
+要启用动态完成，可以在插件目录的根目录中包含一个名为
+plugin.complete的文件。此文件可以是任何类型的可执行文件。例
+如，shell脚本或二进制文件。
+对于包含plugin.complete文件的插件，当请求完成时（即，按
+Tab键），Helm将运行此可执行文件，并将需要完成的文本作为第一个
+参数传递。然后，这个程序应该返回一个可能结果的列表，每个结果
+占一行，并成功退出（即返回代码0）。
+你甚至可以决定将此完成功能作为主插件程序的一部分来提供，
+具体可以使用一个简单的包装器脚本，然后通过使用--complete等标
+志来触发它。下面是一个基本的plugin.complete可执行文件，它执行
+以下操作：
+在zoo插件示例的基础上，假设可用动物类别的列表不断变化，并
+存储在用户主目录的一个名为animals.txt的文件中。以下是
+animals.txt可能的内容：
+更多IT书籍请关注：www.cmsblogs.cn
+
+我们希望能够基于此文件的内容动态地提供完成。下面是一个可
+用于提供动态完成的plugin.complete可执行文件（Bash脚本）：
+现在，如果我们运行这个插件并键入animals list，然后按Tab
+键，它将显示所有可用动物类别的列表：
+更多IT书籍请关注：www.cmsblogs.cn
+
+为了确保它是动态的，让我们在animals.txt中添加一个种类
+“monkeys”并再试一次：
+成功了！
+这只是一个使用动态完成的简单示例，但是请记住，你还可以查
+询一些远程的东西，例如Kubernetes集群中的资源，这使它成为插件
+的一个强大功能。
+如果你已经在使用completion.yaml文件，则不能使用动态完
+成，即使plugin.complete可执行文件存在于插件的根目录中。
+更多IT书籍请关注：www.cmsblogs.cn
+
+8.2　启动程序
+启动程序或启动程序包类似于Helm chart，只不过它们专门用来
+作为新chart的模板。
+当你使用helm create命令创建一个新chart时，这将使用Helm的
+内置启动程序生成一个新chart，这是一个使用最佳实践的通用
+chart。
+要指定自定义启动程序，可以在创建新chart时使用--starter选
+项：
+使用启动程序允许我们利用以前为具有类似用途的应用程序构建
+的chart。这对于引导具有类似需求的新项目快速部署到Kubernetes环
+境非常有用。
+8.2.1　将chart转换为启动程序
+任何Helm chart都可以被转换成启动程序。唯一能区分启动程序
+与标准chart的是启动程序的模板中存在对chart名称的动态引用。
+要将一个标准chart转换为启动程序，需要用字符串<CHARTNAME>
+替换对chart名称的任何硬编码引用。
+为了演示，让我们从一个名为mychart的chart中选取一个简单的
+ConfigMap模板：
+更多IT书籍请关注：www.cmsblogs.cn
+
+下面是启动程序中的模板：
+此chart必须仍然包含Chart.yaml才能工作，但是，它将被生
+成器覆盖。
+更多IT书籍请关注：www.cmsblogs.cn
+
+8.2.2　使启动程序可供Helm使用
+在使用启动程序之前，必须首先确定它的唯一名称。例如，将包
+含用于部署基本Web应用程序的样板模板的启动程序命名为“basic-
+webapp”。
+要使此启动程序成为在命令行上指定--starter标志时使用的有效
+选项，它必须作为文件路径$(helm env HELM_DATA_HOME)/starters下
+的目录存在。
+如果这是你要添加的第一个启动程序，请确保顶层starters目录
+首先存在：
+然后将整个basic-webapp目录复制到顶层目录：
+8.2.3　使用启动程序
+一旦启动程序可用，你就可以在命令行中引用其名称来生成新的
+chart：
+新生成的chart的结构将与启动程序的结构相同。启动程序的模板
+中对<CHARTNAME>的所有引用都将被替换为新chart的名称（即
+superapp）。
+更多IT书籍请关注：www.cmsblogs.cn
+
+下面是基于启动程序生成的chart的示例目录结构，该启动程序只
+定义了deployment.yaml和service.yaml这两个模板：
+从这里，你可以将这个新chart签入版本控制并开始进行更改，以
+便为给定的应用程序定制它。
+更多IT书籍请关注：www.cmsblogs.cn
+
+8.3　进一步扩展Helm
+在本章中，我们讨论了如何使用插件和启动程序来扩展Helm。然
+而，还有一种方法可以扩展Helm：通过开源贡献。
+本书中的所有内容都反映了对Helm项目的数千个开源贡献。虽然
+这项工作大部分是由维护人员完成的，但大部分贡献来自世界各地的
+个人。这不仅包括对Go源代码的更改，还包括测试和文档更新。
+欢迎大家到Helm社区登录页（https://oreil.ly/9TloH）了解更
+多信息！
+更多IT书籍请关注：www.cmsblogs.cn

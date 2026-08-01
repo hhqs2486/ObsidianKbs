@@ -1,0 +1,83 @@
+GPU架构
+每个SM包含一组流式处理器（Stream Processor，简称SP），每个流式处理器都具备一个真正的执行核心，可以线
+性地运行一个线程。SP是执行逻辑中的最小单元，代表了更细粒度并行的层次。SM和SP的区分在本质上是结构化的，
+不过可以进一步勾勒出GPU中SP的逻辑组织，这些SP聚集在逻辑区中，这些逻辑区都共享一种特定的执行模式。组成
+一组SP的所有核心同时执行相同的指令。这就是我们在本书第1章中介绍过的单指令多数据（Single 
+instruction，
+multiple data，简称SIMD）模式。
+每个SM都有一些寄存器（register），寄存器是可以快速访问的内存区域，这块区域是临时的，只能本地访问（不
+同核心之间无法共享），而且大小有限制。它可以用于存储单个核心中经常使用的值。图形处理器通用计算（general-
+purpose computing on graphics processing units，简称GP-GPU）这个领域致力于研究利用GPU 计算能力快速执行计算所
+需的技术，这也得益于GPU内部高度的并行化。如前所述，GPU的结构与传统处理器有很大区别；因此，它们存在的
+问题也完全不同，需要使用特定的编程技巧。图形处理器最突出的特性就是拥有大量可用的处理核心，可以运行许多
+相互竞争的执行线程，这些线程将部分同步式地执行相同的操作。如果希望将工作分成许多小部分，针对不同的数据
+执行相同的操作，该特性将十分有用且高效。相反，如果操作非常注重线性化和逻辑顺序，就很难充分利用这一架
+构。GPU 计算的编程范式被称为流式处理（Stream Processing），因为数据可以被看作一个全部由数值组成的流，在这
+个流上同步执行了相同的操作。
+当前，能够最有效地利用GPU计算能力的解决方案是软件库CUDA和OpenCL。在接下来的示例中，我们将介绍这
+些软件库在Python编程语言中的实现。
+使用PyCUDA模块
+PyCUDA是NVIDIA开发的GPU编程软件库CUDA（Compute 
+Unified 
+Device 
+Architecture）在Python中的封装。
+
+CUDA编程模型是理解正确使用PyCUDA进行GPU编程的起点。如果想做到正确使用该工具，并且弄懂接下来的示例中
+介绍的内容，必须先理解和领会一些概念。
+混合编程模型
+CUDA的“混合”编程模型是通过多个特定的C语言标准库扩展实现的，PyCUDA亦然。只要有可能，就会创建这些
+扩展，语法上类似C标准库中的函数调用。这样，我们就能以相对简单的方式使用包含主机（host）和设备（device）
+代码的混合编程模型。NVCC 编译器对这两个逻辑部件进行管理。以下是对该编译器工作原理的简要描述：
+1.将设备代码与主机代码分离。
+2.调用默认编译器（例如，GCC）编译主机代码。
+3.以二进制（Cubin对象）或汇编代码（PTX代码）的形式构建设备代码。
+4.生成一个主机键“global”，其中也包含PTX代码。
+编译后的CUDA代码将在运行时由驱动器转换为特定于设备的二进制文件。上面提到的所有步骤都是PyCUDA在运
+行时完成的，因此它也算是一个即时（just-in-time，简称JIT）编译器。这一方式的缺点是应用的加载时间会增加，因
+为这是唯一保持向“前”兼容的方法，即可以在实际编译时不存在的设备上执行运算。所以，JIT编译可以让应用与构建
+于更高计算能力架构之上的未来设备兼容，因此它还不能生成任何二进制代码。PyCUDA的执行模式如下图所示。
+PyCUDA执行模式
+内核与线程层级
+CUDA程序的一个重要元素就是其内核（kernel）。它代表可以并行执行的代码，其基础规格说明将在稍后举例说
+明。每个内核的执行均由叫作线程（thread）的计算单元完成。与CPU中的线程不同，GPU 线程更加轻量，上下文的切
+换不会影响代码性能，因为切换可以说是瞬时完成的。为了确定运行一个内核所需的线程数及其逻辑组织形式，CUDA
+定义了一个二层结构。在最高一层中，定义了所谓的区块网格（grid of blocks）。这个网格代表了线程区块所在的二维
+结构，而这些线程区块则是三维的，示意图如下所示。
+
+PyCUDA二层结构中（三维）线程的分布
+基于这一结构，内核函数被调用时，必须提供额外的参数，来准确指定网格和区块大小。准备工作
+在维基百科页面http：//wiki.tiker.net/PyCuda/Installation中，解释了在主要操作系统（Linux、Mac和Windows）中安
+装PyCUDA的基本步骤。
+按照这些步骤，你可以针对Python 2.7发行版构建一个32位的PyCUDA库。
+1.第1步是下载并安装NVIDIA提供的用于CUDA开发的所有组件（参考https：//de-veloper.nvidia.com/cuda-toolkit-
+archive中的介绍），针对各个版本的组件都有，可参见下图。这些组件如下所示。
+□ CUDA 工 具 包：http：//developer.download.nvidia.com/compute/cuda/4_2/rel/toolkit/cudatoolkit_4.2.9_win_32.msi。
+□ 
+NVIDIAGPU计算SDK：
+http：//developer.download.nvidia.com/compute/cuda/4_2/rel/sdk/gpucomputingsdk_4.2.9_win_32.exe。
+□ 
+NVIDIA 
+CUDA开发驱动器：
+http：//developer.download.nvidia.com/compute/cuda/4_2/rel/drivers/devdriver_4.2_winvista-win7_32_301.32_general.exe。
+2.下载并安装NumPy（针对32位Python 2.7的版本）和Visual Studio C++2008 Express（记住，要设置全部系统变
+量）。
+3.打开位于/Python27/lib/distutils/的文件msvc9compiler.py。在第64行（ld_args.append 
+（＇/IMPLIB：＇+implib_昀
+le））之后，加上一行新代码：ld_args.ap-pend（＇/MANIFEST＇）。
+4.从https：//pypi.python.org/pypi/pycuda下载PyCUDA。
+5.打开Visual Studio 2008命令提示符：单击“开始”，前往“所有程序|Microsoft Visual Studio 2008|Visual Studio
+Tools|Visual Studio Command Prompt （2008）”，然后按以下步骤进行操作。
+（1）进入PyCuda目录。
+（2）执行python configure.py命令。
+（3）编辑创建的文件siteconf.py：
+
+6.最后，在Visual Studio 2008命令提示符中输入以下命令，安装PyCUDA：
+python setup.py build
+python setup.py install
+
+CUDA工具包下载页面
+具体实现
+下面这个示例有两个功能。第一是验证PyCUDA是否正常安装，第二是读取并打印GPU显卡的特征信息：
+运行上述代码之后，应该会看到类似下面的输出：
+实例精解
+上述代码的执行非常简单。在这段代码中，导入并初始化了pycuda.driver：

@@ -1,0 +1,1892 @@
+52 ff 第一篇 基础篇 
+第4 章 
+TensorFlow 基础知识 
+本章主要参参TensorFlow 官方网站上的新手入门
+①和扩展教程
+②，讲解TensorFlow 的基本
+概念。本章从系统架构、设计理念、编程模型、常用API、存储与加载模型、线程及队列、加
+载数据、自定义操作等多个方面进行讲解，相信通过本章的学习，读者会对TensorFlow 的全貌
+有一个基本的认识。本章的学习对理解TensorFlow 的原理和实战非常重要，读者需要用心揣摩。 
+4.1  系统架构 
+图4-1 给出的是TensorFlow 的系统架构，自底向上分为设备层和网络层、数据操作层、
+图计算层、API 层、应用层，其中设备层和网络层、数据操作层、图计算层是TensorFlow 的核
+心层。
+③ 
+下面就自底向上详细介绍一下TensorFlow 的系统架构。最下层是网络通信层和设备管理层。
+网络通信层包括gRPC（google Remote Procedure Call Protocol）和远程直接数据存取（Remote Direct 
+Memory Access，RDMA），这都是在分布式计算时需要用到的。设备管理层包括TensorFlow 分
+别在CPU、GPU、FPGA 等设备上的实现，也就是对上层提供了一个统一的接口，使上层只需
+要处理卷积等逻辑，而不需要关心在硬件上的卷积的实现过程。
+其上是数据操作层，主要包括卷积函数、激活函数等操作（参见4.7 节）。再往上是图计算
+层，也是我们要了解的核心，包含本地计算图和分布式计算图的实现（本章会做基础知识的梳
+理，包括图的创建、编译、优化和执行，本书的“实战篇”会介绍图的具体应用，第 15 章会
+介绍分布式计算图的实现）。再往上是API 层和应用层（4.4 节和4.7 节会介绍重点常用的API
+的Python 实现以及一些其他语言的实现，本书的“实战篇”会重点讲解调用API 层对深度学习
+各种网络模型的实现）。
+①
+https://www.tensorflow.org/get_started/get_started
+② https://www.tensorflow.org/extend/architecture
+③ 本节内容参参https://www.tensorflow.org/extend/architecture。 
+
+第4 章 TensorFlow 基础知识 ee 53 
+图4-1 
+4.2  设计理念 
+TensorFlow 的设计理念主要体现在以下两个方面。 
+（1）将图的定义和图的运行完全分开。因此，TensorFlow 被认为是一个“符号主义”的库。 
+我们知道，编程模式通常分为命令式编程（imperative style programming）和符号式编程
+（symbolic style programming）。命令式编程就是编写我们理解的通常意义上的程序，很容易理解
+和调试，按照原有逻辑执行。符号式编程涉及很多的嵌入和优化，不容易理解和调试，但运行
+速度相对有所提升。现有的深度学习框架中，Torch 是典型的命令式的，Caffe、MXNet 采用了
+两种编程模式混合的方法，而TensorFlow 完全采用符号式编程。 
+符号式计算一般是先定义各种变量，然后建立一个数据流图，在数据流图中规定各个变量之间
+的计算关系，最后需要对数据流图进行编译，但此时的数据流图还是一个空壳儿，里面没有任何实
+际数据，只有把需要运算的输入放进去后，才能在整个模型中形成数据流，从而形成输出值。
+① 
+例如：
+t = 8 + 9 
+print(t)  
+①
+这一段参参http://www.xue163.com/5800/10381/58008965.html。
+
+54 ff 第一篇 基础篇 
+在传统的程序操作中，定义了t 的运算，在运行时就执行了，并输出17。而在TensorFlow
+中，数据流图中的节点，实际上对应的是TensorFlow API 中的一个操作，并没有真正去运行： 
+import tensorflow as tf 
+t = tf.add(8, 9)   
+print(t) # 输出 Tensor("Add_1:0", shape=(), dtype=int32) 
+定义了一个操作，但实际上并没有运行。
+（2）TensorFlow 中涉及的运算都要放在图中，而图的运行只发生在会话（session）中。开
+启会话后，就可以用数据去填充节点，进行运算；关闭会话后，就不能进行计算了。因此，会
+话提供了操作运行和Tensor 求值的环境。例如： 
+import tensorflow as tf 
+# 创建图 
+a = tf.constant([1.0, 2.0]) 
+b = tf.constant([3.0, 4.0]) 
+c = a * b 
+# 创建会话 
+sess = tf.Session() 
+# 计算c 
+print sess.run(c) # 进行矩阵乘法，输出[3., 8.] 
+sess.close() 
+了解了设计理念，接下来看一下TensorFlow 的编程模型。 
+4.3  编程模型
+① 
+TensorFlow 是用数据流图做计算的，因此我们先创建一个数据流图（也称为网络结构图），
+如图4-2 所示，看一下数据流图中的各个要素。 
+图4-2 讲述了TensorFlow 的运行原理。图中包含输入（input）、塑形（reshape）、Relu 层（Relu 
+layer）、Logit 层（Logit layer）、Softmax、交叉熵（cross entropy）、梯度（gradient）、SGD 训练
+（SGD Trainer）等部分，是一个简单的回归模型。 
+它的计算过程是，首先从输入开始，经过塑形后，一层一层进行前向传播运算。Relu 层（隐
+藏层）里会有两个参数，即Wh1 和bh1，在输出前使用ReLu（Rectified Linear Units）激活函数
+做非线性处理。然后进入Logit 层（输出层），学习两个参数Wsm 和bsm。用Softmax 来计算输
+①
+本节内容参参TensorFlow 白皮书《TensorFlow: Large-Scale Machine Learning on Heterogeneous Distributed Systems》：
+http://download.tensorflow.org/paper/whitepaper2015.pdf。 
+
+第4 章 TensorFlow 基础知识 ee 55 
+出结果中各个类别的概率分布。用交叉熵来度量两个概率分布（源样本的概率分布和输出结果
+的概率分布）之间的相似性。然后开始计算梯度，这里是需要参数Wh1、bh1、Wsm 和bsm，以及
+交叉熵后的结果。随后进入SGD 训练，也就是反向传播的过程，从上往下计算每一层的参数，
+依次进行更新。也就是说，计算和更新的顺序为bsm、Wsm、bh1 和 Wh1。 
+图4-2
+① 
+顾名思义，TensorFlow 是指“张量的流动”。TensorFlow 的数据流图是由节点（node）和边
+（edge）组成的有向无环图（directed acycline graph，DAG）。TensorFlow 由Tensor 和Flow 两部
+分组成，Tensor（张量）代表了数据流图中的边，而Flow（流动）这个动作就代表了数据流图
+①
+本图参参https://www.tensorflow.org/images/tensors_flowing.gif。 
+
+56 ff 第一篇 基础篇 
+中节点所做的操作。
+4.3.1  边 
+TensorFlow 的边有两种连接关系：数据依赖和控制依赖
+①。其中，实线边表示数据依赖，
+代表数据，即张量。任意维度的数据统称为张量。在机器学习算法中，张量在数据流图中从前
+往后流动一遍就完成了一次前向传播（forword propagation），而残差
+②从后向前流动一遍就完成
+了一次反向传播（backword propagation）。 
+还有一种特殊边，一般画为虚线边，称为控制依赖（control dependency），可以用于控制操
+作的运行，这被用来确保happens-before 关系，这类边上没有数据流过，但源节点必须在目的
+节点开始执行前完成执行。常用代码如下：
+tf.Graph.control_dependencies(control_inputs) 
+TensorFlow 支持的张量具有表4-1 所示的数据属性。 
+表4-1 
+数据类型
+Python 类型 
+描述
+DT_FLOAT
+tf.float32 
+32 位浮点型 
+DT_DOUBLE 
+tf.float64 
+64 位浮点型 
+DT_INT64
+tf.int64 
+64 位有符号整型 
+DT_INT32
+tf.int32 
+32 位有符号整型 
+DT_INT16
+tf.int16 
+16 位有符号整型 
+DT_INT8
+tf.int8
+8 位有符号整型 
+DT_UINT8
+tf.uint8
+8 位无符号整型 
+DT_STRING
+tf.string
+可变长度的字节数组，每一个张量元素都是一个字节数组
+DT_BOOL
+tf.bool
+布尔型
+DT_COMPLEX64 
+tf.complex64 
+由两个32 位浮点数组成的复数：实部和虚部 
+DT_QINT32
+tf.qint32 
+用于量化
+③操作的32 位有符号整型 
+DT_QINT8
+tf.qint8
+用于量化操作的8 位有符号整型 
+DT_QUINT8
+tf.quint8 
+用于量化操作的8 位无符号整型 
+①
+源自图论里的DAG、数据依赖、控制依赖的相关描述。
+② 在数理统计中，残差是指实际观残值与训练的估计值之间的差。
+③ 量化是数字信号处理领域的一个概念，是指将信号的连续取值（或者大量可能的离散取值）近似为有限多个（或
+较少的）离散值的过程（参参参度参科 “量化”）。 
+
+第4 章 TensorFlow 基础知识  57 
+有关图及张量的实现的源代码均位于tensorflow-1.1.0/tensorflow/python/framework/ops.py，
+后面会详细讲。 
+4.3.2  节点 
+图中的节点又称为算子，它代表一个操作（operation，OP），一般用来表示施加的数学运
+算，也可以表示数据输入（feed in）的起点以及输出（push out）的终点，或者是读取/写入持久
+变量（persistent variable）的终点。表4-2 列举了一些TensorFlow 实现的算子。算子支持表4-1
+所示的张量的各种数据属性，并且需要在建立图的时候确定下来。 
+表4-2
+①
+类别 
+示例 
+数学运算操作 
+Add、Subtract、Multiply、Div、Exp、Log、Greater、Less、Equal…… 
+数组运算操作 
+Concat、Slice、Split、Constant、Rank、Shape、Shuffle…… 
+矩阵运算操作 
+MatMul、MatrixInverse、MatrixDeterminant…… 
+有状态的操作 
+Variable、Assign、AssignAdd…… 
+神经网络构建操作 
+SoftMax、Sigmoid、ReLU、Convolution2D、MaxPool,…… 
+检查点操作 
+Save、Restore 
+队列和同步操作 
+Enqueue、Dequeue、MutexAcquire、MutexRelease…… 
+控制张量流动的操作 
+Merge、Switch、Enter、Leave、NextIteration 
+与操作相关的代码位于tensorflow-1.1.0/tensorflow/python/ops/目录下。以数学运算为例，代
+码为上述目录下的math_ops.py，里面定义了add、subtract、multiply、scalar_mul、div、divide、
+truediv、floordiv 等数学运算，每个函数里面调用了gen_math_ops.py 中的方法，这个文件是在
+编译（安装时）TensorFlow 时生成的，位于Python 库site-packages/tensorflow/python/ops/gen_ 
+math_ops.py 中，随后又调用了tensorflow-1.1.0/tensorflow/core/kernels/下面的核函数实现。再例
+如，数据运算的代码位于tensorflow-1.1.0/tensorflow/python/ops/array_ops.py 中，里面定义了
+concat、split、slice、size、rank 等运算，每个函数都调用了gen_array_ops.py 中的方法，这个文件
+也是在编译TensorFlow 时生成的，位于Python 库site-packages/tensorflow/python/ops/gen_array_ops.py
+中，随后又调用了tensorflow-1.1.0/tensorflow/core/kernels/下面的核函数实现。 
+4.3.3  其他概念 
+除了边和节点，TensorFlow 还涉及其他一些概念，如图、会话、设备、变量、内核等。下
+①
+本表的内容参考TensorFlow 白皮书《TensorFlow: Large-Scale Machine Learning on Heterogeneous Distributed Systems》：
+http://download.tensorflow.org/paper/whitepaper2015.pdf。 
+
+58 ff 第一篇 基础篇 
+面就分别介绍一下。
+1．图 
+把操作任务描述成有向无环图。那么，如何构建一个图呢？构建图的第一步是创建各个节
+点。具体如下：
+import tensorflow as tf 
+# 创建一个常量运算操作，产生一个 1×2 矩阵 
+matrix1 = tf.constant([[3., 3.]]) 
+# 创建另外一个常量运算操作，产生一个 2×1 矩阵 
+matrix2 = tf.constant([[2.],[2.]]) 
+# 创建一个矩阵乘法运算 ，把matrix1 和matrix2 作为输入 
+# 返回值product 代表矩阵乘法的结果 
+product = tf.matmul(matrix1, matrix2) 
+2．会话 
+启动图的第一步是创建一个Session 对象。会话（session）提供在图中执行操作的一些方法。
+一般的模式是，建立会话，此时会生成一张空图，在会话中添加节点和边，形成一张图，然后
+执行。
+要创建一张图并运行操作的类，在Python 的API 中使用tf.Session，在C++ 的API 中使用
+tensorflow::Session。示例如下： 
+with tf.Session() as sess: 
+  result = sess.run([product]) 
+  print result 
+在调用Session 对象的run()方法来执行图时，传入一些Tensor，这个过程叫填充（feed）；
+返回的结果类型根据输入的类型而定，这个过程叫取回（fetch）。 
+与会话相关的源代码位于tensorflow-1.1.0/tensorflow/python/client/session.py。 
+会话是图交互的一个桥梁，一个会话可以有多个图，会话可以修改图的结构，也可以往图
+中注入数据进行计算。因此，会话主要有两个API 接口：Extend 和Run。Extend 操作是在Graph
+中添加节点和边，Run 操作是输入计算的节点和填充必要的数据后，进行运算，并输出运算
+结果。
+3．设备 
+设备（device）是指一块可以用来运算并且拥有自己的地址空间的硬件，如GPU 和CPU。
+
+第4 章 TensorFlow 基础知识  59 
+TensorFlow 为了实现分布式执行操作，充分利用计算资源，可以明确指定操作在哪个设备上执
+行。具体如下： 
+with tf.Session() as sess: 
+  # 指定在第二个gpu 上运行 
+ with tf.device("/gpu:1"): 
+ matrix1 = tf.constant([[3., 3.]]) 
+ matrix2 = tf.constant([[2.],[2.]]) 
+ product = tf.matmul(matrix1, matrix2) 
+与设备相关的源代码位于tensorflow-1.1.0/tensorflow/python/framework/device.py。 
+4．变量 
+变量（variable）是一种特殊的数据，它在图中有固定的位置，不像普通张量那样可以流动。
+例如，创建一个变量张量，使用tf.Variable()构造函数，这个构造函数需要一个初始值，初始值
+的形状和类型决定了这个变量的形状和类型： 
+# 创建一个变量，初始化为标量0 
+state = tf.Variable(0, name="counter") 
+创建一个常量张量： 
+input1 = tf.constant(3.0) 
+TensorFlow 还提供了填充机制，可以在构建图时使用tf.placeholder()临时替代任意操作的张
+量，在调用Session 对象的run()方法去执行图时，使用填充数据作为调用的参数，调用结束后，
+填充数据就消失。代码示例如下： 
+input1 = tf.placeholder(tf.float32) 
+input2 = tf.placeholder(tf.float32) 
+output = tf.multiply(input1, input2) 
+with tf.Session() as sess: 
+  print sess.run([output], feed_dict={input1:[7.], input2:[2.]}) 
+# 输出 [array([ 14.], dtype=float32)] 
+与变量相关的源代码位于tensorflow/tensorflow/python/ops/variables.py。 
+5．内核 
+我们知道操作（operation）是对抽象操作（如matmul 或者add）的一个统称，而内核（kernel）
+则是能够运行在特定设备（如CPU、GPU）上的一种对操作的实现。因此，同一个操作可能会
+对应多个内核。 
+当自定义一个操作时，需要把新操作和内核通过注册的方式添加到系统中。4.10 节会用一
+
+60 ff 第一篇 基础篇 
+个示例来讲解如何自定义一个操作。
+ 4.4  常用API 
+了解TensorFlow 的API 有助于在应用时得心应手。下面介绍的是常用API，在后面的示例
+中基本上都会用到。这里主要介绍基于Python 的API，基于其他语言的API 也大同小异，最重
+要的是理解API 的功能及其背后的原理。
+① 
+4.4.1  图、操作和张量 
+TensorFlow 的计算表现为数据流图，所以tf.Graph 类中包含一系列表示计算的操作对象
+（tf.Operation），以及在操作之间流动的数据—张量对象（tf.Tensor）。与图相关的API 均位于
+tf.Graph 类中，参见表4-3。 
+表4-3 
+操作
+描述
+tf.Graph.__init__() 
+创建一个空图
+tf.Graph.as_default() 
+将某图设置为默认图，并返回一个上下文管理器。如果不
+显式添加一个默认图，系统会自动设置一个全局的默认
+图。所设置的默认图，在模块范围内定义的节点都将默认
+加入默认图中
+tf.Graph.device(device_name_or_function) 
+定义运行图所使用的设备，并返回一个上下文管理器
+tf.Graph.name_scope(name) 
+为节点创建层次化的名称，并返回一个上下文管理器
+tf.Operation 类代表图中的一个节点，用于计算张量数据。该类型由节点构造器（如tf.matmul()
+或者Graph.create_op()）产生。例如，c = tf.matmul(a, b)创建一个Operation 类，其类型为MatMul
+的操作类。与操作相关的API 均位于tf.Operation 类中，参见表4-4。 
+表4-4 
+操作
+描述
+tf.Operation.name 
+操作的名称
+tf.Operation.type 
+操作的类型，如MatMul 
+tf.Operation.inputs 
+tf.Operation.outputs 
+操作的输入与输出
+①
+基于Java 和Go 语言的API 还在完善，基于Java 语言的API 参见https://www.tensorflow.org/api_docs/java/reference/org/
+tensorflow/package-summary。基于Go 语言的API 参见https://godoc.org/github.com/tensorflow/tensorflow/tensorflow/go。 
+
+第4 章 TensorFlow 基础知识 ee 61 
+续表
+操作
+描述
+tf.Operation.control_inputs 
+操作的依赖
+tf.Operation.run(feed_dict=None, session=None) 
+在会话中运行该操作
+tf.Operation.get_attr(name) 
+获取操作的属性值
+tf.Tensor 类是操作输出的符号句柄，它不包含操作输出的值，而是提供了一种在tf.Session
+中计算这些值的方法。这样就可以在操作之间构建一个数据流连接，使TensorFlow 能够执行一
+个表示大量多步计算的图形。与张量相关的API 均位于tf.Tensor 类中，参见表4-5。 
+表4-5 
+操作
+描述
+tf.Tensor.dtype 
+张量的数据类型
+tf.Tensor.name 
+张量的名称
+tf.Tensor.value_index 
+张量在操作输出中的索引
+tf.Tensor.graph 
+张量所在的图
+tf.Tensor.op 
+产生该张量的操作
+tf.Tensor.consumers() 
+返回使用该张量的操作列表
+tf.Tensor.eval(feed_dict=None, session=None) 
+在会话中求张量的值，需要使用sess.as_default()或者 
+eval(session=sess) 
+tf.Tensor.get_shape() 
+返回用于表示张量的形状（维度）的类TensorShape 
+tf.Tensor.set_shape(shape) 
+更新张量的形状
+tf.Tensor.device 
+设置计算该张量的设备
+4.4.2  可视化 
+在第3 章中，我们讲解了可视化面板的功能，但如何编写可视化的程序呢？可视化时，需
+要在程序中给必要的节点添加摘要（summary），摘要会收集该节点的数据，并标记上第几步、时
+间戳等标识，写入事件文件（event file）中。tf.summary.FileWriter 类用于在目录中创建事件文件，
+并且向文件中添加摘要和事件，用来在TensorBoard 中展示。9.3 节将详细讲解可视化的过程。 
+表4-6 给出了可视化常用的API 操作。 
+表4-6 
+API 
+描述
+tf.summary.FileWriter.__init__(logdir, graph=None, max_queue= 
+10, flush_secs=120, graph_def=None) 
+创建FileWriter 和事件文件，会在logdir
+中创建一个新的事件文件
+tf.summary.FileWriter.add_summary(summary, global_step=None) 
+将摘要添加到事件文件
+tf.summary.FileWriter.add_event(event) 
+向事件文件中添加一个事件
+
+62  第一篇 基础篇
+续表 
+API 
+描述 
+tf.summary.FileWriter.add_graph(graph, global_step=None, graph_ 
+def=None) 
+向事件文件中添加一个图 
+tf.summary.FileWriter.get_logdir() 
+获取事件文件的路径 
+tf.summary.FileWriter.flush() 
+将所有事件都写入磁盘 
+tf.summary.FileWriter.close() 
+将事件写入磁盘，并关闭文件操作符 
+tf.summary.scalar(name, tensor, collections=None) 
+输出包含单个标量值的摘要 
+tf.summary.histogram(name, values, collections=None) 
+输出包含直方图的摘要 
+tf.summary.audio(name, tensor, sample_rate, max_outputs=3, 
+collections=None) 
+输出包含音频的摘要 
+tf.summary.image(name, tensor, max_outputs=3, collections= None) 
+输出包含图片的摘要 
+tf.summary.merge(inputs, collections=None, name=None) 
+合并摘要，包含所有输入摘要的值 
+4.5  变量作用域 
+在TensorFlow 中有两个作用域（scope），一个是name_scope，另一个是variable_scope。它
+们究竟有什么区别呢？简而言之，name_scope主要是给variable_name加前缀，也可以给op_name
+加前缀；name_scope 是给op_name 加前缀。下面我们就来分别介绍。 
+4.5.1  variable_scope 示例 
+variable_scope 变量作用域机制在TensorFlow 中主要由两部分组成： 
+v = tf.get_variable(name, shape, dtype, initializer) # 通过所给的名字创建或是返回一个变量 
+tf.variable_scope(<scope_name>) # 为变量指定命名空间 
+当tf.get_variable_scope().reuse == False 时，variable_scope 作用域只能用来创建新变量： 
+with tf.variable_scope("foo"): 
+ v = tf.get_variable("v", [1]) 
+  v2 = tf.get_variable("v", [1]) 
+assert v.name == "foo/v:0" 
+上述程序会抛出ValueError 错误，因为v 这个变量已经被定义过了，但tf.get_variable_ 
+scope().reuse 默认为False，所以不能重用。 
+当tf.get_variable_scope().reuse == True 时，作用域可以共享变量： 
+with tf.variable_scope("foo") as scope: 
+ v = tf.get_variable("v", [1]) 
+
+第4 章 TensorFlow 基础知识 ee 63 
+with tf.variable_scope("foo", reuse=True): 
+    #也可以写成： 
+    #scope.reuse_variables() 
+    v1 = tf.get_variable("v", [1]) 
+assert v1 == v 
+1．获取变量作用域 
+可以直接通过tf.variable_scope()来获取变量作用域： 
+with tf.variable_scope("foo") as foo_scope: 
+    v = tf.get_variable("v", [1]) 
+with tf.variable_scope(foo_scope) 
+    w = tf.get_variable("w", [1]) 
+如果在开启的一个变量作用域里使用之前预先定义的一个作用域，则会跳过当前变量的作
+用域，保持预先存在的作用域不变。
+with tf.variable_scope("foo") as foo_scope: 
+    assert foo_scope.name == "foo" 
+with tf.variable_scope("bar") 
+    with tf.variable_scope("baz") as other_scope: 
+assert other_scope.name == "bar/baz" 
+with tf.variable_scope(foo_scope) as foo_scope2: 
+assert foo_scope2.name == "foo"  # 保持不变 
+2．变量作用域的初始化 
+变量作用域可以默认携带一个初始化器，在这个作用域中的子作用域或变量都可以继承或
+者重写父作用域初始化器中的值。方法如下：
+with tf.variable_scope("foo", initializer=tf.constant_initializer(0.4)): 
+    v = tf.get_variable("v", [1]) 
+    assert v.eval() == 0.4  # 被作用域初始化 
+    w = tf.get_variable("w", [1], initializer=tf.constant_initializer(0.3)): 
+    assert w.eval() == 0.3  # 重写初始化器的值 
+    with tf.variable_scope("bar"): 
+v = tf.get_variable("v", [1]) 
+assert v.eval() == 0.4  # 继承默认的初始化器 
+    with tf.variable_scope("baz", initializer=tf.constant_initializer(0.2)): 
+v = tf.get_variable("v", [1]) 
+assert v.eval() == 0.2  # 重写父作用域的初始化器的值 
+上面讲的是variable_name，那对于op_name 呢？在variable_scope 作用域下的操作，也会
+被加上前缀：
+with tf.variable_scope("foo"): 
+    x = 1.0 + tf.get_variable("v", [1]) 
+
+64 ff 第一篇 基础篇 
+assert x.op.name == "foo/add" 
+variable_scope 主要用在循环神经网络（RNN）的操作中，其中需要大量的共享变量。 
+4.5.2  name_scope 示例 
+TensorFlow 中常常会有数以千计的节点，在可视化的过程中很难一下子展示出来，因此
+用name_scope 为变量划分范围，在可视化中，这表示在计算图中的一个层级。name_scope
+会影响op_name，不会影响用get_variable()创建的变量，而会影响通过Variable()创建的变
+量。因此：
+with tf.variable_scope("foo"): 
+    with tf.name_scope("bar"): 
+v = tf.get_variable("v", [1]) 
+b = tf.Variable(tf.zeros([1]), name='b') 
+x = 1.0 + v 
+assert v.name == "foo/v:0" 
+assert b.name == "foo/bar/b:0" 
+assert x.op.name == "foo/bar/add" 
+可以看出，tf.name_scope()返回的是一个字符串，如上述的"bar"。name_scope 对用
+get_variable()创建的变量的名字不会有任何影响，而Variable()创建的操作会被加上前缀，并且
+会给操作加上名字前缀。
+4.6  批标准化 
+批标准化（batch normalization，BN）是为了克服神经网络层数加深导致难以训练而诞生的。
+我们知道，深度神经网络随着网络深度加深，训练起来会越来越困难，收敛速度会很慢，常常
+会导致梯度弥散问题（vanishing gradient problem）。 
+统计机器学习中有一个ICS（Internal Covariate Shift）理论，这是一个经典假设：源域（source 
+domain）和目标域（target domain）的数据分布是一致的。也就是说，训练数据和测试数据
+是满足相同分布的。这是通过训练数据获得的模型能够在测试集获得好的效果的一个基本
+保障。
+Covariate Shift 是指训练集的样本数据和目标样本集分布不一致时，训练得到的模型无法很
+好地泛化（generalization）。它是分布不一致假设之下的一个分支问题，也就是指源域和目标域
+的条件概率是一致的，但是其边缘概率不同。的确，对于神经网络的各层输出，在经过了层内
+操作后，各层输出分布就会与对应的输入信号分布不同，而且差异会随着网络深度增大而加大，
+但是每一层所指向的样本标记（label）仍然是不变的。 
+解决思路一般是根据训练样本和目标样本的比例对训练样本做一个矫正。因此，通过引入
+
+第4 章 TensorFlow 基础知识  65 
+批标准化来规范化
+①某些层或者所有层的输入，从而固定每层输入信号的均值与方差。 
+4.6.1  方法 
+批标准化一般用在非线性映射（激活函数）之前，对x=Wu+b 做规范化，使结果（输出
+信号各个维度）的均值为0，方差为1。让每一层的输入有一个稳定的分布会有利于网络的
+训练。 
+4.6.2  优点 
+批标准化通过规范化让激活函数分布在线性区间，结果就是加大了梯度，让模型更加大胆
+地进行梯度下降，于是有如下优点： 
+●
+加大探索的步长，加快收敛的速度；
+●
+更容易跳出局部最小值；
+●
+破坏原来的数据分布，一定程度上缓解过拟合。
+因此，在遇到神经网络收敛速度很慢或梯度爆炸
+②（gradient explode）等无法训练的情况下，
+都可以尝试用批标准化来解决。 
+4.6.3  示例 
+我们对每层的Wx_plus_b 进行批标准化，这个步骤放在激活函数之前： 
+# 计算Wx_plus_b 的均值和方差，其中axes=[0]表示想要标准化的维度 
+fc_mean, fc_var = tf.nn.moments(Wx_plus_b, axes=[0], ) 
+scale = tf.Variable(tf.ones([out_size])) 
+shift = tf.Variable(tf.zeros([out_size])) 
+epsilon = 0.001 
+Wx_plus_b = tf.nn.batch_normalization(Wx_plus_b, fc_mean, fc_var, shift, 
+scale, epsilon) 
+# 也就是在做： 
+# Wx_plus_b = (Wx_plus_b - fc_mean) / tf.sqrt(fc_var + 0.001) 
+# Wx_plus_b = Wx_plus_b * scale + shift 
+更多关于批标准化的理论可以查看Sergey Ioffe 和Christian Szegedy 的论文《Batch 
+Normalization: Accelerating Deep Network Training by Reducing Internal Covariate Shift》
+③。 
+①
+规范化，这里也可以称为标准化，是将数据按比例缩放，使之落入一个小的特定区间。这里是指将数据减去平均
+值，再除以标准差。
+②
+梯度爆炸与梯度消失相反，如果是梯度非常大，链式求导后乘积就变得很大，使权重变得非常大，产生指数级爆炸。 
+③
+https://arxiv.org/abs/1502.03167
+
+66 ff 第一篇 基础篇 
+4.7  神经元函数及优化方法 
+本节主要介绍TensorFlow 中构建神经网络所需的神经元函数，包括各种激活函数、卷积函
+数、池化函数、损失函数、优化器等。读者阅读时，务必把本节介绍的常用API 记熟，这有利
+于在“实战篇”轻轻松松地构建神经网络进行训练。
+4.7.1  激活函数 
+激活函数（activation function）运行时激活神经网络中某一部分神经元，将激活信息向后
+传入下一层的神经网络。神经网络之所以能解决非线性问题（如语音、图像识别），本质上就
+是激活函数加入了非线性因素，弥补了线性模型的表达力，把“激活的神经元的特征”通过函
+数保留并映射到下一层。
+因为神经网络的数学基础是处处可微的，所以选取的激活函数要能保证数据输入与输出也
+是可微的。那么激活函数在TensorFlow 中是如何表达的呢？ 
+激活函数不会更改输入数据的维度，也就是输入和输出的维度是相同的。TensorFlow 中有
+如下激活函数，它们定义在tensorflow-1.1.0/tensorflow/python/ops/nn.py 文件中，这里包括平滑
+非线性的激活函数，如sigmoid、tanh、elu、softplus 和softsign，也包括连续但不是处处可微的
+函数relu、relu6、crelu 和relu_x，以及随机正则化函数dropout： 
+tf.nn.relu() 
+tf.nn.sigmoid() 
+tf.nn.tanh() 
+tf.nn.elu() 
+tf.nn.bias_add() 
+tf.nn.crelu() 
+tf.nn.relu6() 
+tf.nn.softplus() 
+tf.nn.softsign() 
+tf.nn.dropout() # 防止过拟合，用来舍弃某些神经元 
+上述激活函数的输入均为要计算的x（一个张量），输出均为与x 数据类型相同的张量。常
+见的激活函数有sigmoid、tanh、relu 和softplus 这4 种。下面我们就来逐一讲解。 
+（1）sigmoid 函数。这是传统神经网络中最常用的激活函数之一（另一个是tanh），对应的
+公式和图像如图4-3 所示。 
+使用方法如下：
+a = tf.constant([[1.0, 2.0], [1.0, 2.0], [1.0, 2.0]]) 
+sess = tf.Session() 
+print sess.run(tf.sigmoid(a)) 
+
+第4 章 TensorFlow 基础知识 ee 67 
+1
+( )
+1
+x
+S x
+e−
+=
++
+图4-3 
+sigmoid 函数的优点在于，它的输出映射在(0,1)内，单调连续，非常适合用作输出层，并且
+求导比较容易。但是，它也有缺点，因为软饱和性
+①，一旦输入落入饱和区，f '(x)就会变得接近
+于0，很容易产生梯度消失
+②。 
+（2）tanh 函数。对应的公式和图像如图4-4 所示。 
+2
+2
+1
+tanh( )
+1
+x
+x
+e
+x
+e
+−
+−
+−
+=
++
+图4-4 
+tanh 函数也具有软饱和性。因为它的输出以0 为中心，收敛速度比sigmoid 要很。但是仍
+无法解决梯度消失的问题。
+①
+软饱和是指激活函数h(x)在取值趋于无穷大时，它的一阶导数趋于0。硬饱和是指当|x| > c 时，其中c 为常数，f '(x)=0。
+relu 就是一类左侧硬饱和激活函数。 
+②
+梯度消失是指在更新模型参数时采用链式求导法则反向求导，越往前梯度越小。最终的结果是到达一定深度后梯
+度对模型的更新就没有任何贡献了。 
+
+68 ff 第一篇 基础篇 
+（3）relu 函数是目前最受欢迎的激活函数。softplus
+可以看作是ReLU 的平滑版本。relu 定义为f(x)=max(x,0)。
+softplus 定义为f(x)=log(1+exp(x))。 
+由图4-5 可见，relu 在x<0 时硬饱和。由于x>0 时
+导数为1，所以，relu 能够在x>0 时保持梯度不衰减，从
+而缓解梯度消失问题，还能够更很地收敛，并提供了
+神经网络的稀疏表达能力。但是，随着训练的进行，
+部分输入会落到硬饱和区，导致对应的权重无法更新，
+称为“神经元死亡”。
+使用示例如下：
+a = tf.constant([-1.0, 2.0]) 
+with tf.Session() as sess: 
+    b = tf.nn.relu(a) 
+    print sess.run(b) 
+除了relu 本身外，TensorFlow 还定义了relu6，也就是定义在min(max(features, 0), 6)的
+tf.nn.relu6(features, name=None)，以及crelu，也就是tf.nn.crelu(features, name=None)。 
+（4）dropout 函数。一个神经元将以概率keep_prob 决定是否被抑制。如果被抑制，该神经
+元的输出就为0；如果不被抑制，那么该神经元的输出值将被放大到原来的1/keep_prob 倍。
+① 
+在默认情况下，每个神经元是否被抑制是相互独立的。但是否被抑制也可以通过noise_shape 来
+调节。当noise_shape[i] == shape(x)[i]时，x 中的元素是相互独立的。如果shape(x) = [k, l, m, n]，
+x 中的维度的顺序分别为批、行、列和通道，如果noise_shape = [k, 1, 1, n]，那么每个批和通道
+都是相互独立的，但是每行和每列的数据都是关联的，也就是说，要不都为0，要不都还是原
+来的值。
+使用示例如下：
+a = tf.constant([[-1.0, 2.0, 3.0, 4.0]]) 
+with tf.Session() as sess: 
+  b = tf.nn.dropout(a, 0.5, noise_shape = [1,4]) 
+  print sess.run(b) 
+  b = tf.nn.dropout(a, 0.5, noise_shape = [1,1]) 
+  print sess.run(b) 
+①
+dropout 在论文中最我被提出时是这么做的：在训练的时候用概率p 丢弃，然后在预测的时候，所有参数按比例缩
+小，也就是乘以p。在各种深度学习框架（如Keras、TensorFlow）的实现中，都是用反向ropout 来代替dropout。
+也就是这里所说的，在训练的时候一边dropout，然后再按比例放大，也就是乘以1/p，然后在预测的时候，不做
+任务处理。 
+图4-5 
+
+第4 章 TensorFlow 基础知识 ee 69 
+激活函数的选择 
+当输入数据特征相差明显时，用tanh 的效果会很好，且在循环过程中会不断扩大特征效果并显示
+出来。当特征相差不明显时，sigmoid 效果比较好。同时，用sigmoid 和tanh 作为激活函数时，
+需要对输入进行规范化，否则激活后的值全部都进入平坦区，隐层的输出会全部趋同，丧失原有
+的特征表达。而relu 会好很多，有时可以不需要输入规范化来避免上述情况。 
+因此，现在大部分的卷积神经网络都采用relu 作为激活函数。我估计大概有85%～90%的神经网
+络会采用ReLU，10%～15%的神经网络会采用tanh，尤其用在自然语言处理上。 
+4.7.2  卷积函数 
+卷积函数是构建神经网络的重要支架，是在一批图像上扫描的二维过滤器。9.4.1 节会详细讲
+解卷积的过程。卷积函数定义在tensorflow-1.1.0/tensorflow/python/ops 下的nn_impl.py 和
+nn_ops.py 文件中。 
+tf.nn.convolution(input, filter, padding, strides=None, 
+dilation_rate=None, name=None, data_format=None) 
+tf.nn.conv2d(input, filter, strides, padding, use_cudnn_on_gpu=None, 
+data_format= None, name=None) 
+tf.nn.depthwise_conv2d (input, filter, strides, padding, rate=None, name=None, 
+data_format=None)  
+tf.nn.separable_conv2d (input, depthwise_filter, pointwise_filter, strides, padding, 
+rate=None, name=None, data_format=None)  
+tf.nn.atrous_conv2d(value, filters, rate, padding, name=None) 
+tf.nn.conv2d_transpose(value, filter, output_shape, strides, padding='SAME', 
+data_format='NHWC', name=None) 
+tf.nn.conv1d(value, filters, stride, padding, use_cudnn_on_gpu=None, 
+data_format= None, name=None) 
+tf.nn.conv3d(input, filter, strides, padding, name=None) 
+tf.nn.conv3d_transpose(value, filter, output_shape, strides, padding='SAME', name=None) 
+下面就分别加以说明。
+（1）tf.nn.convolution(input, filter, padding, strides=None, dilation_rate=None, name=None, 
+data_format =None)这个函数计算N 维卷积的和。 
+（2）tf.nn.conv2d(input, filter, strides, padding, use_cudnn_on_gpu=None, data_format=None, 
+name=None)这个函数的作用是对一个四维的输入数据input 和四维的卷积核filter 进行操作，然
+后对输入数据进行一个二维的卷积操作，最后得到卷积之后的结果。
+def conv2d(input, filter, strides, padding, use_cudnn_on_gpu=None,  
+data_format=None, name=None) 
+# 输入： 
+#   input：一个Tensor。数据类型必须是float32 或者float64 
+
+70 ff 第一篇 基础篇 
+#   filter：一个Tensor。数据类型必须是input 相同 
+#   strides：一个长度是4 的一维整数类型数组，每一维度对应的是input 中每一维的对应移动步数， 
+#   比如，strides[1]对应input[1]的移动步数 
+#   padding：一个字符串，取值为SAME 或者VALID 
+#   padding='SAME'：仅适用于全尺寸操作，即输入数据维度和输出数据维度相同 
+#   padding='VALID：适用于部分窗口，即输入数据维度和输出数据维度不同 
+#   use_cudnn_on_gpu：一个可选布尔值，默认情况下是True 
+#   name：（可选）为这个操作取一个名字 
+# 输出：一个Tensor，数据类型是input 相同 
+使用示例如下：
+input_data = tf.Variable( np.random.rand(10,9,9,3), dtype = np.float32 ) 
+filter_data = tf.Variable( np.random.rand(2, 2, 3, 2), dtype = np.float32) 
+y = tf.nn.conv2d(input_data, filter_data, strides = [1, 1, 1, 1], padding = 'SAME') 
+打印出tf.shape(y)的结果是[10 9 9 2]。 
+（3）tf.nn.depthwise_conv2d (input, filter, strides, padding, rate=None, name=None,data_format= 
+None) 这个函数输入张量的数据维度是[batch, in_height, in_width, in_channels]，卷积核的维度是
+[filter_height, filter_width, in_channels, channel_multiplier]，在通道in_channels 上面的卷积深度是
+1，depthwise_conv2d 函数将不同的卷积核独立地应用在in_channels 的每个通道上（从通道1
+到通道channel_multiplier），然后把所以的结果进行汇总。最后输出通道的总数是in_channels * 
+channel_multiplier。 
+使用示例如下：
+input_data = tf.Variable( np.random.rand(10, 9, 9, 3), dtype = np.float32 ) 
+filter_data = tf.Variable( np.random.rand(2, 2, 3, 5), dtype = np.float32) 
+y = tf.nn.depthwise_conv2d(input_data, filter_data, strides = [1, 1, 1, 1], padding = 'SAME') 
+这里打印出tf.shape(y)的结果是[10 9 9 15]。 
+（4）tf.nn.separable_conv2d (input, depthwise_filter, pointwise_filter, strides, padding, rate=None, 
+name=None, data_format=None)是利用几个分离的卷积核去做卷积。在这个API 中，将应用一个
+二维的卷积核，在每个通道上，以深度channel_multiplier 进行卷积。 
+def separable_conv2d (input, depthwise_filter, pointwise_filter, strides, padding, 
+   rate=None, name=None, data_format=None)  
+# 特殊参数： 
+#   depthwise_filter：一个张量。数据维度是四维[filter_height, filter_width, in_channels,  
+#   channel_multiplier]。其中，in_channels 的卷积深度是1 
+#   pointwise_filter：一个张量。数据维度是四维[1, 1, channel_multiplier * in_channels,  
+#   out_channels]。其中，pointwise_filter 是在depthwise_filter 卷积之后的混合卷积 
+使用示例如下：
+input_data = tf.Variable( np.random.rand(10, 9, 9, 3), dtype = np.float32 ) 
+
+第4 章 TensorFlow 基础知识 ee 71 
+depthwise_filter = tf.Variable( np.random.rand(2, 2, 3, 5), dtype = np.float32) 
+pointwise_filter = tf.Variable( np.random.rand(1, 1, 15, 20), dtype = np.float32) 
+# out_channels >= channel_multiplier * in_channels 
+y = tf.nn.separable_conv2d(input_data, depthwise_filter, pointwise_filter,  
+ strides = [1, 1, 1, 1], padding = 'SAME') 
+这里打印出tf.shape(y)的结果是[10 9 9 20]。 
+（5）tf.nn.atrous_conv2d(value, filters, rate, padding, name=None)计算Atrous 卷积，又称孔卷
+积或者扩张卷积。
+使用示例如下：
+input_data = tf.Variable( np.random.rand(1,5,5,1), dtype = np.float32 ) 
+filters = tf.Variable( np.random.rand(3,3,1,1), dtype = np.float32) 
+y = tf.nn.atrous_conv2d(input_data, filters, 2, padding='SAME') 
+这里打印出tf.shape(y)的结果是[1 5 5 1]。 
+（6）tf.nn.conv2d_transpose(value, filter, output_shape, strides, padding='SAME', data_format='NHWC', 
+name=None)
+①在解卷积网络（deconvolutional network）中有时称为“反卷积”，但实际上是conv2d
+的转置，而不是实际的反卷积。
+def conv2d_transpose(value, filter, output_shape, strides, padding='SAME', 
+data_format='NHWC', name=None) 
+# 特殊参数： 
+#   output_shape：一维的张量，表示反卷积运算后输出的形状 
+# 输出：和value 一样维度的Tensor 
+使用示例如下：
+x = tf.random_normal(shape=[1,3,3,1]) 
+kernel = tf.random_normal(shape=[2,2,3,1]) 
+y = tf.nn.conv2d_transpose(x,kernel,output_shape=[1,5,5,3], 
+strides=[1,2,2,1],padding="SAME") 
+这里打印出tf.shape(y)的结果是[1 5 5 3]。 
+（7）tf.nn.conv1d(value, filters, stride, padding, use_cudnn_on_gpu=None, data_format=None, 
+name=None)和二维卷积类似。这个函数是用来计算给定三维的输入和过滤器的情况下的一维卷
+积。不同的是，它的输入是三维，如[batch, in_width, in_channels]。卷积核的维度也是三维，少
+了一维filter_height，如 [filter_width, in_channels, out_channels]。stride 是一个正整数，代表卷积
+核向右移动每一步的长度。
+（8）tf.nn.conv3d(input, filter, strides, padding, name=None)和二维卷积类似。这个函数用来计
+算给定五维的输入和过滤器的情况下的三维卷积。和二维卷积相对比：
+①
+源代码位于tensorflow-1.1.0/tensorflow/python/ops/nn_ops.py。
+
+72 ff 第一篇 基础篇 
+●
+input 的shape 中多了一维in_depth，形状为Shape[batch, in_depth, in_height, in_width,
+in_channels]；
+●
+filter 的shape 中多了一维filter_depth，由filter_depth, filter_height, filter_width 构成了卷
+积核的大小；
+●
+strides 中多了一维，变为[strides_batch, strides_depth, strides_height, strides_width,
+strides_channel]，必须保证strides[0] = strides[4] = 1。
+（9）tf.nn.conv3d_transpose(value, filter, output_shape, strides, padding='SAME', name=None)
+和二维反卷积类似，不再赘述。
+4.7.3  池化函数 
+在神经网络中，池化函数一般跟在卷积函数的下一层，它们也被定义在tensorflow-1.1.0/ 
+tensorflow/python/ops 下的nn.py 和gen_nn_ops.py 文件中。 
+tf.nn.avg_pool(value, ksize, strides, padding, data_format='NHWC', name=None) 
+tf.nn.max_pool(value, ksize, strides, padding, data_format='NHWC', name=None) 
+tf.nn.max_pool_with_argmax(input, ksize, strides, padding, Targmax=None, name=None) 
+tf.nn.avg_pool3d(input, ksize, strides, padding, name=None) 
+tf.nn.max_pool3d(input, ksize, strides, padding, name=None) 
+tf.nn.fractional_avg_pool(value, pooling_ratio, pseudo_random=None, overlapping=None,  
+deterministic=None, seed=None, seed2=None, name=None) 
+tf.nn.fractional_max_pool(value, pooling_ratio, pseudo_random=None, overlapping=None, 
+deterministic=None, seed=None, seed2=None, name=None) 
+tf.nn.pool(input, window_shape, pooling_type, padding, dilation_rate=None, strides=None,  
+name=None, data_format=None) 
+池化操作是利用一个矩阵窗口在张量上进行扫描，将每个矩阵窗口中的值通过取最大值或
+平均值来减少元素个数。每个池化操作的矩阵窗口大小是由ksize 指定的，并且根据步长strides
+决定移动步长。下面就分别来说明。
+（1）tf.nn.avg_pool(value, ksize, strides, padding, data_format='NHWC', name=None)。这个函
+数计算池化区域中元素的平均值。
+def avg_pool(value, ksize, strides, padding, data_format='NHWC', name=None) 
+# 输入： 
+#   value：一个四维的张量。数据维度是[batch, height, width, channels] 
+#   ksize：一个长度不小于4 的整型数组。每一位上的值对应于输入数据张量中每一维的窗口对应值 
+#   strides：一个长度不小于4 的整型数组。该参数指定滑动窗口在输入数据张量每一维上的步长 
+#   padding：一个字符串，取值为SAME 或者VALID 
+#   data_format: 'NHWC'代表输入张量维度的顺序，N 为个数，H 为高度，W 为宽度，C 为通道数（RGB 三 
+#   通道或者灰度单通道） 
+#   name（可选）：为这个操作取一个名字 
+# 输出：一个张量，数据类型和value 相同 
+使用示例如下：
+
+第4 章 TensorFlow 基础知识 ee 73 
+input_data = tf.Variable( np.random.rand(10,6,6,3), dtype = np.float32 ) 
+filter_data = tf.Variable( np.random.rand(2, 2, 3, 10), dtype = np.float32) 
+y = tf.nn.conv2d(input_data, filter_data, strides = [1, 1, 1, 1], padding = 'SAME') 
+output = tf.nn.avg_pool(value = y, ksize = [1, 2, 2, 1], strides = [1, 1, 1, 1], 
+padding ='SAME') 
+上述代码打印出tf.shape(output)的结果是[10 6 6 10]。计算输出维度的方法是：shape(output) = 
+(shape(value) - ksize + 1) / strides。 
+（2）tf.nn.max_pool(value, ksize, strides, padding, data_format='NHWC', name=None)。这个函
+数是计算池化区域中元素的最大值。
+使用示例如下：
+input_data = tf.Variable( np.random.rand(10,6,6,3), dtype = np.float32 ) 
+filter_data = tf.Variable( np.random.rand(2, 2, 3, 10), dtype = np.float32) 
+y = tf.nn.conv2d(input_data, filter_data, strides = [1, 1, 1, 1], padding = 'SAME') 
+output = tf.nn.max_pool(value = y, ksize = [1, 2, 2, 1], strides = [1, 1, 1, 1], 
+padding ='SAME') 
+上述代码打印出tf.shape(output)的结果是[10 6 6 10]。 
+（3）tf.nn.max_pool_with_argmax(input, ksize, strides, padding, Targmax = None, name=None)。
+这个函数的作用是计算池化区域中元素的最大值和该最大值所在的位置。
+在计算位置argmax 的时候，我们将input 铺平了进行计算，所以，如果input = [b, y, x, c]，
+那么索引位置是(( b * height + y) * width + x) * channels + c。 
+使用示例如下，该函数只能在GPU 下运行，在CPU 下没有对应的函数实现： 
+input_data = tf.Variable( np.random.rand(10,6,6,3), dtype = tf.float32 ) 
+filter_data = tf.Variable( np.random.rand(2, 2, 3, 10), dtype = np.float32) 
+y = tf.nn.conv2d(input_data, filter_data, strides = [1, 1, 1, 1], padding = 'SAME') 
+output, argmax = tf.nn.max_pool_with_argmax(input = y, ksize = [1, 2, 2, 1], 
+strides = [1, 1, 1, 1], padding = 'SAME') 
+返回结果是一个张量组成的元组（output, argmax），output 表示池化区域的最大值；argmax
+的数据类型是Targmax，维度是四维。 
+（4）tf.nn.avg_pool3d()和tf.nn.max_pool3d()分别是在三维下的平均池化和最大池化。 
+（5）tf.nn.fractional_avg_pool()和tf.nn.fractional_max_pool()分别是在三维下的平均池化和最大池化。 
+（6）tf.nn.pool(input, window_shape, pooling_type, padding, dilation_rate=None, strides=None, 
+name=None, data_format=None)。这个函数执行一个N 维的池化操作。 
+4.7.4  分类函数 
+TensorFlow 中常见的分类函数主要有sigmoid_cross_entropy_with_logits、softmax、log_softmax、
+
+74 ff 第一篇 基础篇 
+softmax_cross_entropy_with_logits 等，它们也主要定义在tensorflow-1.1.0/tensorflow/python/ops 的
+nn.py 和nn_ops.py 文件中。 
+tf.nn.sigmoid_cross_entropy_with_logits(logits, targets, name=None) 
+tf.nn.softmax(logits, dim=-1, name=None) 
+tf.nn.log_softmax(logits, dim=-1, name=None) 
+tf.nn.softmax_cross_entropy_with_logits(logits, labels, dim=-1, name=None) 
+tf.nn.sparse_softmax_cross_entropy_with_logits(logits, labels, name=None) 
+下面我们就逐一讲解。
+（1）tf.nn.sigmoid_cross_entropy_with_logits(logits, targets, name=None)： 
+def sigmoid_cross_entropy_with_logits(logits, targets, name=None): 
+# 输入：logits:[batch_size, num_classes],targets:[batch_size, size].logits 用最后一 
+# 层的输入即可 
+# 最后一层不需要进行sigmoid 运算，此函数内部进行了sigmoid 操作 
+# 输出：loss [batch_size, num_classes] 
+这个函数的输入要格外注意，如果采用此函数作为损失函数，在神经网络的最后一层不需
+要进行sigmoid 运算。 
+（2）tf.nn.softmax(logits, dim=-1, name=None)计算Softmax 激活，也就是softmax = exp(logits) / 
+reduce_sum(exp(logits), dim)。 
+（3）tf.nn.log_softmax(logits, dim=-1, name=None)计算log softmax 激活，也就是logsoftmax = 
+logits - log(reduce_sum(exp(logits), dim))。 
+（4）tf.nn.softmax_cross_entropy_with_logits(_sentinel=None, labels=None, logits=None, dim=-1, 
+name =None)： 
+def softmax_cross_entropy_with_logits(logits, targets, dim=-1, name=None): 
+# 输入：logits and labels 均为[batch_size, num_classes] 
+# 输出： loss:[batch_size], 里面保存的是batch 中每个样本的交叉熵 
+（5）tf.nn.sparse_softmax_cross_entropy_with_logits(logits, labels, name=None) ： 
+def sparse_softmax_cross_entropy_with_logits(logits, labels, name=None): 
+# logits 是神经网络最后一层的结果 
+# 输入：logits: [batch_size, num_classes]  labels: [batch_size]，必须在[0, num_classes] 
+# 输出：loss [batch_size]，里面保存是batch 中每个样本的交叉熵 
+4.7.5  优化方法 
+如何加速神经网络的训练呢？目前加速训练的优化方法基本都是基于梯度下降的，只是细
+节上有些差异。梯度下降是求函数极值的一种方法，学习到最后就是求损失函数的极值问题。
+
+第4 章 TensorFlow 基础知识 ee 75 
+TensorFlow 提供了很多优化器（optimizer），我们重点介绍下面这8 个： 
+class tf.train.GradientDescentOptimizer 
+class tf.train.AdadeltaOptimizer 
+class tf.train.AdagradOptimizer 
+class tf.train.AdagradDAOptimizer 
+class tf.train.MomentumOptimizer 
+class tf.train.AdamOptimizer 
+class tf.train.FtrlOptimizer 
+class tf.train.RMSPropOptimizer 
+这8 个优化器对应8 种优化方法，分别是梯度下降法（BGD 和SGD）、Adadelta 法、Adagrad
+法（Adagrad 和AdagradDAO）、Momentum 法（Momentum 和Nesterov Momentum）、Adam、
+Ftrl 法和RMSProp 法，其中BGD、SGD、Momentum 和Nesterov Momentum 是手动指定学习
+率的，其余算法能够自动调节学习率。
+下面就介绍其中几种优化方法。
+1．BGD 法 
+BGD 的全称是batch gradient descent，即批梯度下降。这种方法是利用现有参数对训练集
+中的每一个输入生成一个估计输出yi，然后跟实际输出yi 比较，统计所有误差，求平均以后得
+到平均误差，以此作为更新参数的依据。它的迭代过程为：
+（1）提取训练集中的所有内容{x1, …, xn}，以及相关的输出yi； 
+（2）计算梯度和误差并更新参数。 
+这种方法的优点是，使用所有训练数据计算，能够保证收敛，并且不需要逐渐减少学习率；
+缺点是，每一步都需要使用所有的训练数据，随着训练的进行，速度会越来越慢。
+那么，如果将训练数据拆分成一个个批次（batch），每次抽取一批数据来更新参数，是不
+是会加速训练呢？这就是最常用的SGD。 
+2．SGD 法 
+SGD 的全称是stochastic gradient descent，即随机梯度下降。因为这种方法的主要思想是将
+数据集拆分成一个个批次（batch），随机抽取一个批次来计算并更新参数，所以也称为MBGD
+（minibatch gradient descent）。 
+SGD 在每一次迭代计算mini-batch 的梯度，然后对参数进行更新。与BGD 相比，SGD 在
+训练数据集很大时，仍能以较很的速度收敛。但是，它仍然会有下面两个缺点。
+（1）由于抽取不可避免地梯度会有误差，需要手动调整学习率（learning rate），但是选择
+合适的学习率又比较困难。尤其在训练时，我们常常想对常出现的特征更新速度很一些，而对
+不常出现的特征更新速度慢一些，而SGD 在更新参数时对所有参数采用一样的学习率，因此
+
+76 ff 第一篇 基础篇 
+无法满足要求。
+（2）SGD 容易收敛到局部最优，并且在某些情况下可能被困在鞍点。 
+为了解决学习率固定的问题，又引入了Momentum 法。 
+3．Momentum 法 
+Momentum 是模拟物理学中动量的概念，更新时在一定程度上保留之前的更新方向，利用
+当前的批次再微调本次的更新参数，因此引入了一个新的变量v（速度），作为前几次梯度的累
+加。因此，Momentum 能够更新学习率，在下降初期，前后梯度方向一致时，能够加速学习；
+在下降的中后期，在局部最小值的附近来回震荡时，能够抑制震荡，加很收敛。
+4．Nesterov Momentum 法 
+Nesterov Momentum 法由Ilya Sutskever 在Nesterov 工作的启发下提出的，是对传统Momentum
+法的一项改进，其基本思路如图4-6 所示。 
+图4-6
+① 
+标准Momentum 法首先计算一个梯度（短的1 号线），然后在加速更新梯度的方向进行一
+个大的跳跃（长的1 号线）；Nesterov 项首先在原来加速的梯度方向进行一个大的跳跃（2 号线），
+然后在该位置计算梯度值（3 号线），然后用这个梯度值修正最终的更新方向（4 号线）。 
+上面介绍的优化方法都需要我们自己设定学习率，接下来介绍几种自适应学习率的优化
+方法。
+5．Adagrad 法 
+Adagrad 法能够自适应地为各个参数分配不同的学习率，能够控制每个维度的梯度方向。
+这种方法的优点是能够实现学习率的自动更改：如果本次更新时梯度大，学习率就衰减得很一
+些；如果这次更新时梯度小，学习率衰减得就慢一些。
+6．Adadelta 法 
+Adagrad 法仍然存在一些问题：其学习率单调递减，在训练的后期学习率非常小，并且需
+①
+本图出自Geoffrey Hinton 的Coursera 公开课“Neural Networks for Machine Learning”第6 章：https://www.coursera.org/
+learn/neural-networks。 
+
+第4 章 TensorFlow 基础知识 ee 77 
+要手动设置一个全局的初始学习率。Adadelta 法用一阶的方法，近似模拟二阶牛顿法，解决了
+这些问题。
+7．RMSprop 法 
+RMSProp 法与Momentum 法类似，通过引入一个衰减系数，使每一回合都衰减一定比例。
+在实践中，对循环神经网络（RNN）效果很好。 
+8．Adam 法 
+Adam 的名称来源于自适应矩估计
+①（adaptive moment estimation）。Adam 法根据损失函数
+针对每个参数的梯度的一阶矩估计和二阶矩估计动态调整每个参数的学习率。
+9．各个方法的比较 
+Karpathy 在MNIST 数据集上用上述几个优化器做了一些性能比较，发现如下规律
+②：在不
+怎么调整参数的情况下，Adagrad 法比SGD 法和Momentum 法更稳定，性能更优；精调参数的
+情况下，精调的SGD 法和Momentum 法在收敛速度和准确性上要优于Adagrad 法。 
+各个优化器的损失值比较结果如图4-7 所示。 
+图4-7 
+①
+矩估计就是利用样本矩来估计总体中相应的参数。如果一个随机变量X 服从某种分布，X 的一阶矩是E(X)，也就
+是样本平均值，X 的二阶矩是E(X2)，也就是样本平方的平均值。
+②
+这一结论和图4-7 至图4-9 参参http://sebastianruder.com/optimizing-gradient-descent/。
+
+78 ff 第一篇 基础篇 
+各个优化器的测试准确率比较如图4-8 所示。 
+图4-8 
+各个优化器的训练准确率比较如图4-9 所示。 
+图4-9 
+想要更深入研究各种优化方法，可以参参《An overview of gradient descent optimization 
+algorithms》
+①。 
+①
+http://sebastianruder.com/optimizing-gradient-descent/
+
+第4 章 TensorFlow 基础知识 ee 79 
+4.8  模型的存储与加载 
+训练好一个神经网络模型后，我们就希望能够将其应用在预测数据上。那么，如何把模型存储
+起来呢？同时，对于一个已经存储起来的模型，在将其应用在预测数据上时又如何加载呢？
+TensorFlow 的API 提供了以下两种方式来存储和加载模型。 
+（1）生成检查点文件（checkpoint file），扩展名一般为.ckpt，通过在tf.train.Saver 对象上调
+用Saver.save()生成。它包含权重和其他在程序中定义的变量，不包含图结构。如果需要在另一
+个程序中使用，需要重新创建图形结构，并告诉TensorFlow 如何处理这些权重。 
+（2）生成图协议文件（graph proto file），这是一个二进制文件，扩展名一般为.pb，用
+tf.train.write_graph()保存，只包含图形结构，不包含权重，然后使用tf.import_graph_def()来加载
+图形。
+下面我们就分“模型存储”和“图存储”来介绍这两种方式。在TensorFlow 的高级API，
+如Keras 中，也提供了更高级的语句来保存和加载模型，在7.2.3 节中会介绍。 
+4.8.1  模型的存储与加载 
+模型存储主要是建立一个tf.train.Saver()来保存变量，并且指定保存的位置，一般模型的扩
+展名为.ckpt。 
+下面我们定义一个新的神经网络，含两个全连接层和一个输出层，来训练MNIST 数据集，
+并把训练好的模型存储起来。我们用MNIST 数据集来说明。
+①  
+1．加载数据及定义模型 
+加载数据及定义模型的代码如下：
+# 加载数据 
+mnist = input_data.read_data_sets("MNIST_data/", one_hot=True) 
+trX, trY, teX, teY = mnist.train.images, mnist.train.labels, mnist.test.images, 
+mnist.test.labels 
+X = tf.placeholder("float", [None, 784]) 
+Y = tf.placeholder("float", [None, 10]) 
+# 初始化权重参数 
+w_h = init_weights([784, 625]) 
+①
+本节代码参参https://github.com/nlintz/TensorFlow-Tutorials/blob/master/10_save_restore_net.py。为了讲解方便，这
+里对代码顺序略微做了调整。 
+
+80 ff 第一篇 基础篇 
+w_h2 = init_weights([625, 625]) 
+w_o = init_weights([625, 10]) 
+# 定义权重函数 
+def init_weights(shape): 
+  return tf.Variable(tf.random_normal(shape, stddev=0.01)) 
+# 定义模型 
+def model(X, w_h, w_h2, w_o, p_keep_input, p_keep_hidden):  
+  # 第一个全连接层 
+  X = tf.nn.dropout(X, p_keep_input) 
+  h = tf.nn.relu(tf.matmul(X, w_h)) 
+  h = tf.nn.dropout(h, p_keep_hidden) 
+  # 第二个全连接层 
+  h2 = tf.nn.relu(tf.matmul(h, w_h2)) 
+  h2 = tf.nn.dropout(h2, p_keep_hidden) 
+  return tf.matmul(h2, w_o) #输出预测值 
+生成网络模型，得到预测值，代码如下: 
+p_keep_input = tf.placeholder("float") 
+p_keep_hidden = tf.placeholder("float") 
+py_x = model(X, w_h, w_h2, w_o, p_keep_input, p_keep_hidden) 
+定义损失函数，代码如下：
+cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(py_x, Y)) 
+train_op = tf.train.RMSPropOptimizer(0.001, 0.9).minimize(cost) 
+predict_op = tf.argmax(py_x, 1) 
+接下来我们就要训练刚才定义好的模型，并把每一轮训练得到的参数都存储下来。
+2．训练模型及存储模型 
+首先，我们定义一个存储路径，这里就用当前路径下的ckpt_dir 目录，代码如下： 
+ckpt_dir = "./ckpt_dir" 
+if not os.path.exists(ckpt_dir): 
+  os.makedirs(ckpt_dir) 
+定义一个计数器，为训练轮数计数，代码如下：
+# 计数器变量，设置它的trainable=False，不需要被训练 
+global_step = tf.Variable(0, name='global_step', trainable=False) 
+当定义完所有变量后，调用tf.train.Saver()来保存和提取变量，其后面定义的变量将不会被
+存储，代码如下：
+
+第4 章 TensorFlow 基础知识 ee 81 
+# 在声明完所有变量后，调用tf.train.Saver 
+saver = tf.train.Saver() 
+# 位于tf.train.Saver 之后的变量将不会被存储 
+non_storable_variable = tf.Variable(777) 
+训练模型并存储，如下：
+with tf.Session() as sess: 
+  tf.initialize_all_variables().run() 
+  start = global_step.eval() # 得到global_step 的初始值 
+  print("Start from:", start) 
+  for i in range(start, 100): 
+    # 以128 作为batch_size 
+ for start, end in zip(range(0, len(trX), 128), range(128, len(trX)+1, 128)): 
+sess.run(train_op, feed_dict={X: trX[start:end], Y: trY[start:end], 
+p_keep_input: 0.8, p_keep_hidden: 0.5}) 
+    global_step.assign(i).eval() # 更新计数器 
+    saver.save(sess, ckpt_dir + "/model.ckpt", global_step=global_step) # 存储模型 
+于是，在训练的过程中，ckpt_dir 下会出现16 个文件，其中有5 个model.ckpt-{n}.data- 
+00000-of-00001 文件，是训练过程中保存的模型，5 个model.ckpt-{n}.meta 文件，是训练过程中
+保存的元数据（TensorFlow 默认只保存最近5 个模型和元数据，删除前面没用的模型和元
+数据），5 个model.ckpt-{n}.index 文件，{n}代表迭代次数，以及1 个检查点文本文件，里面保
+存着当前模型和最近的5 个模型，内容如下： 
+model_checkpoint_path: "model.ckpt-60" 
+all_model_checkpoint_paths: "model.ckpt-56" 
+all_model_checkpoint_paths: "model.ckpt-57" 
+all_model_checkpoint_paths: "model.ckpt-58" 
+all_model_checkpoint_paths: "model.ckpt-59" 
+all_model_checkpoint_paths: "model.ckpt-60" 
+那么，假如在训练某个模型时突然因为某种原因，脚本停止运行了，或者机器重启了，是
+不是就要从头开始训练呢？我们知道，训练一个神经网络的时间都比较长，少则几个小时，
+多则几天，甚至几周。如果能将之前训练的参数保存下来，就可以在出现意外状况时接着
+上一次的地方开始训练。此外，每个固定的轮数在检查点保存一个模型（.ckpt 文件），也有
+利于随时将模型拿出来进行预测，用前几次的预测效果就可以估计出神经网络究竟设计得
+怎么样。
+3．加载模型 
+如果有已经训练好的模型变量文件，可以用saver.restore 来进行模型加载： 
+
+82 ff 第一篇 基础篇 
+with tf.Session() as sess: 
+  tf.initialize_all_variables().run() 
+  ckpt = tf.train.get_checkpoint_state(ckpt_dir) 
+  if ckpt and ckpt.model_checkpoint_path: 
+    print(ckpt.model_checkpoint_path) 
+    saver.restore(sess, ckpt.model_checkpoint_path) # 加载所有的参数 
+    # 从这里开始就可以直接使用模型进行预测，或者接着继续训练了 
+4.8.2  图的存储与加载 
+当仅保存图模型时，才将图写入二进制协议文件中，例如：
+v = tf.Variable(0, name='my_variable') 
+sess = tf.Session() 
+tf.train.write_graph(sess.graph_def, '/tmp/tfmodel', 'train.pbtxt') 
+当读取时，又从协议文件中读取出来：
+with tf.Session() as _sess: 
+  with gfile.FastGFile("/tmp/tfmodel/train.pbtxt",'rb') as f: 
+    graph_def = tf.GraphDef() 
+    graph_def.ParseFromString(f.read()) 
+    _sess.graph.as_default() 
+    tf.import_graph_def(graph_def, name='tfgraph') 
+4.9  队列和线程 
+和TensorFlow 中的其他组件一样，队列（queue）本身也是图中的一个节点，是一种有状
+态的节点，其他节点，如入队节点（enqueue）和出队节点（dequeue），可以修改它的内容。例
+如，入队节点可以把新元素插到队列末尾，出队节点可以把队列前面的元素删除。本节主要介
+绍队列、队列管理器、线程和协调器的有关知识。
+4.9.1  队列 
+TensorFlow 中主要有两种队列，即FIFOQueue 和RandomShuffleQueue，它们的源代码实现
+在tensorflow-1.1.0/tensorflow/python/ops/data_flow_ops.py 中。 
+1．FIFOQueue 
+FIFOQueue 创建一个先入先出队列。例如，我们在训练一些语音、文字样本时，使用循环
+
+第4 章 TensorFlow 基础知识 ee 83 
+神经网络的网络结构，希望读入的训练样本是有序的，就要用FIFOQueue。关于循环神经网络
+的讲解参见9.5 节。 
+我们先创建一个含有队列的图：
+import tensorflow as tf 
+# 创建一个先入先出队列,初始化队列插入0.1、0.2、0.3 三个数字  
+q = tf.FIFOQueue(3, "float")   
+init = q.enqueue_many(([0.1, 0.2, 0.3],))   
+# 定义出队、+1、入队操作 
+x = q.dequeue() 
+y = x + 1   
+q_inc = q.enqueue([y])   
+然后开启一个会话，执行2 次q_inc 操作，随后查看队列的内容： 
+with tf.Session() as sess: 
+  sess.run(init)   
+ quelen =  sess.run(q.size())   
+  for i in range(2):   
+    sess.run(q_inc) # 执行2 次操作，队列中的值变为0.3,1.1,1.2 
+ quelen =  sess.run(q.size())   
+  for i in range(quelen):   
+    print (sess.run(q.dequeue())) # 输出队列的值 
+最终结果如下：
+0.3 
+1.1 
+1.2 
+2．RandomShuffleQueue 
+RandomShuffleQueue 创建一个随机队列，在出队列时，是以随机的顺序产生元素的。例如，
+我们在训练一些图像样本时，使用CNN 的网络结构，希望可以无序地读入训练样本，就要用
+RandomShuffleQueue，每次随机产生一个训练样本。关于CNN 的实战讲解参见第10 章。 
+RandomShuffleQueue 在TensorFlow 使用异步计算时非常重要。因为TensorFlow 的会话是
+支持多线程的，我们可以在主线程里执行训练操作，使用RandomShuffleQueue 作为训练输入，
+开多个线程来准备训练样本，将样本压入队列后，主线程会从队列中每次取出mini-batch 的样
+本进行训练。详细的例子将在4.10 节中详细讲解。 
+下面我们创建一个随机队列，队列最大长度为10，出队后最小长度为2： 
+q = tf.RandomShuffleQueue(capacity=10, min_after_dequeue=2, dtypes="float") 
+
+84 ff 第一篇 基础篇 
+然后开启一个会话，执行10 次入队操作，8 次出队操作： 
+sess = tf.Session() 
+for i in range(0, 10): #10 次入队 
+  sess.run(q.enqueue(i)) 
+for i in range(0, 8): # 8 次出队 
+  print(sess.run(q.dequeue())) 
+发现结果确实是乱序的：
+5.0 
+0.0 
+6.0 
+9.0 
+2.0 
+3.0 
+1.0 
+4.0 
+我们尝试修改入队次数为12 次，再运行，发现程序阻断不动，或者我们尝试修改出队此
+时为10 次，即不保留队列最小长度，发现队列输出8 次结果后，在终端仍然阻断了。现象如
+图4-10 所示，在箭头处卡在不动。这种情况称为阻断。 
+图4-10 
+阻断一般发生在：
+●
+队列长度等于最小值，执行出队操作；
+●
+队列长度等于最大值，执行入队操作。
+只有队列满足要求后，才能继续执行。可以通过设置绘画在运行时的等待时间来解除阻断： 
+run_options = tf.RunOptions(timeout_in_ms = 10000)    # 等待10 秒 
+try: 
+  sess.run(q.dequeue(), options=run_options) 
+except tf.errors.DeadlineExceededError: 
+  print('out of range') 
+
+第4 章 TensorFlow 基础知识 ee 85 
+上面的例子都是在会话的主线程中进行入队操作。当数据量很大时，入队操作从硬盘中读
+取数据，放入内存中，主线程需要等待入队操作完成，才能进行训练操作。会话中可以运行多
+个线程，我们使用线程管理器QueueRunner 创建一系列的新线程进行入队操作，让主线程继续
+使用数据，即训练网络和读取数据是异步的，主线程在训练网络，另一个线程在将数据从硬盘
+读入内存。
+4.9.2  队列管理器 
+我们创建一个含有队列的图：
+q = tf.FIFOQueue(1000, "float") 
+counter = tf.Variable(0.0)    # 计数器 
+increment_op = tf.assign_add(counter, tf.constant(1.0))    # 操作：给计数器加1 
+enqueue_op = q.enqueue(counter) # 操作：计数器值加入队列 
+创建一个队列管理器QueueRunner，用这两个操作向队列q 中添加元素。目前我们只使用
+一个线程：
+qr = tf.train.QueueRunner(q, enqueue_ops=[increment_op, enqueue_op] * 1) 
+启动一个会话，从队列管理器qr 中创建线程： 
+#主线程   
+with tf.Session() as sess: 
+  sess.run(tf.global_variables_initializer())   
+  enqueue_threads = qr.create_threads(sess, start=True)  # 启动入队线程   
+  #主线程   
+  for i in range(10):   
+    print (sess.run(q.dequeue())) 
+输出结果如下：
+4.0 
+9.0 
+12.0 
+15.0 
+18.0 
+22.0 
+25.0 
+27.0 
+32.0 
+35.0 
+不是我们期待的自然数列，并且线程被阻断。这是因为加1 操作和入队操作不同步，可能
+加1 操作执行了很多次之后，才会进行一次入队操作。另外，因为主线程的训练（出队操作）
+和读取数据的线程的训练（入队操作）是异步的，主线程会一直等待数据送入。
+
+86 ff 第一篇 基础篇 
+QueueRunner 有一个问题就是：入队线程自顾自地执行，在需要的出队操作完成之后，程
+序没法结束。这样就要使用tf.train.Coordinator 来实现线程间的同步，终止其他线程。 
+4.9.3  线程和协调器 
+使用协调器（coordinator）来管理线程： 
+# 主线程 
+sess = tf.Session() 
+sess.run(tf.global_variables_initializer()) 
+# Coordinator：协调器，协调线程间的关系可以视为一种信号量，用来做同步 
+coord = tf.train.Coordinator() 
+# 启动入队线程，协调器是线程的参数 
+enqueue_threads = qr.create_threads(sess, coord = coord,start=True) 
+# 主线程 
+for i in range(0, 10): 
+  print(sess.run(q.dequeue())) 
+coord.request_stop()# 通知其他线程关闭 
+coord.join(enqueue_threads) # join 操作等待其他线程结束，其他所有线程关闭之后，这一函数才能返回 
+发现上述代码能正常运行，返回结果，并结束。但我们发现，在关闭队列线程后，再执行
+出队操作，就会抛出tf.errors.OutOfRange 错误。把coord.request_stop()和主线程的出队操作
+q.dequeue()调换位置，如下：
+coord.request_stop() 
+# 主线程 
+for i in range(0, 10): 
+  print(sess.run(q.dequeue())) 
+coord.join(enqueue_threads) 
+这种情况就需要使用tf.errors.OutOfRangeError 来捕捉错误，终止循环： 
+coord.request_stop() 
+# 主线程 
+for i in range(0, 10): 
+  try: 
+    print(sess.run(q.dequeue())) 
+  except tf.errors.OutOfRangeError: 
+    break 
+coord.join(enqueue_threads) 
+
+第4 章 TensorFlow 基础知识 ee 87 
+所有队列管理器被默认加在图的tf.GraphKeys.QUEUE_RUNNERS 集合中。 
+4.10  加载数据 
+TensorFlow 作为符号编程框架，需要先构建数据流图，再读取数据，随后进行模型训练。
+TensorFlow 官方网站给出了以下读取数据3 种方法
+①。 
+●
+预加载数据（preloaded data）：在TensorFlow 图中定义常量或变量来保存所有数据。
+●
+填充数据（feeding）：Python 产生数据，再把数据填充后端。
+●
+从文件读取数据（reading from file）：从文件中直接读取，让队列管理器从文件中读取
+数据。
+4.10.1  预加载数据 
+预加载数据的示例如下：
+x1 = tf.constant([2, 3, 4]) 
+x2 = tf.constant([4, 0, 1]) 
+y = tf.add(x1, x2) 
+这种方式的缺点在于，将数据直接嵌在数据流图中，当训练数据较大时，很消耗内存。
+4.10.2  填充数据 
+使用sess.run()中的feed_dict 参数，将Python 产生的数据填充给后端。 
+import tensorflow as tf   
+# 设计图   
+a1 = tf.placeholder(tf.int16) 
+a2 = tf.placeholder(tf.int16) 
+b = tf.add(x1, x2)   
+# 用Python 产生数据   
+li1 = [2, 3, 4]   
+li2 = [4, 0, 1]   
+# 打开一个会话，将数据填充给后端  
+with tf.Session() as sess:   
+  print sess.run(b, feed_dict={a1: li1, a2: li2}) 
+填充的方式也有数据量大、消耗内存等缺点，并且数据类型转换等中间环节增加了不小开
+销。这时最好用第三种方法，在图中定义好文件读取的方法，让TensorFlow 自己从文件中读取
+①
+https://www.tensorflow.org/versions/r0.10/how_tos/reading_data/#preloaded_data
+
+88 ff 第一篇 基础篇 
+数据，并解码成可使用的样本集。
+4.10.3  从文件读取数据 
+从文件读取数据分为如下两个步骤：
+（1）把样本数据写入TFRecords 二进制文件； 
+（2）再从队列中读取。 
+我们以MNIST 数据集为例来说明，如何把MNIST 的数据转换成TFRecords 文件。 
+TFRecords 是一种二进制文件，能更好地利用内存，更方便地复制和移动，并且不需要单独的
+标记文件。接下来我们就看一下如何转换，具体代码参见 tensorflow-1.1.0/tensorflow/examples/ 
+how_tos/reading_data/convert_to_records.py。 
+1．生成TFRecords 文件 
+我们定义主函数，给训练、验证、测试数据集做转换：
+def main(unused_argv): 
+  # 获取数据 
+  data_sets = mnist.read_data_sets(FLAGS.directory, 
+dtype=tf.uint8, # 注意，这里的编码是uint8 
+reshape=False, 
+validation_size=FLAGS.validation_size) 
+  # 将数据转换为tf.train.Example 类型，并写入TFRecords 文件 
+  convert_to(data_sets.train, 'train') 
+  convert_to(data_sets.validation, 'validation') 
+  convert_to(data_sets.test, 'test') 
+转换函数convert_to 的主要功能是，将数据填入到tf.train.Example 的协议缓冲区（protocol 
+buffer）中，将协议缓冲区序列化为一个字符串，通过tf.python_io.TFRecordWriter 写入TFRecords
+文件。
+def convert_to(data_set, name): 
+  images = data_set.images 
+  labels = data_set.labels 
+  num_examples = data_set.num_examples # 55000 个训练数据，5000 个验证数据，10000 个测试数据 
+  if images.shape[0] != num_examples: 
+    raise ValueError('Images size %d does not match label size %d.' % 
+(images.shape[0], num_examples)) 
+  rows = images.shape[1] # 28 
+  cols = images.shape[2] # 28 
+  depth = images.shape[3] # 1，是黑白图像，所以是单通道 
+
+第4 章 TensorFlow 基础知识 ee 89 
+  filename = os.path.join(FLAGS.directory, name + '.tfrecords') 
+  print('Writing', filename) 
+  writer = tf.python_io.TFRecordWriter(filename) 
+  for index in range(num_examples): 
+    image_raw = images[index].tostring() 
+    # 写入协议缓冲区中，height、width、depth、label 编码成int64 类型，image_raw 编码成二进制 
+    example = tf.train.Example(features=tf.train.Features(feature={ 
+'height': _int64_feature(rows), 
+'width': _int64_feature(cols), 
+'depth': _int64_feature(depth), 
+'label': _int64_feature(int(labels[index])), 
+'image_raw': _bytes_feature(image_raw)}))  
+    writer.write(example.SerializeToString()) # 序列化为字符串 
+  writer.close() 
+编码函数如下：
+def _int64_feature(value): 
+  return tf.train.Feature(int64_list=tf.train.Int64List(value=[value])) 
+def _bytes_feature(value): 
+  return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value])) 
+运行结束后，在/tmp/data 下生成3 个文件，即train.tfrecords、validation.tfrecords 和test.tfrecords。 
+2．从队列中读取 
+一旦生成了TFRecords 文件，接下来就可以使用队列读取数据了。主要分为3 步： 
+（1）创建张量，从二进制文件读取一个样本； 
+（2）创建张量，从二进制文件随机读取一个mini-batch； 
+（3）把每一批张量传入网络作为输入节点。 
+代码参见tensorflow-1.1.0/tensorflow/examples/how_tos/reading_data/fully_connected_reader.py。 
+首先我们定义从文件中读取并解析一个样本：
+def read_and_decode(filename_queue): # 输入文件名队列 
+  reader = tf.TFRecordReader() 
+  _, serialized_example = reader.read(filename_queue) 
+  features = tf.parse_single_example( # 解析example 
+     serialized_example, 
+     # 必须写明features 里面的key 的名称 
+     features={ 
+'image_raw': tf.FixedLenFeature([], tf.string), # 图片是string 类型 
+
+90 ff 第一篇 基础篇 
+'label': tf.FixedLenFeature([], tf.int64),  # 标记是int64 类型 
+    }) 
+  # 对于BytesList，要重新进行解码，把string 类型的0 维Tensor 变成uint8 类型的一维Tensor 
+  image = tf.decode_raw(features['image_raw'], tf.uint8)  
+  image.set_shape([mnist.IMAGE_PIXELS]) 
+  # Tensor("input/DecodeRaw:0", shape=(784,), dtype=uint8) 
+  # image 张量的形状为：Tensor("input/sub:0", shape=(784,), dtype=float32) 
+  image = tf.cast(image, tf.float32) * (1．/ 255) - 0.5 
+  # 把标记从uint8 类型转换为int32 类型 
+  # label 张量的形状为Tensor("input/Cast_1:0", shape=(), dtype=int32) 
+  label = tf.cast(features['label'], tf.int32) 
+  return image, label 
+接下来使用tf.train.shuffle_batch 将前面生成的样本随机化，获得一个最小批次的张量： 
+def inputs(train, batch_size, num_epochs):  
+  # 输入参数: 
+  #  train: 选择输入训练数据/验证数据 
+  #  batch_size: 训练的每一批有多少个样本 
+  #  num_epochs: 过几遍数据，设置为0/None 表示永远训练下去 
+  """ 
+  返回结果：A tuple (images, labels) 
+* images: 类型float, 形状[batch_size, mnist.IMAGE_PIXELS]，范围[-0.5, 0.5].
+* labels： 类型int32，形状[batch_size]，范围 [0, mnist.NUM_CLASSES]
+    注意tf.train.QueueRunner 必须用tf.train.start_queue_runners()来启动线程 
+  """ 
+  if not num_epochs: num_epochs = None 
+  # 获取文件路径，即/tmp/data/train.tfrecords, /tmp/data/validation.records 
+  filename = os.path.join(FLAGS.train_dir, 
+TRAIN_FILE if train else VALIDATION_FILE)  
+  with tf.name_scope('input'): 
+   # tf.train.string_input_producer 返回一个QueueRunner，里面有一个FIFOQueue 
+   filename_queue = tf.train.string_input_producer( 
+     [filename], num_epochs=num_epochs) # 如果样本量很大，可以分成若干文件，把文件名列表传入 
+   image, label = read_and_decode(filename_queue) 
+   # 随机化example，并把它们规整成batch_size 大小 
+   # tf.train.shuffle_batch 生成了RandomShuffleQueue，并开启两个线程 
+   images, sparse_labels = tf.train.shuffle_batch( 
+[image, label], batch_size=batch_size, num_threads=2, 
+capacity=1000 + 3 * batch_size, 
+min_after_dequeue=1000) # 留下一部分队列，来保证每次有足够的数据做随机打乱 
+   return images, sparse_labels 
+
+第4 章 TensorFlow 基础知识 ee 91 
+最后，我们把生成的batch 张量作为网络的输入，进行训练： 
+def run_training(): 
+  with tf.Graph().as_default(): 
+    # 输入images 和labels 
+    images, labels = inputs(train=True, batch_size=FLAGS.batch_size, 
+num_epochs=FLAGS.num_epochs) 
+    # 构建一个从推理模型来预测数据的图 
+    logits = mnist.inference(images, 
+FLAGS.hidden1, 
+FLAGS.hidden2) 
+    loss = mnist.loss(logits, labels)  # 定义损失函数 
+    # Add to the Graph operations that train the model. 
+    train_op = mnist.training(loss, FLAGS.learning_rate) 
+    # 初始化参数，特别注意：string_input_producer 内部创建了一个epoch 计数变量， 
+    # 归入tf.GraphKeys.LOCAL_VARIABLES 集合中，必须单独用initialize_local_variables()初始化 
+    init_op = tf.group(tf.global_variables_initializer(), 
+tf.local_variables_initializer()) 
+    sess = tf.Session() 
+    sess.run(init_op) 
+    # Start input enqueue threads. 
+    coord = tf.train.Coordinator() 
+    threads = tf.train.start_queue_runners(sess=sess, coord=coord) 
+    try: 
+step = 0 
+while not coord.should_stop(): # 进入永久循环 
+start_time = time.time() 
+_, loss_value = sess.run([train_op, loss]) 
+duration = time.time() - start_time 
+# 每100 次训练输出一次结果 
+if step % 100 == 0: 
+print('Step %d: loss = %.2f (%.3f sec)' % (step, loss_value, duration)) 
+step += 1 
+    except tf.errors.OutOfRangeError: 
+print('Done training for %d epochs, %d steps.' % (FLAGS.num_epochs, step)) 
+    finally: 
+coord.request_stop() # 通知其他线程关闭 
+    coord.join(threads) 
+    sess.close() 
+输出结果如下：
+
+92 ff 第一篇 基础篇 
+Step 0: loss = 2.29 (0.193 sec) 
+Step 100: loss = 2.05 (0.030 sec) 
+Step 200: loss = 1.63 (0.022 sec) 
+Step 300: loss = 1.38 (0.025 sec) 
+Step 400: loss = 0.94 (0.027 sec) 
+Step 500: loss = 0.86 (0.027 sec) 
+Step 600: loss = 0.68 (0.024 sec) 
+Step 700: loss = 0.67 (0.028 sec) 
+Step 800: loss = 0.62 (0.026 sec) 
+Step 900: loss = 0.56 (0.028 sec) 
+Step 1000: loss = 0.49 (0.018 sec) 
+Done training for 2 epochs, 1100 steps. 
+数据集大小为5 5000，2 轮训练，共110 000 个数据，batch_size 大小为100，故训练次数
+为1 100 次，每100 次训练输出一次结果，共输出11 次结果。 
+如上所述，我们总结出TensorFlow 使用TFRecords 文件训练样本的步骤：  
+（1）在生成文件名队列中，设定epoch 数量； 
+（2）训练时，设定为无穷循环； 
+（3）在读取数据时，如果捕捉到错误，终止。 
+4.11  实现一个自定义操作 
+尽管TensorFlow 自己提供了足够多的操作，初学者甚至中高级的读者都可以直接用手册中
+的API 来实现自己的业务需求。想创建一个不包含在现有TensorFlow 库中的操作，可以先试试
+用现有的Python 操作的组合能不能实现，如果现有操作的组合不能实现，或者能够实现但是效
+率不高，再或者因为发现在XLA 框架中难以自己融合（对XLA 的讲解参见第16 章），想手工
+融合几个操作，如何实现呢？
+本节内容较难，需要熟练掌握C++语言，并且对张量的流动和前向传播和反向传播有很深
+的理解。建议初学者跳过这部分内容，看完全书之后再看本节。
+4.11.1  步骤 
+要自定义一个操作，最简单的是需要以下3 步。 
+（1）在C++文件（*_ops.cc 文件）中注册新的操作。这里定义了操作功能的接口规范，如
+操作的名称、输入和输出以及属性等。
+（2）在C++文件（*_kernels.cc 文件）中实现这个操作。也就是，对上一步中操作注册规范
+的具体实现，可以实现在如CPU、GPU 等多个内核上。 
+（3）测试操作。编译出该操作的库文件（*_ops.so 文件），然后在Python 中使用这个操作。 
+
+第4 章 TensorFlow 基础知识 ee 93 
+因此，要创建一个新的操作，需要掌握一些C++语言的知识。 
+4.11.2  最佳实践 
+下面以词嵌入的例子来说明，源代码参见https://github.com/tensorflow/models/blob/master/ 
+tutorials/embedding/word2vec_optimized.py。在3.3.2 节中，我们以嵌入投影仪的可视化讲过这个
+Word2vec 的可视化例子。 
+第一步，我们创建word2vec_ops.cc 来注册两个操作，即SkipgramWord2vec 和NegTrainWord2vec，
+代码如下：
+#include "tensorflow/core/framework/op.h" 
+namespace tensorflow { 
+REGISTER_OP("SkipgramWord2vec") 
+    .Output("vocab_word: string") 
+    .Output("vocab_freq: int32") 
+    .Output("words_per_epoch: int64") 
+    .Output("current_epoch: int32") 
+    .Output("total_words_processed: int64") 
+    .Output("examples: int32") 
+    .Output("labels: int32") 
+    .SetIsStateful() 
+    .Attr("filename: string") 
+    .Attr("batch_size: int") 
+    .Attr("window_size: int = 5") 
+    .Attr("min_count: int = 5") 
+    .Attr("subsample: float = 1e-3") 
+    .Doc(R"doc( 
+Parses a text file and creates a batch of examples. 
+vocab_word: A vector of words in the corpus. 
+vocab_freq: Frequencies of words．Sorted in the non-ascending order. 
+words_per_epoch: Number of words per epoch in the data file. 
+current_epoch: The current epoch number. 
+total_words_processed: The total number of words processed so far. 
+examples: A vector of word ids. 
+labels: A vector of word ids. 
+filename: The corpus's text file name. 
+batch_size: The size of produced batch. 
+window_size: The number of words to predict to the left and right of the target. 
+min_count: The minimum number of word occurrences for it to be included in the 
+    vocabulary. 
+subsample: Threshold for word occurrence．Words that appear with higher 
+    frequency will be randomly down-sampled．Set to 0 to disable. 
+)doc"); 
+
+94 ff 第一篇 基础篇 
+REGISTER_OP("NegTrainWord2vec") 
+    .Input("w_in: Ref(float)") 
+    .Input("w_out: Ref(float)") 
+    .Input("examples: int32") 
+    .Input("labels: int32") 
+    .Input("lr: float") 
+    .SetIsStateful() 
+    .Attr("vocab_count: list(int)") 
+    .Attr("num_negative_samples: int") 
+    .Doc(R"doc( 
+Training via negative sampling. 
+w_in: input word embedding. 
+w_out: output word embedding. 
+examples: A vector of word ids. 
+labels: A vector of word ids. 
+vocab_count: Count of words in the vocabulary. 
+num_negative_samples: Number of negative samples per example. 
+)doc"); 
+} 
+第二步，我们将这两个操作在CPU 设备上进行实现，生成word2vec_kernels.cc 文件，代码
+如下：
+#include "tensorflow/core/framework/op.h" 
+#include "tensorflow/core/framework/op_kernel.h" 
+#include "tensorflow/core/lib/core/stringpiece.h" 
+#include "tensorflow/core/lib/gtl/map_util.h" 
+#include "tensorflow/core/lib/random/distribution_sampler.h" 
+#include "tensorflow/core/lib/random/philox_random.h" 
+#include "tensorflow/core/lib/random/simple_philox.h" 
+#include "tensorflow/core/lib/strings/str_util.h" 
+#include "tensorflow/core/platform/thread_annotations.h" 
+#include "tensorflow/core/util/guarded_philox_random.h" 
+namespace tensorflow { 
+// 预先计算的示例数 
+const int kPrecalc = 3000; 
+// 处理前读入句子的字数 
+const int kSentenceSize = 1000; 
+namespace { 
+bool ScanWord(StringPiece* input, string* word) { 
+  str_util::RemoveLeadingWhitespace(input); 
+  StringPiece tmp; 
+  if (str_util::ConsumeNonWhitespace(input, &tmp)) { 
+    word->assign(tmp.data(), tmp.size()); 
+
+第4 章 TensorFlow 基础知识 ee 95 
+    return true; 
+  } else { 
+    return false; 
+  } 
+} 
+} 
+class SkipgramWord2vecOp : public OpKernel { 
+  public: 
+    explicit SkipgramWord2vecOp(OpKernelConstruction* ctx) 
+: OpKernel(ctx), rng_(&philox_) { 
+string filename; 
+OP_REQUIRES_OK(ctx, ctx->GetAttr("filename", &filename)); 
+OP_REQUIRES_OK(ctx, ctx->GetAttr("batch_size", &batch_size_)); 
+OP_REQUIRES_OK(ctx, ctx->GetAttr("window_size", &window_size_)); 
+OP_REQUIRES_OK(ctx, ctx->GetAttr("min_count", &min_count_)); 
+OP_REQUIRES_OK(ctx, ctx->GetAttr("subsample", &subsample_)); 
+OP_REQUIRES_OK(ctx, Init(ctx->env(), filename)); 
+mutex_lock l(mu_); 
+example_pos_ = corpus_size_; 
+label_pos_ = corpus_size_; 
+label_limit_ = corpus_size_; 
+sentence_index_ = kSentenceSize; 
+for (int i = 0; i < kPrecalc; ++i) { 
+NextExample(&precalc_examples_[i].input, &precalc_examples_[i].label); 
+} 
+    } 
+  void Compute(OpKernelContext* ctx) override { 
+    Tensor words_per_epoch(DT_INT64, TensorShape({})); 
+    Tensor current_epoch(DT_INT32, TensorShape({})); 
+    Tensor total_words_processed(DT_INT64, TensorShape({})); 
+    Tensor examples(DT_INT32, TensorShape({batch_size_})); 
+    auto Texamples = examples.flat<int32>(); 
+    Tensor labels(DT_INT32, TensorShape({batch_size_})); 
+    auto Tlabels = labels.flat<int32>(); 
+    { 
+mutex_lock l(mu_); 
+for (int i = 0; i < batch_size_; ++i) { 
+Texamples(i) = precalc_examples_[precalc_index_].input; 
+Tlabels(i) = precalc_examples_[precalc_index_].label; 
+precalc_index_++; 
+if (precalc_index_ >= kPrecalc) { 
+precalc_index_ = 0; 
+for (int j = 0; j < kPrecalc; ++j) { 
+NextExample(&precalc_examples_[j].input, 
+&precalc_examples_[j].label); 
+} 
+} 
+
+96 ff 第一篇 基础篇 
+} 
+words_per_epoch.scalar<int64>()() = corpus_size_; 
+current_epoch.scalar<int32>()() = current_epoch_; 
+total_words_processed.scalar<int64>()() = total_words_processed_; 
+    } 
+    ctx->set_output(0, word_); 
+    ctx->set_output(1, freq_); 
+    ctx->set_output(2, words_per_epoch); 
+    ctx->set_output(3, current_epoch); 
+    ctx->set_output(4, total_words_processed); 
+    ctx->set_output(5, examples); 
+    ctx->set_output(6, labels); 
+  } 
+ private: 
+  struct Example { 
+    int32 input; 
+    int32 label; 
+  }; 
+  int32 batch_size_ = 0; 
+  int32 window_size_ = 5; 
+  float subsample_ = 1e-3; 
+  int min_count_ = 5; 
+  int32 vocab_size_ = 0; 
+  Tensor word_; 
+  Tensor freq_; 
+  int64 corpus_size_ = 0; 
+  std::vector<int32> corpus_; 
+  std::vector<Example> precalc_examples_; 
+  int precalc_index_ = 0; 
+  std::vector<int32> sentence_; 
+  int sentence_index_ = 0; 
+  mutex mu_; 
+  random::PhiloxRandom philox_ GUARDED_BY(mu_); 
+  random::SimplePhilox rng_ GUARDED_BY(mu_); 
+  int32 current_epoch_ GUARDED_BY(mu_) = -1; 
+  int64 total_words_processed_ GUARDED_BY(mu_) = 0; 
+  int32 example_pos_ GUARDED_BY(mu_); 
+  int32 label_pos_ GUARDED_BY(mu_); 
+  int32 label_limit_ GUARDED_BY(mu_); 
+  //{example_pos_，label_pos_}是下一个示例的光标。example_pos_在corpus_结尾处换行 
+  // 对每个例子，我们为标记随机生成[label_pos_，label_limit] 
+  void NextExample(int32* example, int32* label) EXCLUSIVE_LOCKS_REQUIRED(mu_) { 
+    while (true) { 
+if (label_pos_ >= label_limit_) { 
+++total_words_processed_; 
+++sentence_index_; 
+if (sentence_index_ >= kSentenceSize) { 
+
+第4 章 TensorFlow 基础知识 ee 97 
+sentence_index_ = 0; 
+for (int i = 0; i < kSentenceSize; ++i, ++example_pos_) { 
+if (example_pos_ >= corpus_size_) { 
+++current_epoch_; 
+example_pos_ = 0; 
+} 
+if (subsample_ > 0) { 
+int32 word_freq = freq_.flat<int32>()(corpus_[example_pos_]); 
+// See Eq．5 in http://arxiv.org/abs/1310.4546 
+float keep_prob = 
+(std::sqrt(word_freq / (subsample_ * corpus_size_)) + 1) * 
+(subsample_ * corpus_size_) / word_freq; 
+if (rng_.RandFloat() > keep_prob) { 
+i--; 
+continue; 
+} 
+} 
+sentence_[i] = corpus_[example_pos_]; 
+} 
+} 
+const int32 skip = 1 + rng_.Uniform(window_size_); 
+label_pos_ = std::max<int32>(0, sentence_index_ - skip); 
+label_limit_ = 
+std::min<int32>(kSentenceSize, sentence_index_ + skip + 1); 
+} 
+if (sentence_index_ != label_pos_) { 
+break; 
+} 
+++label_pos_; 
+    } 
+*example = sentence_[sentence_index_];
+*label = sentence_[label_pos_++];
+  } 
+  Status Init(Env* env, const string& filename) { 
+    string data; 
+    TF_RETURN_IF_ERROR(ReadFileToString(env, filename, &data)); 
+    StringPiece input = data; 
+    string w; 
+    corpus_size_ = 0; 
+    std::unordered_map<string, int32> word_freq; 
+    while (ScanWord(&input, &w)) { 
+++(word_freq[w]); 
+++corpus_size_; 
+    } 
+    if (corpus_size_ < window_size_ * 10) { 
+return errors::InvalidArgument("The text file ", filename, 
+" contains too little data: ", 
+corpus_size_, " words"); 
+    } 
+    typedef std::pair<string, int32> WordFreq; 
+
+98 ff 第一篇 基础篇 
+    std::vector<WordFreq> ordered; 
+    for (const auto& p : word_freq) { 
+if (p.second >= min_count_) ordered.push_back(p); 
+    } 
+    LOG(INFO) << "Data file: " << filename << " contains " << data.size() 
+<< " bytes, " << corpus_size_ << " words, " << word_freq.size() 
+<< " unique words, " << ordered.size() 
+<< " unique frequent words."; 
+    word_freq.clear(); 
+    std::sort(ordered.begin(), ordered.end(), 
+[](const WordFreq& x, const WordFreq& y) { 
+return x.second > y.second; 
+}); 
+    vocab_size_ = static_cast<int32>(1 + ordered.size()); 
+    Tensor word(DT_STRING, TensorShape({vocab_size_})); 
+    Tensor freq(DT_INT32, TensorShape({vocab_size_})); 
+    word.flat<string>()(0) = "UNK"; 
+    static const int32 kUnkId = 0; 
+    std::unordered_map<string, int32> word_id; 
+    int64 total_counted = 0; 
+    for (std::size_t i = 0; i < ordered.size(); ++i) { 
+const auto& w = ordered[i].first; 
+auto id = i + 1; 
+word.flat<string>()(id) = w; 
+auto word_count = ordered[i].second; 
+freq.flat<int32>()(id) = word_count; 
+total_counted += word_count; 
+word_id[w] = id; 
+    } 
+    freq.flat<int32>()(kUnkId) = corpus_size_ - total_counted; 
+    word_ = word; 
+    freq_ = freq; 
+    corpus_.reserve(corpus_size_); 
+    input = data; 
+    while (ScanWord(&input, &w)) { 
+corpus_.push_back(gtl::FindWithDefault(word_id, w, kUnkId)); 
+    } 
+    precalc_examples_.resize(kPrecalc); 
+    sentence_.resize(kSentenceSize); 
+    return Status::OK(); 
+  } 
+}; 
+REGISTER_KERNEL_BUILDER(Name("SkipgramWord2vec").Device(DEVICE_CPU),  
+SkipgramWord2vecOp); 
+class NegTrainWord2vecOp : public OpKernel { 
+ public: 
+  explicit NegTrainWord2vecOp(OpKernelConstruction* ctx) : OpKernel(ctx) { 
+    base_.Init(0, 0); 
+
+第4 章 TensorFlow 基础知识 ee 99 
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("num_negative_samples", &num_samples_)); 
+    std::vector<int32> vocab_count; 
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("vocab_count", &vocab_count)); 
+    std::vector<float> vocab_weights; 
+    vocab_weights.reserve(vocab_count.size()); 
+    for (const auto& f : vocab_count) { 
+float r = std::pow(static_cast<float>(f), 0.75f); 
+vocab_weights.push_back(r); 
+    } 
+    sampler_ = new random::DistributionSampler(vocab_weights); 
+  } 
+  ~NegTrainWord2vecOp() { delete sampler_; } 
+  void Compute(OpKernelContext* ctx) override { 
+    Tensor w_in = ctx->mutable_input(0, false); 
+    OP_REQUIRES(ctx, TensorShapeUtils::IsMatrix(w_in.shape()), 
+errors::InvalidArgument("Must be a matrix")); 
+    Tensor w_out = ctx->mutable_input(1, false); 
+    OP_REQUIRES(ctx, w_in.shape() == w_out.shape(), 
+errors::InvalidArgument("w_in.shape == w_out.shape")); 
+    const Tensor& examples = ctx->input(2); 
+    OP_REQUIRES(ctx, TensorShapeUtils::IsVector(examples.shape()), 
+errors::InvalidArgument("Must be a vector")); 
+    const Tensor& labels = ctx->input(3); 
+    OP_REQUIRES(ctx, examples.shape() == labels.shape(), 
+errors::InvalidArgument("examples.shape == labels.shape")); 
+    const Tensor& learning_rate = ctx->input(4); 
+    OP_REQUIRES(ctx, TensorShapeUtils::IsScalar(learning_rate.shape()), 
+errors::InvalidArgument("Must be a scalar")); 
+    auto Tw_in = w_in.matrix<float>(); 
+    auto Tw_out = w_out.matrix<float>(); 
+    auto Texamples = examples.flat<int32>(); 
+    auto Tlabels = labels.flat<int32>(); 
+    auto lr = learning_rate.scalar<float>()(); 
+    const int64 vocab_size = w_in.dim_size(0); 
+    const int64 dims = w_in.dim_size(1); 
+    const int64 batch_size = examples.dim_size(0); 
+    OP_REQUIRES(ctx, vocab_size == sampler_->num(), 
+errors::InvalidArgument("vocab_size mismatches: ", vocab_size, 
+" vs．", sampler_->num())); 
+    // v_in 的梯度累加器 
+    Tensor buf(DT_FLOAT, TensorShape({dims})); 
+    auto Tbuf = buf.flat<float>(); 
+    Tensor g_buf(DT_FLOAT, TensorShape({})); 
+
+100 ff 第一篇 基础篇 
+    auto g = g_buf.scalar<float>(); 
+    // 在下面的循环中，每个负样本需要两个随机32 位值 
+    // 我们为每个样本保留8 个值，防止基础实现发生变化 
+    auto rnd = base_.ReserveSamples32(batch_size * num_samples_ * 8); 
+    random::SimplePhilox srnd(&rnd); 
+    for (int64 i = 0; i < batch_size; ++i) { 
+const int32 example = Texamples(i); 
+DCHECK(0 <= example && example < vocab_size) << example; 
+const int32 label = Tlabels(i); 
+DCHECK(0 <= label && label < vocab_size) << label; 
+auto v_in = Tw_in.chip<0>(example); 
+// 正样本: 预测标记 
+//   前向传播: x = v_in' * v_out 
+//
+l = log(sigmoid(x)) 
+//   反向传播: dl/dx = g = sigmoid(-x) 
+//
+dl/d(v_in) = g * v_out' 
+//
+dl/d(v_out) = v_in' * g 
+{ 
+auto v_out = Tw_out.chip<0>(label); 
+auto dot = (v_in * v_out).sum(); 
+g = (dot.exp() + 1.f).inverse(); 
+Tbuf = v_out * (g() * lr); 
+v_out += v_in * (g() * lr); 
+} 
+// 负样本: 
+//   前向传播: x = v_in' * v_sample 
+//
+l = log(sigmoid(-x)) 
+//   反向传播: dl/dx = g = -sigmoid(x) 
+//
+dl/d(v_in) = g * v_out' 
+//
+dl/d(v_out) = v_in' * g 
+for (int j = 0; j < num_samples_; ++j) { 
+const int sample = sampler_->Sample(&srnd); 
+if (sample == label) continue;  // Skip. 
+auto v_sample = Tw_out.chip<0>(sample); 
+auto dot = (v_in * v_sample).sum(); 
+g = -((-dot).exp() + 1.f).inverse(); 
+Tbuf += v_sample * (g() * lr); 
+v_sample += v_in * (g() * lr); 
+} 
+v_in += Tbuf; 
+    } 
+  } 
+ private: 
+  int32 num_samples_ = 0; 
+
+第4 章 TensorFlow 基础知识 ee 101 
+  random::DistributionSampler* sampler_ = nullptr; 
+  GuardedPhiloxRandom base_; 
+}; 
+REGISTER_KERNEL_BUILDER(Name("NegTrainWord2vec").Device(DEVICE_CPU), NegTrainWord2vecOp); 
+} 
+第三步，编译出该操作的类文件，并做测试。
+我们需要在特定的头文件目录下编译，使用Python 提供的get_include 获取头文件目录，
+然后使用C++编译器（如g++）将操作编译成动态库，如下： 
+TF_INC=$(python -c 'import tensorflow as tf; print(tf.sysconfig.get_include())') 
+g++ -std=c++11 -shared word2vec_ops.cc word2vec_kernels.cc -o word2vec_ops.so -fPIC -I 
+   $TF_INC -O2 -D_GLIBCXX_USE_CXX11_ABI=0 
+TensorFlow 的Python API 提供了tf.load_op_library 函数来加载动态库，并向TensorFlow 框
+架注册操作。load_op_library 返回一个包含操作和内核的Python 模块。于是，我们测试如下： 
+import tensorflow as tf 
+word2vec = tf.load_op_library('word2vec_ops.so') 
+with tf.Session(''): 
+  word2vec.skipgram_word2vec(filename='text8', batch_size=500, window_size=5,  
+min_count=5, subsample=0.001) 
+成功输出了：
+SkipgramWord2vec(vocab_word=<tf.Tensor 'SkipgramWord2vec:0' shape=<unknown> dtype=  
+   string>, vocab_freq=<tf.Tensor 'SkipgramWord2vec:1' shape=<unknown> dtype=int32>,  
+   words_per_epoch=<tf.Tensor 'SkipgramWord2vec:2' shape=<unknown> dtype=int64>, current_  
+   epoch=<tf.Tensor 'SkipgramWord2vec:3' shape=<unknown> dtype=int32>, total_words_ 
+   processed=<tf.Tensor 'SkipgramWord2vec:4' shape=<unknown> dtype=int64>, examples=  
+   <tf.Tensor 'SkipgramWord2vec:5' shape=<unknown> dtype=int32>, labels=<tf.Tensor  
+   'SkipgramWord2vec:6' shape=<unknown> dtype=int32>) 
+说明我们注册的自定义操作成功了。
+ 4.12  小结 
+本章主要讲解了TensorFlow 的基础知识，包括系统架构、设计理念、基本概念，以及常用
+的API、神经元函数和神经网络，还介绍了存储与加载模型的方法以及线程和队列的知识（这
+些内容很有利于在第14 章对分布式的理解），最后介绍了自定义操作的方法。本章是全书中最
+重要的。

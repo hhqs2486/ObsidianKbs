@@ -1,0 +1,301 @@
+ 
+Python 源码剖析——深度探索动态语言核心技术 
+第  0  章 
+准备工作 
+ 
+ 
+ 
+ 
+Python 源码剖析——编译Python 
+ 
+在开始分析Python 的实现之前，我们有许多的准备工作要做。比如，首先应该了解
+一下Python 的整体架构，以期对Python 的实现有一个宏观的认识。此外，我们还要介绍
+如何从源代码编译出Python 可执行程序。因为在整个剖析源码的过程中，一个最好的学
+习方法就是不断根据掌握的知识修改Python 的源代码，以印证自己的猜想和知识。因此，
+本章的目的是为进入Python 源码剖析做一个充足的准备。 
+0.1  Python 总体架构 
+在最高的层次上，Python 的整体架构可以分为三个主要的部分，整个架构如图0-1 所
+示。在图的左边，是Python 提供的大量的模块、库以及用户自定义的模块。比如在执行
+import os 时，这个os 就是Python 内建的模块，当然用户还可以通过自定义模块来扩展
+Python 系统。 
+在图0-1 的右边，是Python 的运行时环境，包括对象/类型系统（Object/Type structures）、
+内存分配器（Memory Allocator）和运行时状态信息（Current State of Python）。运行时状
+态维护了解释器在执行字节码时不同的状态（比如正常状态和异常状态）之间切换的动作，
+我们可以将它视为一个巨大而复杂的有穷状态机。内存分配器则全权负责Python 中创建
+对象时，对内存的申请工作，实际上它就是Python 运行时与C 中malloc 的一层接口。而
+对象/类型系统则包含了Python 中存在的各种内建对象，比如整数、list 和dict，以及
+各种用户自定义的类型和对象。 
+CHAPTER 
+
+Python 源码剖析——编译Python 
+Python 源码剖析——深度探索动态语言核心技术 
+2
+在中间的部分，可以看到Python 的核心——解释器（interpreter），或者称为虚拟机。
+在解析器中，箭头的方向指示了Python 运行过程中的数据流方向。其中Scanner 对应词法
+分析，将文件输入的Python 源代码或从命令行输入的一行行Python 代码切分为一个的
+token；Parser 对应语法分析，在Scanner 的分析结果上进行语法分析，建立抽象语法树
+（AST）；Compiler 是根据建立的AST 生成指令集合——Python 字节码（byte code），就像
+Java 编译器和C#编译器所做的那样；最后由Code Evaluator 来执行这些字节码。因此，
+Code Evaluator 又可以被称为虚拟机。 
+图中，在解释器与右边的对象/类型系统、内存分配器之间的箭头表示“使用”关系；
+而与运行时状态之间的箭头表示“修改”关系，即Python 在执行的过程中会不断地修改
+当前解释器所处的状态，在不同的状态之间切换。 
+ 
+图0-1  Python 总体架构 
+0.2  Python 源代码的组织 
+中国有句老话——巧妇难为无米之炊。要分析Python 源码，首先要获得Python 源码。
+Python 源码可以从Python 的官方网站（http://www.python.org）（如图0-2 所示）自由下载。
+当前Python 的最新发布版本是2.5.2，在本书中，我们剖析的对象是2006 年12 月19 日正
+式发布的Python 2.5。 
+
+0.2  Python 源代码的组织 
+Python 源码剖析——深度探索动态语言核心技术 
+3
+ 
+图0-2  下载Python2.5 源码 
+下载了Python 的源代码压缩包并解压后，可以看到如图0-3 所示的目录结构。下面列
+出了一些主要目录包含的文件： 
+ 
+图0-3  Python 目录结构 
+Include ：该目录下包含了Python 提供的所有头文件，如果用户需要自己用C 或C++
+来编写自定义模块扩展Python，那么就需要用到这里提供的头文件。 
+
+Python 源码剖析——编译Python 
+Python 源码剖析——深度探索动态语言核心技术 
+4
+Lib ：该目录包含了Python 自带的所有标准库，Lib 中的库都是用Python 语言编写
+的。 
+Modules ：该目录中包含了所有用C 语言编写的模块，比如random、cStringIO 等。
+Modules 中的模块是那些对速度要求非常严格的模块，而有一些对速度没有太严格要求的
+模块，比如os，就是用Python 编写，并且放在Lib 目录下的。 
+Parser ：该目录中包含了Python 解释器中的Scanner 和Parser 部分，即对Python 源
+代码进行词法分析和语法分析的部分。除了这些，Parser 目录下还包含了一些有用的工具，
+这些工具能够根据Python 语言的语法自动生成Python 语言的词法和语法分析器，与YACC
+非常类似。 
+Objects ：该目录中包含了所有Python 的内建对象，包括整数、list、dict 等。同
+时，该目录还包括了Python 在运行时需要的所有的内部使用对象的实现。 
+Python ：该目录下包含了Python 解释器中的Compiler 和执行引擎部分，是Python
+运行的核心所在。 
+PCBuild ：包含了Visual Studio 2003 的工程文件，研究Python 源代码就从这里开始
+（本书将采用VS2003 对Python 进行编译）。 
+PCBuild8 ：包含了Visual Stuido 2005 使用的工程文件。 
+0.3  Windows 环境下编译Python 
+下载了Python 的源代码之后，我们就可以走出剖析Python 源码的第一步了——编译
+Python。 
+Python 2.5 提供了在Visual Studio 2003 和Visual Studio 2005 环境下进行开发的工程文
+件，在PCBuild 目录下可以看到VS2003 的工程文件，PCBuild8 目录下是VS2005 的工程
+文件。这里使用的是VS2003 的工程文件。打开工程文件后，我们还需要进行一些设置，
+才能成功编译。 
+首先，我们需要激活VS2003 的配置对话框（如图0-4 所示）： 
+
+0.3  Windows 环境下编译Python 
+Python 源码剖析——深度探索动态语言核心技术 
+5
+ 
+图0-4  调出设置属性对话框 
+在配置对话框中，首先要做的就是更改Startup Project，Python2.5 中默认设置的是
+_bsddb，我们需要将其改为Python（如图0-5 所示）。 
+ 
+图0-5  改变startup project 
+由于我们剖析的只是Python 的核心部分，不会涉及工程中的一些标准库和其他的模
+块，所以可以将它们从编译的列表中删除。点击配置对话框左边列表框中的“Configuration 
+
+Python 源码剖析——编译Python 
+Python 源码剖析——深度探索动态语言核心技术 
+6
+Properties”后，会出现当前配置为需要编译的子工程，取消多余的子工程的选中状态，只
+保留pythoncore 和python 的选中状态（如图0-6 所示）。 
+ 
+图0-6  取消不相关子工程 
+需要进行的改动就是这么多了，但是完成这些改动后，如果马上开始编译，那么编译
+还是会失败（如图0-7 所示）： 
+ 
+图0-7  编译失败 
+原因是我们还需要一个必要的文件，这个文件在Python2.5 的源码包中没有提供，必
+须要通过编译make_buildinfo 和make_versioninfo 子工程（如图0-8 所示）才能生成： 
+ 
+图0-8  编译make_buildinfo 和make_versioninfo 两个子工程 
+好了，现在再编译，一切都会顺利完成了。编译的结果都放在build 文件夹下，主要
+有两个：python25.dll 和python.exe。可以看到python.exe 非常小，实际上Python 解释器的
+全部代码都在python25.dll 中。对于WinXP 操作系统，在安装python 时，这个python25.dll
+会被拷贝到C:\Windows\system32 下。 
+
+0.5  修改Python 源代码 
+Python 源码剖析——深度探索动态语言核心技术 
+7
+ 
+ 
+0.4  Unix/Linux 环境下编译Python 
+在Linux 环境下编译Python 就没有那么麻烦了，按照标准的tarball 安装软件的流程，
+顺序使用下列三个命令，即可完成Python 的安装与编译： 
+ 
+./configure –prefix=<你期望Python 安装到的目录的路径> 
+ 
+make 
+ 
+make install 
+经过这三个步骤，我们在第一步中指定的安装路径下就会显示Python 安装的结果。
+目录bin 下存放的是可执行文件；目录lib 下存放的是Python 的标准库；lib/python2.5/config
+下存放的是libpython2.5.a，用C 语言对Python 进行扩展时需要用到这个静态库。 
+需要注意的是，这样编译之后的结果，bin 目录下的Python 可执行文件是静态链接的。
+如果想要编译成动态链接的，即编译的结果中出现libpython2.5.so，那么需要在第一步加
+入“enable-shared”这个指令，从而编译后得到的libpython2.5.so 就会出现在lib 目录下。 
+以后我们在对Python 源码进行修改时，都不会使用系统相关的API，所以我们添加的
+代码都没有平台相关性问题，无论是Windows 环境，还是Unix/Linux 环境，都可以正常
+编译并运行。 
+0.5  修改Python 源代码 
+修改源代码？这还有什么好说的吗？打开VS2003（Windows 环境）或者vi（Linux
+环境），冲上去一顿敲打键盘不就OK 了吗。确实，修改源代码其实没有什么好说的，不
+过有一些以后修改源代码时需要注意的事项，这里先提一下。 
+如果要观察Python 执行过程中的动态的行为，当然可以使用VS 自带的debugger，不
+过有时候也需要在其中输出一些信息。对于输出信息，使用printf 最简单。但是printf
+要输出Python 中的某个对象却不是那么方便，幸好Python 的C API 中提供了一个输出对
+象的接口： 
+[object.h] 
+int PyObject_Print(PyObject *, FILE *, int); 
+比如我们在int_print 中输出一个整数，可以将int_print 修改成如下的函数： 
+[intobject.c] 
+static int int_print(PyIntObject *v, FILE *fp, int flags) 
+{ 
+ //add by Robert 
+
+Python 源码剖析——编译Python 
+Python 源码剖析——深度探索动态语言核心技术 
+8
+ PyObject* str = PyString_FromString(“i am in int_print”); 
+ PyObject_Print(str, stdout, 0); 
+ printf(“\n”); 
+ 
+ fprintf(fp, "%ld", v->ob_ival); 
+ return 0; 
+} 
+其中粗体部分为我们加入的代码，PyString_FromString 是Python 提供的另一个C 
+API，用于从C 中的原生字符数组创建出Python 中的字符串对象。具体它是如何实现的，
+现在我们先不关心，只需要了解它的功能就OK 了。 
+将Python 重新编译后，得到新的python25.dll，用这个dll 去替换system32 目录下的
+那个python25.dll，我们就可以从Python 运行时看到希望输出的结果如图0-9 所示： 
+ 
+图0-9  在Python 源码中输出额外信息 
+在PyObject_Print 中，第二个参数指明的是输出目标。上面的例子使用了stdout，
+指定了输出目标为标准输出，当我们从命令行环境中激活Python 时，没有问题，但是如
+果使用IDLE 的话，就会发现，输出的信息没有了。原因是IDLE 的输出目标已经不是
+stdout 了，说明加入的输出代码失效了。 
+在Python 中，有一个特性——可以自己重定向标准输出，考虑图0-10 所示的例子： 
+ 
+图0-10  重定向标准输出 
+开始时，标准输出是<stdout>，这也是C 中stdout 所代表的那个系统的标准输出。
+随后，我们将Python 的标准输出定向到了my_stdout.txt 中。当再次输入“sys.stdout”
+时，我们发现屏幕上没有任何输出了，因为这时标准输出已经被重定向，所以现在输出的
+内容已经到my_stdout.txt 中，在图0-11 中显示了my_stdout.txt 中的内容： 
+ 
+图0-11  重定向后的标准输出——my_stdout.txt 
+
+0.6  通往Python 之路 
+Python 源码剖析——深度探索动态语言核心技术 
+9
+所以，同样地，如果想让自己添加的代码输出到IDLE 中，我们也必须使用重定向之
+后的标准输出，而不能再使用stdout 这个系统标准输出了。在Python 中，我们能通过
+sys.out 访问到Python 的标准输出，那么在C 一级呢？Python 也提供了这样的C API。下
+面的代码显示了如何输出到重定向后的标准输出： 
+static PyObject* int_repr(PyIntObject *v) 
+{ 
+    …… 
+ //add by Robert 
+ If(PyInt_AsLong(v) == -999) { 
+     PyObject* str = PyString_FromString("i am in int_repr"); 
+     PyObject* out = PySys_GetObject("stdout"); 
+     if(out != NULL) { 
+   
+    PyObject_Print(str, stdout, 0); 
+  
+    printf("\n"); 
+     } 
+   }  
+   …… 
+} 
+图0-12 显示了在IDLE 中输出的结果： 
+ 
+图0-12 在IDLE 中输出信息 
+PyInt_AsLong 的功能是将Python 的整数对象转换为C 中的int 值。这里我们还展示
+了在监视Python 内部运行时的一个技巧——设置条件，这个技巧不论是在通过输出查看
+内部状态时还是使用VS 的debugger 查看内部状态时，都非常有用。Python 在启动时会进
+行初始化，在初始化时，会调用很多函数，其中可能包含我们想监视的函数，如果这个时
+候在其中不加任何条件地输出或是设置断点，我们会发现要么输出的信息将想监视的函数
+淹没了，要么debugger 在断点处停留时和我们预想的情况完全不一样。 
+0.6  通往Python 之路 
+在第1 节的图0-1 中，我们看到了Python 在整体上的三巨头，但是在本书中，不会对
+所有的内容都进行剖析。本书的目标是彻底剖析Python 在运行时的行为，从而为Python
+程序员彻底理解Python 的运行机制打下坚实的基础。当然，如果你彻底理解了Python 的 
+
+Python 源码剖析——编译Python 
+Python 源码剖析——深度探索动态语言核心技术 
+10
+运行时行为，那么对于如何利用Python的C API来编写Python扩展，如何在C中内嵌Python
+解释器等，都变得水到渠成。 
+本书将剖析的重点放在Python 解释器和Python 运行时环境上，对于Python 的大量的
+外部库，我们将在需要的时候进行剖析。 
+在Python 解释器中，我们将大量的精力放在虚拟机这一部分。对于词法解析，语法
+解析和编译，本书将不完全涉及。因为对于Python 运行时行为的理解，与虚拟机非常相
+关，而跟Python 的编译过程没有太大的关系。不过，Python 编译的结果，编译所得的字
+节码指令，对于运行时行为则大有影响。所以书中会将Python 编译结果和Python 虚拟机
+结合起来，一起进行剖析。 
+本书将对Python 源码的剖析分为下面三个部分： 
+ 
+第1 部分：Python 内建对象。主要内容是简要介绍Python 对象模型，以及剖析主要
+内建对象，包括整数、字符串、list 和dict。在对内建对象的剖析中，我们会深入其
+实现，细致地分析各种对象在C 一级是如何被构建起来的。 
+ 
+第2 部分：Python 虚拟机。主要内容是分析Python 虚拟机执行字节码指令的过程。
+在这一部分中，我们将看到Python 是如何通过虚拟机实现各种表达式、控制流、异
+常机制、函数机制及类机制。 
+ 
+第3 部分：Python 高级话题。主要内容是剖析Python 的运行环境以及一些高级话题。
+内容包括：Python 运行环境的初始化、动态加载机制、多线程机制和内存管理机制。 
+0.7  一些注意事项 
+在正式进入对Python 的剖析之前，有一些在阅读代码时需要注意的事项，这里先提
+一下： 
+ 
+在Python 2.4 的源码中，许多数值的类型都是int 或long，而在Python 2.5 的源码中，
+Python 自定义了一个新的类型Py_ssize_t。一般的，凡出现这个类型的地方，都可
+以以int 视之。对于非Python 开发者阅读代码和理解Python 来说，不需要在意其间
+的差别。 
+ 
+Python有一套相当复杂的内存管理机制。同时，由于历史的原因，也有一套相当混乱
+的内存管理接口。如果在一开始就剖析其内存管理机制，我想就会令读者望而却步，
+所以我们把对内存管理机制的剖析放到了第3 部分。但是，在第1 部分中你就会看到
+对内存管理接口的使用。因为创建对象必先分配内存，而它必须通过内存管理接口，
+所以我们在这里需要对这些内存管理接口进行一下概念上的简化，简化成大家熟悉的
+
+0.7  一些注意事项 
+Python 源码剖析——深度探索动态语言核心技术 
+11
+接口。通常Python 的源码中会使用PyObject_GC_New、PyObject_GC_Malloc、
+PyMem_MALLOC，PyObject_MALLOC 等API。只要坚持一个原则，即凡是以New 结尾
+的，都以C++中的new 操作符视之；凡是以Malloc 结尾的，都以C 中的malloc 操
+作符视之。下面是几个例子： 
+[PyString_FromString() in stringobject.c] 
+op = (PyStringObject *)PyObject_MALLOC(sizeof(PyStringObject) + size); 
+等效于： 
+PyStringObject* op = 
+(PyStringObject*)malloc(sizeof(PyStringObject)+size); 
+ 
+[PyList_New() in listobject.c] 
+op = PyObject_GC_New(PyListObject, &PyList_Type); 
+等效于： 
+PyListObject* op = new PyList_Type(); 
+ 
+op->ob_item = (PyObject **) PyMem_MALLOC(nbytes); 
+等效于： 
+op->ob_item = (PyObject **)malloc(nbytes); 
+ 
+在本书中，我使用了大量的图片，一图胜千言。在这些图片中，大量使用的构图元素
+就是箭头。在大多数情况下，箭头是用来表示C 中的指针这个概念的，但是也有某些
+情况下箭头并不表示指针，这个通过上下文的信息可以判断出来；另一点需要注意的
+是，基于C 中的指针是指向某一内存的起始地址，所以在图中，箭头指向的是内存块
+的边界，而不是内存块本身。由于边界本身就应该是两块内存的交界，所以这个箭头
+指向的是两块内存中的哪块内存就存在着模糊。在本书中，指针指向的内存块都是距
+离指针最近的向右或向下的那块内存，图0-13 中给出了一个例子： 
+ 
+图0-13  指针图示 
+在图0-13 中，深色的方块就是指针所指向的内存块。 
+

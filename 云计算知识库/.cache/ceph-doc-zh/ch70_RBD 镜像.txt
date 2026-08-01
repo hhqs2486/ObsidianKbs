@@ -1,0 +1,146 @@
+rbd flatten rbd/my-image
+Note
+因为拍平的映像包含了快照的所有信息，所以拍平的映像占用的存储空间会比分层克隆要大。
+RBD 镜像
+可以在两个Ceph 集群中异步备份RBD images。该能力利用了RBD image 的日志特性，以
+确保集群间的副本崩溃一致性。镜像功能需要在同伴集群（peer clusters ）中的每一个对应
+的pool 上进行配置，可设定自动备份某个存储池内的所有images 或仅备份images 的一个特
+定子集。用rbd 命令来配置镜像功能。rbd-mirror 守护进程负责从远端集群拉取image
+的更新，并写入本地集群的对应image 中。
+Note
+RBD 镜像功能需要Ceph Jewel 或更新的发行版本。
+Important
+要使用RBD 镜像功能，你必须有2 个Ceph 集群，每个集群都要运行rbd-mirror 守护进
+程。
+存储池配置
+下面的程序说明了如何执行一些基本的管理工作，来用rbd 命令配置镜像功能。镜像功能是
+在Ceph 集群内的存储池级别上配置的。
+配置存储池的步骤需要在2 个同伴集群内都执行一遍。为清楚起见，下面的步骤假定这两个集
+群分别叫做“本地（local）”和“远端（remote）”，而且单主机对这2 个集群都拥有访问权。
+如何连接不同的Ceph 集群，详情可参考rbd 手册页。
+
+Note
+在下面的例子中，集群名称和Ceph 配置文件的名称相同（比如/etc/ceph/remote.conf）。可
+参考ceph-conf 文档来配置多集群环境。
+启用镜像功能
+使用rbd 启用某个存储池的镜像功能，需要指定mirror pool enable 命令，存储池名
+和镜像模式：
+rbd mirror pool enable {pool-name} {mode}
+镜像模式可以是pool 或image：
+
+pool：当设定为pool 模式，存储池中所有开启了日志特性的images 都会被备份。
+
+image：当设定为image 模式，需要对每个image 显式启用镜像功能。
+例如：
+rbd --cluster local mirror pool enable image-pool pool
+rbd --cluster remote mirror pool enable image-pool pool
+禁用镜像功能
+使用rbd 禁用某个存储池的镜像功能，需要指定mirror pool disable 命令和存储池
+名：
+rbd mirror pool disable {pool-name}
+当采用这种方式禁用某个存储池的镜像功能时，存储池内的任一个image 的镜像功能也会被
+禁用，即使曾显式启用过。
+
+例如：
+rbd --cluster local mirror pool disable image-pool
+rbd --cluster remote mirror pool disable image-pool
+添加同伴集群
+为了使rbd-mirror 守护进程发现它的同伴集群，需要向存储池注册。使用rbd 添加同伴
+Ceph 集群，需要指定mirror pool peer add 命令、存储池名和集群说明：
+rbd mirror pool peer add {pool-name} {client-
+name}@{cluster-name}
+例如：
+rbd --cluster local mirror pool peer add image-pool
+client.remote@remote
+rbd --cluster remote mirror pool peer add image-pool
+client.local@local
+移除同伴集群
+使用rbd 移除同伴Ceph 集群，指定mirror pool peer remove 命令、存储池名和
+同伴的UUID（可通过rbd mirror pool info 命令获取）：
+rbd mirror pool peer remove {pool-name} {peer-uuid}
+例如：
+rbd --cluster local mirror pool peer remove image-pool
+55672766-c02b-4729-8567-f13a66893445
+
+rbd --cluster remote mirror pool peer remove image-pool
+60c0e299-b38f-4234-91f6-eed0a367be08
+IMAGE 配置
+不同于存储池配置，image 配置只需针对单个Ceph 集群操作。
+镜像RBD image 被指定为主镜像或者副镜像。这是image 而非存储池的特性。被指定为副镜
+像的image 不能被修改。
+当一个image 首次启用镜像功能时（存储池的镜像模式设为pool 且启用了该image 的日志
+特性，或者通过rbd 命令显式启用），它会自动晋升为主镜像。
+启用IMAGE 的日志支持
+RBD 镜像功能使用了RBD 日志特性，来保证image 副本间的崩溃一致性。在备份image 到
+另一个同伴集群前，必须启用日志特性。该特性可在使用rbd 命令创建image 时通过指定-
+-image-feature exclusive-lock,journaling 选项来启用。
+或者，可以动态启用已有image 的日志特性。使用rbd 开启日志特性，需要指
+定feature enable 命令，存储池名，image 名和特性名：
+rbd feature enable {pool-name}/{image-name} {feature-name}
+例如：
+rbd --cluster local feature enable image-pool/image-1
+journaling
+Note
+日志特性依赖于独占锁（exclusive-lock）特性。如果没有启用独占锁，则必须在启用日志特
+性之前先启用独占锁。
+
+Tip
+你可以通过在Ceph 配置文件中增加rbd default features = 125 ，使得所有新建
+image 默认启用日志特性。
+启用IMAGE 镜像功能
+如果把某个存储池的镜像功能配置为image 模式，还需要对存储池中的每一个image ，明确
+启用镜像功能。通过rbd 启用某个特定image 的镜像功能，要指
+定mirror image enable 命令、存储池名和image 名：
+rbd mirror image enable {pool-name}/{image-name}
+例如：
+rbd --cluster local mirror image enable image-pool/image-
+1
+禁用IMAGE 镜像功能
+通过rbd 禁用某个特定image 的镜像功能，要指定mirror image disable 命令、存
+储池名和image 名：
+rbd mirror image disable {pool-name}/{image-name}
+例如：
+rbd --cluster local mirror image disable image-
+pool/image-1
+
+IMAGE 的升级与降级
+在需要把主名称转移到同伴Ceph 集群这样一个故障切换场景中，应该停止所有对主image
+的访问（比如关闭VM 的电源或移除VM 的相关驱动），当前的主image 降级为副，原副
+image 升级为主，然后在备份集群上恢复对该image 访问。
+Note
+RBD 仅提供了一些必要的工具来帮助image 有序的故障切换。还需要一种外部机制来协调整
+个故障切换流程（比如在降级之前关闭image）。
+通过rbd 降级主image，需要指定mirror image demote 命令、存储池名和image 名：
+rbd mirror image demote {pool-name}/{image-name}
+例如：
+rbd --cluster local mirror image demote image-pool/image-
+1
+通过rbd 升级副image，需要指定mirror image promote 命令、存储池名和image
+名：
+rbd mirror image promote {pool-name}/{image-name}
+例如：
+rbd --cluster remote mirror image promote image-
+pool/image-1
+Tip
+
+由于主/ 副状态是对于每个image 而言的，故可以让两个集群拆分IO 负载来进行故障切换/
+故障自动恢复。
+Note
+可以使用--force 选项来强制升级。当降级要求不能被正确传播到同伴Ceph 集群的时候
+（比如Ceph 集群故障，通信中断），就需要强制升级。这会导致两个集群间的脑裂，而且在
+调用强制重新同步命令之前，image 将不会自动同步。
+强制IMAGE 重新同步
+如果rbd-daemon 探测到了脑裂事件，它在此情况得到纠正之前，是不会尝试去备份受到影
+响的image。为了恢复对image 的镜像备份，首先判定降级image 已经过时，然后向主
+image 请求重新同步。通过rbd 重新同步image，需要指定mirror image resync 命
+令、存储池名和image 名：
+rbd mirror image resync {pool-name}/{image-name}
+例如：
+rbd mirror image resync image-pool/image-1
+Note
+此条rbd 命令仅标记了某image 需要重新同步。本地集群的rbd-mirror 守护进程会异步
+实施真正的重新同步过程。
+RBD-MIRROR 守护进程
+有两个rbd-mirror 守护进程负责监控远端同伴集群的image 日志，并针对本地集群进行
+日志重放。RBD image 日志特性会按发生的顺序记录下对该image 的所有修改。这保证了远
+端image 的崩溃一致性镜像在本地是可用的。

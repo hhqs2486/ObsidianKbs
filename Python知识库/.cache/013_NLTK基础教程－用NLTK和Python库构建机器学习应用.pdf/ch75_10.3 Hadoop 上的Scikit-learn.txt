@@ -1,0 +1,105 @@
+10.3  Hadoop 上的Scikit-learn 147 
+reducer 函数，然后使用mapper.py 来操作Python 流，它的用法和Hive UDF 非常类似。下
+面，就用同一个例子来示范一下map-reduce 函数操作Python 流的过程。这种方法提供了一
+种可以使用Hive 表，甚至直接使用HDFS 文件的选项。在这里，只示范如何读取相关的内
+容并将其标识化，并不会涉及任何reduce 操作，但为了让学习有一定的完整性，我会在这
+里纳入一个虚拟的reducer，该函数只负责转储相关结果。也正因为如此，这里可以完全忽
+略来自命令执行环境中的reducer。下面是Mapper.py 的代码： 
+Mapper.py 
+>>>import sys 
+>>>import pickle 
+>>>import nltk 
+>>>for line in sys.stdin: 
+>>>    line  = line.strip() 
+>>>    id, content = line.split('\t') 
+>>>    tokens =nltk.word_tokenize(concat_all_text) 
+>>>    print '\t'.join([id,content,topics]) 
+接下来是Reducer.py 的代码： 
+Reducer.py 
+>>>import sys 
+>>>import pickle 
+>>>import nltk  
+>>>for line in sys.stdin: 
+>>>    line = line.strip() 
+>>>    id, content,tokens = line.split('\t') 
+>>>    print '\t'.join([id,content,tokens]) 
+下面再来看看Hadoop 中执行Python 流操作的命令： 
+hadoop jar <path>/hadoop-streaming.jar \ 
+-D mapred.reduce.tasks=1 -file <path>/mapper.py \ 
+-mapper <path>/mapper.py \ 
+-file <path>/reducer.py \ 
+-reducer <path>/reducer.py \ 
+-input /hdfspath/infile \ 
+-output outfile 
+10.3  Hadoop 上的Scikit-learn 
+机器学习是大数据领域中另一个非常重要的用例。在这方面Hadoop、scikit-learn 这些
+
+148 第10 章  大规模文本挖掘 
+框架就显得更尤为重要了，因为这是大数据环境下对机器学习模型进行评分的最佳选项之
+一。由于大型机器学习本身就是当前业界最热门的话题之一，所以在Hadoop 这样的大数
+据环境中做这些事就显得更为重要了。当前，机器学习模型主要有两个方面的问题：在大
+数据环境下建模，以及针对大量数据的建模和评分。
+为了加深对上述概念的理解，这里也将采用之前那张表中的相同示例数据，这其中包
+含了一些客户的评论信息。现在假设要用一份重要的训练样本来构建一个文本分类模式，
+并利用在第6 章中学到的知识在该数据上构建出朴素贝叶斯算法、SVM 或逻辑回归模型。
+然后在进行评分的时候，可能需要面对的是针对海量数据的评分，如说客户评论这样的信
+息。另一方面，靠scikit-learn 库在大数据环境中建模是做不到的，所以这里会需要用到像
+spark / Mahot 这样的工具。另外，还会像在使用NLTK 时一样用到某种预训练模型，并执
+行相同的步骤评分方法，下一节中将会介绍其建模过程。特别在处理处理文本挖掘类问题
+时，使用预训练模型来执行评分是非常合适的。当然，需要将这里的两个主要对象（vectorizer
+和modelclassifier）存储成某种序列化的pickle 对象。 
+提示： 
+这里提到的pickle 其实是一个Python 模块，主要用于
+实现序列化，即通过该模块，可以将对象以二进制状
+态存储在磁盘上，并且可以通过二次加载来使用。
+https://docs.python.org/2/library/pickle.html。 
+下面，我们要用scikit 在本地机器上构建离线模型，并准备好pickle 对象。举例来说，
+如果这里重现的是第6 章中朴素贝叶斯算法的那个例子，就必须要将其中的vectorizer 和
+clf 转储成pickle 对象： 
+>>>vectorizer = TfidfVectorizer(sublinear_tf=True, min_df=in_min_df, 
+stop_words='english', ngram_range=(1,2), max_df=in_max_df) 
+>>>joblib.dump(vectorizer, "vectorizer.pkl", compress=3) 
+>>>clf = GaussianNB().fit(X_train,y_train) 
+>>>joblib.dump(clf, "classifier.pkl") 
+以下是创建输出表的步骤，该表中包含了所有客户评价的历史记录。
+1．在Hive 中创建一个与之前示例相同的模式。下面就用Hive 脚本来执行这一操作。这
+个输出表可能很巨大，具体到眼下这个例子，假设这其中包含了公司收到过的所有客户评论： 
+Hive script 
+CREATE TABLE $InputTableName ( 
+ID String, 
+
+10.3  Hadoop 上的Scikit-learn 149 
+Content String 
+) 
+ROW FORMAT DELIMITED 
+FIELDS TERMINATED BY '\t'; 
+2．构建组成输出表的各列，例如评分可信度等： 
+Hive script 
+CREATE TABLE $OutTableName ( 
+ID String, 
+Content String, 
+predict String, 
+predict_score double 
+) 
+3．接下来，要用Hive 中的addFILE 命令将这些pickle 对象加载到其分布式缓存中： 
+add FILE vectorizer.pkl; 
+add FILE classifier.pkl; 
+4．下一步就是编写Hive UDF 了，会在这些函数中定义如何加载这些pickle 对象。现
+在，这些对象的行为必须要先与其在本地的行为保持一致。在设置好这些classifier 和
+vectorizer 对象之后，接下来就可以使用测试样本了。在这里，测试样本只是一个字符串，
+然后生成输出的是TFIDF 向量。vectorizer 对象现在属于预测类，可以当作概率类来使用： 
+Classification.py 
+>>>import sys 
+>>>import pickle 
+>>>import sklearn 
+>>>from sklearn.externals import joblib 
+>>>clf = joblib.load('classifier.pkl') 
+>>>vectorizer = joblib.load('vectorizer.pkl') 
+>>>for line in sys.stdin: 
+>>>    line = line.strip() 
+>>>    id, content= line.split('\t') 
+>>>    X_test = vectorizer.transform([str(content)]) 
+>>>    prob = clf.predict_proba(X_test) 
+>>>    pred = clf.predict(X_test) 
+>>>    prob_score =prob[:,1] 
+>>>    print '\t'.join([id, content,pred,prob_score]) 

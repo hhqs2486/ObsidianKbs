@@ -1,0 +1,503 @@
+第7章
+chart存储库
+如果没有共享和分发软件包的方法，软件包管理器的功能就不完
+整。组织和供应商必须有一种发布软件包的方法，供最终用户下载和
+使用。同样，最终用户必须有一种可以从各种来源获取软件包的通用
+方法。
+Helm支持通过一个名为chart存储库的系统来分发软件包。chart
+存储库是简单的HTTP（S）Web服务，用户可以从中查找和下载可用的
+chart。从概念上讲，chart存储库在设计上类似于Debian软件包存储
+库、Fedora软件包数据库或综合Perl归档网络（Comprehensive Perl
+Archive Network,CPAN）。
+在本章中，我们将首先深入研究chart存储库的内部结构。我们将
+讨论存储库索引以及如何用新的chart版本更新它。之后，我们将演示
+如何从头开始设置chart存储库，如何保护一个chart存储库，还将演
+示如何使用GitHub页面为开源项目托管公共chart存储库的真实示例。
+之后，我们将介绍各种helm repo命令以及如何有效地使用它们。
+最后，我们将介绍使用Helm的实验性开放容器计划（Open
+Container Initiative,OCI）支持的下一代chart存储库。Helm 3中添
+加的这一前沿功能允许用户将Helm chart与容器镜像一起存储在容器
+登记站中。
+最后，我们将简要描述Helm生态系统中与chart存储库相关的一些
+项目。
+更多IT书籍请关注：www.cmsblogs.cn
+
+7.1　存储库索引
+所有chart存储库都包含一个名为index.yaml的索引文件，其中列
+出了所有可用的chart及其各自的下载位置。
+index.yaml格式的更多详细信息参见附录B。
+下面是一个非常基本的index.yaml文件：
+更多IT书籍请关注：www.cmsblogs.cn
+
+注意entries部分，它列出了所有chart和chart版本。这个
+index.yaml示例仅列出了一个chart，即superapp，其版本为0.1.0。
+7.1.1　chart存储库索引示例
+通常，chart存储库列出许多chart及其所有可用版本。这允许用
+户下载他们希望安装的特定版本的chart。下面是一个更详细的chart
+存储库索引示例，其中包含多个chart和chart版本：
+更多IT书籍请关注：www.cmsblogs.cn
+
+更多IT书籍请关注：www.cmsblogs.cn
+
+更多IT书籍请关注：www.cmsblogs.cn
+
+前面的示例显示了两个可用的chart：cert-manager和tor-
+proxy。共有三个可用的chart版本：cert-manager v0.14.1、cert-
+manager v0.14.2（最新版本）和tor-proxy 0.1.1（最新版本）。在
+运行helm search时，会显示repo中每个chart的最新版本。
+通常，chart归档文件（.tgz文件）本身的存放位置与存储库索引
+相同，但索引也可能链接到完全不同的域上的远程位置。下面的
+index.yaml片断引用了位于分离的域上的chart归档文件（请注意绝对
+URL）：
+更多IT书籍请关注：www.cmsblogs.cn
+
+更多IT书籍请关注：www.cmsblogs.cn
+
+❶　绝对chart URL。
+每个条目中包含的其他字段包括chart的元数据（它们在
+Chart.yaml中描述，比如description），以及添加的digest（摘要）
+字段，其中包含chart归档文件的安全散列算法（SHA-256）校验和。
+在第4章中，我们详细讨论了chart元数据和Chart.yaml。
+此外，在最上层是一个generated字段（描述索引创建的时间（使
+用RFC 3339格式）），以及一个apiVersion（描述索引的API版本）。
+在撰写本书时，chart存储库只有一个API版本。此字段应始终为v1。
+7.1.2　生成索引
+存储库索引可以由自定义程序生成，也可以手动键入。Helm还提
+供了生成存储库索引的内置功能。
+让我们创建一个空目录charts/，它将作为chart存储库的根目
+录：
+要在charts/目录中生成存储库索引，请运行以下命令：
+这将在chart/index.yaml目录下创建一个文件：
+更多IT书籍请关注：www.cmsblogs.cn
+
+你会注意到entries是空的。这是意料之中的，因为charts/目录
+中还没有任何chart。
+让我们创建一个示例chart，并将其打包到charts/目录中：
+现在，让我们再次尝试生成索引：
+更多IT书籍请关注：www.cmsblogs.cn
+
+现在我们看到entries部分中列出了这个chart。
+7.1.3　添加到现有索引
+更多IT书籍请关注：www.cmsblogs.cn
+
+在某些场景中（例如，持续集成/持续部署（CI/CD）），你可能
+只能访问现有的index.yaml文件和新打包的chart归档文件。Helm使
+用--merge选项提供了一种基于现有索引内容的构建机制。
+让我们来模拟这个场景。创建一个名为workspace/的新目录，它
+将表示CI/CD流水线中的一个新工作目录：
+将现有的索引文件用新名称（如index-old.yaml）复制到
+workspace/目录中：
+在真实场景中，你可能从某个远程位置（例如，Amazon S3）获取
+现有的索引文件。
+接下来创建另一个Helm chart并将其打包到workspace/目录中：
+运行以下命令，它将基于在index-old.yaml索引中找到的现有条
+目以及workspace/目录中的任何.tgz文件的组合来创建一个新的
+index.yaml文件：
+更多IT书籍请关注：www.cmsblogs.cn
+
+最后，将文件从workspace/目录移到charts/目录中，用新的索引
+文件覆盖旧的索引文件
+索引文件的新版本现在应包含两个chart的条目：
+更多IT书籍请关注：www.cmsblogs.cn
+
+更多IT书籍请关注：www.cmsblogs.cn
+
+在你不一定能访问包含所有chart归档文件的目录的环境中，此方
+法非常有用。
+但是请记住，如果这种合并同时发生在多个系统上，你可能会遇
+到冲突的情况，导致索引中会缺少一个或多个chart。通过确保此过程
+仅同步执行（例如，一个单独的CI作业负责创建用于存储库的
+index.yaml）可以缓解此问题。解决此问题的另一种方法是使用一个
+动态Web服务器负责生成index.yaml的内容，ChartMuseum项目（见7.5
+节）就是可以用于此用途的动态chart存储库服务器的一个示例。
+更多IT书籍请关注：www.cmsblogs.cn
+
+7.2　设置chart存储库
+chart存储库的好处之一是它们可以是完全静态的，这意味着你可
+以将文件放在简单的Web服务器（如Apache或Nginx）后面，并按原样
+提供服务。你甚至可以使用对象存储提供程序，如Amazon S3。当客户
+端请求index.yaml时，服务器端不需要进行任何重要的计算。例如，
+静态Web服务器只打开文件系统中存在的文件，并将原始内容发送回客
+户端。
+7.2.1　基于Python的简单chart存储库
+在本例中，我们将使用Python内置的静态Web服务器来建立本地测
+试存储库。注意，几乎所有编程语言的标准库都支持启动Web服务器并
+提供静态文件。之所以选择Python，仅仅是因为它预先安装在大多数
+基于Unix的系统上，而且提供了一个简单的命令行来启动静态Web服务
+器。
+按照7.1.2节中的说明，创建chart/目录，其中包含index.yaml，
+superapp-0.1.0.tgz和duperapp-0.1.0.tgz文件。运行以下命令之
+一，在http://localhost:8080上启动本地Web服务器。
+使用Python 3（首先尝试）：
+使用Python 2：
+更多IT书籍请关注：www.cmsblogs.cn
+
+Python2的这行命令监听所有接口（0.0.0.0），而不只监听
+环回接口（127.0.0.1）。这将允许网络上的其他设备连接到你的机
+器，具体取决于你的系统。在运行此命令之前，请注意charts/目录中
+存在哪些文件。
+现在，在另一个终端窗口中，尝试使用curl获取index.yaml：
+验证一下是否可以获取chart归档文件：
+如果curl命令执行成功，你的chart库就可以用于Helm了。
+7.2.2　保护chart存储库
+在许多情况下，你可能希望限制对chart存储库的访问，或者维护
+对哪些用户正在访问哪些资源的审计跟踪日志。Helm对此提供了内置
+的支持，允许用户针对通过basic auth或mTLS保护的chart存储库对自
+己进行身份验证。
+基本身份验证
+更多IT书籍请关注：www.cmsblogs.cn
+
+chart存储库可以通过基本访问验证或基本身份验证（basic
+auth）进行保护。这要求用户提供有效的用户名/口令的组合来访问服
+务器上的资源。
+服务器可以通过在处理请求之前首先检查Authorization头来实现
+基本身份验证。传入的基本身份验证头类似于以下内容：
+❶　这里的隐蔽字符串是username+":"+password的Base64编码。
+Authorization头的内容没有加密，因此强烈建议你在提供
+基本身份验证凭据时也使用HTTPS。
+首次添加存储库时，可以在命令行中提供用户名和口令组合，这
+将指示Helm在对此存储库发出请求时使用基本访问验证：
+客户端证书
+大多数通过HTTPS进行的客户端-服务器通信都允许客户端基于服
+务器提供的SSL证书来验证服务器的身份。通过相互TLS身份验证
+（mTLS），服务器还可以基于客户端在TLS握手期间提供的单独SSL证
+书来验证客户端的身份。
+下面是一个简单的Nginx服务器配置，支持chart存储库的mTLS，
+假设静态文件（例如，index.yaml和.tgz文件）位于服务器上
+的/chartrepo目录中：
+更多IT书籍请关注：www.cmsblogs.cn
+
+❶　服务器的SSL证书。
+❷　服务器的私钥。
+❸　用于客户端身份验证的证书颁发机构（CA）仅接受来自具有此
+CA签名的证书的客户端的请求。
+获取客户端证书的第一步是生成新的私钥和证书签名请求
+（CSR）：
+更多IT书籍请关注：www.cmsblogs.cn
+
+当生成CSR时如果提示输入“通用名称”（Common Name），则必
+须输入一个值。使用能识别客户端的输入（例如，“francis”）。从
+技术上讲，其他字段可以留空，但鼓励你填写。
+接下来，使用服务器上配置的证书颁发机构（client-ca.pem）以
+及相关的私钥（client-ca.key），从CSR生成新的客户端证书：
+现在，你可以通过在添加新的chart存储库时指定--cert-file和-
+-key-file选项来使用此证书进行身份验证：
+在服务器使用自签名证书的情况下，还可以指定--ca-file选项，
+指向受信任的证书或证书包：
+更多IT书籍请关注：www.cmsblogs.cn
+
+用于--cert-file、--key-file和--ca-file的路径都存储在
+绑定到存储库的Helm缓存中。千万记住，不要移动这些文件。否则，
+由于缺少对客户端进行身份验证所需的文件，将来对存储库的请求将
+会失败。
+有关mTLS的更多信息，请参阅Internet Engineering Task
+Force(IETF)RFC 8446,“The Transport Layer
+Security(TLS)Protocol Version 1.3”。
+7.2.3　真实示例：使用GitHub页面
+GitHub有一个免费的静态托管解决方案，称为GitHub Pages。如
+果你不介意向全世界公开你的chart，GitHub Pages是托管chart存储
+库的一个很好的选择。
+此外，GitHub Pages允许你使用指向GitHub Pages站点的自定义
+域名。在本节中，我们将展示如何使用GitHub Pages轻松地设置公共
+Helm chart存储库。
+GitHub Pages有一些限制（如带宽），因此在使用此方法之前，
+请先列举chart存储库的性能要求，并与GitHub的GitHub Pages功能文
+档进行比较。
+创建一个新Git repo
+第一步是在GitHub上创建一个专门用于chart存储库的全新Git
+repo。从技术上讲，你可以将chart repo与其他内容一起托管，但为
+更多IT书籍请关注：www.cmsblogs.cn
+
+了简单起见，我们将使用专用的Git repo。图7-1显示了如何设置新的
+存储库。
+更多IT书籍请关注：www.cmsblogs.cn
+
+更多IT书籍请关注：www.cmsblogs.cn
+
+图7-1：在GitHub中创建新的公共存储库
+登录到GitHub后，单击屏幕右上角并选择“New repository”
+（新建存储库）。你可以对Git repo任意命名。在这个例子中，我们
+将其命名为mycharts。确保选择了将存储库标记为“Public”的选
+项，这是使用GitHub Pages的先决条件。选择“Initialize this
+repository with a README”复选框，这将允许我们立即克隆repo。
+请任意选择一个许可证，例如“MIT License”，以表明此repo中的源
+代码可以自由使用和重新调整用途。最后，单击“Create
+repository”（创建存储库）。
+在此上下文中，需要注意Helm repo（或chart存储库）和
+GitHub上托管的Git repo（用于版本控制）之间的区别。
+启用GitHub页面
+定位到存储库上的“Settings”面板。在主设置中，向下滚动到
+标题为GitHub Pages的部分（参见图7-2）。对于Source选项，选择
+“main branch”。这将导致GitHub在你每次对主分支进行新的提交时
+重新部署GitHub Pages站点。单击“Save”。
+更多IT书籍请关注：www.cmsblogs.cn
+
+图7-2：在存储库中启用GitHub页面
+可选：使用自定义域
+默认情况下，GitHub Pages上的站点驻留为github.io域下面的一
+个子域。例如，你的网站的URL类似于
+更多IT书籍请关注：www.cmsblogs.cn
+
+https://yourusername.github.io/mycharts/。
+如果要使用自定义域名，请在你注册者的Web控制台（或者，在你
+为权威的域名服务器设置的服务控制台）中，创建指向
+yourusername.github.io的新DNS记录，如果使用根域，请使用ALIAS
+记录类型；如果使用子域，请使用CNAME记录类型。
+返回GitHub中的存储库设置。如图7-3所示，在“Custom
+domain”输入框中，输入为其设置DNS记录的域名。
+更多IT书籍请关注：www.cmsblogs.cn
+
+更多IT书籍请关注：www.cmsblogs.cn
+
+图7-3：为GitHub Pages使用自定义域
+GitHub可能需要一个小时才能为你的域生成TLS证书。一旦准备就
+绪，你应该会看到一些文本显示在设置中，如“Your site is
+published athttps://example.com”。一旦你看到这一点，请确保启
+用Enforce HTTPS（强制HTTPS）选项，这样你的站点就只能通过HTTPS
+而不是普通的HTTP进行访问。
+添加chart存储库文件
+在GitHub UI中找到repo的克隆URL（通常在屏幕的右侧）。将新
+的GitHub存储库克隆到本地系统，这样我们就可以添加一些文件，将
+其转换为真正的chart存储库：
+输入Git存储库的目录：
+接下来，在一个新的src/目录中创建一个名为spineapple的
+chart，将其打包到repo根目录中的归档文件中，并创建一个
+index.yaml文件：
+更多IT书籍请关注：www.cmsblogs.cn
+
+完成后，提交并将所有这些新文件推回到GitHub中：
+更多IT书籍请关注：www.cmsblogs.cn
+
+在浏览器中返回GitHub。在推送更改和这些更改在GitHub Pages
+站点上生效之间有一个小的延迟。单击右侧边栏中的
+“Environments”项将显示上次部署站点的时间。如果你看到一个对
+你刚刚推送的提交（上例中的9bba19d）的引用，那么你的GitHub
+Pages站点就可以使用了。
+将GitHub Pages站点用作chart存储库
+更多IT书籍请关注：www.cmsblogs.cn
+
+一旦你推送了一个index.yaml文件到你的Git repo，并且该站点
+带有最新提交，则你可以像使用任何其他chart存储库一样使用它。
+将GitHub Pages chart存储库添加到本地存储库：
+或者，如果你使用的是自定义域：
+更多IT书籍请关注：www.cmsblogs.cn
+
+7.3　使用chart存储库
+一旦有了一个能工作的chart存储库，就可以使用Helm CLI来利用
+它。
+顶级helm repo子命令下有几个命令可用于处理chart存储库。本
+节将重点介绍如何有效地使用这些命令。
+7.3.1　添加存储库
+使用chart存储库的第一步是为它指定一个唯一的名称（比如
+mycharts），并将它添加到Helm已知的存储库列表中。当你第一次添
+加存储库时，Helm从提供的URL中获取index.yaml，并将其存储在本
+地。
+使用helm repo add命令添加存储库：
+如果你正在运行Python示例，请查看chart存储库的日志，你应该
+会看到传入的GET/index.yaml请求：
+7.3.2　下载chart
+要直接从存储库下载chart，可使用helm pull命令：
+更多IT书籍请关注：www.cmsblogs.cn
+
+Helm将根据语义版本控制自动查找最新版本。你还可以指定一个
+版本：
+这将在你的工作区中生成一个新的chart存档（.tgz文件）：
+然后可以直接安装此归档文件：
+你还可以直接从添加的存储库安装chart：
+7.3.3　列出存储库
+了解哪些chart存储库已经添加到你的系统中通常是有帮助的，这
+样我们可以决定是使用其中一个来下载chart，还是从系统中完全删除
+其中的一个。
+更多IT书籍请关注：www.cmsblogs.cn
+
+使用helm repo list命令可以列出添加到系统中的所有chart存储
+库：
+如果需要的话，你还可以利用--output/-o选项以机器可读的格式
+获取该文件。
+通过添加-o yaml以YAML的形式获取列表：
+通过添加-o json以JSON的形式获取列表：
+7.3.4　更新存储库
+新chart版本发布后，存储库所有者将.tgz包添加到repo存储，并
+用一个新条目更新index.yaml。
+为了获取存储库索引的最新版本，可使用helm repo update命
+令：
+更多IT书籍请关注：www.cmsblogs.cn
+
+如果再次运行Python示例，你应该能在你的chart存储库的输出日
+志中注意到一个传入的GET/index.yaml请求：
+无论存储库索引是否更改了内容（我们没有向myrepo添加更多的
+chart），此文件都会被提取并下载到缓存中，覆盖先前保存的版本。
+7.3.5　删除存储库
+可以使用helm repo remove命令删除存储库：
+这将删除存储在Helm缓存中的对此存储库的所有引用。
+更多IT书籍请关注：www.cmsblogs.cn
+
+7.4　实验性OCI支持
+Helm的OCI支持（https://oreil.ly/eH4KE）仍然被认为是
+高度实验性的。虽然这方面的开发仍在进行中，但本节所述的语法可
+能很快就会过时。
+chart存储库系统的设计意图是为了易于使用。在大多数情况下，
+这一系统已被证明足以使全球各地的组织分享和分发其Helm chart。
+然而，chart存储库确实存在一些关键挑战：
+·它们没有命名空间的概念。一个repo的所有chart都列在一个索引
+中。
+·它们没有细粒度的访问控制。你要么可以访问repo中的所有
+chart，要么不能访问任何chart。
+·具有不同名称但原始内容完全相同的chart包被存储了两次。
+·存储库索引可能变得非常大，导致Helm消耗大量内存。
+与其尝试添加特性来解决当前chart存储库模型中的这些问题，不
+如在符合OCI分发规范（OCI Distribution Specification）的登记站
+之上构建下一代chart存储库。
+OCI代表开放式容器倡议（Open Container Initiative）。摘自
+网站https://opencontainers.org，OCI的定义如下：
+一个开放的治理结构，其明确目的是围绕容器格式和运行时创建
+开放的行业标准。
+更多IT书籍请关注：www.cmsblogs.cn
+
+OCI定义的标准之一是分发规范（distribution
+specification）。这个规范描述了一个用于分发容器镜像的HTTP
+API。有趣的是，这个API是通用的，可以应用于除了容器镜像之外的
+所有程序，比如Helm chart！
+从Helm 3.0.0开始，添加了基于OCI的容器登记站的推送、拉取
+chart的实验支持。
+OCI分发规范的历史
+Docker在2013年推出了自己的容器引擎，2014年CoreOS推出了
+rkt（一种具有开放标准的替代引擎），对其提出了挑战。有趣的事实
+是：Kubernetes的Pod概念直接来自rkt。为了弥合这一分歧，2015年成
+立了开放式容器倡议，就容器运行时和镜像的开放标准展开合作。
+同时，Docker也在开发其登记站API的v2版本。如果你曾经使用过
+docker pull或docker push，那么底层HTTP调用将基于此API。Docker登
+记站开始被大规模采用，诞生了Quay.io（https://www.quay.io）等公
+司。AWS等云服务提供商开始提供自己的托管选择。
+2018年，Docker将其登记站v2规范以分发规范
+（https://oreil.ly/JWYFv）的名义捐赠给OCI，使更广泛的社区能够在
+Docker的工作基础上继续发展。该规范今天继续发展，已成为一个具
+有强大API的通用存储解决方案。
+7.4.1　启用OCI支持
+在撰写本书时，Helm的OCI支持仍被认为是实验性的。
+现在，在你的环境中设置以下内容以启用OCI支持：
+更多IT书籍请关注：www.cmsblogs.cn
+
+7.4.2　运行本地登记站
+Docker Distribution项目（也称为Docker登记站）是Docker’s
+Registry v2 API的原始实现。它开箱即用地支持Helm chart。
+如果安装了docker，则可以使用以下命令轻松地在端口5000上的
+容器中运行本地登记站：
+要跟踪你的登记站的日志，可运行以下命令（按Ctrl-C退出）：
+要停止登记站，可运行以下命令：
+Docker登记站有几个与身份验证、存储等相关的配置选项
+（https://oreil.ly/CBb0F）。
+如果你想用一个用户名-口令的组合来配置基本身份验证，首先要
+创建一个.htpasswd文件：
+然后启动登记站，挂载.htpasswd文件并设置REGISTRY_AUTH环境
+变量：
+更多IT书籍请关注：www.cmsblogs.cn
+
+有关Docker Distribution的更多信息，请访问项目GitHub页面
+（https://oreil.ly/Q8Omf）。
+7.4.3　登录到登记站
+为了对登记站进行身份验证，可使用helm registry login命令
+（将提示你手动输入口令）：
+这将使用凭据向登记站上的路径/v2/发出一个简单的GET请求，以
+确定它们是否有效。如果有效，凭据将存储在Helm配置文件中。如果
+你启用了任何Docker凭据存储（例如macOS上的osxkeychain），则用
+户名和口令将安全地存储在那里。
+在localhost:5000上运行本地登记站的示例不使用身份验
+证。如果你尚未在登记站上启用身份验证，则任何登录凭据组合都将
+被接受。
+7.4.4　注销登记站
+更多IT书籍请关注：www.cmsblogs.cn
+
+要从系统中删除给定登记站的凭据，可使用helm registry
+logout命令：
+7.4.5　在缓存中存储chart
+在将chart上传到登记站之前，必须先将其保存到缓存中。这会将
+chart从其正常状态转换为内容可寻址的blob，并为其提供唯一标识
+符。
+使用helm chart save在缓存中存储chart：
+注意，chart引用上使用的标记基于Chart.yaml中chart的版本
+（2.7.0）。
+你还可以使用自定义标记，例如stable，方法是在chart引用的冒
+号（:）后面指定它：
+更多IT书籍请关注：www.cmsblogs.cn
+
+7.4.6　列出缓存中的chart
+使用helm chart list可显示当前存储在缓存中的所有chart：
+7.4.7　从缓存中导出chart
+如果要在缓存中提取chart的源文件，必须首先将其导出到本地目
+录中。使用helm chart export命令可以导出chart：
+更多IT书籍请关注：www.cmsblogs.cn
+
+chart的名称将用于确定输出路径（例如，mychart/）。
+7.4.8　将chart推送到登记站
+把一个chart推送（即上传）到登记站中，其他人就可以使用它。
+一旦你已经登录到登记站并且要推送的chart已保存到缓存中，可以使
+用helm chart push命令推送chart：
+7.4.9　从登记站中拉取chart
+更多IT书籍请关注：www.cmsblogs.cn
+
+一旦chart被推送到登记站，其他用户就可以拉取（即下载）它
+们。从登记站中拉取chart会将它们放入本地缓存。要从登记站中拉取
+现有chart，可使用helm chart pull命令：
+7.4.10　从缓存中删除chart
+要从本地缓存中删除chart，可使用helm chart remove命令：
+更多IT书籍请关注：www.cmsblogs.cn
+
+7.5　相关项目
+Helm的chart存储库系统产生了一系列开源工具来进一步增强这种
+体验。下面介绍与chart存储库相关的一些项目。
+7.5.1　ChartMuseum
+项目主页：https://github.com/helm/chartmuseum
+ChartMuseum是一个简单的chart存储库Web服务器。将其配置为指
+向包含chart包的存储位置，它将动态生成index.yaml。它还公开了一
+个用于上传、查询和删除chart包的HTTP API。此外，它还有许多其他
+身份验证、多租户和缓存的配置设置，这使得它成为用户托管私有或
+内部chart存储库的流行选择。
+ChartMuseum支持的后端
+ChartMuseum支持多种存储后端，包括：
+·Alibaba Cloud OSS Storage
+·Amazon S3
+·Baidu Cloud BOS Storage
+·DigitalOcean Spaces
+·etcd
+·Google Cloud Storage
+·Local filesystem
+更多IT书籍请关注：www.cmsblogs.cn
+
+·Microsoft Azure Blob Storage
+·Minio
+·Netease Cloud NOS Storage
+·Openstack Object Storage
+·Oracle Cloud Infrastructure Object Storage
+·Tencent Cloud Object Storage
+7.5.2　Harbor
+项目主页：https://github.com/goharbor/harbor
+Harbor是一个功能齐全的登记站，具有附加的安全和管理功能。
+它为Helm chart提供了一个UI，并利用后端的ChartMuseum作为多租户
+chart存储库。它还为Helm的实验性OCI特性集提供支持。
+与Helm类似，Harbor是一个优秀的顶级CNCF项目。
+7.5.3　Chart Releaser
+项目主页：https://github.com/helm/chart-releaser
+Chart Releaser（简称为cr）是一个命令行工具，它利用GitHub
+发行版来托管chart包。它能够检测Git repo中的chart，对它们进行
+打包，并将它们作为以独特的chart版本命名的工件上传到GitHub发行
+版中。
+使用cr上传chart后，还可以使用该工具基于GitHub版本和相关工
+件的内容生成index.yaml文件。这个存储库索引可以静态地托管在
+GitHub Pages或其他地方。
+7.5.4　S3插件
+更多IT书籍请关注：www.cmsblogs.cn
+
+项目主页：https://github.com/hypnoglow/helm-s3
+S3插件是一个Helm插件，它允许你使用私有的Amazon S3存储桶作
+为chart存储库。
+7.5.5　GCS插件
+项目主页：https://github.com/hayorov/helm-gcs
+GCS插件是一个Helm插件，它允许你使用私有的Google Cloud
+Storage存储桶作为chart存储库。
+7.5.6　Git插件
+项目主页：https://github.com/aslafy-z/helm-git
+Git插件是一个Helm插件，它允许你使用包含chart源文件的Git存
+储库作为chart存储库。它支持子路径、自定义引用以及HTTPS和SSH
+Git URL。
+更多IT书籍请关注：www.cmsblogs.cn

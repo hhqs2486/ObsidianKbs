@@ -1,0 +1,237 @@
+140 第6 章预测你的内容是否会广为流传 
+相关研究。
+图6-1 
+6.2 获取分享的数量和内容 
+在开始探索哪些特征会使得内容易于共享之前，我们手头上需要足够的内容。我们还
+需要每份内容在各种社交网络上的分享次数。幸运的是，获取这些并没有多大困难。我会
+使用网站ruzzit.com。
+这是一个相对较新的网站——它仍处于beta测试阶段
+①
+①译者注：至少在原著作者撰写本书的时候是如此。
+，但它会跟踪最常被分享的内容，
+这正是我们需要的，如图6-2 所示。 
+我们将从页面中抓取内容——不幸的是，没有可以直接使用的API 接口。而且，因为
+该网站使用了无限滚动的机制，我们需要使用第3 章的老朋友，Selenium 和PhantomJS。
+现在开始抓取吧。
+
+6.2 获取分享的数量和内容 141 
+图6-2 
+我们将从最初需要导入的包开始。
+import requests  
+import pandas as pd  
+import numpy as np  
+import json  
+import time  
+from selenium import webdriver 
+ pd.set_option('display.max_colwidth', 200) 
+接下来，我们将设置Selenium浏览器。这里仅选择该站点过去一年的文章来生成URL
+网址列表。需要设定浏览器的大小，以便获得标准的桌面外观，并且每隔15 秒请求一次，
+这事关礼仪
+①
+①译者注：频繁地爬取网站内容将对其服务器造成不必要的压力，作者认为这样做是不合礼仪的。
+。我们也将向下滚动相当于50 页的内容（每页有10 篇文章）。 
+browser = webdriver.PhantomJS()  
+browser.set_window_size(1080,800)  
+browser.get("http://www.ruzzit.com/en-US/Timeline?media=Articles&timeline= 
+Year1&networks=All")  
+time.sleep(3)  
+pg_scroll_count = 50  
+while pg_scroll_count:  
+ browser.execute_script("window.scrollTo(0, document.body.scrollHeight);") 
+ time.sleep(15)  
+ pg_scroll_count -= 1  
+titles = browser.find_elements_by_class_name("article_title") 
+
+142 第6 章预测你的内容是否会广为流传 
+link_class = browser.find_elements_by_class_name("link_read_more_article")  
+stats = browser.find_elements_by_class_name("ruzzit_statistics_area") 
+在最后一节中，我们选择了分析所需的页面元素。接下来，需要进一步解析它们以获
+取文本信息。
+我在分析中去除Twitter 所提供的分享次数。该公司在2015 年年底决定从其标准API
+中删除此项数据。鉴于此，其展示的次数不太可靠。为了避免数据被污染的风险，最好直
+接去除这些信息。
+all_data = []  
+for title, link, stat in zip(titles, link_class, stats): 
+ all_data.append((title.text,\ 
+ link.get_attribute("href"),\ 
+ stat.find_element_by_class_name("col-md- 
+ 12").text.split(' shares')[0],  
+ stat.find_element_by_class_name("col-md-  
+ 12").text.split('tweets\n')  
+ [1].split('likes\n0')[0],  
+ stat.find_element_by_class_name("col-md-  
+ 12").text.split('1's\n')[1].split(' pins')[0], 
+ stat.find_element_by_class_name("col-md-  
+ 12").text.split('pins\n')[1]))   
+接下来，我们将它放入一个数据框。
+df = pd.DataFrame(all_data, columns=['title', 'link', 'fb', 'lnkdn', 
+'pins', 'date'])  
+df 
+上述代码生成图6-3 的输出。 
+图6-3 
+
+6.2 获取分享的数量和内容 143 
+这是一个好的开始，但我们需要清理数据。你会注意到所有的链接都是通过ruzzit.com
+的重定向。我们将通过跟踪链接，检索原始站点的链接来解决这个问题，具体如下。
+df = df.assign(redirect = df['link'].map(lambda x: requests.get(x).url)) 
+此行代码使用requests 库检索故事的真实URL（重定向之后的），如图6-4 所示。 
+图6-4 
+如果现在检查数据框DataFrame，我们可以看到该网站的原始链接。你会注意到在
+第一行有CNN 的主页。仔细研究后，发现有17 个故事指向某个网站的主页。这是因为它
+们已被删除。另一个原因是一些链接指向的是图像而不是文章。
+以下代码将识别这两个问题，并删除有问题的行。
+def check_home(x): 
+ if '.com' in x:  
+ if len(x.split('.com')[1]) < 2: 
+ return 1  
+ else:  
+ return 0  
+ else:  
+ return 0  
+def check_img(x): 
+ if '.gif' in x or '.jpg' in x: 
+ return 1  
+ else:  
+ return 0  
+df = df.assign(pg_missing = df['pg_missing'].map(check_home)) 
+df = df.assign(img_link = df['redirect'].map(check_img))  
+dfc = df[(df['img_link']!=1)&(df['pg_missing']!=1)]  
+dfc 
+上述代码生成图6-5 的输出。 
+
+144 第6 章预测你的内容是否会广为流传 
+图6-5 
+现在让我们进行下一步，获取完整的文章和其他元数据。就如上一章，我们将使用
+embed.ly 中的API 接口。如果对于其设置你需要帮助，请返回前一章参看详细介绍。这
+里将使用embed.ly 来检索文章的标题、HTML 和一些附加数据，例如引用和图像。
+ 
+def get_data(x): 
+ try:  
+ data = requests.get('https://api.embedly.com/1/extract? 
+ key=SECRET_KEY7&url=' + x)  
+ json_data = json.loads(data.text)  
+ return json_data  
+except: 
+ print('Failed') 
+ return None  
+dfc = dfc.assign(json_data = dfc['redirect'].map(get_data)) 
+dfc 
+上述代码生成图6-6 的输出。 
+图6-6 
+
+6.2 获取分享的数量和内容 145 
+现在每篇文章都有一列JSON 数据。这里将解析这个JSON 数据，抽取出我们有兴趣
+探索的每个特征列。先从基本信息开始：网站、标题、HTML 和图片数量。 
+def get_title(x): 
+ try: 
+ return x.get('title') 
+ except: 
+  return None  
+def get_site(x): 
+ try: 
+ return x.get('provider_name') 
+ except: 
+  return None  
+def get_images(x): 
+ try: 
+ return len(x.get('images')) 
+ except: 
+  return None  
+def get_html(x): 
+ try: 
+ return x.get('content') 
+ except: 
+  return None  
+dfc = dfc.assign(title = dfc['json_data'].map(get_title))  
+dfc = dfc.assign(site = dfc['json_data'].map(get_site))  
+dfc = dfc.assign(img_count = dfc['json_data'].map(get_images)) 
+dfc = dfc.assign(html = dfc['json_data'].map(get_html))  
+dfc 
+上述代码生成图6-7 的输出。 
+图6-7 
+大多数行都成功抽取了页面的HTML 内容，但是有一些却没有返回任何值。检查了空
+白的行之后，我们发现它们似乎主要来自BuzzFeed 这个网站。这是合理的，因为这种页面
+主要是图片和小测验。这是一个小小的烦恼，我们不得不将就着用一下。
+
+146 第6 章预测你的内容是否会广为流传 
+现在让我们取出HTML 并将其转换为文本。这里将使用BeautifulSoup 库为我们
+实现这个目标。
+from bs4 import BeautifulSoup 
+def text_from_html(x):  
+ try: 
+ soup = BeautifulSoup(x, 'lxml') 
+ return soup.get_text() 
+ except: 
+  return None  
+dfc = dfc.assign(text = dfc['html'].map(text_from_html)) 
+dfc 
+上述代码生成图6-8 的输出。 
+现在添加额外的特征。我们将添加页面上第一个图像中最
+突出的颜色。由embed.ly 生成的JSON 数据保存了每个图像的
+RGB 值，这些值体现了对应图像的颜色，所以这将是一个简单
+的任务。
+import matplotlib.colors as mpc 
+def get_rgb(x):  
+ try: 
+ if x.get('images'): 
+ main_color = x.get('images')[0].get('colors') [0].get('color') 
+ return main_color 
+ except: 
+  return None  
+def get_hex(x): 
+ try: 
+ if x.get('images'): 
+ main_color = x.get('images')[0].get('colors') [0].get('color') 
+ return mpc.rgb2hex([(x/255) for x in main_color]) 
+ except: 
+  return None  
+dfc = dfc.assign(main_hex = dfc['json_data'].map(get_hex)) 
+dfc = dfc.assign(main_rgb = dfc['json_data'].map(get_rgb)) 
+dfc  
+上述代码生成图6-9 的输出。 
+图6-8 
+
+6.2 获取分享的数量和内容 147 
+图6-9 
+我们提取出第一个图像中最突出的颜色并保存其RGB 值，同时也将其转换为HEX 十
+六进制值。稍后检查图像颜色的时候也会使用这个信息。
+我们几乎完成了数据的处理部分，不过还需要转换一些从Ruzzit 获取的数字。我们所
+拥有的分享次数是用于显示目的，而不是用于分析的格式，如图6-10 所示。 
+图6-10 
+我们需要清理fb、lnkdn、pins 和date（日期）列，将它们从字符串表示转化为
+数字类型，如下所示。
+def clean_counts(x): 
+ if 'M' in str(x): 
+ d = x.split('M')[0]  
+ dm = float(d) * 1000000 
+ return dm  
+
+148 第6 章预测你的内容是否会广为流传 
+ elif 'k' in str(x): 
+ d = x.split('k')[0]  
+ dk = float(d.replace(',','')) * 1000 
+ return dk  
+ elif ',' in str(x): 
+ d = x.replace(',','') 
+ return int(d) 
+ else: 
+  return x  
+dfc = dfc.assign(fb = dfc['fb'].map(clean_counts))  
+dfc = dfc.assign(lnkdn = dfc['lnkdn'].map(clean_counts))  
+dfc = dfc.assign(pins = dfc['pins'].map(clean_counts))  
+dfc = dfc.assign(date = pd.to_datetime(dfc['date'], dayfirst=True)) 
+dfc 
+上述代码生成图6-11 的输出。 
+图6-11 
+最后，我们将添加最后一个特征，每列的字数统计。我们可以通过空格来切分文本，
+然后采取最终的计数。操作如下。
+def get_word_count(x): 
+ if not x is None:  
+ return len(x.split(' ')) 
+ else:  
+  return None  
+dfc = dfc.assign(word_count = dfc['text'].map(get_word_count)) 
+dfc 
+上述代码生成图6-12 的输出。 
+随着我们的数据准备就绪，现在可以开始进行分析了。我们将尝试寻找什么样的特征
+会使内容具有更高的传播度。

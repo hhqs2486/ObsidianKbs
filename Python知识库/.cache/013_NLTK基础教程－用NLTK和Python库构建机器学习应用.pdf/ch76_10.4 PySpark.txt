@@ -1,0 +1,121 @@
+150 第10 章  大规模文本挖掘 
+5．在编写完classification.py 中的UDF 之后，还必须要将这个UDF 添加到分布式缓存
+中，然后有效地在输出表的每一行上将这个UDF 以TRANSFORM 函数的形式运行。其Hive
+脚本如下：
+Hive script 
+add FILE classification.py; 
+INSERT OVERWRITE TABLE $OutTableName 
+SELECT 
+    TRANSFORM (id, content) 
+    USING 'python2.7 classification.py' 
+    AS (id string, scorestringscore string ) 
+FROM $Tablename; 
+6．如果一切顺利，就会得到符合以下输出模式的输出表： 
+ID 
+内容
+预测
+评分可信度
+UA0001 
+"I tried calling you, The service was not up to the mark"
+投诉
+0.98 
+UA0002 
+"Can you please update my phone no " 
+非投诉
+0.23 
+UA0003 
+"Really bad experience" 
+投诉
+0.97 
+UA0004 
+"I am looking for an iPhone " 
+非投诉
+0.01 
+如你所见，输出表中包含了过去所有的客户评论记录，以及这些评论是否属于投诉的
+预测和预测的可信度。当然例子采用的是Hive UDF，但类似的过程也可以用Pig 和Python
+流的方式来做，其做法与用NLTK 非常类似。 
+这个例子所演示的是如何在Hive 上对机器学习模型进行评分。在下一个例子中，我们
+将要讨论如何在大数据环境中构建机器学习/NLP 的模型。 
+10.4  PySpark 
+先来回顾一下之前是如何在Hadoop 上构建机器学习/NLP 模型，以及如何对这个
+Hadoop 上的ML 模型进行评分的。在上一节中，我们较为深入地讨论了一下评分的第二个
+选项。与对规模较小的数据集进行抽样不同的是，我们这次要对规模较大的数据集进行评
+分，并使用PySpark 库来逐步构建大型的机器学习模型。当然，我们在这里会再次使用到
+与之前相同模式的相同的运行数据：
+
+10.4  PySpark
+151 
+ID 
+评论
+类别
+UA0001 
+I tried calling you, The service was not up to the mark 
+1 
+UA0002 
+Can you please update my phone no 
+0 
+UA0003 
+Really bad experience 
+1 
+UA0004 
+I am looking for an iPhone 
+0 
+UA0005 
+Can somebody help me with my password 
+1 
+UA0006 
+Thanks for considering my request for 
+0 
+通常，我们要考虑的是近10 年来评价的组织模式。但现在要改用一个小型的样本，先
+为其创建分类模型，然后再用预训练模型对所有评论进行评分。下面，就通过一个例子来
+逐步演示一下这个过程，具体说明一下如何用PySpark 库来构建文本分类模型。 
+首先来导入一些模块。从SparkContext 开始，这更多的是一个配置性的模块，在这里
+可以通过更多的参数来提供信息，如应用程序的名称等。
+>>> from pyspark import SparkContext 
+>>> sc = SparkContext(appName="comment_classifcation") 
+提示： 
+如果想了解关于PySpark 库的更多信息，你可以阅读一
+下下面这篇文章：
+http://spark.apache.org/docs/0.7.3/api/pyspark/ 
+pyspark.context.SparkContext-class.html。 
+接下来要读取这个由制表符分隔的文本文件。要将该文件读取到HDFS 上，文件的体
+积可能会很大（～Tb/Pb）： 
+>>> lines = sc.textFile("testcomments.txt") 
+现在，lines 就成为了包含语料库中所有行的一个列表： 
+>>> parts = lines.map(lambda l: l.split("\t")) 
+>>> corpus = parts.map(lambda row: Row(id=row[0], comment=row[1], 
+class=row[2])) 
+这部分代码的作用获取是字段列表，其依据是各行中分隔字段的“\ t”符。 
+下面要将不同RDD 对象中的语料库分解成[ID, comment, class (0,1)]的形式： 
+
+152 第10 章  大规模文本挖掘 
+>>> comment = corpus.map(lambda row: " " + row.comment) 
+>>> class_var = corpus.map(lambda row:row.class) 
+一旦收集完了评论信息，接下来的处理过程就与第6 章中所做的事非常类似了。这
+里会用scikit 库来执行标识化处理、散列化vectorizer 以及用vectorizer 来计算TF、IDF
+和tf-idf。 
+下面来看看如何创建标识化处理、词汇频率和反向文档频率，其代码如下：
+>>> from pyspark.mllib.feature import HashingTF 
+>>> from pyspark.mllib.feature import IDF 
+# https://spark.apache.org/docs/1.2.0/mllib-feature-extraction.html 
+>>> comment_tokenized = comment.map(lambda line: line.strip().split(" ")) 
+>>> hashingTF = HashingTF(1000) # to select only 1000 features  
+>>> comment_tf = hashingTF.transform(comment_tokenized) 
+>>> comment_idf = IDF().fit(comment_tf) 
+>>> comment_tfidf = comment_idf.transform(comment_tf)  
+接下来，要将该类与tfidf RDD 对象进行合并： 
+>>> finaldata = class_var.zip(comment_tfidf) 
+然后来做一个典型测试，进行训练取样：
+>>> train, test = finaldata.randomSplit([0.8, 0.2], seed=0) 
+现在来执行主分类命令，该命令与scikit 库非常相似。这里使用的是逻辑回归算法，
+这是一种使用度很广的分类器。pyspark.mllib 中提供了各种可用的算法。 
+提示： 
+如果想了解更多关于pyspark.mllib 的信息，可以参考
+以下链接中的资料：https://spark. apache.org/docs/latest/ 
+api/python/pyspark.mllib.html。 
+下面是朴素贝叶斯分类器的示例：
+>>>from pyspark.mllib.regression import LabeledPoint 
+>>>from pyspark.mllib.classification import NaiveBayes 
+>>>train_rdd = train.map(lambda t: LabeledPoint(t[0], t[1])) 
+>>>test_rdd = test.map(lambda t: LabeledPoint(t[0], t[1])) 
+>>>nb = NaiveBayes.train(train_rdd,lambda = 1.0) 

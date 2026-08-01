@@ -1,0 +1,1499 @@
+Chapter 6
+BINAREYE: Digital and Mixed-Signal
+Always-On Binary Neural Network
+Processing
+6.1
+Binary Neural Networks
+6.1.1
+Introduction
+As discussed in Chaps. 1 and 3, Convolutional Neural Networks (CNN) are state-
+of-the-art deep learning algorithms that are too costly to embed on wearable,
+battery constrained devices. One of the ways to reduce both their computational
+and memory footprint is through reducing the precision of the used weights and
+activations. Reduced precision operators can reduce the cost of arithmetic operations
+and the relative cost of the control logic, especially if techniques like DVAFS
+(Chap.4) are used. Lowering the precision of weights and activations in QNN’s also
+potentially reduces a system’s memory footprint: fewer bits per stored word means
+lower on-chip memory requirements and less communication with main memory.
+Chapter 3 shows how to choose the used number of bits optimally for a number
+of benchmarks. BinaryNets (Hubara et al. 2016)—networks with all weights and
+activations constrained to +/−1—are the ultimate form of QNN and hence promise
+signiﬁcant energy savings for ultra-low power applications.
+In BinaryNets, a digital 1b′0 represents the number −1, while a digital 1b′1
+represents the number +1. At training time, ﬂoating-point weights and activations
+are used for computing all parameter gradients, as discussed in Sect. 3.4 in Chap. 3.
+During the forward pass, BinaryNets reduce memory size and accesses by 32×
+compared to a ﬂoating-point baseline and replace almost all internal operations by
+bit-wise operations. Of course, due to the low modeling capacity of 1b weights and
+activations, a BinaryNet will have to be wider and deeper than its high-precision
+counterparts. This trade-off is investigated in detail in Chap. 3.
+© Springer Nature Switzerland AG 2019
+B. Moons et al., Embedded Deep Learning,
+https://doi.org/10.1007/978-3-319-99223-5_6
+153
+
+154
+6
+BINAREYE: Digital and Mixed-Signal Always-On Binary Neural Network. . .
+The Bigger Picture
+The chips discussed in this chapter are optimized for simple wake-up tasks on always-
+on wearable platforms, where energy per classiﬁcation is of utmost concern. In the
+hierarchical approach discussed in Chap. 2, they would hence be used in the ﬁrst couple
+of stages. The Envision chips from Chap. 5 would take care of the more complex later
+stages in the hierarchy.
+6.1.2
+Binary Neural Network Layers
+As in any deep neural network, a BinaryNet consists of a sequence of CONV-,
+FC-, ACT-, Max-pooling, and batch normalization layers. However, compared to
+high-precision neural networks, several of the operators used in those layers can be
+simpliﬁed signiﬁcantly.
+As discussed in Chap.1, a Convolutional Layer (CONVL) transforms input
+feature maps (I) into output feature maps (O), each containing multiple units. Each
+unit in an output feature map (M × M × F) is connected to local patches of units
+(K × K × C) in the input feature maps through a ﬁlter W[F] (K × K × C × 1) in
+a ﬁlter bank W (K × K × C × F) existing out of a set of machine-learned weights
+and a bias (B) per output feature map. A formal mathematical description is given
+in the following equation:
+O[f ][x][y] =
+C
+
+c=0
+K
+
+i=0
+K
+
+j=0
+I[c][Sx + i][Sy + j] × W[f ][c][i][j]
++ B[f ]
+(6.1)
+
+6.1
+Binary Neural Networks
+155
+where S is a stride and x, y, f are bounded by: x, y ∈[0, . . ., M[ and f
+∈
+[0, . . ., F[. As all internal weights and activations are either +/−1, a multiplication
+in this domain is only a simple XNOR operation. The previous equation can hence
+be simpliﬁed as follows:
+O[f ][x][y] = POPCOUNTC,K,KXNOR(I[c][Sx + i][Sy + j], W[f ][c][i][j])
++ B[f ]
+(6.2)
+Here, the bias B[f ] and the output O[f ][x][y] are signed integers with a limited
+range that is known at train time. The POPCOUNT operator is the same summation
+over the same dimensions as in Eq. (6.1). However in the binary case, it can be
+simpliﬁed to a simple counter, rather than a general addition.
+Similarly in a fully connected layer (FC), the standard neuron operation is
+O[z] =
+M
+
+m=0
+W[z, m] × I[m] + B[z]
+(6.3)
+which can be replaced by:
+O[z] = POPCOUNTMXNOR(W[z, m], I[m]) + B[z]
+(6.4)
+This neuron operator hence uses exactly the same operators as the CONV layer.
+The only difference is in the weight reuse: all weights in an FC layer are used only
+once.
+The result of the local sum computed in this ﬁlter bank is then passed through
+a nonlinearity layer. In a SotA neural network, this is typically a Rectiﬁed Linear
+Unit (ReLU), using the nonlinear activation function a(u) = max(0, u), where u
+is a feature map unit. In BinaryNets, this activation is simpliﬁed to a hard tangent
+hyperbolic operation, which simpliﬁes to the sign function in the binary forward
+pass:
+a(u) = sign(u)
+(6.5)
+where u is again a feature map unit. Note that a sign function is extremely easy to
+implement in digital electronics. It merely requires reading the MSB of u.
+Max-pooling layers, shown in Fig. 6.1, compute and output only the maximum
+of a local patch (typically 2 × 2 or 3 × 3) of output units in a feature map. They
+thereby reduce the dimension of the feature representation and create an invariance
+to small shifts and distortions in the inputs. On a binary feature map, where all
+values are constrained to +/ −1 after activation, a max-pooling operation simply
+comes down to checking if any of the values in the patch are 1, or equal to digital
+
+156
+6
+BINAREYE: Digital and Mixed-Signal Always-On Binary Neural Network. . .
+Fig. 6.1 Max-pooling
+visualized
+1′b1. Max-pooling can be implemented as an N-way digital OR in digital logic. This
+is a very cheap operation on 2 × 2 or 3 × 3 patches.
+Finally, BinaryNets require batch normalization (Ioffe and Szegedy 2015), as
+ﬁrst discussed in Chap. 1 to prevent overﬁtting and ensure good and fast convergence
+during training. Batch normalization normalizes the inputs to subsequent layer to
+reduce the otherwise large internal covariate shift. This is done according to the
+statistics of the current batch. The output of a batch normalization layer y is then:
+y =
+x −μ
+√
+σ 2 + ϵ
+γ + β
+(6.6)
+where x and y are the input and output of the batch normalization layer, μ is the
+mean of the current batch, σ is the standard deviation of the current batch, and
+ϵ is a factor ensuring numerical stability. γ and β are trainable shifting factors.
+None of the operators given here are inherently binary, which means that there is
+a potential need for internal ﬂoating-point operations if the batch normalization
+operation is to be implemented. Fortunately, due to the use of the sign activation
+function in BinaryNets, batch normalization does not have to be computed at run-
+time if the batch normalization layer follows a convolutional layer. The effect of
+batch normalization can be embedded into the previous CONVL at run-time. This
+process is described below.
+First, the batch normalization process itself can be simpliﬁed to:
+y = (xK) + (β −μK)
+with K =
+γ
+√
+σ 2 + ϵ
+(6.7)
+Tips and Tricks
+Batch normalization does not require ﬂoating-point computation in BinaryNets. The
+sequence “NNL—Batch Normalization—sign/hardtanh activation” can be replaced with
+an equivalent “NNLeq—sign/hardtanh activation” in the forward pass. This equivalent
+form can be computed ofﬂine after training and before the model is deployed.
+
+6.1
+Binary Neural Networks
+157
+Tips and Tricks
+When using batch normalization on binary neural networks, or quantized neural networks
+in general, beware not to use the framework—standard settings provided by the likes of
+keras and tensorﬂow. Quantized neural networks require much lower momentum than
+their ﬂoating-point counterparts. An ϵ = 0.0001 and momentum= 0.1 instead of the
+default 0.99 are experimentally veriﬁed to be good settings for quantized training.
+Here, the second term is a biasing term that can be computed ofﬂine at train time
+and can be incorporated into the CONV or FC layer at test time. The full bias is then
+equal to βEQ = βCONV + βBN. If batch normalization comes after a fully binary
+CONVL or FCL and if it is followed by a hardtanh/sign activation, its operations
+can be incorporated into the weights and bias of the previous layer. The output of
+a sequence of NNL—Batch Norm—Activation can be replaced as shown below.
+Here, a(y) is the hardtanh activation function performed on y, the output of the
+batch normalization layer that takes x as an input. x is an output feature generated
+by a neural network layer with weights W and bias b.
+A(y) = sign(y)
+= sign(xK + (β −μK))
+= sign(W · ai−1K + (β −(μ −b)K))
+= sign
+
+|K|((sign(K)W) · yi−1 +
+ β
+|K| −(μ −b)sign(K)
+
+= sign
+
+((sign(K)W) · yi−1 +
+ β
+|K| −(μ −b)sign(K)
+
+= sign(WEQ · yi−1 + βEQ)
+(6.8)
+Hence, batch normalization is embedded into the NNL’s bias and weights by
+computing equivalent sets WEQ = sign(K)×W and βEQ = βBN
+|K| +(b−μ)sign(K)
+for every layer. This trick is only possible for BinaryNets and not for general
+quantized neural networks, as only they use the sign/hardtanh activation function.
+Apart from vanilla BinaryNets, several expansions on the same ideas have been
+developed with better results on large-scale benchmarks such as IMAGENET (Rus-
+sakovsky et al. 2015). In Binary Weight networks (Courbariaux et al. 2015), only
+the weights are quantized to 1b. These do not seem to outperform fully quantized
+BinaryNets in the energy-accuracy space due to the large intermediate feature
+maps (Moons et al. 2017a). The BinaryNet training setup can also be generalized to
+TernaryNets (Zhu et al. 2016), nonlinear trained-clustered quantization (Han et al.
+2016) and ultimately quantized neural networks (Moons et al. 2017a). BinaryNets
+themselves have been improved upon by moving towards XNOR-Nets (Rastegari
+et al. 2016) with much higher accuracy on ImageNet, for example. In XNOR-Nets,
+
+158
+6
+BINAREYE: Digital and Mixed-Signal Always-On Binary Neural Network. . .
+the core CONV layers are performed with binary precision as well, but these are
+followed by an afﬁne transformation. However, the algorithm requires on the ﬂy
+computation of these scaling factors based on the ﬂoating-point values of the input
+feature maps. All these are performed with ﬂoating-point precision. The XNOR-Net
+requires storing intermediate feature maps in high precision as well, which has high
+cost as discussed in Moons et al. (2017a), Sze et al. (2017), and Chap.3. It is not yet
+clear how plain BinaryNets compared to XNOR-Nets in the energy-accuracy space,
+but due to the added ﬂoating-point complexity, seem less suitable for always-on
+wake-up applications.
+6.2
+Binary Neural Network Applications
+To date, plain BinaryNets are unproven on complex large-scale image recognition
+tasks such as the ImageNet (Russakovsky et al. 2015) challenge. However, they
+do achieve high accuracy within reasonable range of the SotA on simpler tasks
+such as handwritten digit recognition (LeCun and Cortes 1998) (up to 98.5%), 10-
+class object recognition (Krizhevsky and Hinton 2009) (up to 88% on FPGA (Zhao
+et al. 2017)), and some of our own custom designed tasks such as face detection,
+owner recognition, 10-face recognition, and angle recognition (Moons et al. 2018,
+2017c). This scope of applications, combined with their potential for low-energy
+operation, makes them suitable for use on battery constrained devices where an
+always-on gesture, face, owner, and angle detector can be used as a wake-up sensor
+for its screen or application processor. A speciﬁc future application, currently under
+industrial development, is an always-on camera on the front of a smartphone. This
+camera is equipped with recognition hardware that allows tracking a user’s face and
+its angle, allowing autorotate functionality without relying solely on accelerometer
+data. Future generations of such devices could use BinaryNet ASICs.
+Figure 6.2 situates the use of BinaryNets in the application and associated
+platform space. The y-axis in this space is energy efﬁciency: the number of
+classiﬁcations a system can perform per Joule of consumed energy. The x-axis
+is more abstract. It represents all quantities associated with performance in a
+broad sense: benchmark accuracy and throughput. In order to achieve this, the
+bandwidth and processing power a network requires typically increases as well.
+In this space, three regions are to be differentiated, each with their own associated
+energy efﬁciency, which is equivalent to a power budget in real-time processing.
+The highest performance is achieved in HPC systems such as GPU’s and TPU’s
+The Bigger Picture
+BinaryNets are trained to use 1b operators only. They are hence a special case of the
+quantized neural networks discussed in Chap. 3.
+
+6.3
+A Programmable Input-to-Label Accelerator Architecture
+159
+Fig. 6.2 Situating BinaryNet applications
+that are used for network training, and large-scale cloud workloads. These are used
+for large networks consuming 100’s of mJs per classiﬁcation. The power budget
+in these systems is up to 100’s of Watts. A second class is in mobile devices,
+such as smartphones and self-driving cars, with a power budget of Watts. In order
+to bring systems within this power budget, accuracy is typically kept high and
+only throughput is reduced compared to the HPC class. The envision processors in
+Chap. 5 are targetting this envelope. A ﬁnal class performs always-on tasks within a
+1-mW power budget. In order to achieve this, both throughput and accuracy should
+be lowered compared to the previous two classes, making BinaryNets a good ﬁt
+for this class. The ﬁgure further illustrates the potential of BinaryNets, the target
+performance of the designed ASICs, and some examples of typical applications.
+The latter are further discussed in Sect. 6.5.
+6.3
+A Programmable Input-to-Label Accelerator
+Architecture
+Figure 6.3 shows the top-level architecture of the visual wake-up ASIC architecture
+discussed in this chapter. The ASIC takes in raw 32 × 32 RGB image patches
+from an external source and outputs a classiﬁcation label. The chip operates end-
+to-end or Input-to-Label (I2L), as all computations in this process are performed
+
+160
+6
+BINAREYE: Digital and Mixed-Signal Always-On Binary Neural Network. . .
+Fig. 6.3 System-level overview of the chip architecture
+on-chip and there is no interaction with the outside world or external memory except
+for input and output data and some control signals. This I2L operation is a major
+difference with all currently published similar systems (Biswas and Chandrakasan
+2018; Gonugondla et al. 2018; Khwa et al. 2018; Chen et al. 2018), which heavily
+rely on communication with off-chip memory or only implement parts of a full
+neural network. The ﬁgure also shows samples from CIFAR-10 (Krizhevsky and
+Hinton 2009), the benchmark used in designing and testing this chip.
+In order to be able to offer this I2L operation, the chip has to support Binary
+CONV and MaxPool layers for feature extraction and FC layers for the ﬁnal
+classiﬁcation. Batch normalization is supported by transforming weights W and
+biases β to their equivalent forms WEQ and βEQ as in Sect. 6.1.
+The main workload in the targeted BinaryNets is in the CONV layers; hence, the
+hardware implementing these will take most of the area of the chip. Figure 6.3 shows
+the baseline idea for these layers. The chip consists of an array of 64 reconﬁgurable
+binary neurons, surrounded by a total of 259 kB of weight SRAM on the north and
+south side storing full models and 2×32 kB of feature SRAM on the west and east
+side each storing full feature maps. Every neuron is a hardwired implementation of
+the triple summation in Eq. (6.2). Feature maps are processed on the array and ping-
+ponged from east-to-west and vice versa from layer-to-layer during classiﬁcation.
+The north and south weight memories are used to update the weights and biases
+in the neuron array within a single layer, or from layer-to-layer. Not shown on this
+image is any control logic or the extra memory and hardware required to support
+FC layers. The rest of this section discusses the detailed operation of the chip.
+Section 6.3.1 discusses 256X: a rigid baseline architecture used in the ﬁnal Mixed-
+Signal chip implementation Sect. 6.4. Section 6.3.2 discusses SX: a more ﬂexible
+extension to 256X based on the DVAFS ideas developed in Chap. 4.
+
+6.3
+A Programmable Input-to-Label Accelerator Architecture
+161
+Fig. 6.4 Binary neuron operation and baseline network architecture
+6.3.1
+256X: A Baseline BinaryNet Architecture
+Figure 6.4 illustrates the CONV operations that are performed in the 256X
+architecture, according to Eq. (6.1). Every layer is a series of F ×k×k×C ﬁlters that
+are convolved over an input feature map of W × H × C. In the 256X architecture,
+F, C, and k are kept constant in order to simplify the logic and interconnect at the
+interface between memory and compute, hereby maximizing energy efﬁciency at
+the expense of ﬂexibility. In every layer, F and C are ﬁxed to 256, while the kernel
+size k is taken ﬁxed as 2. This means that every neuron contains 1024 weights,
+equal to 128 bytes. Every layer hence requires 32 kB of weight storage. The size
+of the feature maps is limited to W, H ≤32, which is sufﬁcient for the targeted
+wake-up applications such as face detection. Throughout a network, the sizes of the
+intermediate feature maps reduce due to non-padded convolutions and max-pooling.
+Figure 6.5 is a full overview of the 256X architecture. It is a hardwired array
+of 64 weight-programmable neurons surrounded by control units, drivers, decoders,
+and weight and activation memory. Also, on-chip is a separate unit that performs
+FC classiﬁcation on binary generated features. The chip is connected to the outside
+world through an SPI interface that allows storing all conﬁguration bits and network
+instructions. The weight buffers are written in a startup phase only through a
+separate scan interface. Input pixels are quantized into 85 levels per color (6.4b×)
+and fed to the chip using a 16b-parallel input bus. On chip, they are then decoded
+to an 85-channel per RGB-channel thermometer format in order to ﬁt into the 256-
+channel binary feature map format. This is further discussed below in Sect. 6.3.1.2.
+Finally, the output labels generated by the FC layer are transferred to the outside
+world on a 4b bus. This section discusses the operation of each of these blocks.
+6.3.1.1
+Neuron Array, Weight Updates, and Input and Output Demuxing
+Figures 6.6 and 6.7 zoom in on more details of the binary neuron and on the mode
+of operation of the neuron array.
+
+162
+6
+BINAREYE: Digital and Mixed-Signal Always-On Binary Neural Network. . .
+Fig. 6.5 Full 256X architecture overview
+Fig. 6.6 A hardwired binary neuron
+Figure 6.6 is the logical implementation of the core operation in Eq. (6.2). Each
+of the 64 neurons in Fig. 6.5 is hardwired to the illustrated structure. The neuron
+is a column of XNOR 1b-multipliers, followed by a POPCOUNT operator that
+combines all products with a 9b-ﬁlter bias. The full 11b sum is activated through
+a sign function before the ﬁltering result is written back to feature memory. As
+one neuron is convolved over a full input image and weights can hence be reused,
+all weights are stored locally in a set of 1024 storage elements that can be either
+latches or ﬂip-ﬂops. Due to this local storage, neuron weights are reused up to
+W × H = 1024 times in the input layer. As the POPCOUNT operator combines
+more than 1024 input bits, it will dominate the energy consumption in the neuron.
+
+6.3
+A Programmable Input-to-Label Accelerator Architecture
+163
+Fig. 6.7 256X neuron array architecture
+Therefore, it is implemented efﬁciently in the analog domain in Sect. 6.4. Section 6.6
+shows that the analog circuit is 4.2× more efﬁcient than the conventional digital
+implementation.
+Figure 6.7 shows how these neurons are physically implemented in the array
+and how they are connected to the surrounding weight and feature memory. The
+north weight memory supplies weights to the top halve of the neuron’s weight ﬂip-
+ﬂops, while the south side supplies the bottom halve. Hence, the north side contains
+weights for channels 128–255, while the south side contains weights for channels
+0–127 as well as all biases.
+The neuron array contains only 64 neurons, while every layer exists out of
+256 neurons. Hence, every layer is split into four groups and their convolution is
+time multiplexed. The neuron array always convolves one complete ﬁlter group,
+such as ﬁlter group 0 containing ﬁlter indices [0,4,8,...,252] or group 2 containing
+ﬁlter indices [2,6,10,...,254] of a speciﬁc CONVL. In a single CONVL, neuron
+weight updates or load (LD) sequences are interleaved with convolutional (CONV)
+sequences. After such an LD sequence, all weights of a neuron are kept local
+throughout a CONV cycle. This keeps the overall memory bandwidth to weight
+memory low. Hence, this architecture translates algorithm locality to reduced
+loading in the digital circuits. In order to process a layer with 256 neurons split
+into four groups, 4 LD-CONV cycles are needed on the 64-neuron array.
+
+164
+6
+BINAREYE: Digital and Mixed-Signal Always-On Binary Neural Network. . .
+Fig. 6.8 Processing sequence in 256X. (a) Local WFF updates. (b) CONV processing with
+activation reuse
+Figures 6.7 and 6.8a give more insight in how and when the weight ﬂip-ﬂops are
+updated. Per neuron, there are two 4-bit buses connected to all ﬂip-ﬂops, one bus
+for the north and one bus for the south side for a total 512b bandwidth per cycle.
+Every cycle, the 2 × 2 ﬁlter values for a single channel are written to the ﬂops in
+both the north and south side of the neuron array. Hence, a single LD sequence,
+
+6.3
+A Programmable Input-to-Label Accelerator Architecture
+165
+Fig. 6.9 Write back with optional max-pooling
+writing the convolutional weights for 64 neurons to the array, takes 128 cycles plus
+the time to preload the biasing values that are stored on the bottom of the array. All
+the ﬂip-ﬂops are clock-gated on a per-row basis: every row has one integrated clock
+gating cell, allowing efﬁcient activity reduction on these memory elements. The LD
+sequence overhead is only large when the chip is operating on small feature maps.
+Figures 6.7 and 6.8b show how the neurons are connected to the feature map
+buffers through a demultiplexer (XMUX) that exploits data reuse in a Stride = 1
+data ﬂow. A single address in the feature map buffers stores the 256 channels
+associated with a feature map unit. When convolving the ﬁlter over a feature map,
+these values are fed sequentially to the array and reused across all 64 neurons,
+as they all operate on the same data. Figure 6.8b shows how XMUX buffers and
+reshufﬂes incoming data in order to limit the necessary SRAM bandwidth. For
+every Stride = 1 convolution step, only two additional units have to be fetched per
+channel. This is implemented by rewiring the connectivity of the input activations
+to the neurons, as illustrated in the ﬁgure. As the bandwidth to activation memory is
+limited to 256b, it takes one cycle to fetch one pixel and hence two cycles to fetch
+two pixels. Due to this scheme, the neuron array computes a result only once every
+two cycles, as it takes two cycles to ready a next set of input features. A further
+optimization would be to data-gate the neuron array such that its inputs only switch
+when the full 2 × 2 × 256 image patch is valid. This would come at the cost of
+additional ﬂip-ﬂops and logic in the XMUX block.
+Finally, as illustrated in Figs. 6.5 and 6.9, the activated output features are fed
+back to the feature buffer on the opposite side, again through an XMUX block. This
+block implements both standard and max-pooling operations. In the standard mode,
+64-features are written to a 256-port SRAM when the correct result is available. A
+mask containing bit-write-enable (BWE) ﬂags deﬁned by the ﬁlter group number
+ensures that the 64 features are written to the correct channel positions, without
+overwriting other results.
+The same block also implements streaming max-pooling as in Sect. 6.1 and
+shown in Fig. 6.1. Here, max-pooling is hence not implemented as an extra
+layer but is embedded at run-time into a CONVL. The only thing required is to
+modify the write-back scheme accordingly, as described below. In max-pooling
+
+166
+6
+BINAREYE: Digital and Mixed-Signal Always-On Binary Neural Network. . .
+Fig. 6.10 Timing diagram for streaming max-pooling. (a) Even rows, and (b) odd rows. The
+address is computed as (column»1) + (row»1) × (width»1)
+mode, depending on the r, c (row, column) indices of the current convolution, the
+previously written value for a given channel can be read-out ﬁrst. If both r and c are
+even, the result is directly written to the correct address. If either r or c is uneven,
+before writing, the previously written result at a given address is read ﬁrst, as shown
+in Fig. 6.10. The read/written address is computed as addr = (c >> 1) + (r >>
+1) × (w >> 1), where w is the width of the input layer. The pre-fetched value is
+then compared (OR’ed) with the new incoming feature that belongs to the same
+max-pooling 2 × 2 cluster. Only if the incoming value is larger (equal to 1) than
+the previously stored value, the new feature will be written to the feature SRAM.
+Otherwise, the previous value is written again. The scheme described here is clearly
+not optimal. SRAM switching can be prevented by putting the BWE for the current
+channel, if the previously stored value is larger than or equal to the new feature. In
+that case, there is no need to rewrite the feature SRAM buffer.
+6.3.1.2
+Input Decoding
+As discussed before, the neuron array is hardwired to operate on W × H × 256 1b
+feature maps. This poses problems at the input layer, for two reasons. First, if input
+pixels are quantized to 1b, almost all information is lost in most cases. Second, raw
+input images are natively in an RGB W × H × 3 format, hence some adaptations
+have to be made to the input data to make it ﬁt on the ﬁxed-dimension neuron array,
+which requires feature maps to have 256 channels. Both issues are taken care of in
+a decoding block that transforms multi-bit input pixels into a format suitable for the
+array. More speciﬁcally, every channel R,G,B is represented as an 85b thermometer
+code, which is equivalent to a 6.4b-binary representation. Data transfer is always
+done in the binary format, to maintain a high IO speed. The ﬁnal feature vector
+stored in memory is then a 3 × 85 =255 + 1b equivalent representation as in:
+
+6.3
+A Programmable Input-to-Label Accelerator Architecture
+167
+I256X = [85′bIth(R), 85′bIth(G), 85′bIth(B), 1′b1]
+(6.9)
+Here, the last bit is padding, but necessary in order for the vector to ﬁt in the array.
+Through a right choice of equivalent weight kernel (see Eq. (6.11)), this padding bit
+does not inﬂuence the output of the network. All decoding discussed here is done
+on-chip at run-time.
+The 2 × 2 × 3 1b weight kernel that is trained on the RGB input images should
+also be transformed into a format that ﬁts in the neuron array. Note that in Eq. (6.1)
+the following replacement can be made through a simple rule of associativity:
+I[c] × W[f ][c][i[j] =
+ 85
+
+z=0
+Iz[c]
+
+× W[f ][c][i[j] =
+85
+
+z=0
+(Iz[c] × W[f ][c][i[j])
+(6.10)
+where
+85
+
+z=0
+Iz[c] is the thermometer encoded representation of I[c] this means that
+the 3-channel ﬁrst layer ﬁlters can easily be expanded to a 256-channel format, by
+repeating each ﬁlter value 85 times, once for every element of the thermometer
+encoded input feature map. This is formalized below in Eq. (6.11):
+W256X = [85 × W(R), 85 × W(G), 85 × W(B), mod2(i + j)]
+(6.11)
+Here, 85× indicates that the same 1b weight is repeated 85 times. mod2(i + j)
+makes sure that the redundant bit in the feature vector is canceled out, as i and j are
+the spatial indices as in Eq. (6.1).
+6.3.1.3
+Dense Layers
+A sequence of a single FC or dense layer is supported in the 256X architecture,
+in order to facilitate input-to-label (I2L) behavior. Although this FC layer could
+potentially be implemented on the same neuron array as the one used for convo-
+lutional layers, here it is implemented separately outside of the array. This split
+allows separating the control and driving logic of the neuron array and optimizing it
+completely for the dominant CONVL’s. As the FC layers are so small, the area
+overhead incurred by separation is limited. Apart from separate compute logic,
+it also uses a separate weight buffer. Figure 6.11 shows how this FC layer is
+implemented in a sequential way in a 64-way parallel processing unit. Every cycle,
+64 weights and 64 features are transferred to the processing unit. Here, the binary
+values are multiplied and counted as in Eq. (6.4). A typical full feature map of
+4 × 4 × 256 = 4096 1b features hence takes 64 cycles to complete a full vector
+
+168
+6
+BINAREYE: Digital and Mixed-Signal Always-On Binary Neural Network. . .
+Fig. 6.11 Fully connected layer implementation: 64 activations and weights are fetched from
+memory every cycle
+product for a single output. The partial sums are kept locally until the full sum is
+made. After, this result is multiplied with a ﬁlter-speciﬁc batch normalization factor
+γf after which an equivalent batch normalization bias BEQ = bf is added. The trick
+to incorporate batch normalization completely into an equivalent weights set WEQ,
+BEQ as discussed in Sect. 6.1.2 is not possible here, as the sign activation function
+is not used. Finally, the layer can compare the output values for each class and can
+output the label of the largest value. The system does not support outputting a label
+and its conﬁdence, which would be needed in a real detection application. Adding
+this functionality could be part of this project’s future work.
+The chip contains a total of 5.5 kB of FC-related SRAM (with weights, biases,
+and batch normalization parameters), in order to support a maximum of 10 output
+classes, to be classiﬁed based on 4 × 4 × 256 feature maps.
+6.3.1.4
+System Control
+256X is built to be a programmable architecture, even though some of its function-
+ality is hardwired. It is a non-Von Neumann processor with an instruction set, a
+program memory, and a complex data path as discussed above. An overview of the
+used instructions and the top-level control is given in Fig. 6.12. Figure 6.12a shows
+the three supported instruction types in 256X and some of their relevant parameters.
+All these instructions start a “layer” that can last for thousands of cycles. Only if the
+instruction is done, the program counter is increased. Three main instructions are
+designed:
+•
+IO instructions are used to request or send encoded or raw input images. The
+instruction indicated the size of the data to be transferred, whether it requires
+decoding, and whether the data transfer is to/from the west or east activation
+memory.
+
+6.3
+A Programmable Input-to-Label Accelerator Architecture
+169
+Fig. 6.12 Controlling the 256X architecture. (a) 256X instructions. (b) 256X control overview
+•
+CONV instructions start and reconﬁgure a CONV layer. Relevant parameters are
+the size of the input feature map, whether or not max-pooling should be enabled,
+and whether features should be taken from the west or east activation memory.
+•
+FC instructions start the ﬁnal classiﬁcation of a feature map into a classiﬁcation
+label. The number of classes and the buffer containing the ﬁnal activations (west
+or east) are variables in this instruction.
+The system can be programmed through an SPI interface that connects to a
+conﬁguration register ﬁle and the system’s program memory. The latter is also
+implemented as a register ﬁle that stores up to 16 instructions or layers. In 256X,
+the total size of the weight memory limits the number of layers to 8 CONV and 1
+FC layer.
+Figure 6.12b gives a bird’s eye overview of the system-level controller. A top-
+level controller controls the operating mode (startup, or running) and communicates
+with the outside world. The top-level controller masters all other elements on-chip
+but itself acts as a slave to another controller that is off-chip. In startup mode, both
+the weights can be updated through a scan interface and the SPI interface can be
+used to reconﬁgure the program memory. Whenever the system master asks for a
+
+170
+6
+BINAREYE: Digital and Mixed-Signal Always-On Binary Neural Network. . .
+classiﬁcation, the top-level controller starts a new network. The network controller
+then loops through the instructions in the program memory. A new instruction is
+only started when the layer controller acknowledges that a layer is fully done.
+6.3.2
+SX: A Flexible DVAFS BinaryNet Architecture
+SX is a more ﬂexible architecture based on the rigid 256X baseline. The S in SX
+indicates that this architecture can support layers of different widths, as opposed
+to 256X where every layer has to have 256 ﬁlters of 256 channels wide. More
+speciﬁcally in SX, F ×2×2×C ﬁlters can be convolved on W×H ×C feature maps.
+Here, F is still kept equal to C, but both values are not taken ﬁxed and equal to 256,
+but can be 256/S with S = 1, 2, or4. The need for a more ﬂexible implementation
+is easily explained. If energy is to be traded for accuracy in 256X, the only available
+knob is the network depth, which scales energy linearly with the number of layers.
+In SX, accuracy can be traded more efﬁciently by modulating the network width
+on top of the depth. The amount of computations, and hence in a ﬁrst order its
+energy consumption, in a single layer scales quadratically with the factor S. Due to
+its rigidity, 256X would perform too many operations for some simple applications
+such as face detection. The added ﬂexibility in SX solves this issue: it combines the
+efﬁciency of a hardwired array with more programmability.
+This reconﬁgurability is further illustrated in Fig. 6.13, which visually illustrates
+two different operating modes in SX. In the S = 1 mode, the chip processes layers
+of 256 2×2×256 ﬁlters on W ×H ×256 feature maps. As the neuron array contains
+only 64 neurons, its usage is time-multiplexed. Four LD-CONV cycles are needed to
+process a single layer on a single feature map. In the S = 4 mode, every layer uses 64
+2×2×64 ﬁlters on W×H ×64 feature maps. As a single column in the array can now
+map four separate neurons, four feature maps can be computed in parallel using the
+same neuron array. On top of that, every layer only requires 64 neurons, so each
+layer is also 4× faster than in the S = 1 case, using only a single LD-CONV cycle
+per layer. The combination of these two effects leads to a speedup or equivalent
+energy reduction of 16×. On top of that, the 16× speedup can be exploited by using
+a lower frequency and supply voltage if throughput is kept constant, similar to the
+DVAFS technique discussed in Chap. 4. Although here, DVAFS is used in a sub-
+net parallel context rather than a subword-parallel context. More speciﬁcally, on
+CIFAR-10, a digital SX implementation achieves 86.05% accuracy in the S = 1
+mode while consuming 15 uJ/classiﬁcation. In the S = 4 mode, it achieves 76%
+accuracy while consuming 0.9 uJ/classiﬁcation.
+Figure 6.14 shows more details on how this can be implemented. It shows how
+the width of the CNN layers (F) and the number of channels of the input map
+(C) can be modulated with the variable degree of parallelism or batch size S as
+F = C = 256/S. Varying S hence allows trading energy in exchange for modeling
+accuracy. This is implemented by splitting neurons into four sub-neurons, each
+processing a 64 × 2 × 2 dot product on 64 channels of the activation SRAM, as
+
+6.3
+A Programmable Input-to-Label Accelerator Architecture
+171
+Fig. 6.13 Difference in operation in modes (a) S = 1 and (b) S = 4
+shown in Fig. 6.14a. Depending on S, the intermediate outputs of the sub-neurons
+are combined into S output features. SX can hence either perform F × C × k × k
+= 256 × 256 × 2 × 2 (S = 1), 128 × 128 × 2 × 2 (S = 2) or 64 × 64 × 2 × 2
+(S = 4) layers on one 256 × W × H (S = 1), two 128 × W × H (S = 2) or four
+64 × W × H (S = 4) feature maps in parallel. This has a signiﬁcant impact on
+throughput and energy, as further illustrated in Fig. 6.14b. If S = 1, a layer contains
+256 neurons (F = C = 256), which means 4 LD-CONV cycles are required to
+process all neurons. If S = 4, a layer contains 64 (F = C = 64) neurons and
+requires only 1 LD-CONV cycle to process four input maps. Here, throughput and
+energy are improved quadratically with S2 = 16, at the cost of reduced classiﬁcation
+accuracy. This trade-off is further quantiﬁed in Sect. 6.5.
+Figure 6.15 shows a top-level view of this reconﬁgurability. The SX architecture
+supports three different modes of “sub-net” parallelism. In the N = 2 mode, the chip
+is effectively split by partitioning the 256X architecture into two separate parts. This
+allows it to run smaller networks with a width of 128 ﬁlters on the same physical
+array. The N = 4 mode is the mode supporting the smallest networks with 64 ﬁlters
+per layer. In this case, the chip is reconﬁgured into four separate parts using the
+same physical array.
+
+172
+6
+BINAREYE: Digital and Mixed-Signal Always-On Binary Neural Network. . .
+Fig. 6.14 SX requires a limited number of architectural changes compared to 256X. (a) A neuron
+split into sub-neurons. (b) Timing in different modes
+Fig. 6.15 System-level view of the three different operating modes supported in SX. (a) S = 1,
+id. 256X. (b) S = 2. (c) S = 4
+Apart from the discussed modiﬁcations above, moving from 256X to SX requires
+very little other changes. Obviously, the mode S should be stored in a conﬁguration
+memory, which is a separate small register ﬁle in all implementations. Based on the
+value S in conﬁguration memory, all the control loops and neurons are reconﬁgured
+
+6.4
+MSBNN: A Mixed-Signal 256X Implementation
+173
+in order to support the correct ﬂow. However, the baseline functionality remains the
+same across modes S and only small changes are necessary. One major change is in
+the input decoding blocks. In S = 1, 255 = 85 × 3 channels are available per color.
+The possible input pixel precision drops in the S = 4 mode. Here, there are only
+64 = 32 × 3 chip channels available to represent thermometer-coded RGB images.
+In general, the equivalent number of thermometer code channels per color is 85 in
+S = 1 (6.4b), 42 in S = 2 (5.5b), and 21 (4.5b) in S = 1. The number of possible
+input values per color is hence given by Eq. (6.12):
+#Values =
+256
+#inputchannels × S
+(6.12)
+where #inputchannels equals three for RGB input images. This reduction in
+maximum input precision in the different modes will lead to a reduction in network
+performance in those modes. At this point, it is not clear how much of the loss in
+accuracy in modes 2 and 4 is due to this reduction in input precision, and how much
+is due to the smaller layers.
+The design and measurement of a digital implementation of the SX architecture,
+a chip called BinarEye, is discussed in Sect. 6.5.
+6.4
+MSBNN: A Mixed-Signal 256X Implementation
+With multiplication reduced to XNOR and memory access amortized across many
+computations by parallelism and reuse, wide vector summation in the neuron array
+becomes the main energy bottleneck. Because neural networks can tolerate a certain
+amount of random error in arithmetic computation without loss in classiﬁcation
+accuracy, an opportunity exists to lower energy consumption by performing addition
+approximately with the internally analog, externally digital switched-capacitor (SC)
+neuron shown in Fig. 6.16 (Murmann et al. 2015; Moons et al. 2016). The SC
+neuron performs a weighted sum with data-dependent switching (apart from the
+comparator), hence its energy scales with activity factor like static CMOS logic.
+Precise matching between metal-oxide-metal (MOM) fringe capacitors in the 28-
+nm technology allows the unit capacitance to be as small as 1 fF without loss
+in classiﬁcation accuracy. In contrast, the equivalent digital adder tree contains
+The Bigger Picture
+The SX BinaryNet architecture performs Dynamic-Voltage-Accuracy-Frequency-Scaling
+(Chap. 4) on the network level. Instead of operating in a subword-parallel mode at
+lower computational precision, this architecture operates in a sub-net parallel mode at
+lower benchmark accuracy. If the system-level throughput is kept constant, voltage and
+frequency can be modulated to increase energy efﬁciency.
+
+174
+6
+BINAREYE: Digital and Mixed-Signal Always-On Binary Neural Network. . .
+Fig. 6.16 Switched-capacitor neuron performs addition via charge redistribution
+a large amount of switched capacitance across its multiple logic stages. The
+dominant noise source is the comparator, but its energy cost is amortized over
+1024 weights. As a result, the SC neuron is amenable to low signal swing, and
+uses a combined 0.6 V analog reference and digital supply. The combination of
+activity factor proportionality, low voltage, and lower switched capacitance results
+in lower energy per classiﬁcation using the SC neuron array relative to a digital
+neuron array implemented with static CMOS tree adders. This section discusses
+the mixed-signal binary CNN processor (MSBNN), an implementation of the 256X
+architecture achieving 3.8 µJ/86% CIFAR-10 I2L operation using the SC neuron
+array (Bankman et al. 2018).
+6.4.1
+Switched-Capacitor Neuron Array
+The SC neuron in Fig. 6.16 performs a complete binary CNN ﬁlter computation
+according to:
+z = 1;
+(6.13)
+XNOR gates perform point-wise products between weights wi of a 2 × 2 × 256
+ﬁlter and activations xi of a 2×2×256 feature map patch. The addition operation is
+performed in the analog domain using a differential capacitive DAC (CDAC). The
+CDAC unit element is a 1-fF MOM fringe capacitor. A 1024b thermometer-coded
+
+6.4
+MSBNN: A Mixed-Signal 256X Implementation
+175
+CDAC section adds point-wise products wixi, and a 9b binary-weighted CDAC
+section adds the ﬁlter bias b, which is represented as a sign-magnitude integer. The
+1b neuron output z is resolved using a voltage comparator. Because the SC neuron
+completes a binary CNN ﬁlter computation internally, the analog–digital interface
+is reduced to a single comparator decision.
+Under ideal operation, the SC neuron computes z exactly according to (6.13).
+Three circuit non-idealities can potentially affect classiﬁcation accuracy using the
+SC neuron array: unit-capacitor mismatch, comparator offset, and comparator noise.
+Detailed analysis shows that the actual, mismatched unit-capacitor values in the
+1024b thermometer-coded CDAC section can be referred into a set of effective
+weights for the applied ﬁlter. Similarly, the unit-capacitor values in the 9b binary-
+weighted CDAC section and the comparator offset can together be referred into
+an effective bias. Unlike the random but static variations caused by mismatch,
+comparator noise is generated independently at every ﬁlter computation. Behavioral
+Monte Carlo simulations were run to determine the amount of comparator offset,
+noise, and unit-capacitor mismatch that the binary CNN can tolerate without
+degradation in classiﬁcation accuracy, resulting in comparator offset and noise
+requirements of 4.6 mV and 460 µV, respectively, and a 1-fF unit capacitance.
+6.4.2
+Measurement Results
+MSBNN was fabricated in TSMC’s high-performance low-leakage (HPL) 28 nm
+CMOS technology, with the 1P8M_4X2Y1Z metal stack. Figure 6.19 shows a photo
+of the 2.44 mm×2.4 mm die. The design is split into four separate power domains:
+VDD for control and data transfer logic, VMEM for SRAM, VNEU = 0.6 V for the
+neuron array combined analog reference and digital supply, and VCOMP = 0.8 V
+for comparators. All measurements were taken at room temperature.
+In the following measurements, MSBNN was tested on the full CIFAR-10 data
+set in order to build statistics characterizing noise and mismatch in the SC neuron
+array. The typical benchmark network used for these measurements is given in
+Fig. 6.20, which achieves 86.05% accuracy on the CIFAR-10 image classiﬁcation
+task. The network contains 10 layers: 1 input layer, 8 CONV layers with max-
+pooling in layers 4 and 6, and 1 FC layer that outputs a 4b label. The full
+network requires 2 billion 1b operations, a task that is performed at an average I2L
+throughput of 23.7 fps/MHz or 47.6 GOPS/MHz. The chip is I2L, input-to-label, as
+it directly transforms a raw 32 × 32 × 32 RBG image into one out of ten output
+category labels, without any interaction with other systems.
+At nominal supply voltages in the digital periphery VDD = VMEM = 1.0 V, the
+chip operates at 380 FPS with fCLK = 16 MHz and achieves 5.4 µJ/classiﬁcation.
+Lowering VDD and VMEM to 0.8 V leads to 3.8 µJ/classiﬁcation at 237 FPS with
+fCLK = 10 MHz. Figure 6.17 shows energy per classiﬁcation broken down by power
+domain at the operating point VDD = VMEM = 0.8 V. Not included in these energy
+
+176
+6
+BINAREYE: Digital and Mixed-Signal Always-On Binary Neural Network. . .
+Fig. 6.17 Energy per
+classiﬁcation of 3.8 µJ at the
+operating point
+VDD = VMEM = 0.8 V,
+237 FPS. Breakdown by
+power domain
+Fig. 6.18 Measured
+classiﬁcation accuracy over
+10 chips, 30 runs each
+through the 10,000 image
+CIFAR-10 test set
+ﬁgures is the 1.8 V chip IO energy, which amounts to 0.43 µJ/classiﬁcation (a small
+fraction of the core energy).
+Figure 6.18 shows a histogram of classiﬁcation accuracy measured across 10
+chips, 30 runs each through the 10,000 image CIFAR-10 test set. The mean
+classiﬁcation accuracy is 86.05%, the same as observed in a perfect digital model.
+The 95% conﬁdence interval in mean classiﬁcation accuracy is 86.01% to 86.10%.
+The standard deviation in classiﬁcation accuracy is 0.39%, caused solely by noise
+and mismatch in the SC neuron (which can notably lead to a higher classiﬁcation
+accuracy than in the perfect digital model) (Figs. 6.19 and 6.20).
+Table 6.1 compares this work with prior art. On the same benchmark dataset
+(CIFAR-10), we achieve 40× improvement in energy per classiﬁcation over the
+IBM TrueNorth chip, which does not exploit the locality of CNNs and hence suffers
+from high interconnect activity. The binarized DNN accelerator in Ando et al.
+(2017) has all memory on-chip, but because fully connected DNNs cannot exploit
+
+6.4
+MSBNN: A Mixed-Signal 256X Implementation
+177
+Fig. 6.19 Die photo of MSBNN, implemented in 28-nm CMOS. The chip is split into four voltage
+domains: one for all logic, all memory, one for the comparators, and one for the rest of the neurons.
+This granularity allows advanced DVFS methods to minimize energy consumption
+Fig. 6.20 Typical 10-layer benchmark used to measure MSBNN. The network has 10 layers: 1
+input layer, 8 CONV layers with max-pooling in layers 4 and 6, and 1 FC layer that outputs a 4b
+label. Using this network, the 256X architecture with periodic clearing achieves 86.05% accuracy
+on the test set of CIFAR-10 at 23.8 fps/MHz of I2L throughput
+
+178
+6
+BINAREYE: Digital and Mixed-Signal Always-On Binary Neural Network. . .
+Table 6.1 Comparison to state of the art
+This work
+IBM TrueNorth
+Esser et al. (2016)
+VLSI ‘17 Ando
+et al. (2017)
+VLSI ‘17 Buhler
+et al. (2017)
+Technology
+28 nm
+28 nm
+65 nm
+40 nm
+Algorithm
+CNN
+CNN
+DNN
+LCA
+Dataset
+CIFAR-10
+CIFAR-10
+MNIST
+MNIST
+Weight bits
+1
+1.6
+1.6
+4
+Activation bits
+1
+1
+1
+1
+Supply [V]
+0.6, 0.8
+1.0
+0.55, −1.0
+0.9
+Classiﬁcation
+accuracy [%]
+86.05
+83.41
+90.1
+88
+Energy per
+classiﬁcation [µJ]
+3.79
+164
+0.28, −0.73
+0.050
+Power [mW]
+0.899
+204.4
+50, −600
+87
+Frame rate [FPS]
+237
+1249
+820 K, −3280 K
+1.7 M
+Arithmetic
+532
+–
+6.0 −2.3
+3.43
+energy efﬁciency
+1b-TOPS/W
+TOPS/W
+TOPS/W
+weight reuse, the energy cost of an SRAM bit load is attached to each XNOR
+operation. The spiking LCA network in Buhler et al. (2017) exhibits low energy,
+but has relatively low accuracy for a lower-complexity task (MNIST).
+6.4.3
+Analog Signal Path Overhead
+Analog circuit non-idealities must be managed in the SC neuron array in order to
+prevent loss in classiﬁcation accuracy. This is accomplished using standard mixed-
+signal circuit techniques that do not contribute signiﬁcantly to the SC neuron array
+energy per classiﬁcation, which is dominated by the wires that connect its digital
+gates. We nonetheless describe the design overhead here in order to highlight the
+implementation differences between MSBNN and BinarEye, which was synthesized
+entirely in an RTL-to-GDSII standard cell ﬂow.
+The manner in which the SC neuron in Fig. 6.16 performs the weighted sum
+in (6.13) can be interpreted as a superposition of capacitive dividers. In order
+for the linear capacitive divider relation to hold true with respect to each CDAC
+bottom plate input, the charge at the CDAC top plate node must be zero. To
+accomplish this, convolution must be paused periodically while all CDAC bottom
+plate inputs are grounded and a switch connected to the CDAC top plate node (not
+shown in Fig. 6.16) discharges it. Such “clear” operations run every 100 to 300
+clock cycles, as determined by the leakage current at the top plate node. At this
+rate, the contribution to energy per classiﬁcation is negligible. Periodically pausing
+convolution for clear operations results in a 5.7% reduction in throughput relative to
+BinarEye, which operates at 25.1 fps/MHz.
+
+6.5
+BinarEye: A Digital SX Implementation
+179
+The requirement on comparator offset can be signiﬁcantly alleviated using
+calibration at startup. With 9 bits allocated to the ﬁlter bias, sufﬁcient range exists to
+correct for comparator offset using the binary-weighted CDAC section, without an
+additional trim-DAC. The comparator offset is digitized at startup, stored in a local
+register, and subtracted from the bias loaded from SRAM during weight transfer. In
+environments where large temperature changes may induce signiﬁcant offset drift,
+calibration can be performed periodically (e.g., once per second) at negligible cost
+in average energy per classiﬁcation and throughput.
+6.5
+BinarEye: A Digital SX Implementation
+Simultaneously with the MSBNN chip discussed in Sect. 6.4, an all-digital SX
+architecture was developed and measured. Ideally, MSBNN should have been SX
+as well. But, due to time constraints and tape-out deadlines, the team decided to
+stick with the vanilla 256X architecture for the mixed-signal design, as that design
+requires intensive manual layout, part of which was already done by the time
+SX was developed. However, there are no fundamental reasons why the mixed-
+signal version could not be implemented as SX. Both the mixed-signal neuron
+optimization and the added ﬂexibility offered by SX can be regarded as completely
+orthogonal design efforts. The energy overheads in SX in the S = 1 mode where all
+ﬁlters are 256 wide are very low compared to the 256X baseline and can arguably
+be neglected. The only considerable overheads are in the multiplexing shown in
+Fig. 6.14a and in the more complex, multi-mode IO decompression. Hence, the
+performance of BinarEye for S = 1 is still comparable to the performance of
+MSBNN and can be used to estimate the gains of analog computation. The academic
+value of BinarEye is hence double: it is both a validation of the efﬁciency of the SX
+architecture and a case study in comparing analog-vs-digital computation.
+Due to the added ﬂexibility in SX, BinarEye has a wide energy-accuracy trade-
+off available by modulating not only the network depth but also the network width.
+For some tasks, such as face detection and face angle recognition, narrow networks
+are sufﬁcient, allowing for much lower energy consumption. At low iso-accuracy
+on some benchmarks, the gains through the ﬂexibility in SX outperform the gains
+through analog neurons in 256X. This is further discussed in detail in Sect. 6.6.
+6.5.1
+An All-Digital Binary Neuron
+The Neurons in BinarEye are implemented as in Fig. 6.14a, with a fully digital
+reconﬁgurable POPCOUNT operator. The POPCOUNT adder is synthesized from
+a tree description using the + operator in SystemVerilog using standard Synopsys
+Designware. Throughout the design, no further optimizations or custom interven-
+tions are done to minimize the energy consumption of the POPCOUNT operator.
+
+180
+6
+BINAREYE: Digital and Mixed-Signal Always-On Binary Neural Network. . .
+Fig. 6.21 Die photo of BinarEye. BinarEye is split into two separate power domains, in order to
+be able to separately scale supply voltages in the neuron array and the peripheral circuitry
+The design is meant to be the baseline performance achievable by an experienced
+RTL designer, without any extra tools available.
+6.5.2
+Physical Implementation
+Figure 6.21 is a die photo of the BinarEye chip, which was implemented in the same
+28-nm CMOS technology as MSBNN but using the 1P8M-5X1Z1U metal stack. In
+this technology, BinarEye is implemented in less than 2 mm2 as 1.45 × 1.35 mm2
+with pads included. The system is synthesized and laid out to achieve 50 MHz
+operation at a nominal voltage of 1 V. All neurons and logic are automatically placed
+and routed with a minimum amount of constraints in order to give the optimization
+tools the maximum amount of freedom. As a top view, and ignoring the actual
+dimensions, this layout is nearly identical to the manual layout of MSBNN in
+Sect. 6.4. This chip, however, is only split into two power domains: one default
+domain for all peripheral logic, all control, and the SRAM memories and another
+one for the full neuron array. Figure 6.21 roughly indicates the placement of those
+power domains.
+6.5.3
+Measurement Results
+This subsection discusses both the performance of the benchmark network of
+Fig. 6.20 and the system-level performance of multiple applications.
+
+6.5
+BinarEye: A Digital SX Implementation
+181
+Fig. 6.22 Multi-mode benchmark network and performance in terms of 1b-TOPS/W for each of
+those modes. (a) Benchmark description in different modes. (b) Efﬁciency of all layers in the
+benchmark
+Fig. 6.23 Performance (1b-GOPS) of CONV layers (a) and of FC layers (b). Figure (c) shows
+how voltage can be scaled in the chip as function of frequency
+6.5.3.1
+Benchmark Network Performance
+To demonstrate the chip’s ﬂexibility and the effectiveness of its different modes,
+Figs. 6.22 and 6.23 show measurement results for the layers of a typical 9-layer
+benchmark network for always-on imaging. Figure 6.22a shows the settings for all
+nine layers in the benchmarks in different modes. Depending on the scaling factor
+S, the width of each of the layers is reduced, also reducing the number of necessary
+operations considerably. When S = 1, the ﬁrst layer in Figs. 6.22b and 6.23a
+receives a 32 × 32 7-bit RGB input and transforms it into a 256 × 31 × 31 binary
+feature map in 500 M binary operations at core efﬁciencies up to 230 1b-TOPS/W
+at 6 MHz and 352 1b-GOPS. In the same layer, at S = 4, energy efﬁciency drops to
+
+182
+6
+BINAREYE: Digital and Mixed-Signal Always-On Binary Neural Network. . .
+Fig. 6.24 Relative (a) time and (b) energy spent on every layer within the 9-layer benchmark. (c)
+is the relative energy consumption across the different power domains. Figure (c) again motivates
+the move to analog neuron implementations in MSBNN, as most of the energy is consumed in the
+neuron array, and more speciﬁcally in the POPCOUNT operator
+205 1b-TOPS/W at the same frequency. Figure 6.22b also shows that throughout the
+network, the core efﬁciency drops with smaller W × H feature maps, as the relative
+LD time increases compared to the CONV-time. Figure 6.23b further shows that,
+although BinarEye is not optimized for FC layers, it does achieve SotA efﬁciencies
+up to 1.5TOPS/W, which is similar to Ando et al. (2017). All measurements are at
+room temperature at optimal supply voltages from 0.66 to 0.9 V and frequencies
+ranging from 1.5 to 48 MHz, as indicated in Fig. 6.23c.
+Some more details on the energy consumption in this 9-layer benchmark network
+are given in Fig. 6.24. These graphs show measurements for the relative computation
+time and energy of all layers of the 9-layer benchmark, as well as the relative energy
+consumption in all three power domains at 6 MHz in Emin, where the Neuron supply
+is 0.65 V and the memory supply 0.7 V. The “Memory” power domain contains all
+required SRAM memories: the north and south weight SRAM, the east and west
+activation SRAM and the fully connected layer weight SRAM. The “Neuron” power
+domain contains the full neuron array, all control logic, data-transfer logic used for
+transferring data from SRAM to the array, and the fully connected layer arithmetic.
+The “IO” power domain contains the IO ring at 1.8 V.
+Figure 6.25 shows the simulated performance breakdown of BinarEye at
+20 MHz with the memory power domain at 1 V and the neuron array at 0.8 V.
+Almost 50% of the power consumption is due to wiring, while only 2% is in
+leakage at this frequency. This is achieved by primarily using HVT cells. As was
+stated before, the neuron array is dominant in power consumption, even at a non-
+nominal supply voltages. 75% of BinarEye’s power consumption is in the neurons,
+of which more than 50% is in its wire connections. This motivates moving from an
+all-digital design to a mixed-signal design, as in Sect. 6.4.
+6.5.3.2
+Application-Level Performance
+For several very simple applications, such as handwritten digit recognition and face
+detection, the 256-wide CONV layers in 256X and MSBNN are overkill and need
+
+6.5
+BinarEye: A Digital SX Implementation
+183
+Internal: 54%
+Switching: 44%
+Leakage: 2%
+(a) Breakdown by type
+Neuron
+Array: 75%
+FC: < 1%
+WMEM: 4%
+AMEM: 9%
+Control: < 1%
+WMUX: 3%
+XMUX: 6%
+IO+other: 3%
+(b) Functional breakdown
+Fig. 6.25 Breakdown of simulated power consumption by type (a) and functional block (b)
+too many operations and consume too much energy. Hence, those tasks can beneﬁt
+from the support for narrow layers in BinarEye’s SX architecture. Narrow networks
+require much less energy per classiﬁcation but still have the classiﬁcation capabil-
+ities for such simple tasks. This section discusses the performance of BinarEye on
+several applications in terms of I2L energy consumption and benchmark accuracy.
+The system-level, IO-to-Label (I2L) performance and wide applicability of
+BinarEye are illustrated in Fig. 6.26. Here, the accuracy of several benchmarks is
+given as a function of S together with the energy consumption, throughput, and
+power for the 9-layer network of Fig. 6.22. All data sets and training scripts are
+available online at https://github.com/BertMoons/ (Moons et al. 2017c).
+BinarEye can efﬁciently process several wake-up tasks relevant in the context
+of battery constrained wearable devices, among others. The numbers given in this
+paragraph and in Fig. 6.26 include the IO energy at 1.8 V. When S = 1 at 150
+inferences/s and 14.4 uJ/inference, the chip achieves up to 86% on CIFAR-10,
+98.1% precision / 95.7% recall on face and 98.2% precision / 83.3% recall on owner
+detection. If a slightly lower accuracy is allowed, the chip can scale up to 1700
+inferences/s at its minimum energy point, consuming 0.92 uJ/inference at 94.5%
+precision on face detection. Once a face or owner is detected, the chip can reliably
+recognize up to 3–7 angles of the face, which can allow a mobile device to accurately
+track the relative position of a user’s face relative to its own screen. If BinarEye is
+used as a detector in a sliding window fashion on QQVGA images, it achieves 1–
+20 fps at 1 mW and 15–200fps at 10 mW using a stride of 16 pixels. At 1 mW, the
+chip hence offers up to 33 days of always operation on a typical 810-mWh AAA
+battery. How all this translates into face-detection benchmark accuracy is still being
+studied at this time.
+6.5.4
+DVAFS in BinarEye
+The width-tuning knob allows for a wide range in network-level Dynamic-Voltage-
+Accuracy-Frequency-Scaling (DVAFS), a technique discussed in detail in Chap. 4.
+
+184
+6
+BINAREYE: Digital and Mixed-Signal Always-On Binary Neural Network. . .
+Fig. 6.26 I2L system-level, including 1.8 V IO (a) efﬁciency, (b) energy per classiﬁcation, (c)
+throughput, and (d) application-level speciﬁcations
+In BinarEye, the network width is modulated, rather than the binary precision of the
+computational arithmetic. The energy per frame at constant throughput in this case
+can thus be described in a similar way as in classical DVAFS systems as in:
+E ∼
+α
+k0 × S C
+f
+k1 × S
+ V
+k2
+2
+(6.14)
+Here, S is the level of sub-net parallelism as discussed in Sect. 6.5. Factors k0
+and k1 are factors modeling the slight deviation of ideal throughput scaling with S,
+and k2 is a scaling factor on the supply voltage the frequency is modulated. The
+impact of DVAFS in BinarEye can be seen from Fig. 6.27, which shows the I2L
+energy consumption for S = 1, 2, 4 at a constant throughput of 1000 inferences per
+second. A designer can hence choose to trade-off system-level energy for accuracy,
+depending on the requirements of the application. A network achieving 76% on
+CIFAR-10 consumes 20× less energy than a network achieving 86% accuracy.
+Figure 6.27 also compares the width-scaling knob in BinarEye, with the depth-
+scaling knob. At iso-accuracy, it is more energy efﬁcient to modulate the network
+
+6.5
+BinarEye: A Digital SX Implementation
+185
+Fig. 6.27 Energy and
+accuracy in multiple sub-net
+parallel DVAFS modes in
+BinarEye operating on
+CIFAR-10
+0
+5
+10
+15
+20
+Energy @ 1000 inf/s [uJ]
+70
+75
+80
+85
+90
+CIFAR-10 accuracy [%]
+Width-Scaling
+Depth-Scaling
+width than to modulate the depth. This is shown across the 80–86% accuracy range
+on CIFAR-10. The gains of depth-scaling compared to width scaling are signiﬁcant,
+especially in the low-accuracy regions.
+This kind of scalability is not necessarily useful within a single application.
+However, it can be used when a single computing platform should be able to cover
+applications of varying difﬁculty, such as face detection, owner recognition, and
+object recognition. In this case, all of those tasks can be run in the most efﬁcient
+operating mode through DVAFS.
+6.5.5
+Comparison with the State-of-the-Art
+Figure 6.28 compares BinarEye with other recent neural network implementations.
+YodaNN (Andri et al. 2016) is a binary-weight accelerator, as only the weights
+are 1b and activations are kept at high precision. Because of this, it achieves a
+very high accuracy on CIFAR-10, up to 91.7%. However, due to the large feature
+map sizes at 12b, the chip requires high bandwidth at run-time, which leads to an
+estimation of 1 mJ per classiﬁcation if IO energy is included. Ando et al. (2017) is
+a binary/ternary DNN implementation that can only achieve 90% on MNIST, which
+is a very poor result, close to the accuracy of a single-layer linear classiﬁer. As this
+chip fully optimized for DNN operation, it outperforms BinarEye up to a factor of
+6 on FC layers, even in its 65-nm technology. In Moons et al. (2017b), accurate
+face detection is performed at 3 uJ/frame, only including the core energy. BinarEye
+achieves the same accuracy consuming only 0.9 uJ i2l, without any off-loading of
+intermediate data or weights. IBM’s TrueNorth is about 10× less energy efﬁcient
+than BinarEye, while using 500× more transistors to do the job. Bong et al. (2017)
+performs accurate face detection using an analog implementation of a Haar cascade.
+In 65 nm, it requires 12 uJ per classiﬁcation, while BinarEye can achieve the same
+
+186
+6
+BINAREYE: Digital and Mixed-Signal Always-On Binary Neural Network. . .
+Fig. 6.28 Comparison of low-precision CNN processors on multiple benchmarks. Asterisk is the test core efﬁciency without IO power. Dagger is with IO
+power included. Uparrow is the energy on Conv layers only. Alpha are numbers for the 9-layer benchmark of Fig. 6.22a. MNIST on this work is for a 5-layer
+network. Plus is extrapolated based on our own experiments
+
+6.6
+Comparing Digital and Analog Binary Neural Network Implementations
+187
+level of accuracy using less than 1 uJ. Finally, Whatmough et al. (2017) is 2× more
+efﬁcient than a narrow, 5-layer network ran on BinarEye at iso-accuracy on MNIST.
+However, the DNN’s used by Whatmough et al. (2017) cannot be used to accurately
+model more complex CIFAR-10 images. At 0.92 uJ/classiﬁcation, BinarEye still
+achieves more than 76% accuracy on CIFAR-10, while Whatmough et al. (2017)
+drops to 60%, even at similar or higher energy consumption.
+6.6
+Comparing Digital and Analog Binary Neural Network
+Implementations
+This section explicitly compares the analog and digital versions of the 256X and SX
+architectures. Figure 6.29 is a full overview comparing some crucial speciﬁcations
+for both MSBNN and BinarEye chips, as well as extrapolated data for a ﬁctitious
+mixed-signal and optimal digital SX implementation.
+From measurements of the two chips, it is clear that the energy consumed in the
+MSBNN neuron is up to 12.9× lower than in BinarEye, when the S = 1 modes are
+directly compared on the same benchmark. This is due to the combined effect of the
+efﬁciency of the mixed-signal neuron, more advanced voltage scaling and a custom,
+very regular layout on an unconstrained area (25 kµm2/neuron). In BinarEye on
+the other hand, the Neurons are a multi-stage tree structure that is irregularly laid
+out in a much more constrained area (13 kµm2/neuron). Through simulations, the
+optimized digital neuron with a hand-designed adder tree laid out in the same area
+as MSBNN consumes 4.2× more than the mixed-signal implementation, or 3.1×
+less than the automated digital version. The difference in neuron efﬁciency is not
+only due to the design style (analog vs optimized digital vs digital) but also due
+to a difference in design constraints. The digital allows 2× less area per neuron,
+which leads to an increase in wiring, speciﬁcally on the higher metals. On top of
+that, digital BinarEye was signed-off for 50 MHz, while the other implementations
+are signed-off for 20 MHz. This difference leads to increased buffering. Figure 6.29
+also shows the DVAFS scalability of projected mixed-signal and optimized digital
+SX implementations. Here, we assume that the energy and throughput of the SC
+neuron array scale quadratically with S, as is the case for the digital neuron array. We
+additionally assume no degradation in mean classiﬁcation accuracy for the 128X and
+64X SC neuron array, as was the case in measurement for the 256X implementation.
+It should be noted that the assumption of quadratic scaling neglects the overhead of
+the ﬁlter bias CDAC section and the comparator, and that the assumption of no
+accuracy degradation has not been veriﬁed in simulation. With this, most of the
+previous conclusions hold here as well. However, as the discussed baseline versions
+are already more efﬁcient, the gains of width scaling will be more modest than in a
+digital implementation. The maximum gain here is close to 10×, between the two
+ultimate modes, as compared to 15× in BinarEye.
+
+188
+6
+BINAREYE: Digital and Mixed-Signal Always-On Binary Neural Network. . .
+Fig. 6.29 Comparison of BinarEye, MSBNN, and the extrapolated performance of a ﬁctitious mixed-signal and optimized digital SX implementation.
+Estimated numbers assume no accuracy degradation due to the analog non-idealities of the mixed-signal neuron array, as was the case in the measured
+mixed-signal chip
+
+6.6
+Comparing Digital and Analog Binary Neural Network Implementations
+189
+10 -1
+10 0
+10 1
+Energy [uJ]
+0.88
+0.9
+0.92
+0.94
+0.96
+0.98
+1
+Accuracy[%]
+Digital
+Optimized Digital
+Mixed-Signal
+[And17]
+[What17]
+(a)
+10 0
+10 2
+Energy [uJ]
+0.5
+0.6
+0.7
+0.8
+0.9
+1
+Accuracy[%]
+Digital
+Optimized Digital
+Mixed-Signal
+[And16]
+[Ess16]
+[What17]
+(b)
+Fig. 6.30 Performance comparison of different versions of SX implementations vs the SotA.
+“Optimized digital” and “mixed-signal” are projections based on the measurements of MSBNN
+and BinarEye. (a) MNIST. (b) Performance comparison of different versions of SX implementa-
+tions vs the SotA
+Figure 6.29 not only compares the chips but also their performance in different
+operating modes. On MNIST, MSBNN can only lower its energy consumption by
+a factor of <2× by going to a shallower 6-layer network. In doing this, it also
+lowers its accuracy on the MNIST dataset. BinarEye has a separate knob, as it can
+also modulate the network width, which leads to a larger energy trade-off, without
+losing much more accuracy on simple data sets. In the S = 4 mode, it consumes
+only a third of the power of the MSBNN chip, at a slightly lower accuracy. This
+is the DVAFS effect, as in Chap. 4: for narrower networks, the chip operates in a
+sub-net parallel operating mode, allowing lower frequencies and supply voltages.
+At a constant throughput, in terms of classiﬁcations per second, it will then be more
+energy-efﬁcient than modes with wider networks. For some simple applications,
+narrow networks can be sufﬁcient to achieve high accuracy. This is most apparent
+when looking at the i2l core power at ﬁxed throughput’ rows in the table. On
+CIFAR-10, S = 4 leads to an accuracy loss of 10%. On MNIST, the accuracy
+drop is much lower at around 2%. The same observation holds for multiple other
+simple benchmarks in face detection and face angle recognition, as discussed in
+Sect. 6.5.3 and Fig. 6.26a. The performance of the different versions of BinarEye
+and the SX projections of an optimized digital and a mixed-signal implementation
+is further shown in Fig. 6.30a. The ﬁgure also shows the current SotA as a reference
+point. Figure 6.30b shows the performance on MNIST, while Fig. 6.30 shows the
+performance on CIFAR-10.
+Even though it is less energy efﬁcient, BinarEye has several advantages com-
+pared to MSBNN, speciﬁcally in an industrial environment. First, BinarEye works
+out-of-the-box and requires no offset or threshold calibration to compensate for
+comparator non-idealities, as is the case in MSBNN and was discussed in Sect. 6.4.
+BinarEye is a fully digital solution and can as such be operated in a mode where
+there are no deviations of the ideal functionality. In MSBNN, due to the analog
+
+190
+6
+BINAREYE: Digital and Mixed-Signal Always-On Binary Neural Network. . .
+nature of the computations, bits can ﬂip under inﬂuence of thermal noise, as already
+happens at room temperature at low voltages. The inﬂuence of higher temperatures
+has not yet been measured on neither of the two chips. Finally, the design cycle
+of BinarEye is much shorter, much less challenging, and much more established
+than the design and veriﬁcation of MSBNN. For BinarEye, only digital design
+tools and ﬂows are required, while the design of MSBNN requires mixed-mode
+simulations and the manual design and layout of comparator circuitry, line drivers,
+ﬂip-ﬂops, latches, and so on. Once a working RTL-level netlist has been established,
+our experience shows that BinarEye can be fabricated by 1 experienced designer
+in about 2 months. Starting from the same netlist, MSBNN requires 5 months of
+development time before it can be fabricated. If the same system is to be built in
+another technology, a full redesign of the mixed-signal chip would be necessary.
+6.7
+Outlook and Future Work
+Several innovations or optimizations are still to be made to BinaryNets in general
+and the 256X and SX architectures in speciﬁc to make them a good alternative to
+networks operating at higher precision.
+Several doubts still exist on BinaryNets. These will have to be solved before
+BinaryNet hardware can be used in the wild.
+•
+Although BinaryNets perform reasonably well on simple benchmarks such as
+CIFAR-10 and MNIST, it is not yet clear which real-world applications they
+can power. For example, even though BinarEye can achieve 86% accuracy on
+CIFAR-10 and general BinaryNets can be pushed up to 92%, they do not seem to
+outperform Viola–Jones based face detection in a vanilla face-detection pipeline.
+The IC-design research community should move away from treating benchmarks
+like CIFAR-10 or MNIST as representative of real-life applications and target full
+application pipelines instead.
+Tips and Tricks
+The analog implementation of MSBNN, which was laid out by hand, is close to 13×
+more efﬁcient than a tool generated digital layout in the same technology. The hand-
+designed digital adder is 3.5× more efﬁcient than the generated digital adder. In the tool-
+generated digital, every neuron is laid out on an average of 13 kµm2, while the other
+versions have 2× more (25 kµm2) area available. On top of that, the automated digital is
+signed-off for 50 MHz, while the others are signed-off for 20 MHz. The combination of
+these two effects—increased wire loads due to area constraints and increased buffering
+due to timing constraints—leads to the large difference in efﬁciency. This is a lesson
+indicating the importance of both constraints and their effect on energy consumption.
+
+6.7
+Outlook and Future Work
+191
+•
+Very little research efforts have gone into testing binary or quantized neural
+networks on more advanced network architectures such as ResNets, DenseNets,
+and MobileNets. Preliminary experiments on ResNet show discouraging results,
+as it does not support BinaryNets, for example (see Chap. 3). This is a problem, as
+most of the more novel network architectures not only achieve higher accuracies
+but do this using less weights and less operations. This raises the question if
+advanced quantization might be a wrong answer to the right question: how to
+minimize energy consumption in the state-of-the-art neural networks.
+For the designed 256X and SX architectures, several changes can be made to
+make them more energy-efﬁcient.
+•
+As discussed in Sect. 6.3, the bandwidth from the west and east feature buffers
+is too low to support a CONV operation every cycle. In the current version, the
+ﬁlters are shifted and computed only once every two cycles.
+•
+To maximize the impact of the previous optimization, the bandwidth from
+the memory-like neuron array to the north and south weight buffers could be
+increased as well in order to speed up the weight-LD cycles. A higher bandwidth
+would reduce the time overhead of the LD cycle and increase overall throughput.
+•
+The current 256X and SX architectures do not support input images larger than
+32 ×32 ×RGB. The architectures could be expanded for usage on larger inputs.
+This can be done in two complementary ways. First, the feature map buffers
+can easily be quadrupled or octupled in size, without major impact on energy
+efﬁciency. On top of that, the chip could be embedded into a larger system with
+external DRAM, to support arbitrarily large feature maps.
+•
+The current array is hardwired to 256/N × 2 × 2 neurons. It could pay off to
+generalize the architecture to 1 × 1 and depthwise separable 3 × 3 layers. Going
+to 256/N×3×3 ﬁlters would only require minor architectural changes. However,
+in our experiments, this does not lead to better results on CIFAR-10, but might
+on other benchmarks or on larger feature maps.
+•
+The same SX architecture can be expanded to support 2b or 4b (or Nb for that
+matter) operators. As precision is increased, the gap in energy efﬁciency between
+mixed-signal and digital processing closes (Murmann et al. 2015). According to
+Chap. 3, speciﬁcally 4b networks are generally a better trade-off in energy vs
+accuracy. On top of that, they are proven to be compatible with ResNets as well
+in Moons et al. (2017a).
+•
+In terms of layout, several improvements can be made as well, both in digital
+BinarEye and in the MSBNN. In the current versions, feature memories are
+placed left and right of the array, which makes the lines going from left to
+right longer than they have to. Placing the memories and all horizontal line
+drivers in the middle of the array would shorten those lines and minimize the
+now signiﬁcant wiring energy. This strategy would be similar to the one used in
+classical SRAM macros.
+
+192
+6
+BINAREYE: Digital and Mixed-Signal Always-On Binary Neural Network. . .
+6.8
+Conclusion
+Due to their complexity, CNNs have not yet been deployed on always-on mobile
+platforms such as smartphones, where an always-on gesture, face, owner, and angle
+detector can be used as a wake-up sensor for its screen or application processor.
+This chapter discusses the architecture and hardware design, measurements,
+and application-level performance of two BinaryNet acceleration ASICS that
+could achieve just this. They target a wide variety of always-on visual wake-up
+applications on battery-constrained mobile devices, typically the earliest stages in
+the hierarchical processing cascades discussed in Chap. 2. This goal of always-
+on compute is achieved through: (1) extremely efﬁcient hardware in the analog
+domain, (2) maximal reuse of weights in a memory-like neuron array (3), storing
+full models and feature maps on chip, requiring no off-chip bandwidth, and (4)
+ﬂexibility on three levels: retrainable weights, a programmable network depth, and
+a reconﬁgurable network width. As part of a larger team at Stanford, we developed
+two hardware architectures for these BinaryNets that can operate in an always-
+on fashion. 256X is implemented in a mixed-signal fashion in MSBNN. SX is
+implemented in the all-digital BinarEye chip.
+MSBNN is a mixed-signal binary CNN implementation of 256X, that performs
+image classiﬁcation of moderate complexity (86% on CIFAR-10) in the analog
+domain (1) and employs near-memory data processing (2,3) to achieve peak
+532 1b-TOPS/W at a classiﬁcation energy of 3.8 uJ, a 40× improvement over
+TrueNorth (Esser et al. 2016).
+BinarEye is an all-digital SX implementation that focuses on improved ﬂexibility.
+Its computations are fully digital, but its architecture expands on 256X by
+allowing more reconﬁgurability in its network mapping (4). Because of this,
+BinarEye can map a wide range of applications, while offering an input-to-label,
+full-system efﬁciency up to 145 1b-TOPS/W. This allows running 1k inferences/s
+of 125M operations each at 1 mW or 1 uJ/inference, while still achieving 94%
+precision in face detection and 90% accuracy in multiple other tasks. BinarEye
+outperforms (Ando et al. 2017; Moons et al. 2017b; Andri et al. 2016; Bong
+et al. 2017) up to 70× on CIFAR-10 at a slightly lower accuracy and 10× the
+throughput and by 3.3–12× on face detection at iso-accuracy.
+Due to its computations in the analog domain, MSBNN consumes almost 13×
+less energy in its neurons than BinarEye. A projection of a hand-designed digital
+neuron implementation consumes 3.1× less neuron energy than BinarEye. On the
+system level, MSBNN is 4× and 1.76× better than BinarEye and the hand-designed
+digital projection, respectively.
+
+References
+193
+References
+Ando K, Ueyoshi K, Orimo K, Yonekawa H, Sato S, Nakahara H, Ikebe M, Asai T, Takamaeda-
+Yamazaki S, Kuroda T, et al (2017) Brein memory: a 13-layer 4.2 k neuron/0.8 m synapse
+binary/ternary reconﬁgurable in-memory deep neural network accelerator in 65 nm CMOS. In:
+Symposium on VLSI circuits, 2017. IEEE, pp C24–C25
+Andri R, Cavigelli L, Rossi D, Benini L (2016) Yodann: an ultra-low power convolutional neural
+network accelerator based on binary weights. In: IEEE computer society annual symposium on
+VLSI (ISVLSI), 2016. IEEE, pp 236–241
+Bankman D, Yang L, Moons B, Verhelst M, Murmann B (2018) An always-on 3.8 uj/classiﬁcation
+86accelerator with all memory on chip in 28nm CMOS. In: International Solid-State Circuits
+Conference (ISSCC) technical digest
+Biswas A, Chandrakasan A (2018) Conv-ram: an energy-efﬁcient SRAM with embedded convo-
+lution computation for low-power CNN-based machine learning applications. In: International
+Solid-State Circuits Conference (ISSCC)
+Bong K, Choi S, Kim C, Kang S, Kim Y, Yoo HJ (2017) 14.6 a 0.62 mw ultra-low-power
+convolutional-neural-network face-recognition processor and a cis integrated with always-on
+haar-like face detector. In: IEEE International Solid-State Circuits Conference (ISSCC), 2017.
+IEEE, pp 248–249
+Buhler F, Brown P, Li J, Chen T, Zhang Z, Flynn M (2017) A 3.43 tops/w 48.9 pj/pixel
+50.1 nj/classiﬁcation 512 analog neuron sparse coding neural network with on-chip learning
+and classiﬁcation in 40 nm CMOS. In: Symposium on VLSI circuits, pp 30–31
+Chen WH, Li KX, Lin WY, Hsu KH, et al (2018) A 65 nm 1 mb nonvolatile computing-in-memory
+reram macro with sub-16ns multiply-and-accumulate for binary DNN ai edge processors. In:
+IEEE International Solid-State Circuits Conference (ISSCC), IEEE
+Courbariaux M, Bengio Y, David JP (2015) Binaryconnect: training deep neural networks with
+binary weights during propagations. In: Cortes C, Lawrence ND, Lee DD, Sugiyama M, Garnett
+R (eds) Advances in neural information processing systems, vol 28. Curran Associates, Inc.,
+Red Hook, pp 3123–3131
+Esser S, Merolla P, Arthur J, Cassidy A, et al (2016) Convolutional networks for fast, energy-
+efﬁcient neuromorphic computing. In: Proceedings of the national academy of sciences
+Gonugondla SK, Kang M, Shanbhag N (2018) A 42pj/decision 3.12tops/w robust in-memory
+machine learning classiﬁer with on-chip training. In: International Solid-State Circuits Con-
+ference (ISSCC)
+Han S, Mao H, Dally WJ (2016) Deep compression: compressing deep neural network with
+pruning, trained quantization and huffman coding. In: International Conference on Learning
+Representations (ICLR)
+Hubara I, Courbariaux M, Soudry D, El-Yaniv R, Bengio Y (2016) Binarized neural networks. In:
+Advances in Neural Information Processing Systems (NIPS)
+Ioffe S, Szegedy C (2015) Batch normalization: accelerating deep network training by reducing
+internal covariate shift. arXiv preprint:150203167
+Khwa WS, Chen JJ, Li JF, Si X, et al (2018) A 65 nm 4 kb algorithm-dependent computing-in-
+memory SRAM unit-macro with 2.3 ns and 55.8 tops/w fully parallel product-sum operation for
+binary DNN edge processors. In: IEEE International Solid-State Circuits Conference (ISSCC).
+IEEE
+Krizhevsky A, Hinton G (2009) Learning multiple layers of features from tiny images. Technical
+report
+LeCun Y, Cortes C (1998) The MNIST database of handwritten digits
+Moons B, De Brabandere B, Van Gool L, Verhelst M (2016) Energy-efﬁcient convnets through
+approximate computing. In: Proceedings of the IEEE Winter Conference on Applications of
+Computer Vision (WACV), pp 1–8
+
+194
+6
+BINAREYE: Digital and Mixed-Signal Always-On Binary Neural Network. . .
+Moons B, Goetschalckx K, Van Berckelaer N, Verhelst M (2017a) Minimum energy quantized
+neural networks. In: Asilomar conference on signals, systems and computers
+Moons B, Uytterhoeven R, Dehaene W, Verhelst M (2017b) Envision: a 0.26-to-10 tops/w
+subword-parallel dynamic-voltage-accuracy-frequency-scalable convolutional neural network
+processor in 28 nm FDSOI. In: International Solid-State Circuits Conference (ISSCC)
+Moons B, et al (2017c) Bertmoons github page. http://github.com/BertMoons, Accessed: 01 Jan
+2018
+Moons B, Bankman D, Yang L, Murmann B, Verhelst M (2018) Binareye: an always-on energy-
+accuracy-scalable binary CNN processor with all memory on-chip in 28 nm CMOS. In: IEEE
+Custom Integrated Circuits Conference (CICC)
+Murmann B, Bankman D, Chai E, Miyashita D, Yang L (2015) Mixed-signal circuits for embedded
+machine-learning applications. In: 2015 49th Asilomar conference on signals, systems and
+computers, pp 1341–1345. https://doi.org/10.1109/ACSSC.2015.7421361
+Rastegari M, Ordonez V, Redmon J, Farhadi A (2016) XNOR-net: Imagenet classiﬁcation using
+binary convolutional neural networks. In: European conference on computer vision. Springer,
+Berlin, pp 525–542
+Russakovsky O, Deng J, Su H, Krause J, Satheesh S, Ma S, Huang Z, Karpathy A, Khosla A,
+Bernstein M, et al (2015) Imagenet large scale visual recognition challenge. Int J Comput Vis
+115(3):211–252
+Sze V, Yang TJ, Chen YH (2017) Designing energy-efﬁcient convolutional neural networks using
+energy-aware pruning. In: Conference on Computer Vision and Pattern Recognition (CVPR)
+Whatmough PN, Lee SK, Lee H, Rama S, Brooks D, Wei GY (2017) 14.3 a 28 nm soc with
+a 1.2 ghz 568 nj/prediction sparse deep-neural-network engine with> 0.1 timing error rate
+tolerance for IOT applications. In: IEEE International Solid-State Circuits Conference (ISSCC),
+2017. IEEE, pp 242–243
+Zhao R, Song W, Zhang W, Xing T, Lin JH, Srivastava M, Gupta R, Zhang Z (2017) Accelerating
+binarized convolutional neural networks with software-programmable FPGAS. In: Proceedings
+of the 2017 ACM/SIGDA international symposium on ﬁeld-programmable gate arrays. ACM,
+New York, pp 15–24
+Zhu C, Han S, Mao H, Dally WJ (2016) Trained ternary quantization. arXiv preprint:161201064

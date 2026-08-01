@@ -1,0 +1,550 @@
+Regression – 
+Recommendations Improved
+At the end of the last chapter, we used a very simple method to build a 
+recommendation engine: we used regression to guess a ratings value. In the 
+first part of this chapter, we will continue this work and build a more advanced 
+(and better) rating estimator. We start with a few ideas that are helpful and then 
+combine all of them. When combining, we use regression again to learn the best 
+way to combine them.
+In the second part of this chapter, we will look at a different way of learning called 
+basket analysis, where we will learn how to make recommendations. Unlike the 
+case in which we had numeric ratings, in the basket analysis setting, all we have is 
+information about shopping baskets, that is, what items were bought together. The 
+goal is to learn recommendations. You have probably already seen features of the 
+form "people who bought X also bought Y" in online shopping. We will develop  
+a similar feature of our own.
+Improved recommendations
+Remember where we stopped in the previous chapter: with a very basic, but not 
+very good, recommendation system that gave better than random predictions. We 
+are now going to start improving it. First, we will go through a couple of ideas that 
+will capture some part of the problem. Then, what we will do is combine multiple 
+approaches rather than using a single approach in order to be able to achieve a better 
+final performance.
+We will be using the same movie recommendation dataset that we started off with in 
+the last chapter; it consists of a matrix with users on one axis and movies on the other. 
+It is a sparse matrix, as each user has only reviewed a small fraction of the movies.
+
+Regression – Recommendations Improved
+[ 166 ]
+Using the binary matrix of recommendations
+One of the interesting conclusions from the Netflix Challenge was one of those 
+obvious-in-hindsight ideas: we can learn a lot about you just from knowing which 
+movies you rated, even without looking at which rating was given! Even with a 
+binary matrix where we have a rating of 1 where a user rated a movie and 0 where 
+they did not, we can make useful predictions. In hindsight, this makes perfect sense; 
+we do not choose movies to watch completely randomly, but instead pick those 
+where we already have an expectation of liking them. We also do not make random 
+choices of which movies to rate, but perhaps only rate those we feel most strongly 
+about (naturally, there are exceptions, but on an average this is probably true).
+We can visualize the values of the matrix as an image where each rating is depicted 
+as a little square. Black represents the absence of a rating and the grey levels 
+represent the rating value. We can see that the matrix is sparse—most of the squares 
+are black. We can also see that some users rate a lot more movies than others and 
+that some movies are the target of many more ratings than others.
+The code to visualize the data is very simple (you can adapt it to show a larger 
+fraction of the matrix than is possible to show in this book), as follows:
+from matplotlib import pyplot as plt
+imagedata = reviews[:200, :200].todense()
+plt.imshow(imagedata, interpolation='nearest')
+The following screenshot is the output of this code:
+
+Chapter 8
+[ 167 ]
+We are now going to use this binary matrix to make predictions of movie ratings. 
+The general algorithm will be (in pseudocode) as follows:
+1.	 For each user, rank every other user in terms of closeness. For this step,  
+we will use the binary matrix and use correlation as the measure of 
+closeness (interpreting the binary matrix as zeros and ones allows us  
+to perform this computation).
+2.	 When we need to estimate a rating for a user-movie pair, we look at the 
+neighbors of the user sequentially (as defined in step 1). When we first find  
+a rating for the movie in question, we report it.
+Implementing the code first, we are going to write a simple NumPy function. 
+NumPy ships with np.corrcoeff, which computes correlations. This is a very 
+generic function and computes n-dimensional correlations even when only a single, 
+traditional correlation is needed. Therefore, to compute the correlation between two 
+users, we need to call the following:
+  corr_between_user1_and_user2 = np.corrcoef(user1, user2)[0,1]
+In fact, we will be wishing to compute the correlation between a user and all the 
+other users. This will be an operation we will use a few times, so we wrap it in  
+a function named all_correlations:
+import numpy as np
+def all_correlations(bait, target):
+    '''
+    corrs = all_correlations(bait, target)
+    corrs[i] is the correlation between bait and target[i]
+    '''
+    return np.array(
+            [np.corrcoef(bait, c)[0,1]
+                for c in target])
+
+Regression – Recommendations Improved
+[ 168 ]
+Now we can use this in several ways. A simple one is to select the nearest neighbors 
+of each user. These are the users that most resemble it. We will use the measured 
+correlation discussed earlier:
+def estimate(user, rest):
+  '''
+   estimate movie ratings for 'user' based on the 'rest' of the 
+universe.
+  '''
+  # binary version of user ratings
+    bu = user > 0
+  # binary version of rest ratings
+    br = rest > 0
+    ws = all_correlations(bu,br)
+  # select 100 highest values
+    selected = ws.argsort()[-100:]
+  # estimate based on the mean:
+    estimates = rest[selected].mean(0)
+  # We need to correct estimates
+  # based on the fact that some movies have more ratings than others:
+    estimates /= (.1+br[selected].mean(0))
+When compared to the estimate obtained over all the users in the dataset, this 
+reduces the RMSE by 20 percent. As usual, when we look only at those users that 
+have more predictions, we do better: there is a 25 percent error reduction if the user 
+is in the top half of the rating activity.
+Looking at the movie neighbors
+In the previous section, we looked at the users that were most similar. We can also 
+look at which movies are most similar. We will now build recommendations based on 
+a nearest neighbor rule for movies: when predicting the rating of a movie M for a user 
+U, the system will predict that U will rate M with the same points it gave to the movie 
+most similar to M.
+Therefore, we proceed with two steps: first, we compute a similarity matrix (a matrix 
+that tells us which movies are most similar); second, we compute an estimate for 
+each (user-movie) pair.
+We use the NumPy zeros and ones functions to allocate arrays (initialized to zeros 
+and ones respectively):
+movie_likeness = np.zeros((nmovies,nmovies))
+allms = np.ones(nmovies, bool)
+cs = np.zeros(nmovies)
+
+Chapter 8
+[ 169 ]
+Now, we iterate over all the movies:
+for i in range(nmovies):
+    movie_likeness[i] = all_correlations(reviews[:,i], reviews.T)
+    movie_likeness[i,i] = -1
+We set the diagonal to -1; otherwise, the most similar movie to any movie is 
+itself, which is true, but very unhelpful. This is the same trick we used in Chapter 
+2, Learning How to Classify with Real-world Examples, when we first introduced the 
+nearest neighbor classification. Based on this matrix, we can easily write a function 
+that estimates a rating:
+def nn_movie(movie_likeness, reviews, uid, mid):
+    likes = movie_likeness[mid].argsort()
+  # reverse the sorting so that most alike are in
+   # beginning
+    likes = likes[::-1]
+  # returns the rating for the most similar movie available
+    for ell in likes:
+        if reviews[u,ell] > 0:
+            return reviews[u,ell]
+How well does the preceding function do? Fairly well: its RMSE is 
+only 0.85.
+The preceding code does not show you all of the details of the cross-
+validation. While it would work well in production as it is written, 
+for testing, we need to make sure we have recomputed the likeness 
+matrix afresh without using the user that we are currently testing 
+on (otherwise, we contaminate the test set and we have an inflated 
+estimate of generalization). Unfortunately, this takes a long time, and 
+we do not need the full matrix for each user. You should compute only 
+what you need. This makes the code slightly more complex than the 
+preceding examples. On the companion website for this book, you will 
+find code with all the hairy details. There you will also find a much 
+faster implementation of the all_correlations function.
+Combining multiple methods
+We can now combine the methods given in the earlier section into a single 
+prediction. For example, we could average the predictions. This is normally good 
+enough, but there is no reason to think that both predictions are similarly good  
+and should thus have the exact same weight of 0.5. It might be that one is better.
+
+Regression – Recommendations Improved
+[ 170 ]
+We can try a weighted average, multiplying each prediction by a given weight before 
+summing it all up. How do we find the best weights though? We learn them from the 
+data of course!
+Ensemble learning
+We are using a general technique in machine learning called ensemble 
+learning; this is not only applicable in regression. We learn an ensemble 
+(that is, a set) of predictors. Then, we combine them. What is interesting 
+is that we can see each prediction as being a new feature, and we are now 
+just combining features based on training data, which is what we have 
+been doing all along. Note that we are doing so for regression here, but 
+the same reasoning is applicable during classification: you learn how to 
+create several classifiers and a master classifier, which takes the output 
+of all of them and gives a final prediction. Different forms of ensemble 
+learning differ on how you combine the base predictors. In our case, we 
+reuse the training data that learned the predictors.
+Data
+Final
+Prediction
+Predict 1
+Predict 2
+Predict 3
+....
+Weights
+By having a flexible way to combine multiple methods, we can simply try any idea 
+we wish by adding it into the mix of learners and letting the system give it a weight. 
+We can also use the weights to discover which ideas are good: if they get a high 
+weight, this means that it seems they are adding useful information. Ideas with  
+very low weights can even be dropped for better performance.
+The code for this is very simple, and is as follows:
+  
+  # We import the code we used in the previous examples:
+  import similar_movie
+  import corrneighbors
+  import usermodel
+  from sklearn.linear_model import LinearRegression
+  es = [
+    usermodel.estimate_all()
+    corrneighbors.estimate_all(),
+    similar_movie.estimate_all(),
+  ]
+
+Chapter 8
+[ 171 ]
+  coefficients = []  
+  # We are now going to run a leave-1-out cross-validation loop
+  for u in xrange(reviews.shape[0]): # for all user ids
+    es0 = np.delete(es,u,1) # all but user u
+    r0 = np.delete(reviews, u, 0)
+        P0,P1 = np.where(r0 > 0) # we only care about actual 
+predictions
+        X = es[:,P0,P1]
+        y = r0[r0 > 0]
+        reg.fit(X.T,y)
+        coefficients.append(reg.coef_)
+    prediction = reg.predict(es[:,u,reviews[u] > 0].T)
+    # measure error as before
+The result is an RMSE of almost exactly 1. We can also analyze the coefficients 
+variable to find out how well our predictors fare:
+  print coefficients.mean(0) # the mean value across all users
+The values of the array are [ 0.25164062,  0.01258986,  0.60827019]. The 
+estimate of the most similar movie has the highest weight (it was the best individual 
+prediction, so it is not surprising), and we can drop the correlation-based method 
+from the learning process as it has little influence on the final result.
+What this setting does is it makes it easy to add a few extra ideas; for example, if the 
+single most similar movie is a good predictor, how about we use the five most similar 
+movies in the learning process as well? We can adapt the earlier code to generate the 
+k-th most similar movie and then use the stacked learner to learn the weights:
+es = [
+    usermodel.estimate_all()
+    similar_movie.estimate_all(k=1),
+    similar_movie.estimate_all(k=2),
+    similar_movie.estimate_all(k=3),
+    similar_movie.estimate_all(k=4),
+    similar_movie.estimate_all(k=5),
+  ]
+# the rest of the code remains as before!
+We gained a lot of freedom in generating new machine learning systems. In this  
+case, the final result is not better, but it was easy to test this new idea.
+
+Regression – Recommendations Improved
+[ 172 ]
+However, we do have to be careful to not overfit our dataset. In fact, if we randomly 
+try too many things, some of them will work well on this dataset but will not 
+generalize. Even though we are using cross-validation, we are not cross-validating 
+our design decisions. In order to have a good estimate, and if data is plentiful, you 
+should leave a portion of the data untouched until you have your final model that 
+is about to go into production. Then, testing your model gives you an unbiased 
+prediction of how well you should expect it to work in the real world.
+Basket analysis
+The methods we have discussed so far work well when you have numeric ratings of 
+how much a user liked a product. This type of information is not always available.
+Basket analysis is an alternative mode of learning recommendations. In this mode, 
+our data consists only of what items were bought together; it does not contain any 
+information on whether individual items were enjoyed or not. It is often easier to get 
+this data rather than ratings data as many users will not provide ratings, while the 
+basket data is generated as a side effect of shopping. The following screenshot shows 
+you a snippet of Amazon.com's web page for the book War and Peace, Leo Tolstoy, 
+which is a classic way to use these results:
+This mode of learning is not only applicable to actual shopping baskets, naturally. 
+It is applicable in any setting where you have groups of objects together and need 
+to recommend another. For example, recommending additional recipients to a 
+user writing an e-mail is done by Gmail and could be implemented using similar 
+techniques (we do not know what Gmail uses internally; perhaps they combine 
+multiple techniques as we did earlier). Or, we could use these methods to develop an 
+application to recommend webpages to visit based on your browsing history. Even if 
+we are handling purchases, it may make sense to group all purchases by a customer 
+into a single basket independently of whether the items where bought together or on 
+separate transactions (this depends on the business context).
+
+Chapter 8
+[ 173 ]
+The beer and diapers story
+One of the stories that is often mentioned in the context of basket analysis 
+is the "diapers and beer" story. It states that when supermarkets first 
+started to look at their data, they found that diapers were often bought 
+together with beer. Supposedly, it was the father who would go out to 
+the supermarket to buy diapers and then would pick up some beer as 
+well. There has been much discussion of whether this is true or just an 
+urban myth. In this case, it seems that it is true. In the early 1990s, Osco 
+Drug did discover that in the early evening beer and diapers were bought 
+together, and it did surprise the managers who had, until then, never 
+considered these two products to be similar. What is not true is that this 
+led the store to move the beer display closer to the diaper section. Also, 
+we have no idea whether it was really that fathers were buying beer and 
+diapers together more than mothers (or grandparents).
+Obtaining useful predictions
+It is not just "customers who bought X also bought Y", even though that is how 
+many online retailers phrase it (see the Amazon.com screenshot given earlier); a real 
+system cannot work like this. Why not? Because such a system would get fooled by 
+very frequently bought items and would simply recommend that which is popular 
+without any personalization.
+For example, at a supermarket, many customers buy bread (say 50 percent of 
+customers buy bread). So if you focus on any particular item, say dishwasher soap, 
+and look at what is frequently bought with dishwasher soap, you might find that 
+bread is frequently bought with soap. In fact, 50 percent of the times someone 
+buys dishwasher soap, they buy bread. However, bread is frequently bought with 
+anything else just because everybody buys bread very often.
+What we are really looking for is customers who bought X are statistically more likely to 
+buy Y than the baseline. So if you buy dishwasher soap, you are likely to buy bread, 
+but not more so than the baseline. Similarly, a bookstore that simply recommended 
+bestsellers no matter which books you had already bought would not be doing a 
+good job of personalizing recommendations.
+Analyzing supermarket shopping baskets
+As an example, we will look at a dataset consisting of anonymous transactions at a 
+supermarket in Belgium. This dataset was made available by Tom Brijs at Hasselt 
+University. The data is anonymous, so we only have a number for each product and 
+a basket that is a set of numbers. The datafile is available from several online sources 
+(including the book's companion website) as retail.dat.
+
+Regression – Recommendations Improved
+[ 174 ]
+We begin by loading the dataset and looking at some statistics:
+   from collections import defaultdict
+from itertools import chain
+# file format is a line per transaction
+# of the form '12 34 342 5...'
+dataset = [[int(tok) for tok in ,line.strip().split()]
+        for line in open('retail.dat')]
+# count how often each product was purchased:
+counts = defaultdict(int)
+for elem in chain(*dataset):
+    counts[elem] += 1
+We can plot a small histogram as follows:
+# of times bought
+# of products
+Just once
+2224
+Twice or thrice
+2438
+Four to seven times
+2508
+Eight to 15 times
+2251
+16 to 31 times
+2182
+32 to 63 times
+1940
+64 to 127 times
+1523
+128 to 511 times
+1225
+512 times or more
+179
+There are many products that have only been bought a few times. For example,  
+33 percent of products were bought four or less times. However, this represents 
+only 1 percent of purchases. This phenomenon that many products are only 
+purchased a small number of times is sometimes labeled "the long tail", and has 
+only become more prominent as the Internet made it cheaper to stock and sell 
+niche items. In order to be able to provide recommendations for these products,  
+we would need a lot more data.
+There are a few open source implementations of basket analysis algorithms out 
+there, but none that are well-integrated with scikit-learn or any of the other packages 
+we have been using. Therefore, we are going to implement one classic algorithm 
+ourselves. This algorithm is called the Apriori algorithm, and it is a bit old (it was 
+published in 1994 by Rakesh Agrawal and Ramakrishnan Srikant), but it still works 
+(algorithms, of course, never stop working; they just get superceded by better ideas).
+
+Chapter 8
+[ 175 ]
+Formally, Apriori takes a collection of sets (that is, your shopping baskets) and 
+returns sets that are very frequent as subsets (that is, items that together are part of 
+many shopping baskets).
+The algorithm works according to the bottom-up approach: starting with the smallest 
+candidates (those composed of one single element), it builds up, adding one element 
+at a time. We need to define the minimum support we are looking for:
+  minsupport = 80
+Support is the number of times that a set of products was purchased together. The 
+goal of Apriori is to find itemsets with high support. Logically, any itemset with 
+more than minimal support can only be composed of items that themselves have at 
+least minimal support:
+  valid = set(k for k,v in counts.items()
+          if (v >= minsupport))
+Our initial itemsets are singletons (sets with a single element). In particular,  
+all singletons that have at least minimal support are frequent itemsets.
+  itemsets = [frozenset([v]) for v in valid]
+Now our iteration is very simple and is given as follows:
+    new_itemsets = []
+    for iset in itemsets:
+        for v in valid:
+            if v not in iset:
+          # we create a new possible set
+          # which is the same as the previous,
+          #with the addition of v
+                newset = (ell|set([v_]))
+                # loop over the dataset to count the number
+                # of times newset appears. This step is slow
+                # and not used proper implementation
+                c_newset = 0
+                for d in dataset:
+                   if d.issuperset(c):
+                      c_newset += 1
+                if c_newset > minsupport:
+                    newsets.append(newset)
+
+Regression – Recommendations Improved
+[ 176 ]
+This works correctly, but is very slow. A better implementation has more 
+infrastructure so you can avoid having to loop over all the datasets to get the count 
+(c_newset). In particular, we keep track of which shopping baskets have which 
+frequent itemsets. This accelerates the loop but makes the code harder to follow. 
+Therefore, we will not show it here. As usual, you can find both implementations on 
+the book's companion website. The code there is also wrapped into a function that 
+can be applied to other datasets.
+The Apriori algorithm returns frequent itemsets, that is, small baskets that are not in 
+any specific quantity (minsupport in the code).
+Association rule mining
+Frequent itemsets are not very useful by themselves. The next step is to build 
+association rules. Because of this final goal, the whole field of basket analysis is 
+sometimes called association rule mining.
+An association rule is a statement of the "if X then Y" form; for example, if a 
+customer bought War and Peace, they will buy Anna Karenina. Note that the rule is not 
+deterministic (not all customers who buy X will buy Y), but it is rather cumbersome 
+to always spell it out. So if a customer bought X, he is more likely to buy Y according 
+to the baseline; thus, we say if X then Y, but we mean it in a probabilistic sense.
+Interestingly, the antecedent and conclusion may contain multiple objects: costumers 
+who bought X, Y, and Z also bought A, B, and C. Multiple antecedents may allow 
+you to make more specific predictions than are possible from a single item.
+You can get from a frequent set to a rule by just trying all possible combinations of X 
+implies Y. It is easy to generate many of these rules. However, you only want to have 
+valuable rules. Therefore, we need to measure the value of a rule. A commonly used 
+measure is called the lift. The lift is the ratio between the probability obtained by 
+applying the rule and the baseline:
+In the preceding formula, P(Y) is the fraction of all transactions that include Y while 
+P(Y|X) is the fraction of transactions that include Y and X both. Using the lift helps 
+you avoid the problem of recommending bestsellers; for a bestseller, both P(Y) 
+and P(X|Y) will be large. Therefore, the lift will be close to one and the rule will be 
+deemed not very relevant. In practice, we wish to have at least 10, perhaps even 100, 
+values of a lift. 
+
+Chapter 8
+[ 177 ]
+Refer to the following code:
+def rules_from_itemset(itemset, dataset):
+  itemset = frozenset(itemset)
+  nr_transactions = float(len(dataset))
+  for item in itemset:
+           antecendent = itemset-consequent
+      base = 0.0
+      # acount: antecedent count
+        acount = 0.0
+    # ccount : consequent count
+    ccount = 0.0
+    for d in dataset:
+      if item in d: base += 1
+      if d.issuperset(itemset): ccount += 1
+      if d.issuperset(antecedent): acount += 1
+    base /= nr_transactions
+    p_y_given_x = ccount/acount
+    lift = p_y_given_x / base
+    print('Rule {0} ->  {1} has lift {2}'
+          .format(antecedent, consequent,lift))
+This is slow-running code: we iterate over the whole dataset repeatedly. A better 
+implementation would cache the counts for speed. You can download such an 
+implementation from the book's website, and it does indeed run much faster.
+Some of the results are shown in the following table:
+Antecedent
+Consequent
+Consequent 
+count
+Antecedent 
+count
+Antecedent 
+and 
+consequent 
+count
+Lift
+1378, 1379l, 
+1380
+1269
+279 (0.3%)
+80
+57
+225
+48, 41, 976
+117
+1026 (1.1%)
+122
+51
+35
+48, 41, 16011
+16010
+1316 (1.5%)
+165
+159
+64
+Counts are the number of transactions; they include the following:
+•	
+The consequent alone (that is, the base rate at which that product is bought)
+•	
+All the items in the antecedent
+•	
+All the items in the antecedent and the consequent
+
+Regression – Recommendations Improved
+[ 178 ]
+We can see, for example, that there were 80 transactions of which 1378, 1379l, 
+and 1380 were bought together. Of these, 57 also included 1269, so the estimated 
+conditional probability is 57/80 ≈ 71%. Compared to the fact that only 0.3% of all 
+transactions included 1269 , this gives us a lift of 255.
+The need to have a decent number of transactions in these counts in order to be able 
+to make relatively solid inferences is why we must first select frequent itemsets. 
+If we were to generate rules from an infrequent itemset, the counts would be very 
+small; due to this, the relative values would be meaningless (or subject to very large 
+error bars).
+Note that there are many more association rules that have been discovered from 
+this dataset: 1030 datasets are required to support at least 80 minimum baskets 
+and a minimum lift of 5. This is still a small dataset when compared to what is now 
+possible with the Web; when you perform millions of transactions, you can expect to 
+generate many thousands, even millions, of rules.
+However, for each customer, only a few of them will be relevant at any given time, 
+and so each costumer only receives a small number of recommendations.
+More advanced basket analysis
+There are now other algorithms for basket analysis that run faster than Apriori. The 
+code we saw earlier was simple, and was good enough for us as we only had circa 
+100 thousand transactions. If you have had many millions, it might be worthwhile to 
+use a faster algorithm (although note that for most applications, learning association 
+rules can be run offline).
+There are also methods to work with temporal information leading to rules that take 
+into account the order in which you have made your purchases. To take an extreme 
+example of why this may be useful, consider that someone buying supplies for a 
+large party may come back for trash bags. Therefore it may make sense to propose 
+trash bags on the first visit. However, it would not make sense to propose party 
+supplies to everyone who buys a trash bag.
+You can find Python open source implementations (a new BSD license as scikit-learn) 
+of some of these in a package called pymining. This package was developed by 
+Barthelemy Dagenais and is available at https://github.com/bartdag/pymining.
+
+Chapter 8
+[ 179 ]
+Summary
+In this chapter, we started by improving our rating predictions from the previous 
+chapter. We saw a couple of different ways in which to do so and then combined 
+them all in a single prediction by learning how to use a set of weights. These 
+techniques, ensemble or stacked learning, are general techniques that can be used 
+in many situations and not just for regression. They allow you to combine different 
+ideas even if their internal mechanics are completely different; you can combine their 
+final outputs.
+In the second half of the chapter, we switched gears and looked at another method of 
+recommendation: shopping basket analysis or association rule mining. In this mode, 
+we try to discover (probabilistic) association rules of the customers who bought X are 
+likely to be interested in Y form. This takes advantage of the data that is generated from 
+sales alone without requiring users to numerically rate items. This is not available in 
+scikit-learn (yet), so we wrote our own code (for a change).
+Association rule mining needs to be careful to not simply recommend bestsellers to 
+every user (otherwise, what is the point of personalization?). In order to do this, we 
+learned about measuring the value of rules in relation to the baseline as the lift of a 
+rule. In the next chapter, we will build a music genre classifier.
+

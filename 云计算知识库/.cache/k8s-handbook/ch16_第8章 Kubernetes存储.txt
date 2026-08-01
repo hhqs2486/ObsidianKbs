@@ -1,0 +1,602 @@
+第8章 Kubernetes存储
+存储对于大多数的实际生产环境应用来说是非常重要的。幸运的
+是，Kubernetes拥有成熟且功能丰富的存储子系统，称为持久化卷子
+系统（Persistent Volume Subsystem）。
+本章从以下内容展开。
+●概述。
+●Storage提供商。
+●容器存储接口（The Container Storage Interface, CSI）。
+●Kubernetes持久化卷子系统。
+●存储类（Storage Class）和动态置备（Dynamic
+Provisioning）。
+●示例。
+8.1 概述
+首先要说，Kubernetes支持来自多种途径的多种类型的存储。例
+如iSCSI、SMB、NFS，以及对象存储等，都是不同类型的、部署在云上
+或自建数据中心的外部存储系统。不过，无论什么类型的存储，或来
+自哪里，在其对接到Kubernetes集群中后，都会被统称为卷
+（volume）。例如，来自Azure File的资源在Kubernetes中称为卷，
+来自AWS弹性块存储（Elastic Block Store）的块设备也是如此。
+Kubernetes上所有的存储都被称为卷。
+图8.1是总体架构。
+更多IT书籍请关注：www.cmsblogs.cn
+
+图8.1
+左侧是存储提供商。它可能是来自诸如EMC和NetApp等厂商的传统
+企业级存储阵列，也可能是来自诸如AWS弹性块存储（EBS）和GCE持久
+化磁盘（PD）的云存储服务。只需要一个插件就可以让存储资源作为
+卷在Kubernetes中应用。
+图中间是插件层。通俗来说，它像胶水一般连接外部存储和
+Kubernetes。实际上，插件是基于容器存储接口（The Container
+Storage Interface, CSI）的，CSI是一种旨在为插件提供一套清晰接
+口的开放标准。如果读者是一个编写存储插件的开发者，CSI能够为读
+者抽象Kubernetes存储的内部细节，使读者可以在Kubernetes“代码
+树”之外（out-of-tree）进行开发。
+注：在CSI出现之前，所有的存储插件都是作为Kubernetes代码树
+（in-tree）的一部分来实现的。这意味着，所有的插件都必须是开源
+的，并且所有的更新和Bug修复都绑定在Kubernetes的发布周期上。这
+对于插件开发者和Kubernetes的维护者来说都是噩梦。不过，现在有
+了CSI，存储提供商不再需要开源其代码，并且可以按照自己的节奏来
+进行更新和Bug修复。
+图8.1的右侧是Kubernetes持久化卷子系统。其中是一组能够被各
+个应用来使用的API对象。简单来说，持久化卷（Persistent Volume,
+PV）允许用户将外部存储映射到集群，而持久化卷申请（Persistent
+Volume Claim, PVC）则类似于许可证，使有授权的应用（Pod）可以
+使用PV。
+更多IT书籍请关注：www.cmsblogs.cn
+
+我们假设一个简单的例子，如图8.2所示。
+图8.2
+某Kubernetes集群运行在AWS上，AWS管理员创建了一个名为
+“ebs-vol”的25GB的EBS卷。Kubernetes管理员创建了一个名为
+“k8s-vol”的PV，该PV通过kubenetes.io/aws-ebs插件连接后端的
+“ebs-vol”。虽然听起来有点复杂，但是很简单。在Kubernetes集群
+中，PV是一种表示外部存储的简单方式。最终，Pod通过一个PVC来申
+请对PV的使用。
+补充以下两点。
+1.对于多个Pod访问同一个卷的情况，有相应的规则来确保正常访
+问。
+2.一个外部存储卷只能被一个PV使用。例如，一个50GB的外部卷
+不能分成两个25GB的Kubernetes PV来使用。
+以上是一些思路性的解释，下面将进一步深入介绍。
+8.2 存储提供者
+更多IT书籍请关注：www.cmsblogs.cn
+
+Kubernetes可以让各种类型的外部存储系统为其所用。常见的可
+能是诸如AWSElastic BlockStore或AzureDisk等本地云服务，也可能
+是传统自建存储阵列提供的iSCSI或NFS卷。当然还有其他存储可选，
+总之，Kubernetes能够广泛对接各种外部存储系统。
+不过一些明显的限制除外，比如，肯定无法让运行在Microsoft
+Azure云上的Kubernetes集群使用AWSElasticBlockStore提供的存储。
+8.3 容器存储接口（CSI）
+CSI是Kubernetes存储体系非常重要的一部分。不过，除非是编写
+存储插件的开发者，否则不太可能经常与CSI打交道。
+CSI是一个开源项目，定义了一套基于标准的接口，从而使存储能
+够以一种统一的方式被不同的容器编排工具使用。换句话说，存储厂
+商编写的CSI插件应该可以被用于多个编排工具，比如Kubernetes和
+Docker Swarm。不过，Kubernetes被重点照顾。
+在Kubernetes的世界中，CSI是编写驱动（插件）的推荐方式，这
+意味着插件代码不需要存在于Kubernetes代码树中。它提供了一套简
+洁的接口，能够对Kubernetes内部存储机制的复杂性进行抽象。因
+此，CSI仅暴露出一些简洁的接口，而隐藏了Kubernetes代码中丑陋的
+卷机制（无意冒犯）。
+从日常管理的角度来说，与CSI打交道的唯一机会就是通过YAML部
+署文档来引用合适的插件。不过，代码树中的插件逐步被CSI插件代替
+还需要一定的时间。
+有时我们将插件称为“provisioner”，尤其是在本章后面谈到存
+储类（Storage Class）的时候。
+8.4 Kubernetes持久化卷子系统
+更多IT书籍请关注：www.cmsblogs.cn
+
+本节介绍的，才是每天都有可能通过配置和操作与Kubernetes存
+储打交道的内容。
+如图8.3所示，左侧是原始存储，它通过CSI插件与Kubernetes对
+接。这样，就可以在应用中使用由持久化卷子系统提供的存储了。
+图8.3
+持久化卷子系统中的3个主要资源如下。
+●持久化卷（Persistent Volume，PV）。
+●持久化卷申请（Persistent Volume Claim，PVC）。
+●存储类（Storage Class，SC）。
+概括地说，PV代表的是Kubernetes中的存储；PVC就像许可证，赋
+予Pod访问PV的权限；CS则使分配过程是动态的。
+让我们通过一个具体的例子来深入了解。
+假设有一个Kubernetes集群和一套外部存储系统。存储提供商的
+CSI插件能够用来在Kubernetes集群中使用其存储。我们在存储系统上
+置备3个10GB的卷，并创建3个Kubernetes PV对象以便集群可以使用这
+3个卷。每一个PV代表存储上的一个卷。这时，在Kubernetes集群中就
+可以看到这3个卷并使用它们了。
+现在假设要部署一个需要10GB存储空间的应用。这没问题，因为
+已经有3个10GB的PV了。为了让应用能够使用其中一个PV，需要PVC。
+前面提到，PVC就像许可证，能够准许一个Pod（应用）使用一个PV。
+应用有了PVC之后，就可以将相应的PV作为卷挂载到Pod中。可以回看
+图8.2以帮助理解。
+更多IT书籍请关注：www.cmsblogs.cn
+
+大体的过程就是这样的，下面上手操作一下。
+本示例适用于运行在Google云上的Kubernetes集群。本书之所以
+基于一个云平台来举例，是因为这能够简化示例的理解，读者可以使
+用云平台上的免费方案或初始的免费券。当然，在其他平台上也是类
+似的，稍作改动即可。
+本例假设，在Google云上，集群所在的Region或Zone已经预先创
+建了一个名为uber-disk的10GB的SSD卷。那么，在Kubernetes中的操
+作将分为如下几步。
+（1）创建PV。
+（2）创建PVC。
+（3）在PodSpec中定义卷。
+（4）挂载到一个容器上。
+下面的YAML文件将创建一个PV对象，该对象与Google云上已创建
+的“uber-disk”磁盘是关联的。以下YAML文件gke-pv.yml可以在本书
+GitHub库的storage目录下找到。
+apiVersion: v1  
+kind: PersistentVolume  
+metadata:  
+  name: pv1  
+spec:  
+  accessModes:  
+  - ReadWriteOnce  
+  storageClassName: test  
+  capacity:   
+    storage: 10Gi  
+  persistentVolumeReclaimPolicy: Retain 
+  gcePersistentDisk:  
+    pdName: uber-disk
+仔细研读一下该文件的内容。
+更多IT书籍请关注：www.cmsblogs.cn
+
+PV资源是定义在coreAPI组的v1中的。PV的名称是pv1，其访问模
+式是ReadWriteOnce，并且将其存储类设置为test。另外，它还被定义
+为一个10GB的卷，设置了Reclaim策略，并且被映射到已创建的GCE磁
+盘uber-disk上。
+执行以下命令来创建PV。假设YAML文件在PATH中（或当前目录
+下），并且名为gke-pv.yml。如果尚未在后端存储（本例中存储后端
+由Google计算引擎提供）中创建uber-disk，则该命令会执行失败。
+$ kubectl apply -f gke-pv.yml 
+persistentvolume/pv1 created
+查看PV是否已经创建。
+$ kubectl get pv pv1  
+NAME   CAPACITY   MODES   RECLAIM POLICY  STATUS      
+STORAGECLASS ... 
+pv1    10Gi       RWO     Retain          Available   test
+当然，还可以执行kubectl describe pv pv1命令来查看更多详细
+信息。至此，所创建的PV如图8.4所示。
+下面简要介绍YAML文件中的几个PV属性。
+更多IT书籍请关注：www.cmsblogs.cn
+
+图8.4
+spec.accessModes定义了PV是如何被挂载的。可选项包括以下几
+种。
+●ReadWriteOnce（RWO）。
+●ReadWriteMany（RWM）。
+●ReadOnlyMany（ROM）。
+ReadWriteOnce限制一个PV只能以读写方式被挂载或绑定到一个
+PVC。尝试将其绑定到多个PVC的话会失败。
+ReadWriteMany则允许一个PV能够以读写方式被绑定到多个PVC
+上。这种模式通常只支持诸如NFS这样的文件或对象存储。块存储通常
+只支持RWO。
+ReadOnlyMany允许PV以只读方式绑定到多个PVC。
+需要强调几点。首先，一个PV只能设置一种模式：不能在与一个
+PVC以ROM模式绑定的同时再与另一个PVC以RWM模式绑定。其次，Pod不
+能直接与PV对接，而是必须通过PVC与某个PV绑定。
+spec.storageClassName让Kubernetes将该PV归入名为test的存储
+类。本章后续还会就存储类展开介绍，此处为了确保PV与PVC顺利完成
+更多IT书籍请关注：www.cmsblogs.cn
+
+绑定暂且如此设置。
+还有一个属性spec.persistentVolumeReclaimPolicy，用于定义
+在PVC被释放之后，如何处理对应的PV。具体来说有两种策略。
+●Delete。
+●Retain。
+Delete是更危险的方式，也是在使用存储类动态创建PV时的默认
+策略。这一策略会删除对应的PV对象以及外部存储系统中关联的存储
+资源，从而可能导致数据丢失！因此必须谨慎使用该策略。
+Retain则会保留对应的PV对象，以及外部存储系统中的资源。不
+过，也会导致其他PVC无法继续使用该PV。
+如果想要继续使用保留的PV，则需要执行如下3个步骤。
+1.手动删除该PV。
+2.格式化外部存储系统中相对应的存储资源。
+3.重新创建PV。
+注意，在实验环境中，非常容易忘记还需要执行以上3个步骤来尝
+试重新使用一个旧的已删除的设置为retain策略的PV。
+spec.capacity用于告诉Kubernetes这个PV的容量是多少。它的值
+可以比实际的物理存储资源更少，但是不能更多。比如读者不能在外
+部存储系统的50GB的设备上创建一个100GB的PV，但是却可以在100GB
+的外部卷上创建一个50GB的PV（不过会造成浪费）。
+YAML文件的最后一行将PV与后端存储上已创建的设备名称关联。
+此外，还可以在YAML文件的parameters部分定义与存储提供商相
+关的属性。这在后续介绍存储类的时候会看到。如果存储系统支持
+NVMe设备，那么就可以在这里进行定义。
+现在已经有PV了，下面再创建一个PVC，这样Pod就可以声明
+（claim）对PV的使用了。
+更多IT书籍请关注：www.cmsblogs.cn
+
+下面的YAML文件定义了一个PVC，可以被Pod用来声明对名为pv1的
+PV的使用权。以下文件gke-pvc.yml可以在本书GitHub库的storage目
+录下找到。
+apiVersion: v1  
+kind: PersistentVolumeClaim  
+metadata:  
+  name: pvc1  
+spec:  
+  accessModes:  
+  - ReadWriteOnce  
+  storageClassName: test  
+  resources:   
+    requests:  
+      storage: 10Gi
+同PV一样，PVC也是core API组中稳定的v1资源。
+最重要的是要注意到，PVC的spec部分的值与要绑定的PV要一致。
+本例中，access mode、storage class和capacity必须与PV的一致，
+如图8.5所示。
+注：PV可以拥有比PVC更大的容量。比如，一个10GB的PVC可以绑
+定到一个15GB的PV上（显然会浪费5GB的PV空间）。不过，一个15GB的
+PVC无法绑定到一个10GB的PV上。
+图8.5是某PV与PVC的YAML文件的对比，需要匹配的属性已经被加
+重显示了。
+更多IT书籍请关注：www.cmsblogs.cn
+
+图8.5
+执行如下命令来部署PVC。假设YAML文件gke-pvc.yml已经存在于
+PATH中。
+$ kubectl apply -f gke-pvc.yml  
+persistentvolumeclaim/pvc1 created
+查看PVC是否已创建并绑定到PV。
+$ kubectl get pvc pvc1  
+NAME   STATUS   VOLUME   CAPACITY   ACCESS MODES   
+STORAGECLASS 
+pvc1   Bound    pv1      10Gi       RWO            test
+现在已经在Kubernetes集群上部署了一个名为pv1的PV，它代表一
+个10GB的外部存储，并且还绑定了一个名为pvc1的PVC。下面来看一下
+Pod是如何利用PVC来使用存储的。
+多数情况下，我们基于Deployment和StatefuSet这种高层次的控
+制器来部署应用，不过为了简化示例，这里只部署一个Pod。这样部署
+的Pod通常称为“单例”（singleton），在生产环境中并不建议这样
+部署，因为它并不具备高可用的特性，并且无法自愈。
+更多IT书籍请关注：www.cmsblogs.cn
+
+以下的YAML文件用来部署一个单容器的Pod，它有一个名为data的
+卷用到了刚刚创建的PVC和PV对象。这个名为volPod.yml的文件可以在
+本书GitHub库的storage目录下找到。
+apiVersion: v1 
+kind: Pod  
+metadata:  
+  name: volPod 
+spec:  
+  volumes  
+  - name: data 
+    persistentVolumeClaim:  
+      claimName: pvc1  
+  containers:  
+  - name: ubuntu-ctr  
+    image: ubuntu:latest  
+    command:  
+    - /bin/bash  
+    - "-c"  
+    - "sleep 60m"  
+    volumeMounts:  
+    - mountPath: /data  
+      name: data 
+第一个与存储有关的配置是spec.volumes。在这里定义了一个名
+为data的卷，它用到了前面创建的名为pvc1的PVC。
+通过执行kubectl get pv和kubectl get pvc命令可以看到已创建
+的名为pvc1的PVC与名为pv1的PV是绑定关系。kubectl describe pv
+pv1命令还会显示pv1与一个10GB的名为uber-disk的GCE持久化磁盘是
+关联的。
+使用如下命令部署Pod。
+$ kubectl apply -f volPod.yml 
+Pod/volPod created
+更多IT书籍请关注：www.cmsblogs.cn
+
+此时执行kubectl describe Pod volPod命令也可以看到Pod已经
+成功使用了data卷和pvc1的PVC。
+在继续介绍如何使用存储类来动态使用存储之前，先对以上内容
+做一个快速的总结。
+从外部存储系统上的存储资源说起。我们使用一个CSI插件将外部
+存储系统与Kubernetes集成，然后使用PV对象使外部存储在集群中可
+用。每一个PV在Kubernetes集群中都是一个能够对外部存储系统上的
+特定存储资源（LUN、共享、块等）进行映射的对象。最终，如果想让
+Pod使用PV，需要一个PVC。这就像是发给Pod的许可证，给了Pod使用
+PV的权限。一旦PV和PVC对象完成创建和绑定，该PVC就可以被一个
+PodSpec引用，以便在容器中将其关联的PV挂载为一个卷。
+如果感觉这些内容有点难以理解，不用担心，在本章最后我们会
+在一个示例中综合重温一遍。
+8.5 存储类和动态置备
+前面介绍的内容是Kubernetes存储的基础，但是无法扩展——在
+一个大规模的Kubernetes环境中，手动创建和维护大量的PV和PVC是难
+以完成的任务。因此需要一些动态置备的手段。
+有请存储类（Storage Class）出场。[1]
+见名知意，存储类允许用户为存储定义不同的类或层（tier）。
+用户可以根据存储的类型来自行决定如何定义类。比如，有人可能会
+定义一个fast类、一个slow类和一个encrypted类。
+目前在Kubernetes中，存储类被作为资源定义在
+storage.k8s.io/v1的API组中。资源类型是StorageClass，用户可以
+在YAML文件中进行配置，然后POST到API Server中进行部署。在使用
+kubectl时，用户也可以使用sc作为简称来指代StorageClass对象。
+更多IT书籍请关注：www.cmsblogs.cn
+
+注：使用kubectl api-resources命令可以查看API资源列表及其
+简称。输出的信息中还包括：每个资源属于哪个API组（空的话表示属
+于core API组）、资源是否在命名空间中（namespaced），以及在编
+写YAML文件时的kind值。
+8.5.1 存储类YAML
+以下是一个存储类YAML文件的简单例子。它定义了一个名为fast
+的存储类，存储后端是AWS“爱尔兰”域eu-west-1a上的固态硬盘
+（io1）。它还定义性能级别为10 IOPs/GB。
+kind: StorageClass  
+apiVersion: storage.k8s.io/v1  
+metadata:  
+  name: fast  
+provisioner: kubernetes.io/aws-ebs 
+parameters:  
+  type: io1  
+  zones: eu-west-1a  
+  iopsPerGB: "10"
+与其他Kubernetes的YAML文件类似，kind告诉API Server现在定
+义的对象是什么类型，apiVersion给出要部署资源的版本。
+metadata.name用于指定要部署的对象的名字——例子中是fast。
+provisioner告诉Kubernetes使用哪个插件，parameters的内容用于指
+定后端存储的具体信息。
+以下是几点补充说明。
+1.StorageClass对象是不可变的——也就是说它在部署之后是不
+能修改的。
+更多IT书籍请关注：www.cmsblogs.cn
+
+2.metadata.name应当是有意义的，因为其他对象可能会用到它来
+代指某个类。
+3.provisioner和plugin两个术语可互相替换。
+4.parameters定义了与插件相关的值，每个插件可以支持其特有
+的一组参数。关于这部分的配置需要建立在对相关的存储插件及其关
+联的后端存储有一定了解的基础之上。
+8.5.2 多个存储类
+用户可以按需配置任意数量的StorageClass对象。不过每个
+StorageClass只能关联一个存储后端。比如，某Kubernetes集群有
+StorageOS和Portworx两个存储后端，则需要至少两个StorageClass对
+象。另外，每个存储后端可以提供多个存储的类/层，进一步对应多个
+StorageClass对象。举例来说，对于同一个存储后端，可以有如下两
+个StorageClass对象。
+1.fast-secure用于高速的加密卷。
+2.fast用于高速的非加密卷。
+一个基于Portworx存储后端的加密卷的StorageClass可能定义如
+下（前提是需要有Portworx环境）。
+kind: StorageClass  
+apiVersion: storage.k8s.io/v1  
+metadata:   
+  name: portworx-db-secure  
+provisioner: kubernetes.io/portworx-volume 
+parameters:   
+  fs: "xfs"   
+  block_size: "32"  
+  repl: "2"  
+  snap_interval: "30"  
+更多IT书籍请关注：www.cmsblogs.cn
+
+  io-priority: "medium"  
+  secure: "true"
+可以看到，parameters部分内容比较多，而且包括一些难以理解
+的值。这部分的配置需要对相关的插件和后端存储有充分的了解。配
+置细节可以查看相关插件的文档。
+8.5.3 实现存储类
+部署和使用StorageClass对象的基本流程如下。
+1.创建Kubernetes集群及其存储后端。
+2.确保与存储后端对应的插件是就绪的。
+3.创建一个StorageClass对象。
+4.创建一个PVC对象，并通过名称与StorageClass对象关联。
+5.部署一个Pod，使用基于该PVC的卷。
+请注意以上流程不包括创建PV。这是因为存储类能够自动创建
+PV。
+以下的YAML代码片段包含对一个StorageClass、一个PVC和一个
+Pod的定义。这3个对象可以被定义在同一个YAML文件中，只需要用3个
+中划线（---）隔开。
+请留意PodSpec是如何通过名称引用PVC的，以及PVC是如何通过名
+称引用SC（StorageClass）的。
+kind: StorageClass  
+apiVersion: storage.k8s.io/v1  
+metadata:   
+  name: fast # 由PVC引用  
+provisioner: kubernetes.io.gce-pd  
+parameters:   
+  type: pd-ssd  
+---   
+更多IT书籍请关注：www.cmsblogs.cn
+
+apiVersion: v1  
+kind: PersistentVolumeClaim  
+metadata:  
+  name: mypvc  # 由PodSpec引用  
+  namespace: mynamespace  
+spec:  
+  accessModes:  
+  - ReadWriteOnce   
+  resources:   
+    requests:  
+      storage: 50Gi  
+  storageClassName: fast    # 匹配SC名称  
+---   
+apiVersion: v1  
+kind: Pod  
+metadata:  
+  name: myPod  
+spec:  
+  volumes:  
+    - name: data   
+      persistentVolumeClaim: 
+        claimName: mypvc  # 匹配PVC名称  
+  containers: ...   
+  <SNIP>
+以上YAML文件是截取的，不包括完整的PodSpec。
+到目前为止，我们已经见过几个不同的SC的定义了。不过，由于
+对应的provisioner（存储插件/后端）不同，各个定义也不尽相同。
+因此在部署前，需要查找存储插件的相关文档来了解各个provisioner
+所支持的选项。
+8.6节将会演示一个完整示例，不过在此之前，我们先对存储类进
+行一个简单的总结。
+StorageClass使我们无须手动创建PV，只需要创建一个
+StorageClass对象，然后使用一个插件将其与某个具体的存储后端联
+系起来。比如在AWS“孟买”域上的高性能AWS SSD存储。SC需要有名
+称（name），并且需要在YAML文件中定义，然后用kubectl来部署。部
+署成功之后，StorageClass会观察API Server上是否有新的被关联的
+更多IT书籍请关注：www.cmsblogs.cn
+
+PVC对象。当匹配的PVC出现时，StorageClass会自动在后端存储系统
+上创建所需的卷，并在Kubernetes上创建PV。
+当然，还有更多细节，比如挂载选项（mount option）和卷绑定
+模式（volume binding mode）。不过以上介绍的内容已经足够入门
+了。
+下面通过一个示例将所有的内容串起来。
+8.6 示例
+本节将会演示一个使用StorageClass的示例。基本的步骤如下。
+1.创建一个StorageClass。
+2.创建一个PVC。
+3.创建一个Pod来使用它们。
+Pod会通过PVC来映射一个卷，而PVC会触发SC来动态创建一个PV，
+以及外部存储上的相关资源。本示例将运行在Google云平台上，并且
+假定已经拥有正确配置的kubectl。
+8.6.1 清理
+如果跟进了前面的示例，那么可以用以下命令删除前面创建的
+Pod、PVC和PV。
+$ kubectl delete Pods volPod 
+Pod "volPod" deleted  
+$ kubectl delete pvc pvc1  
+persistentvolumeclaim "pvc1" deleted  
+  
+$ kubectl delete pv pv1  
+persistentvolume "pv1" deleted 
+更多IT书籍请关注：www.cmsblogs.cn
+
+8.6.2 创建一个存储类
+我们将使用下面的YAML文件来创建一个名为slow的
+StorageClass，它基于Google GCE上的标准持久化磁盘。我们将不会
+涉及太多有关存储后端的细节内容，简单来说，我们使用的是一个性
+能不高的磁盘。YAML中还对声明策略（reclaim policy）进行了设
+置，以便在释放PVC的绑定之后不会丢失数据。最后，我们使用注解
+（annotation）来尝试将其设置为集群的默认存储类。
+以下的YAML文件名为google-sc.yml，可以在本书GitHub库的
+storage目录下找到。
+kind: StorageClass  
+apiVersion: storage.k8s.io/v1  
+metadata:  
+  name: slow  
+  annotations:  
+    storageclass.kubernetes.io/is-default-class: "true" 
+provisioner: kubernetes.io/gce-pd  
+parameters:  
+  type: pd-standard  
+reclaimPolicy: Retain 
+在部署这个SC之前说明两点。
+1.该示例在Kubernetes 1.16.2版本上通过测试。
+2.该示例使用注解在所测试版本的Kubernetes上设置默认存储
+类。这一方式在以后的Kubernetes版本中可能会变化。
+执行如下命令部署SC。
+$ kubectl apply -f google-sc.yml  
+storageclass.storage.K8s.io/slow created
+更多IT书籍请关注：www.cmsblogs.cn
+
+然后可以使用kubectl get sc slow和kubectl describe sd slow
+查看部署情况。
+$ kubectl get sc slow  
+NAME             PROVISIONER             AGE   
+slow (default)   kubernetes.io/gce-pd    32s
+8.6.3 创建一个PVC
+使用如下的YAML文件创建一个PVC对象来关联刚刚创建的slow
+StorageClass。以下内容可见于本书GitHub库的storage目录下的
+google-pvc.yml文件。
+apiVersion: v1  
+kind: PersistentVolumeClaim 
+metadata:  
+  name: pv-ticket   
+spec:   
+  accessModes:  
+  - ReadWriteOnce  
+  storageClassName: slow  
+  resources:   
+    requests:  
+      storage: 25Gi
+请注意，PVC名为pv-ticket，它与slow存储类关联，声明的是一
+个25GB的卷。执行如下命令来部署它。
+$ kubectl apply -f google-pvc.yml  
+persistentvolumeclaim/pv-ticket created
+执行kubectl get pvc来查看部署情况。
+更多IT书籍请关注：www.cmsblogs.cn
+
+$ kubectl get pvc pv-ticket  
+NAME        STATUS   VOLUME          CAPACITY   ACCESS 
+MODES    STORAGECLASS 
+pv-ticket   Bound    pvc-881a23...   25Gi       RWO         
+slow
+可见PVC已经绑定到pvc-881a23...卷上——我们不需要手动创建
+PV。这一操作背后的原理如下。
+1.创建存储类slow。
+2.创建一个监视API Server的轮询（loop），等待有新的PVC引用
+slow存储类。
+3.此时创建PVC pv-ticket，请求绑定一个来自slow存储类的25GB
+的卷。
+4.存储类发现了该PVC，然后动态创建所需的PV。
+执行以下命令来查看自动创建的PV。
+$ kubectl get pv  
+NAME         CAPACITY   Mode    STATUS   CLAIM       
+STORAGECLASS 
+pvc-881...   25Gi       RWO     Bound    pv-ticket   slow
+此处为了适应本书宽度，删掉了部分列。
+使用以下的YAML文件来定义一个单容器的Pod。Pod模板中指定一
+个名为data的卷使用PVC pvc-ticket。容器将这个data卷挂载到了容
+器中的/data目录。以下内容可以查看本书GitHub库storage目录下的
+google-Pod.yml文件。
+apiVersion: v1  
+kind: Pod  
+metadata:  
+  name: class-Pod  
+spec:   
+  volumes:  
+更多IT书籍请关注：www.cmsblogs.cn
+
+  - name: data   
+    persistentVolumeClaim: 
+      claimName: pv-ticket 
+  containers:  
+  - name: ubuntu-ctr   
+      image: ubuntu:latest 
+      command:  
+      - /bin/bash  
+      - "-c"   
+      - "sleep 60m"   
+      volumeMounts:  
+      - mountPath: /data   
+        name: data
+执行kubectl apply -f google-Pod.yml来部署这个Pod。
+恭喜！相信读者已经完成了StorageClass的部署，并使用PVC动态
+创建了一个PV。此外，还有一个Pod将该PVC作为卷挂载在其内的容器
+上。
+8.6.4 清理
+如果读者完整操作了本示例，那么现在应该有一个名为class-Pod
+的Pod、一个使用PVC pv-ticket在SC slow上动态创建的卷。可以执行
+以下命令来删除这些对象。
+$ kubectl delete Pod class-Pod 
+Pod "class-Pod" deleted   
+  
+$ kubectl delete pvc pv-ticket   
+persistentvolumeclaim "pv-ticket" deleted  
+  
+$ kubectl delete sc slow   
+storageclass.storage.k8s.io "slow" deleted
+更多IT书籍请关注：www.cmsblogs.cn
+
+8.6.5 使用默认的StorageClass
+如果读者的集群中有一个默认存储类，那么可以仅使用一个
+PodSpec和一个PVC来部署Pod，无须手动创建StorageClass。不过，实
+际生产集群环境中通常有多个StorageClass，因此最好创建和维护一
+个符合相应的业务系统需求的StorageClass。默认的StorageClass通
+常仅在开发环境中，或没有具体的存储需求的情况下才会用到。
+8.7 总结
+本章谈到，Kubernetes拥有一套强大的存储子系统，该子系统能
+够广泛利用各种类型的存储后端。
+每一个存储后端都需要一个插件来让自身的存储资源在
+Kubernetes集群中得到使用，推荐的插件是CSI插件。启用插件后，就
+可以用PV来指代外部存储资源，用PVC来为Pod提供对PV的访问能力。
+存储类使应用可以动态地请求存储资源。我们可以通过创建
+StorageClass对象来指代存储后端的一个类/层。一旦存储类创建完
+成，就会持续监视API Server上是否有引用自身的PVC出现。在匹配的
+PVC出现后，SC就会动态创建存储并使其以PV卷的形式挂载在Pod（容
+器）中。
+注释
+[1] 原文中出现的StorageClass（中间无空格），通常指存储类对
+象，将不做翻译。——译者注
+更多IT书籍请关注：www.cmsblogs.cn

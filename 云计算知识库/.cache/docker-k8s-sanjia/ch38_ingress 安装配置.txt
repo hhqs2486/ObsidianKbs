@@ -1,0 +1,248 @@
+外部服务发现之 ingress
+上节课我们学习了在 Kubernetes 集群内部使⽤ kube-dns 实现服务发现的功能，那么我们部署在
+Kubernetes 集群中的应⽤如何暴露给外部的⽤户使⽤呢？我们知道前⾯我们使⽤ NodePort 和
+LoadBlancer 类型的 Service 可以实现把应⽤暴露给外部⽤户使⽤，除此之外，Kubernetes 还为我们
+提供了⼀个⾮常重要的资源对象可以⽤来暴露服务给外部⽤户，那就是 ingress。对于⼩规模的应⽤我
+们使⽤ NodePort 或许能够满⾜我们的需求，但是当你的应⽤越来越多的时候，你就会发现对于
+NodePort 的管理就⾮常麻烦了，这个时候使⽤ ingress 就⾮常⽅便了，可以避免管理⼤量的 Port。
+介绍
+ Ingress 其实就是从 kuberenets 集群外部访问集群的⼀个⼊⼝，将外部的请求转发到集群内不同的
+Service 上，其实就相当于 nginx、haproxy 等负载均衡代理服务器，有的同学可能觉得我们直接使⽤
+nginx 就实现了，但是只使⽤ nginx 这种⽅式有很⼤缺陷，每次有新服务加⼊的时候怎么改 Nginx 配
+置？不可能让我们去⼿动更改或者滚动更新前端的 Nginx Pod 吧？那我们再加上⼀个服务发现的⼯具
+⽐如 consul 如何？貌似是可以，对吧？⽽且在之前单独使⽤ docker 的时候，这种⽅式已经使⽤得很
+普遍了，Ingress 实际上就是这样实现的，只是服务发现的功能⾃⼰实现了，不需要使⽤第三⽅的服务
+了，然后再加上⼀个域名规则定义，路由信息的刷新需要⼀个靠 Ingress controller 来提供。
+Ingress controller 可以理解为⼀个监听器，通过不断地与 kube-apiserver 打交道，实时的感知后端
+service、pod 的变化，当得到这些变化信息后，Ingress controller 再结合 Ingress 的配置，更新反向
+代理负载均衡器，达到服务发现的作⽤。其实这点和服务发现⼯具 consul consul-template ⾮常类似。
+现在可以供⼤家使⽤的 Ingress controller 有很多，⽐如 traefik、nginx-controller、Kubernetes Ingress
+Controller for Kong、HAProxy Ingress controller，当然你也可以⾃⼰实现⼀个 Ingress Controller，现
+在普遍⽤得较多的是 traefik 和 nginx-controller，traefik 的性能较 nginx-controller 差，但是配置使⽤要
+简单许多，我们这⾥会以更简单的 traefik 为例给⼤家介绍 ingress 的使⽤。
+Traefik
+Traefik 是⼀款开源的反向代理与负载均衡⼯具。它最⼤的优点是能够与常⻅的微服务系统直接整合，
+可以实现⾃动化动态配置。⽬前⽀持 Docker、Swarm、Mesos/Marathon、 Mesos、Kubernetes、
+Consul、Etcd、Zookeeper、BoltDB、Rest API 等等后端模型。 
+ingress 安装配置
+240
+
+要使⽤ traefik，我们同样需要部署 traefik 的 Pod，由于我们演示的集群中只有 master 节点有外⽹⽹
+卡，所以我们这⾥只有 master 这⼀个边缘节点，我们将 traefik 部署到该节点上即可。
+⾸先，为安全起⻅我们这⾥使⽤ RBAC 安全认证⽅式：(rbac.yaml)：
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: traefik-ingress-controller
+  namespace: kube-system
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+  name: traefik-ingress-controller
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - services
+      - endpoints
+      - secrets
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - extensions
+    resources:
+      - ingresses
+    verbs:
+      - get
+      - list
+      - watch
+---
+kind: ClusterRoleBinding
+ingress 安装配置
+241
+
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+  name: traefik-ingress-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: traefik-ingress-controller
+subjects:
+- kind: ServiceAccount
+  name: traefik-ingress-controller
+  namespace: kube-system
+直接在集群中创建即可：
+$ kubectl create -f rbac.yaml
+serviceaccount "traefik-ingress-controller" created
+clusterrole.rbac.authorization.k8s.io "traefik-ingress-controller" created
+clusterrolebinding.rbac.authorization.k8s.io "traefik-ingress-controller" created
+然后使⽤ Deployment 来管理 Pod，直接使⽤官⽅的 traefik 镜像部署即可（traefik.yaml）
+---
+kind: Deployment
+apiVersion: extensions/v1beta1
+metadata:
+  name: traefik-ingress-controller
+  namespace: kube-system
+  labels:
+    k8s-app: traefik-ingress-lb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      k8s-app: traefik-ingress-lb
+  template:
+    metadata:
+      labels:
+        k8s-app: traefik-ingress-lb
+        name: traefik-ingress-lb
+    spec:
+      serviceAccountName: traefik-ingress-controller
+      terminationGracePeriodSeconds: 60
+      tolerations:
+      - operator: "Exists"
+      nodeSelector:
+        kubernetes.io/hostname: master
+      containers:
+      - image: traefik
+        name: traefik-ingress-lb
+        ports:
+        - name: http
+          containerPort: 80
+        - name: admin
+          containerPort: 8080
+        args:
+        - --api
+        - --kubernetes
+ingress 安装配置
+242
+
+        - --logLevel=INFO
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: traefik-ingress-service
+  namespace: kube-system
+spec:
+  selector:
+    k8s-app: traefik-ingress-lb
+  ports:
+    - protocol: TCP
+      port: 80
+      name: web
+    - protocol: TCP
+      port: 8080
+      name: admin
+  type: NodePort
+直接创建上⾯的资源对象即可：
+$ kubectl create -f traefik.yaml
+deployment.extensions "traefik-ingress-controller" created
+service "traefik-ingress-service" created
+要注意上⾯ yaml ⽂件：
+tolerations:
+- operator: "Exists"
+nodeSelector:
+  kubernetes.io/hostname: master
+由于我们这⾥的特殊性，只有 master 节点有外⽹访问权限，所以我们使⽤ nodeSelector 标签
+将 traefik 的固定调度到 master 这个节点上，那么上⾯的tolerations是⼲什么的呢？这个是因为我们
+集群使⽤的 kubeadm 安装的，master 节点默认是不能被普通应⽤调度的，要被调度的话就需要添加
+这⾥的 tolerations 属性，当然如果你的集群和我们的不太⼀样，直接去掉这⾥的调度策略就⾏。
+nodeSelector 和 tolerations 都属于 Pod 的调度策略，在后⾯的课程中会为⼤家讲解。
+traefik 还提供了⼀个 web ui ⼯具，就是上⾯的 8080 端⼝对应的服务，为了能够访问到该服务，我们
+这⾥将服务设置成的 NodePort：
+$ kubectl get pods -n kube-system -l k8s-app=traefik-ingress-lb -o wide
+NAME                                          READY     STATUS    RESTARTS   AGE       IP 
+           NODE
+traefik-ingress-controller-57c4f787d9-bfhnl   1/1       Running   0          8m        10.
+244.0.18   master
+$ kubectl get svc -n kube-system
+NAME                      TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)              
+         AGE
+...
+traefik-ingress-service   NodePort    10.102.183.112   <none>        80:30539/TCP,8080:304
+86/TCP   8m
+...
+ingress 安装配置
+243
+
+现在在浏览器中输⼊ master_node_ip:30486 就可以访问到 traefik 的 dashboard 了： 
+Ingress 对象
+现在我们是通过 NodePort 来访问 traefik 的 Dashboard 的，那怎样通过 ingress 来访问呢？ ⾸先，需
+要创建⼀个 ingress 对象：(ingress.yaml)
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: traefik-web-ui
+  namespace: kube-system
+  annotations:
+    kubernetes.io/ingress.class: traefik
+spec:
+  rules:
+  - host: traefik.haimaxy.com
+    http:
+      paths:
+      - backend:
+          serviceName: traefik-ingress-service
+          servicePort: 8080
+然后为 traefik dashboard 创建对应的 ingress 对象：
+$ kubectl create -f ingress.yaml
+ingress.extensions "traefik-web-ui" created
+要注意上⾯的 ingress 对象的规则，特别是 rules 区域，我们这⾥是要为 traefik 的 dashboard 建⽴⼀
+个 ingress 对象，所以这⾥的 serviceName 对应的是上⾯我们创建的 traefik-ingress-service，端⼝也
+要注意对应 8080 端⼝，为了避免端⼝更改，这⾥的 servicePort 的值也可以替换成上⾯定义的 port 的
+名字：admin
+创建完成后，我们应该怎么来测试呢？
+第⼀步，在本地的/etc/hosts⾥⾯添加上 traefik.haimaxy.com 与 master 节点外⽹ IP 的映射关系
+第⼆步，在浏览器中访问：http://traefik.haimaxy.com 我们会发现并没有得到我们期望的
+dashboard 界⾯，这是因为我们上⾯部署 traefik 的时候使⽤的是 NodePort 这种 Service 对象，
+所以我们只能通过上⾯的 30539 端⼝访问到我们的⽬标对象：http://traefik.haimaxy.com:30539 
+ingress 安装配置
+244
+
+加上端⼝后我们发现可以访问到 dashboard 了，⽽且在 dashboard 当中多了⼀条记录，正是上⾯
+我们创建的 ingress 对象的数据，我们还可以切换到 HEALTH 界⾯中，可以查看当前 traefik 代理
+的服务的整体的健康状态 
+第三步，上⾯我们可以通过⾃定义域名加上端⼝可以访问我们的服务了，但是我们平时服务别⼈
+的服务是不是都是直接⽤的域名啊，http 或者 https 的，⼏乎很少有在域名后⾯加上端⼝访问的
+吧？为什么？太麻烦啊，端⼝也记不住，要解决这个问题，怎么办，我们只需要把我们上⾯的
+traefik 的核⼼应⽤的端⼝隐射到 master 节点上的 80 端⼝，是不是就可以了，因为 http 默认就是
+访问 80 端⼝，但是我们在 Service ⾥⾯是添加的⼀个 NodePort 类型的服务，没办法映射 80 端
+⼝，怎么办？这⾥就可以直接在 Pod 中指定⼀个 hostPort 即可，更改上⾯的 traefik.yaml ⽂件中
+的容器端⼝：
+ingress 安装配置
+245
+
+containers:
+- image: traefik
+name: traefik-ingress-lb
+ports:
+- name: http
+  containerPort: 80
+  hostPort: 80
+- name: admin
+  containerPort: 8080
+添加以后 hostPort: 80 ，然后更新应⽤：
+$ kubectl apply -f traefik.yaml
+更新完成后，这个时候我们在浏览器中直接使⽤域名⽅法测试下： 
+第四步，正常来说，我们如果有⾃⼰的域名，我们可以将我们的域名添加⼀条 DNS 记录，解析到
+master 的外⽹ IP 上⾯，这样任何⼈都可以通过域名来访问我的暴露的服务了。
+如果你有多个边缘节点的话，可以在每个边缘节点上部署⼀个 ingress-controller 服务，然后在边
+缘节点前⾯挂⼀个负载均衡器，⽐如 nginx，将所有的边缘节点均作为这个负载均衡器的后端，
+这样就可以实现 ingress-controller 的⾼可⽤和负载均衡了。
+到这⾥我们就通过 ingress 对象对外成功暴露了⼀个服务，下节课我们再来详细了解 traefik 的更多⽤
+法。
+点击查看本⽂视频
+ingress 安装配置
+246
+
+扫描下⾯的⼆维码(或微信搜索 k8s技术圈 )关注我们的微信公众帐号，在微信公众帐号中回复 加群 即
+可加⼊到我们的 kubernetes 讨论群⾥⾯共同学习。
+k8s技术圈⼆维码
+Copyright © qikqiak.com 2018 all right reserved，powered by GitbookUpdated: 2019-03-16 09:51:34
+ingress 安装配置
+247

@@ -1,0 +1,106 @@
+73.根据web访问日志，封禁请求量异常的IP，如IP在半小
+时后恢复正常，则解除封禁
+ 
+74.判断用户输入的是否为IP地址
+ 
+方法1:
+#!/bin/bash
+################################################################################
+####
+#根据web访问日志，封禁请求量异常的IP，如IP在半小时后恢复正常，则解除封禁
+################################################################################
+####
+logfile=/data/log/access.log
+#显示一分钟前的小时和分钟
+d1=`date -d "-1 minute" +%H%M`
+d2=`date +%M`
+ipt=/sbin/iptables
+ips=/tmp/ips.txt
+block()
+{ 
+#将一分钟前的日志全部过滤出来并提取IP以及统计访问次数
+ grep '$d1:' $logfile|awk '{print $1}'|sort -n|uniq -c|sort -n > $ips
+ #利用for循环将次数超过100的IP依次遍历出来并予以封禁
+ for i in `awk '$1>100 {print $2}' $ips` 
+ do
+ $ipt -I INPUT -p tcp --dport 80 -s $i -j REJECT 
+ echo "`date +%F-%T` $i" >> /tmp/badip.log 
+ done
+}
+unblock()
+{ 
+#将封禁后所产生的pkts数量小于10的IP依次遍历予以解封
+ for a in `$ipt -nvL INPUT --line-numbers |grep '0.0.0.0/0'|awk '$2<10 {print 
+$1}'|sort -nr` 
+ do 
+ $ipt -D INPUT $a
+ done
+ $ipt -Z
+}
+#当时间在00分以及30分时执行解封函数
+if [ $d2 -eq "00" ] || [ $d2 -eq "30" ] 
+ then
+ #要先解再封，因为刚刚封禁时产生的pkts数量很少
+ unblock
+ block 
+ else
+ block
+fi
+#!/bin/bash
+function check_ip(){
+    IP=$1
+    VALID_CHECK=$(echo $IP|awk -F. '$1< =255&&$2<=255&&$3<=255&&$4<=255{print 
+"yes"}')
+
+方法2：
+增加版：
+加个死循环，如果IP可用就退出，不可用提示继续输入，并使用awk判断。
+    if echo $IP|grep -E "^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]
+{1,3}$">/dev/null; then
+        if [ $VALID_CHECK == "yes" ]; then
+            echo "$IP available."
+        else
+            echo "$IP not available!"
+        fi
+    else
+        echo "Format error!"
+    fi
+}
+check_ip 192.168.1.1
+check_ip 256.1.1.1
+#!/bin/bash
+function check_ip(){
+    IP=$1
+    if [[ $IP =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        FIELD1=$(echo $IP|cut -d. -f1)
+        FIELD2=$(echo $IP|cut -d. -f2)
+        FIELD3=$(echo $IP|cut -d. -f3)
+        FIELD4=$(echo $IP|cut -d. -f4)
+        if [ $FIELD1 -le 255 -a $FIELD2 -le 255 -a $FIELD3 -le 255 -a $FIELD4 -le 
+255 ]; then
+            echo "$IP available."
+        else
+            echo "$IP not available!"
+        fi
+    else
+        echo "Format error!"
+    fi
+}
+check_ip 192.168.1.1
+check_ip 256.1.1.1
+#!/bin/bash
+function check_ip(){
+    local IP=$1
+    VALID_CHECK=$(echo $IP|awk -F. '$1< =255&&$2<=255&&$3<=255&&$4<=255{print 
+"yes"}')
+    if echo $IP|grep -E "^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$" 
+>/dev/null; then
+        if [ $VALID_CHECK == "yes" ]; then
+            return 0
+        else
+            echo "$IP not available!"
+            return 1
+        fi
+    else
+        echo "Format error! Please input again."
+        return 1

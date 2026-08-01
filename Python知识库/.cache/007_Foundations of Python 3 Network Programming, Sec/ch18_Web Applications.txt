@@ -1,0 +1,859 @@
+C H A P T E R   11 
+ 
+■ ■ ■ 
+179
+Web Applications 
+This chapter focuses on the actual act of programming—on what it means to sit down and write a 
+Python web application. Every other issue that we consider will be in the service of this overarching goal: 
+to create a new web service using Python as our language. 
+The work of designing a web site can be enormous and incur months of graphic design and usability 
+work. Or it can involve nothing more than a single-page sketch on the back of a napkin. It can even be as 
+simple as an idea in your head. But when it comes to implementation, applications that are designed to 
+face the public Internet demand at least three big decisions from their implementers: 
+• 
+A front-end web server will need to be chosen. Its job is to listen on port 80 of the 
+web server—or whatever port has been designated for the site—and to serve static 
+content like images, style sheets, and JavaScript files. And, for the specific URLs 
+that serve the actual dynamic site content, the front-end server needs to delegate 
+page creation to your Python program. 
+• 
+Some means of linking the server and the Python application needs to be selected. 
+We will spend the most time on the WSGI standard, which provides a standard 
+invocation protocol between a web server and Python; however, it is also common 
+for servers and Python to be linked through mechanisms like FastCGI and SCGI. 
+• 
+Either in the web server itself or in the harness that runs the Python code, there 
+needs to be logic that spawns several copies of the Python web application code, 
+whether as threads or processes. This enables your app to answer different 
+customers simultaneously without blocking. 
+• 
+Finally, the programmer needs to decide which Python libraries he will use for 
+common tasks like URL dispatch, database access, and template rendering—or 
+whether to do without the convenience of standard tools altogether and to roll 
+some of these solutions on his own. Often he will choose to use a web framework 
+that provides these features as a more-or-less unified suite. 
+Very often, the process of building a web application goes through these bullet points in reverse 
+order. Most often, a programmer starts experimenting with an idea by running the “create project” 
+routine of a popular web framework and adding her own code to the skeleton that gets created. Days or 
+weeks or months later, when it is time to start exposing her application to real users on the local intranet 
+or even out on the World Wide Web, the developer belatedly researches the best choice of front-end 
+server for her framework of choice. She spends a few hours getting everything tweaked and configured 
+correctly, so she can put her application into production. 
+But we will tackle the steps in the order listed previously, moving from the front end of the system 
+towards its core. This means that we will first establish the context in which Python web services run, 
+and then spend the rest of the chapter focusing on actual programming techniques. 
+
+CHAPTER 11 ■ WEB APPLICATIONS 
+180 
+Web Servers and Python 
+Acceptable web site performance generally requires the ability to serve several users concurrently. And
+since few Python programmers condescend to writing their web application logic using Twisted
+callbacks (see Chapter 7), achieving this performance means running several copies of your web
+application concurrently, using either threads or processes. 
+You will recall from our discussion of threads in Chapter 7 that the standard C language
+implementation of Python—the version of Python people download from its web site—does not actually
+run Python code in a thread-safe manner. To avoid corrupting in-memory data structures, C Python
+employs a Global Interpreter Lock (GIL), so that only one thread in a multi-threaded program can
+actually be executing Python code at any given time. Thus Python will let you create as many threads as
+you want in a given process; however, only one thread can run code at a time, as though your threads
+were confined to a single processor. 
+You might think that multiprocessing would always be the required approach; however, it turns out
+that threading can have decent performance because so many web applications are essentially light
+front-ends that sit between the user and a database. A typical web application receives and parses the
+user's request, then makes a corresponding request to the database behind it; while that thread is
+waiting for a response from the database, the GIL is available for any other threads that need to run
+Python code. Finally the database answers; the waiting thread reacquires the GIL; and, in a quick blaze
+of CPU activity, the data is turned into an attractive web page, and the response is sent winging its way
+back to the user. 
+Thus threads can sometimes at least perform decently. Nevertheless, multiple processes are the
+more general way to scale. This is because, as a service gets bigger, additional processes can be brought
+up on additional machines, rather than being confined to a single machine. Threads, no matter their
+other merits, cannot do that! 
+There are two general approaches to running a Python web application inside of a collector of
+identical worker processes: 
+•
+The Apache web server can be combined with the popular mod_wsgi module to
+host a separate Python interpreter in every Apache worker process. 
+•
+The web application can be run inside of either the flup server or the uWSGI server.
+Both of these servers will manage a pool of worker processes where each process
+hosts a Python interpreter running your application. The front-end web server can
+submit requests to flup using either the standard Fast CGI (FCGI) or Simple CGI
+(SCGI) protocol,  while it has to speak to uWSGI in its own special “uwsgi” protocol
+(whose name is all lowercase to distinguish it from the name of the server). 
+Note that both approaches insist that a powerful, secure, name-brand web server face the actual
+customer, with your Python web application sitting safely behind it. This lets the web server use its fast,
+compiled code to reject obviously malformed or nonsensical HTTP requests, passing along to your
+application only those requests that are at least superficially parsable. It can also have performance
+benefits, as you will see in the next section. 
+Two Tiers 
+Most objects fetched by your web browser each day are completely static: images, movies, style sheets,
+and JavaScript files. These are usually served directly from disk, without undergoing any dynamic
+modification or customization. Modern web pages with even fairly simple designs typically include a
+dozen or more static elements for every dynamically-generated page you actually visit—elements that
+will remain the same for weeks or months until, in fact, the site is upgraded or redesigned. 
+Download from www.eBookTM.Com
+
+CHAPTER 11 ■ WEB APPLICATIONS 
+181
+This will be familiar to you if you have ever used the Google Chrome built-in Developer Tools or the 
+Firebug extension for Firefox to look behind the scenes and see the resources that must be downloaded 
+to actually display a web page. For example, Figure 11–1 shows the files that Google Chrome downloads 
+to display the Stack Overflow front page. The time axis goes from left to right, with the entire download 
+taking about 1.5 seconds. The last few outliers appear to be advertisements, which are often the slowest 
+elements of a web site to load. 
+ 
+Figure 11–1. Downloading the Stack Overflow Front Page 
+For our purposes, the most important fact in this graph is that, of all of the many resources that 
+make up the front page, it is likely that only one of them—the initial HTML page itself, whose download 
+is displayed as the upper-left bar on the graph—was generated dynamically. The HTML contains the 
+dynamic list of most-active questions, along with user-specific information such as my name and the list 
+of tags that I find interesting. Everything else is completely generic; all the images, styles, and scripts 
+remain exactly the same, regardless of who is visiting the site. 
+And so production web apps are best designed with two tiers of servers: 
+• 
+The first server actually faces users and their browsers. It should be configured to 
+serve the high-volume static content directly from disk using a fast, static language 
+like C. 
+• 
+The second server is a framework that powers the dynamic pages. It is invoked 
+only for pages that absolutely require it. Often the dynamic code runs in a separate 
+process that listens on a localhost port that only the front-end web server can 
+access. (see Chapters 2 and 3 for more about sockets and localhost.) 
+
+CHAPTER 11 ■ WEB APPLICATIONS 
+182 
+Many administrators are tempted to run only one web server that combines these two roles. They 
+accomplish this by choosing a very flexible front-end web server that can also directly host their 
+application code. But having two separate servers for the static and dynamic content has a number of 
+benefits, including the ability to performance tune the servers separately. For example, the front-end 
+workers can be small and light to answer requests for static content, while the back-end worker 
+processes can be fewer but heavier  because they each need to host a full Python interpreter. If you try 
+running just one server, then every worker will need to contain both the lightweight code for serving 
+static files and the Python interpreter for creating dynamic pages, but only one or the other piece of code 
+will get invoked for a given request. 
+Choosing a Web Server 
+All of the popular open source web servers can be used to serve Python web applications, so the full 
+range of modern options is available: 
+Apache HTTP Server: Since taking the lead as the most popular HTTP server 
+back in 1996, Apache has always remained in the top spot and has never yet 
+been eclipsed by a competitor. Its stated goal is flexibility and modularity; it is 
+reasonably fast, but it will not win speed records against more recent servers 
+that focus only on speed. Its configuration files can be a bit long and verbose, 
+but through them Apache offers very powerful options for applying different 
+rules and behaviors to different directories and URLs. A variety of extension 
+modules are available (many of which come bundled with it), and user 
+directories can have separate .htaccess configuration files that make further 
+adjustments to the main configuration. 
+nginx (“engine X”): Started by a Russian programmer in the early 2000's, the 
+nginx server has become a great favorite of organizations with a large volume of 
+content that needs to be served quickly. It is considered fairly easy to configure. 
+lighttpd (“lighty”): First written to demonstrate an architecture that could 
+support tens of thousands of open client sockets (both nginx and Cherokee are 
+also contenders in this class), this server is known for being very easy to 
+configure. Some system administrators complain about its memory usage, but 
+many others have observed no problems with it. 
+Cherokee: Not only does this server offer performance that might edge out even 
+nginx and lighttpd, but it lets you configure the server through a built-in web 
+interface. 
+Of course, this list will grow slowly out-of-date over time, so you should use it only as a jumping-off 
+point for your own research into choosing an HTTP server. Nevertheless, having a good list of specific 
+examples at this point is important because it enables us to turn to the concrete question of Python 
+integration. 
+So how can each of these servers be combined with Python? 
+One option, of course, is to simply set up Apache and configure it to serve all of your content, both 
+static and dynamic. 
+Alternatively, the mod_wsgi module has a daemon mode where it internally runs your Python code 
+inside a stack of dedicated server processes that are separate from Apache. Each WSGI process can even 
+run as a different user. If you really want to use Apache as your front end, this is one of the best options 
+available. 
+
+CHAPTER 11 ■ WEB APPLICATIONS 
+183
+But the most strongly recommended approach today is to set up one of the three fast servers to 
+provide your static content, and then use one of the following three techniques to run your Python code 
+behind them: 
+• 
+Use HTTP proxying so that your nginx, lighttpd, or Cherokee front-end server 
+delivers HTTP requests for dynamic web pages to a back-end Apache instance 
+running mod_wsgi. 
+• 
+Use the FastCGI protocol or SCGI protocol to talk to a flup instance running your 
+Python code. 
+• 
+Use the uwsgi protocol to talk to a uWSGI instance running your Python code. 
+Given that every one of the four major web servers supports HTTP, the fast CGI protocols, and 
+uwsgi, your options are quite broad. So how do you decide on a specific approach? 
+Your first task should be to look at the documentation, tweets, and blogs for the Python web 
+framework or tools on which you intend to build your solution. Choosing a configuration that is a 
+standard in that community increases your chances of success; it also increases the possibility of getting 
+useful help if things go wrong. 
+Also, list any specific features that you require of your front end and choose only from among the 
+HTTP servers that support them. Make sure your choice can support your requirements involving 
+certificates and encryption, as well as any restrictions you want placed on SSL protocol versions or 
+permitted ciphers (see Chapter 6). You should also make sure your choice runs well on the operating 
+system you will be deploying. If your operating system vendor (like Red Hat or Ubuntu) already provides 
+precompiled versions of any of these servers, then that might also deserve consideration. 
+As mentioned previously, the task of selecting and configuring a front-end web server often comes 
+quite late in the timeline of a project; and the choice will draw much more deeply upon your system 
+administrator skills than it will upon your expertise as a programmer. 
+At this point, you understand something of the larger context in which Python web applications are 
+usually run; you are now ready to turn your attention to the task of programming. 
+WSGI 
+When the front-end web server receives an HTTP request, consults the patterns listed in its 
+configuration, and decides that this particular URL needs to be handled by a Python web application, 
+how does it actually invoke the Python code? And how can that code then communicate back to the 
+server, whether to signal an error, make a redirect, or return a particular block of data as the web page? 
+Integrating Python with web servers used to be the Wild West: every server presented programmers 
+with different data formats and calling conventions. Small web programs written against one server's 
+API would need to be ported before they could be used with another brand of web server; and web 
+frameworks themselves had to maintain a separate entry point for each server which developers might 
+want to use to deploy their applications. 
+This situation was much improved by the creation of PEP 333, which defines the Python Web Server 
+Gateway Interface (WSGI): www.python.org/dev/peps/pep-0333/ 
+WSGI introduced a single calling convention that every web server could implement, thereby 
+making that web server instantly compatible with all of the Python web applications and web 
+frameworks that also support WSGI. 
+Developers generally avoid writing raw WSGI applications because the conveniences of even a 
+simple web framework make code so much easier to write and maintain. But, for the sake of illustration, 
+Listing 10-1 shows a small WSGI application whose front page asks the user to type a string. Submitting 
+the string takes the user to a second web page, where he can see its base64 encoding. From there, a link 
+will take him back to the first page to repeat the process. 
+
+CHAPTER 11 ■ WEB APPLICATIONS 
+184 
+Listing 11–1. A Complete WSGI Application 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 11 - wsgi_app.py 
+# A simple web application built directly against the low-level WSGI spec. 
+ 
+import cgi, base64 
+from wsgiref.simple_server import make_server 
+ 
+def page(content, *args): 
+»   yield '<html><head><title>wsgi_app.py</title></head><body>' 
+»   yield content % args 
+»   yield '</body>' 
+ 
+def simple_app(environ, start_response): 
+»   gohome = '<br><a href="/">Return to the home page</a>' 
+»   q = cgi.parse_qs(environ['QUERY_STRING']) 
+ 
+»   if environ['PATH_INFO'] == '/': 
+ 
+»   »   if environ['REQUEST_METHOD'] != 'GET' or environ['QUERY_STRING']: 
+»   »   »   start_response('400 Bad Request', [('Content-Type', 'text/plain')]) 
+»   »   »   return ['Error: the front page is not a form'] 
+ 
+»   »   start_response('200 OK', [('Content-Type', 'text/html')]) 
+»   »   return page('Welcome! Enter a string: <form action="encode">' 
+»   »   »   »   »   '<input name="mystring"><input type="submit"></form>') 
+ 
+»   elif environ['PATH_INFO'] == '/encode': 
+ 
+»   »   if environ['REQUEST_METHOD'] != 'GET': 
+»   »   »   start_response('400 Bad Request', [('Content-Type', 'text/plain')]) 
+»   »   »   return ['Error: this form does not support POST parameters'] 
+ 
+»   »   if 'mystring' not in q or not q['mystring'][0]: 
+»   »   »   start_response('400 Bad Request', [('Content-Type', 'text/plain')]) 
+»   »   »   return ['Error: this form requires a "mystring" parameter'] 
+ 
+»   »   my = q['mystring'][0] 
+»   »   start_response('200 OK', [('Content-Type', 'text/html')]) 
+»   »   return page('<tt>%s</tt> base64 encoded is: <tt>%s</tt>' + gohome, 
+»   »   »   »   »   cgi.escape(repr(my)), cgi.escape(base64.b64encode(my))) 
+ 
+»   else: 
+»   »   start_response('404 Not Found', [('Content-Type', 'text/plain')]) 
+»   »   return ['That URL is not valid'] 
+ 
+print 'Listening on localhost:8000' 
+make_server('localhost', 8000, simple_app).serve_forever() 
+The first thing to note in this code listing is that two very different objects are being created: a WSGI 
+server that knows how to use HTTP to talk to a web browser and an application written to respond 
+correctly when invoked per the WSGI calling convention. Note that these two pieces—the client and 
+server—could easily be swapped out. Other WSGI applications would all work equally well when run by 
+
+CHAPTER 11 ■ WEB APPLICATIONS 
+185
+the wsgiref simple server; similarly, any other web server that speaks WSGI could be substituted in place 
+of the wsgiref server and thus be used to serve this particular application. 
+This code example should make the calling convention clear enough: 
+1. 
+For each incoming request, the application is called with an environ object, 
+giving it the details of the HTTP request and a live, callable, and named 
+start_response(). 
+2. 
+Once the application has decided what HTTP response code and headers need 
+to be returned, it makes a single call to start_response(). Its headers will be 
+combined with any headers that the WSGI server might already provide to the 
+client. 
+3. 
+Finally, the application needs only to return the actual content—either a list of 
+strings or a generator yielding strings. Either way, the strings will be 
+concatenated by the WSGI server to produce the response body that is 
+transmitted back to the client. Generators are useful for cases where it would be 
+unwise for an application to try loading all of the content (like large files) into 
+memory at once. 
+Of course, using this apparently simple convention in the real world involves all sorts of caveats and 
+edge cases, and a leisurely read through PEP 333 should satisfy any further curiosity you have about 
+what counts as appropriate behavior in WSGI applications and servers. 
+I have tried to make this tiny application formally correct in order to illustrate the onus that WSGI 
+places upon the programmer to handle every possible situation. After checking the URL against the 
+paths to the two pages that exist on this small site, it correctly returns a 404 error, complete with helpful 
+error text. For each page that does exist, any confused attempts on the part of an HTTP client to submit 
+inappropriate data need to return an error (which is generally friendlier than leaving a user confused as 
+to why her input is not making any difference). Content types have to be paired correctly with 
+documents; and, of course, user input has to be meticulously quoted so that any special HTML 
+characters are never copied literally into any document that we return. 
+Because programmers do not generally enjoy solving these problems over and over again in every 
+application they write, very few Python programmers tend to write raw WSGI applications. Instead, they 
+use web frameworks that provide tools for handling URLs (replacing the big if statement in Listing 11–
+1); for interpolating user strings into HTML and other markup; and for handling non-existent URLs and 
+badly written forms automatically—all without explicitly writing clauses to detect such circumstances in 
+every application. 
+Note that the wsgiref package, whose simple_server we used here, also contains several utilities for 
+working with WSGI. It includes functions for examining, further unpacking, and modifying the environ 
+object; a prebuilt iterator for streaming large files back to the server; and even a validate sub-module 
+whose routines can check a WSGI application to see whether it complies with the specification when 
+presented with a series of representative requests. 
+WSGI Middleware 
+Standard interfaces like WSGI make it possible for developers to create wrappers—a design-patterns 
+person would call these adapters—that accept a request from a server; modify, adjust, or record the 
+request; and then call a normal WSGI application with the modified environment. Such middleware can 
+also inspect and adjust the outgoing data stream; everything, in fact, is up for grabs, and essential 
+arbitrary changes can be made both to the circumstances under which a WSGI application runs, as well 
+as to the content that it returns. Many other possibilities leap to mind, like these (in cases where I just 
+mention a bare module name, you can visit its Python Package Index page to learn more about it): 
+
+CHAPTER 11 ■ WEB APPLICATIONS 
+186 
+• 
+If several WSGI applications need to live at a single web site under different URLs, 
+then a piece of middleware can be given the URLs. This middleware can then 
+delegate incoming requests to the correct application, returning 404 errors on its 
+own authority when requests arrive where the URL doesn't match any of the 
+configuration applications. Ian Bicking wrote Paste Deploy (you can learn more at 
+pythonpaste.org), a tool that combines exactly this kind of URL routing with a 
+simple system for centrally managing the configuration of several WSGI 
+applications. 
+• 
+If each WSGI application on a web site were to keep its own list of passwords and 
+honor only its own session cookies, then users would have to log in again each 
+time they crossed an application boundary. By delegating authentication to WSGI 
+middleware, applications can be relieved even of the duty to provide their own 
+login page; instead, the middleware asks a user who lacks a session cookie to log 
+in; once a user is authenticated, the middleware can pass along the user's identity  
+to the applications by putting the user's information in the environ argument. 
+Both repoze.who and repoze.what can help site integrators assert site-wide 
+control over users and their permissions. 
+• 
+Theming can be a problem when several small applications are combined to form 
+a larger web site. This is because each application typically has its own approach 
+to theming. One usually has to learn as many new theming systems as there are 
+applications to combine! This has led to the development of two competing tools, 
+xdv and Deliverance, that let you build a single HTML theme and then provide 
+simple rules that pull text out of your back-end applications and drop it into your 
+theme in the right places. 
+• 
+Debuggers can be created that call a WSGI application and, if an uncaught Python 
+exception is raised, display an annotated traceback to support debugging. 
+WebError actually provides the developer with a live, in-browser Python 
+command line prompt for every level in a stack trace at which the developer can 
+investigate a failure. Another popular tool is repoze.profile, which watches the 
+application as it processes requests and produces a report on which functions are 
+consuming the most CPU cycles. 
+If you are interested in what WSGI middleware is available, then you can visit this pair of sites to 
+learn more: 
+http://wsgi.org/wsgi/Middleware_and_Utilities 
+http://repoze.org/repoze_components.html#middleware 
+Over the next few years, new ideas will continue to emerge while old solutions start to fade into 
+obscurity. Therefore, be sure to check current blogs, mailing lists, and Stack Overflow when looking for 
+middleware solutions. 
+Having said all of that, I think it is fair to observe that most Python web programmers today are not 
+making very active use of WSGI middleware. 
+The “weak” version of the WSGI gospel has certainly come to pass: all Python web frameworks seem 
+to support WSGI. But the “strong” version of the WSGI gospel has been slower to arrive: WSGI has not 
+become the standard mechanism by which Python web applications are constructed. That said, a few 
+Python web programmers certainly exist who tend to build sites by taking a few small WSGI applications 
+and placing them behind a stack of middleware that handles URL dispatch, authentication, and 
+theming. 
+Today there are at least three major competing approaches in the Python community for crafting 
+modular components that can be used to build web sites: 
+
+CHAPTER 11 ■ WEB APPLICATIONS 
+187
+• 
+The WSGI middleware approach thinks that code reuse can often best be achieved 
+through a component stack, where each component uses WSGI to speak to the 
+next. Here, all interaction has to somehow be made to fit the model of a dictionary 
+of strings being handed down and then content being passed back up. 
+• 
+Everything built atop the Zope Toolkit uses formal Design Pattern concepts like 
+interfaces and factories to let components discover one another and be configured 
+for operation. Thanks to adapters, components can often be used with widgets 
+that were not originally designed with a given type of component in mind. 
+• 
+Several web frameworks have tried to adopt conventions that would make it easy 
+for third-party pieces of functionality to be added to an application easily. The 
+Django community seems to have traveled the farthest in this direction, but it also 
+looks as though it has encountered quite serious roadblocks in cases where a 
+component needs to add its own tables to the database that have foreign-key 
+relationships with user tables. 
+These examples illustrate an important fact: WSGI middleware is a good idea that has worked very 
+well for a small class of problems where the idea of wrapping an application with concentric 
+functionality makes solid sense. However, most web programmers seem to want to use more typical 
+Python mechanisms like APIs, classes, and objects to combine their own code with existing components. 
+The problem is that we, as a Python community, are still learning about different ways of accomplishing 
+this, and no single “Pythonic” solution appears ready to emerge. 
+One of the biggest changes in Python 3 is its much more rigorous approach toward byte strings and 
+Unicode strings. These can be mixed so freely in Python 2 that developers often use the wrong type 
+without knowing it. Obviously, the transition to Python 3 will heavily affect WSGI because strings and 
+their encodings are a foundational issue both in parsing HTTP requests and in generating well-formed 
+responses. PEP 444 is currently the focus of this work. Pay attention to this PEP's status as you 
+contemplate moving your web applications to Python 3; it should point you to any further resources you 
+will need to understand how web application stacks will communicate in the future. 
+Python Web Frameworks 
+And here, in the middle of this book on Python network programming, we reach what for many of you 
+will be the jumping off point into an entirely different discipline: web application development. 
+Network programmers think about things like sockets, port numbers, protocols, packet loss, latency, 
+framing, and encodings. Although all of these concepts must also be in the back of a web developer's 
+mind, her actual attention is focused on a set of technologies so intricate and fast-changing that the 
+actual packets and latencies are recalled to mind only when they are causing trouble. The web developer 
+needs to think instead about HTML, GET, POST, forms, REST, CSS, JavaScript, Ajax, APIs, sprites, 
+compression, and emerging technologies like HTML5 and WebSocket. The web site exists in her mind 
+primarily as a series of documents that users will traverse to accomplish goals. 
+Web frameworks exist to help programmers step back from the details of HTTP—which is, after all, 
+an implementation detail most users never even become aware of—and to write code that focuses on 
+the nouns of web design. Listing 11–2 shows how even a very modest Python microframework can be 
+used to reorient the attention of a web programmer. You can install the framework and run the listing 
+once you have activated a virtual environment (see Chapter 1): 
+$ pip install bottle 
+$ python bottle_app.py 
+Bottle server starting up (using WSGIRefServer())... 
+Listening on http://localhost:8080/ 
+Use Ctrl-C to quit. 
+
+CHAPTER 11 ■ WEB APPLICATIONS 
+188 
+Listing 11–2 also requires an accompanying template file, which is shown in Listing 11–3. 
+Listing 11–2. Rewriting the WSGI Application With a Framework 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 11 - wsgi_app.py 
+# A simple web application built using the Bottle micro-framework. 
+ 
+import base64, bottle 
+bottle.debug(True) 
+app = bottle.Bottle() 
+ 
+@app.route('/encode') 
+@bottle.view('bottle_template.html') 
+def encode(): 
+»   mystring = bottle.request.GET.get('mystring') 
+»   if mystring is None: 
+»   »   bottle.abort(400, 'This form requires a "mystring" parameter') 
+»   return dict(mystring=mystring, myb=base64.b64encode(mystring)) 
+ 
+@app.route('/') 
+@bottle.view('bottle_template.html') 
+def index(): 
+»   return dict(mystring=None) 
+ 
+bottle.run(app=app, host='localhost', port=8080) 
+In Listing 11–1, the attention was on the single incoming HTTP request, and the branches in our 
+logic explored all of the possible lifespans for that particular protocol request. Listing 11–2 changes the 
+focus to the pages that actually exist on the site and giving each of these pages reasonable behaviors. The 
+same tree of possibilities exists, but the tree exists implicitly thanks to the possible URLs defined in the 
+code, not because the programmer has written a large if statement. 
+Listing 11–3. The Template That Goes With Listing 11–2 
+%#!/usr/bin/env python 
+%# Foundations of Python Network Programming - Chapter 11 - bottle_template.py 
+%# The page template that goes with bottle_app.py. 
+%# 
+<html><head><title>bottle_app.py</title></head> 
+<body> 
+  %if mystring is None: 
+»   Welcome! Enter a string: 
+»   <form action="encode"><input name="mystring"><input type="submit"></form> 
+  %else: 
+»   <tt>{{mystring}}</tt> base64 encoded is: <tt>{{myb}}</tt><br> 
+»   <a href="/">Return to the home page</a> 
+  %end 
+</body> 
+It might seem merely a pleasant convenience that we can use the Bottle SimpleTemplate to insert our 
+variables into a web page and know that they will be escaped correctly. But the truth is that templates 
+serve, just like schemes for URL dispatch, to re-orient our attention: instead of the resulting web page 
+existing in our minds as what will result when the strings in our program listing are finally concatenated, 
+we get to lay out its HTML intact, in order, and in a file that can actually take an .html extension and be 
+
+CHAPTER 11 ■ WEB APPLICATIONS 
+189
+highlighted and indented as HTML in our editor. The Python program will no longer impede our 
+relationship with our markup. 
+And full-fledged Python frameworks abstract away even more implementation details. A very 
+important feature they typically provide is data abstraction: instead of talking to a database using its raw 
+APIs, a programmer can define models, laying out the data fields so they are easy to instantiate, search, 
+and modify. And some frameworks can provide entire RESTful APIs that allow creation, inspection, 
+modification, and deletion with PUT, GET, POST, and DELETE. The programmer merely needs to define the 
+structure of his data document, and then name the URL at which the tree of REST objects should be 
+based. 
+So how should you go about choosing a web framework? 
+It might surprise you, but I am not going to now launch into a comparative review of my favorite 
+web frameworks. I think that the field is simply moving too fast. Old web frameworks lose steam, new 
+ones appear, and the ones with the best communities keep innovating and have the annoying habit of 
+making complaints about missing features suddenly obsolete. 
+So, while I will mention a few good web frameworks by name in the text that follows, you should 
+probably start your search for a web framework at the Python Wiki page, where the community keeps a 
+list of the available contenders: http://wiki.python.org/moin/WebFrameworks 
+Next—and I cannot emphasize this enough—you should always be participating in a programming 
+community. Find a local Python meet-up or users group, or fellow students or employees who are using 
+Python to solve problems similar to yours. Ask them what web frameworks they are using. Using the 
+second-best Python web framework in the world—which will still be a pretty good one—in the company 
+of other people who are also using it, blogging about it, and contributing patches to it will contribute to a 
+vastly more wonderful experience that sitting alone in the dark and using the best framework instead. 
+Online community is important too. Once you have chosen a web framework, be sure to check out 
+its mailing lists, forums, IRC channels, and its important blogs. You should also look for answers to 
+questions you might have on Stack Overflow. Stay connected, and you will often save days or weeks of 
+effort when helpful fellow Python programmers point you at better solutions for your problems than the 
+ones you knew existed. 
+When looking for a web framework, you will find that the various frameworks differ on a few major 
+points. The upcoming sections will walk you through what these points are, and how they might affect 
+your development experience. 
+URL Dispatch Techniques 
+The various Python web frameworks tend to handle URL dispatch quite differently. 
+• 
+Some small frameworks like Bottle and Flask let you create small applications by 
+decorating a series of callables with URL patterns; small applications can then be 
+combined later by placing them beneath one or more top-level applications. 
+• 
+Others frameworks, like Django, Pylons, and Werkzeug, encourage each 
+application to define its URLs all in one place. This breaks your code into two 
+levels, where URL dispatch happens in one location and rendering in another. 
+This separation makes it easier to review all of the URLs that an application 
+supports; it also means that you can attach code to new URLs without having to 
+modify the functions themselves. 
+
+CHAPTER 11 ■ WEB APPLICATIONS 
+190 
+•
+Another approach has you define controllers, which are classes that represent
+some point in the URL hierarchy—say, the path /cart—and then write methods
+on the controller class named view() and edit() if you want to support sub-pages
+named /cart/view and /cart/edit. CherryPy, TurboGears2, and Pylons (if you use
+controllers instead of Routes) all support this approach. While determining later
+what URLs are supported can mean traversing a maze of different connected
+classes, this approach does allow for dynamic, recursive URL spaces that exist only
+at runtime as classes hand off dispatch requests based on live data about the site
+structure. 
+•
+A large community with its own conferences exists around the Zope framework.
+The Plone CMS is built atop Zope technology, and recent web frameworks like
+Grok and BFG have been springing up to try to make Zope more accessible. In this
+approach, URLs actually traverse your database! Instead of having to match string
+patterns or descend across a series of controllers, each URL is a path from one
+object to another, with each URL component naming the next object attribute that
+should be dereferenced. Zope people tend to store their objects in a Python object
+database like the ZODB, but traversal can work just as easily against objects stored
+in a relational database behind an ORM like SQLAlchemy. The last URL
+component, such as /edit or /view, usually selects one of several available views
+that are available to render the object. 
+When looking for a URL dispatch mechanism, pay particular attention to how each framework
+thinks about URLs. Recall from Chapter 9 that the following pair of URLs are different; the first has two
+path elements, while the second has three: 
+http://example.com/Nord%2FLB/logo
+http://example.com/Nord/LB/logo 
+If you are building a fresh web application from the ground up and can absolutely guarantee that
+you will never need a slash in a URL path component—which you can assure by designing your
+application so that you always use web-ready slugs rather than raw item names, for example—then the
+distinction is not important. In that case, you can simply avoid ugly characters in path components
+entirely. But if you might need to support URLs like the first one listed in the preceding example, then
+beware that some popular Python web frameworks do not fully support RFC 1738 because they decode
+the %2F to a slash before your application ever sees it; this would make it impossible for you to properly
+distinguish literal slashes from encoded ones. 
+The various mechanisms for URL dispatch can all be used to produce fairly clean design, and
+choosing from among them is largely a matter of taste. 
+Templates 
+Almost all web frameworks expect you to produce web pages by combining Python code called a view
+with an HTML template; you saw this approach in action in Listing 11–2. This approach has gained
+traction because of its eminent maintainability: building a dictionary of information is best performed in
+plain Python code, and the items fetched and arranged by the view can then easily be included by the
+template, so long as the template language supports basic actions like iteration and some form of
+expression evaluation. It is one of the glories of Python that we use views and templates, and one of the
+shames of traditional PHP development that developers would freely intermix HTML and extensive PHP
+code to produce a single, unified mess. 
+Views can also become more testable when their only job is to generate a dictionary of data. A good
+framework will let you write tests that simply check the raw data returned by the function instead of
+making you peek repeatedly into fully rendered templates to see if the view corralled its data correctly. 
+Download from www.eBookTM.Com
+
+CHAPTER 11 ■ WEB APPLICATIONS 
+191
+There seem to be two major differences of opinion among the designers and users of the various 
+template languages about what constitutes the best way to use templates: 
+• 
+Should templates be valid HTML with iteration and expressions hidden in element 
+attributes? Or should the template language use its own style of markup that 
+festoons and wraps the literal HTML of the web page, as in Listing 11–3? While the 
+former can let the developer run HTML validation against template files before 
+they are ever rendered and be assured that rendering will not change the 
+validator's verdict, most developers seem to find the latter approach much easier 
+to read and maintain. 
+• 
+Should templates allow arbitrary Python expressions in template code, or lock 
+down the available options to primitive operations like dictionary get-item and 
+object get-attribute? Many popular frameworks choose the latter option, requiring 
+even lazy programmers to push complex operations into their Python code 
+“where it belongs.” But several template languages reason that, if Python 
+programmers do so well without type checking, then maybe they should also be 
+trusted with the choice of which expressions belong in the view and which in the 
+template. 
+Since many Python frameworks let you plug in your template language of choice, and only a few of 
+them lock you down to one option, you might find that you can pair your favorite approaches. As always, 
+look for a community with a consistent practice, try to understand the reasons for the community's 
+choice of template language, and join that community if you think its approach holds water. 
+Final Considerations 
+A few last thoughts on web frameworks will conclude our discussion. 
+Because Python is powerful and flexible, it is an easy language in which to write new web 
+frameworks. These frameworks can even spring up accidentally, as an application that originally needed 
+to serve “just one tiny status web page” gradually grows its own custom URL dispatch mechanism, 
+template conventions, and view calling conventions. But while web frameworks are easy to create, you 
+should generally avoid creating new ones. Instead, it is very often best to simply choose an existing 
+framework. You will benefit from all of the work and knowledge about HTTP that has gone into its 
+design, and other programmers will be able to understand your code if they are already familiar with the 
+framework you have chosen. 
+The Django web framework wins many converts because its admin interface makes it easy to browse 
+the back-end database. Each table row gets rendered as the corresponding Django model object that the 
+developer has defined, and an administrator can use simple forms to create, edit, or delete objects. This 
+not only lets data-entry personnel get to work immediately on populating a model while web developers 
+are still getting started on designing the application itself, but it also means that developers often never 
+have to write CRUD (create, read, update, and delete) pages for objects that are not manipulated by end-
+users. 
+You might think that a database browser would serve just as well, but over time a web application 
+tends to develop a lot of knowledge about its models that is never pushed back into the database. For 
+example, a web application knows which fields can have which combinations of values and which string 
+formats are allowed and disallowed. Only by editing a database row with the application logic itself can 
+these invariants and constraints be enforced. Other web frameworks have tried to add a system like the 
+Django admin interface, but none of these alternatives seem to have succeeded to the degree that 
+Django has at the time of writing. 
+Web services, whether RPC or RESTful, are another important feature that are simple to write in 
+some frameworks but are rather more verbose or difficult in others. Most large web applications today 
+contain many dynamic elements—like URLs that are not human-browsable, but which return data for 
+
+CHAPTER 11 ■ WEB APPLICATIONS 
+192 
+the sake of JavaScript routines running in each web page. If your application will require these, then 
+check each framework that interests you for its degree of support for XML-RPC, JSON, and a RESTful 
+approach to data documents in general. 
+Obviously, user authentication is an enormous issue for many programmers. Some web frameworks 
+remember usernames and passwords and feature support for login screens and session cookies out-of-
+the-box; others make you build these components yourself or plug in a third-party approach to solve 
+these issues. Still others have such complex systems of extensions and plug-ins that some developers 
+can never get user configuration working in the desired manner. 
+If you need specific advanced features such as a Comet-like approach to serving events back to the 
+browser, then you should obviously look for a framework that implements those required features well. 
+Note that some quite successful web applications are produced by combining two or more frameworks 
+that are loosely coupled through a common database. For example, you might combine a Django 
+application serving HTML pages with a restish application that provides RESTful CRUD operations that 
+can be invoked from JavaScript. Choosing the best tool for the job sometimes involves combining 
+several tools, instead of demanding everything from a single monolithic application. 
+Finally, understand that experience is often the best guide to choosing a web framework. This 
+means that, after all of the window shopping, you are going to have to sit down and try actually writing 
+in some of the various frameworks available before you really know whether a given framework will 
+prove a good fit for either yourself or your problem. We all like to think that we know ourselves well 
+enough to predict such things without doing any actual coding. For example, we may feel we know 
+intuitively which web framework is really “our style” and will let us be productive. However, trying a 
+range of approaches may reveal that your initial guess about how your mind works did not actually do 
+justice to what you can accomplish with an ostensibly “ugly” framework, once you understand its 
+benefits. 
+Remember that, whatever framework you choose, you are writing Python code. This means that 
+your application's quality is going to depend at least as much upon your ability to write good, clean, 
+Pythonic code as it will upon any magical features of the framework itself. The framework might even 
+feel rather awkward to you, or it might be selected by a senior team member with whom you disagree; 
+but always remember that this is Python, and that its flexibility and elegance will generally let you write a 
+good web application, whatever framework you ultimately end up using. 
+Pure-Python Web Servers 
+A fun way to demonstrate that Python comes with “batteries included” is to enter a directory on your 
+system and run the SimpleHTTPServer Standard Library module as a stand-alone program: 
+$ python -m SimpleHTTPServer 
+Serving HTTP on 0.0.0.0 port 8000 ... 
+If you direct your browser to localhost:8000, you will see the contents of this script's current 
+directory displayed for browsing, such as the listings provided by Apache when a site leaves a directory 
+browsable. Documents and images will load in your web browser when selected, based on the content 
+types chosen through the best guesses of the mimetypes Standard Library module. 
+The SimpleHTTPServer is a subclass of BaseHTTPServer, which is also the foundation of the 
+wsgiref.simple_server that we looked at earlier. Before the WSGI standard was invented, small Python 
+programs could subclass BaseHTTPServer if they needed to answer raw HTTP requests. This is actually a 
+common difference between the old mechanisms by which Python programs provided extensibility, and 
+the more modern and Pythonic mechanisms. It used to be popular to write a class with stub methods 
+inside, and then tell programmers to extend it by subclassing and defining those methods; today, we use 
+namespaces, callables, and duck-typed objects to provide much cleaner forms of extensibility. For 
+example, today an object like start_response is provided as an argument (dependency injection), and 
+
+CHAPTER 11 ■ WEB APPLICATIONS 
+193
+the WSGI standard specifies its behavior rather than its inheritance tree (duck typing).The Standard 
+Library includes two other HTTP servers: 
+• 
+CGIHTTPServer takes the SimpleHTTPServer and, instead of just serving static files 
+off of the disk, it adds the ability to run CGI scripts (which we will cover in the next 
+section). 
+• 
+SimpleXMLRPCServer and DocXMLRPCServer each provide a server endpoint against 
+which client programs can make XML-RPC remote procedure calls, as 
+demonstrated in Chapter 18 and Listing 22-1. This protocol uses XML files 
+submitted through HTTP requests. 
+Note that none of the preceding servers is typically intended for production use; instead, they are 
+useful for small internal tasks for which you just need a quick HTTP endpoint to be used by other 
+services internal to a system or subnet. And while most Python web frameworks will provide a way to run 
+your application from the command line for debugging, most follow the lead of Django in 
+recommending against using the development platform for debugging. 
+However, a few Python web frameworks exist that not only provide their own built-in HTTP servers, 
+but have also worked on their security and performance, so that they can be recommended for use in 
+production. 
+These pure-Python web servers can be very useful if you are writing an application that users will be 
+installing locally, and you want to provide a web interface without having to ship a separate web server 
+like Apache or nginx. Frameworks that offer a pure-Python integrated web server include CherryPy; 
+Zope, and thus Grok and BFG; web2py; and web.py. 
+CGI 
+When the first experiments were taking place with dynamically generated web pages, developers would 
+write an external program and have their web server run the program every time a matching HTTP 
+request arrived. This resembled the behavior of the traditional inetd server (Chapter 7), which could run 
+an external command to answer each incoming TCP or UDP connection on a listening socket. 
+Many of these early web servers lacked the ability to designate entire sections of a web site as 
+dynamic; for example, you could not tell them, “all URLs beneath /cart should be handled by my 
+application.” Instead, scripts were simply designated as a new type of content, and then placed right 
+next to static pages, images, and archive files in directories that were already browsable from the web. 
+Just as servers had been told that .html files should be delivered as text/html content and that .jpg files 
+should be returned as images, they were now told that executable .cgi files should be run and their 
+output returned to the HTTP client. 
+Obviously, a calling convention was necessary, and so the Common Gateway Interface (CGI) was 
+defined. It allowed programs in all sorts of languages—C, the various Unix shells, awk, Perl, Python, PHP, 
+and so forth—to be partners in generating dynamic content. 
+Today, the design of CGI is considered something of a disaster. Running a new process from scratch 
+is just about the most expensive single operation that you can perform on a modern operating system, 
+and requiring that this take place for every single incoming HTTP request is simply madness. You should 
+avoid CGI under all circumstances. But it is possible you might someday have to connect Python code to 
+a legacy HTTP server that does not support at least FastCGI or SCGI, so I will outline CGI's essential 
+features. 
+Three standard lines of communication that already existed between parent and child processes on 
+Unix systems were used by web servers when invoking a CGI script: 
+
+CHAPTER 11 ■ WEB APPLICATIONS 
+194 
+• 
+The Unix environment—a list of strings provided to each process upon its 
+invocation that traditionally includes things like TZ=EST (the time zone) and 
+COLUMNS=80 (user's screen width)—was instead stuffed full of information about 
+the HTTP request that the CGI script was being called upon to answer. The various 
+parts of the request's URL; the user agent string; basic information about the web 
+server; and even a cookie could be included in the list of colon-separated key-
+value pairs. 
+• 
+The standard input to the script could be read to end-of-file to receive whatever 
+data had been submitted in the body of the HTTP request using POST. Whether a 
+request was indeed a POST could be checked by examining the REQUEST_METHOD 
+environment variable. 
+• 
+Finally, the script would produce content, which it did by writing HTTP headers, a 
+blank line, and then a response body to its standard output. To be a valid 
+response, a Content-Type header was generally necessary at a minimum—though 
+in its absence, some web servers would instead accept a Location header as a 
+signal that they should send a redirect. 
+Should you ever need to run Python behind an HTTP server that only supports CGI, then I 
+recommend that you use the CGIHandler module from the wsgiref Standard Library package. This lets 
+you use a normal Python web framework to write your service—or, alternatively, to roll up your sleeves 
+and write a raw WSGI application—and then offer the HTTP server a CGI script, as shown here: 
+import CGIHandler, MyWSGIApp 
+my_wsgi_app = MyWSGIApp()  # configuration necessary here? 
+CGIHandler().run(my_wsgi_app) 
+Be sure to check whether your web framework of choice already provides a way to invoke it as a CGI 
+script; if so, your web framework will already know all of the steps involved in loading and configuring 
+your application. For complex web frameworks, it might be tedious to run all of the steps manually in a 
+script like this one. 
+The Python Standard Library also includes two more ancient modules related to the CGI protocol. 
+Old CGI scripts written with Python imported the cgi module; this module contains a number of 
+helpers and utilities for interpreting both the standard CGI environment variables and also for parsing 
+GET or POST form parameters, so that you can access them like a dictionary. 
+And, believe it or not, there is actually a CGIHTTPServer module in the Standard Library, so that 
+Python can actually be used as a CGI-enabled HTTP server. Like many other web servers of its era, this 
+module interprets URLs as paths into a directory tree and serves static files directly while invoking CGI 
+scripts as separate processes. 
+mod_python 
+As it became clear that CGI was both inefficient and inflexible—CGI scripts could not flexibly set the 
+HTTP return code, for example—it became fashionable to start embedding programming languages 
+directly in web servers. 
+Earlier in this chapter, we discussed how embedding Python is possible today with mod_wsgi under 
+Apache. (We also noted that this is usually only desirable if you have another web server in front of 
+Apache that can handle static requests with workers that are not bloated by including their own Python 
+interpreter!) Back in the early days, embedding was also possible, through a somewhat different 
+approach that actually made Python an extension language for much of the internals of Apache itself. 
+The module that supported this was mod_python, and for years it was by far the most popular way to 
+connect Python to the World Wide Web. 
+7
+
+CHAPTER 11 ■ WEB APPLICATIONS 
+195
+The mod_python Apache module put a Python interpreter inside of every worker process spawned by 
+Apache. Programmers could arrange for their Python code to be invoked by writing directives into their 
+Apache configuration files like this: 
+<Directory /cart> 
+  AddHandler mod_python .py 
+  PythonHandler my_shopping_cart 
+  PythonDebug On 
+</Directory> 
+All kinds of Apache handlers could be provided, each of which intervened at a different moment 
+during the various stages of Apache's request processing. Most Python programmers just declared a 
+publisher handler—publishing was one of Apache's last steps and the one where content was generated. 
+These scripts would examine their request argument and then build a response, which made them look 
+like a more complex version of this snippet: 
+# "my_shopping_cart.py" 
+from mod_python import apache 
+def handler(request): 
+»   request.content_type = 'text/plain' 
+»   request.write('Welcome to your Python-powered shopping cart!') 
+»   return apache.OK 
+But many other kinds of handlers could also be implemented, thanks to the many integration points 
+that mod_python provided. Python could be used to make access control decisions, to authenticate 
+requests using non-standard mechanisms, to pre-process headers before they were handed off to some 
+other application, and to implement custom logging or statistics collection. 
+It must be admitted, though, that very little of the excitement surrounding this flexibility ever seems 
+to have panned out. I think that lots of complex logic that people once dreamed of plugging into Apache 
+actually wound up being implemented inside web frameworks instead. The frameworks tended to take 
+things like authentication and redirection out of the web server altogether. But for the few people who 
+really did need to extend Apache, nothing could really replace mod_python. 
+Today, mod_python is mainly of historical interest. I have outlined its features here, not only because 
+you might be called upon to maintain or upgrade a service that is still running on mod_python, but 
+because it still provides unique Apache integration points where Python cannot get involved in any 
+other way. If you run into either situation, you can find its documentation at modpython.org. 
+Summary 
+Web applications are typically deployed by using either a pure-Python web server for a low-volume or 
+internal site, or by using a high-capacity front-end server to serve static content and dispatch requests 
+for dynamic pages to your Python application. A popular approach is to put something fast like nginx, 
+lighttpd, or Cherokee in front, and then use flup, uWSGI, or Apache with mod_wsgi to actually manage 
+your Python server processes. 
+The introduction of the WSGI calling convention in PEP 333 has been a great advance in Python web 
+interoperability: web servers and web applications can now be paired freely, freeing web framework 
+developers from having to build in explicit support for every web server they wanted to support. Each 
+WSGI application is a callable that receives information about the incoming web request and issues an 
+HTTP response code, headers, and content in reply. 
+WSGI middleware is software that sits between a WSGI server and an application, and performs 
+operations like authentication, dispatch, tracing, and debugging. Middleware is especially useful when 
+several applications are being combined and themed to form a single web site. However, it is fair to say 
+that, at this point, the dream has not come to pass that Python web developers would one day start new 
+
+CHAPTER 11 ■ WEB APPLICATIONS 
+196 
+web applications by selecting and configuring a middleware stack that got the application's boilerplate 
+logic out of the way. 
+Python web frameworks are crucial to modern web development. They handle much of the logic of 
+HTTP, and they also provide several important abstractions: they can dispatch different URLs to 
+different Python code, insert Python variables into HTML templates, and provide important assistance 
+in both persisting Python objects to the database and also in letting them be accessed from the web both 
+through user-facing CRUD interfaces as well as RESTful web-service protocols. 
+There do exist pure-Python web servers, which can be especially important when writing a web 
+interface for a program that users will install locally. There are not only good choices available for 
+download, but a few small servers are even built into the Python Standard Library. 
+Two old approaches to dynamic web page generation are the CGI protocol and the mod_python 
+Apache module. Neither should be used for new development. 
+ 

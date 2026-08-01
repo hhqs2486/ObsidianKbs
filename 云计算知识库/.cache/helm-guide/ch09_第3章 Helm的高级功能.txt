@@ -1,0 +1,559 @@
+第3章
+Helm的高级功能
+在上一章中，我们研究了最常用的Helm命令。在本章中，我们将
+探讨Helm工具提供的其他功能。我们将深入研究提供有关发布、测试
+安装和跟踪历史等信息的命令。最后，我们将重新讨论安装和升级，
+这次将讨论高级案例。
+我们还将开始使用一些有助于故障排除和调试的工具。
+更多IT书籍请关注：www.cmsblogs.cn
+
+3.1　模板和试运行
+当Helm安装一个发行版时，程序会经历几个阶段。它加载chart，
+解析传递给程序的值，读取chart元数据，等等。大约在这个过程的中
+间，Helm编译chart中的所有模板（一次完成），然后通过传递值来呈
+现它们（就像我们在上一章中看到的那样）。在这个中间部分，它执
+行所有的模板指令。一旦模板被呈现到YAML中，Helm通过将其解析为
+Kubernetes对象来验证YAML的结构。最后，Helm序列化这些对象并将
+它们发送到kubernetes API服务器。
+过程如下：
+1.加载整个chart，包括其依赖项。
+2.解析值。
+3.执行模板，生成YAML。
+4.将YAML解析为Kubernetes对象以验证数据。
+5.将它发送给Kubernetes。
+例如，让我们看看上一章中发出的如下命令：
+在第一阶段，Helm将定位名为bitnami/drupal的chart并加载该
+chart。如果chart是本机的，它将从磁盘中读取。如果给定了一个
+URL，它将从远程位置获取（可能使用插件来帮助获取chart）。
+更多IT书籍请关注：www.cmsblogs.cn
+
+然后它将把--set drupalUsername=admin转换为一个可以注入模
+板的值。此值将与chart的values.yaml文件中的默认值合并。Helm根
+据数据做了一些基本检查。如果它在解析用户输入时遇到问题，或者
+默认值已损坏，它将退出并返回一个错误。否则，它将构建一个大值
+对象，模板引擎可以使用该对象进行替换。
+生成的值对象通过以下三个步骤来创建：加载chart文件的所有
+值；用从文件加载的任何值（即，使用-f标志）覆盖；使用--set标志
+设置的任何值覆盖。换句话说，--set值覆盖传入的值文件中的设置，
+而传入的值文件又覆盖chart的默认values.yaml文件中的任何内容。
+此时，Helm将读取Drupal chart中的所有模板并执行这些模板，
+然后将合并的值传递给模板引擎。格式错误的模板将导致错误。但也
+有很多其他情况可能会导致失败。例如，如果缺少必需的值，则在此
+阶段返回错误。
+需要注意的是，在执行时，一些Helm模板需要关于Kubernetes的
+信息。因此，在模板渲染期间，Helm可能会联系Kubernetes API服务
+器。这是我们稍后将讨论的一个重要主题。
+然后将前面步骤的输出从YAML解析为Kubernetes对象。Helm将在
+此时执行一些模式级验证，确保对象的格式良好。然后将它们序列化
+为Kubernetes的最终YAML格式。
+在最后一个阶段，Helm将YAML数据发送到Kubernetes API服务
+器。这是kubectl和其他Kubernetes工具与之交互的服务器。
+API服务器将对提交的YAML运行一系列检查。如果Kubernetes接受
+YAML数据，Helm将认为部署成功。但是如果Kubernetes拒绝了YAML，
+Helm将以一个错误退出。
+稍后，我们将详细讨论将对象发送到Kubernetes之后会发生什
+么。特别地，我们将介绍Helm如何将前面描述的过程与安装和修改相
+关联。但是现在，我们有足够的关于工作流的信息来理解两个相关的
+Helm特性：--dry-run标志和helm template命令。
+3.1.1　--dry-run标志
+更多IT书籍请关注：www.cmsblogs.cn
+
+helm install和helm upgrade等命令提供了一个名为--dry-run的
+标志。当在命令行中添加此标志时，将导致Helm逐步完成前四个阶段
+（加载chart、确定值、渲染模板、格式化为YAML）。但是当第四阶段
+结束时，Helm会将大量信息转储到标准输出，包括所有渲染的模板。
+然后它将退出，而不将对象发送给Kubernetes，也不创建任何发布记
+录。
+例如，这里是以前的Drupal安装的一个版本，附加了--dry run标
+志：
+在输出的最前面，它将打印有关此发布版本的信息：
+前面的内容显示了安装的名称、上次的部署时间（在本例中是当
+前日期和时间）、它将部署到哪个命名空间、它处于版本的哪个阶段
+（pending-install）以及版本号。因为这是一个安装，所以修订版本
+是1。升级时，它将是2或更大的数字。
+最后，如果这个chart声明了任何钩子，它们将在这里被枚举。有
+关钩子的更多信息，参见第6章和第7章。
+更多IT书籍请关注：www.cmsblogs.cn
+
+乍一看，这个元数据条目似乎有很多不必要的数据。毕竟，如果
+我们没有实际安装，LAST DEPLOYED有什么用处呢？事实上，这部分信
+息是整个Helm中使用的标准集。它是发布记录的一部分：关于发布的
+一组信息。helm get等命令会使用这些相同的字段。
+接下来，在信息块之后，所有渲染的模板都被转储到标准输出：
+渲染的Drupal chart有数千行，因此前面只显示了输出的前几
+行。
+在试运行输出的最后，Helm打印面向用户的发行版本说明：
+更多IT书籍请关注：www.cmsblogs.cn
+
+为了简洁起见，这个例子被截断了。
+这个试运行（dry-run）特性为Helm用户提供了一种在chart把输
+出发送到Kubernetes之前调试它的方法。通过渲染所有模板，你可以
+准确地检查提交给集群的内容。通过发布版本数据，你可以验证是否
+按照预期创建了发布版本。
+--dry-run标志的主要目的是让人们有机会在将输出发送到
+Kubernetes之前检查和调试输出。但在它被引入后不久，Helm维护人
+员就注意到了用户中的一种趋势：人们希望使用--dry-run将Helm用作
+模板引擎，然后使用其他工具（如kubectl）将渲染的输出发送到
+Kubernetes。
+但是编写--dry-run时没有考虑到这个用例，这导致了一些问题：
+1.--dry-run将非YAML信息与渲染的模板混合。这意味着在将数据
+发送到kubectl等工具之前，必须对其进行清理。
+更多IT书籍请关注：www.cmsblogs.cn
+
+2.--dry-run在升级时可能会产生与其安装时不同的YAML输出，这
+可能会让人困惑。
+3.它会联系Kubernetes API服务器进行验证，这意味着Helm必须
+拥有Kubernetes凭据，即使它只是用来试运行一个发行版本。
+4.它还将特定于集群的信息插入模板引擎。因此，某些渲染过程
+的输出可能是特定于集群的。
+为了解决这些问题，Helm维护人员引入了一个完全独立的命令：
+helm template。
+3.1.2　helm template命令
+虽然--dry-run是为调试而设计的，但helm template是为了将
+Helm的模板渲染过程与安装或升级逻辑隔离开来。
+之前，我们研究了Helm安装或升级的5个阶段。template命令执行
+前4个阶段（加载chart、解析值、渲染模板、格式化为YAML）。但它
+也有一些额外的注意事项：
+·在helm template执行期间，Helm从不联系远程Kubernetes服务
+器。
+·template命令的作用始终类似于安装。
+·通常需要联系Kubernetes服务器的模板函数和指令将只返回默认
+数据。
+·chart只能访问默认的Kubernetes类型。
+关于最后一项，helm template做了一个显著的简化假设。
+Kubernetes服务器支持内置种类（Pod、Service、ConfigMap等）以及
+由CRD生成的自定义类型。当运行安装或升级时，Helm在处理chart之
+前从Kubernetes服务器获取这些类型。
+但是，helm template执行此步骤的方式不同。在编译Helm时，它
+是针对Kubernetes的特定版本编译的。Kubernetes库包含该版本的内
+更多IT书籍请关注：www.cmsblogs.cn
+
+置类型列表。Helm使用这个内置列表，而不是它从API服务器获取的列
+表。因此，Helm在helm template运行期间不能访问任何CRD，因为CRD
+安装在集群上，并且不包含在Kubernetes库中。
+如果针对使用新类型或新版本的chart运行旧版本的Helm，会
+在helm template运行期间产生错误，因为Helm不会把最新类型或版本
+编译进去。
+作为这些决策的结果，helm template在运行之后生成一致的输
+出。更重要的是，它可以在不能访问Kubernetes集群的环境中运行，
+比如持续集成（CI）管道。
+输出也不同于--dry-run。下面是一个命令示例：
+更多IT书籍请关注：www.cmsblogs.cn
+
+更多IT书籍请关注：www.cmsblogs.cn
+
+前面是一个大大简化了的输出版本，只显示了命令、开始数据和
+结束数据的示例。不过，需要重点注意的是，默认情况下只打印YAML
+格式的Kubernetes清单。
+因为Helm在helm template运行期间不联系Kubernetes集群，所以
+它不会对输出进行完全验证。在这种情况下，Helm可能不会发现一些
+错误。如果你想要这种行为，可以选择使用--validate标志，但是在
+这种情况下，Helm需要一个有效的kubeconfig文件，其中包含集群的
+凭据。
+helm template命令有大量的标志，这些标志对应于helm install
+中的标志。因此，在许多情况下，你可以像执行helm install一样执
+行helm template命令，随后捕获YAML并将其与其他工具一起使用。
+使用后期渲染而不是Helm模板
+有时你需要截取YAML，用自己的工具修改它，然后将其加载到
+Kubernetes中。Helm提供了一种执行这个外部工具的方法，而不必使
+用helm template。install、upgrade、rollback和template上的--
+post-renderer标记会导致Helm将YAML数据发送到命令，然后将结果读
+回Helm。这是使用Kustomize等工具的好方法。
+总而言之，helm template是一个用于将Helm chart渲染到YAML中
+的工具，--dry-run标志是一个用于调试安装和升级命令，而无须将数
+据加载到Kubernetes中的工具。
+更多IT书籍请关注：www.cmsblogs.cn
+
+3.2　了解发布版本信息
+在上一章中，我们看到了helm get命令。本节将更深入地研究该
+命令以及其他可以提供有关Helm发布版本信息的命令。
+首先回顾上一节中的5个Helm安装阶段：
+1.加载chart。
+2.解析值。
+3.执行模板。
+4.渲染YAML。
+5.把它发送到Kubernetes。
+前4个阶段主要涉及数据的局部表示。即，Helm在运行helm命令的
+同一台计算机上执行所有处理。
+不过，在最后一个阶段，Helm将数据发送给Kubernetes。然后二
+者“来回沟通”，直到发布版本被接受或拒绝。
+在第5阶段，Helm必须监控发布状态。此外，由于许多人可能正在
+处理该特定应用程序安装的同一副本，因此Helm需要以多个用户可以
+看到该信息的方式监控状态。
+Helm为这个特性提供了发布记录。
+3.2.1　发布记录
+当我们（使用helm install）安装一个Helm chart时，新的安装
+将在你指定的命名空间或默认命名空间中创建（在第2章中讨论过）。
+更多IT书籍请关注：www.cmsblogs.cn
+
+在第2章的结尾，我们还看到了helm install如何创建一种特殊类
+型的Kubernetes Secret来保存发布信息。我们看到了如何与kubectl
+一起检查这些Secret：
+特别值得注意的是最后一个Secret，即
+sh.helm.release.v1.mysite.v1。注意，它使用了一个特殊类型
+（helm.sh/release.v1）来表示这是一个Helm Secret。Helm自动生成
+这个Secret来跟踪mysite安装的版本1（这是一个Drupal站点）。
+每次升级mysite安装时，都会创建一个新的Secret来跟踪每个版
+本。换句话说，发布记录跟踪安装的每个修订版：
+更多IT书籍请关注：www.cmsblogs.cn
+
+在前面的例子中，我们已经升级了几次，现在是mysite的v3。默
+认情况下，Helm最多跟踪每个安装的10个修订版。一旦安装超过10个
+发布版本，Helm将删除最早的发布记录，直到剩余的数量不超过最大
+允许值。
+每个发布记录都包含足够的信息，可以为该修订版重新创建
+Kubernetes对象（这对于helm rollback来说很重要）。它还包含有关
+发布的元数据。
+例如，如果我们使用kubectl查看此发布版本，会看到如下内容：
+更多IT书籍请关注：www.cmsblogs.cn
+
+❶　标签包含Helm元数据。
+在本例中，数量巨大的Base64编码数据与其他一些不重要的字段
+一起被删除。该blob包含chart和版本的gzip表示。但重要的是，
+Kubernetes元数据的labels部分包含有关此版本的信息。
+更多IT书籍请关注：www.cmsblogs.cn
+
+例如，我们可以看到，这个数据描述了名为mysite的版本，它的
+当前修订号是3，这个版本被标记为deployed。如果我们看第2版，会
+看到发布状态（status）是superseded，这意味着它已经被更新的版
+本所取代。
+简而言之，这个Secret存储在Kubernetes中，以便同一集群的不
+同用户可以访问相同的发布信息。
+在某个发布版的生命周期中，它可以经历几个不同的状态。在这
+里，大致按照你可能看到的顺序排列它们：
+pending-install（挂起-安装）
+在将清单发送给Kubernetes之前，Helm通过创建一个状态设置为
+pending-install的版本（标记为version 1）来声明安装。
+deployed（已部署）
+一旦Kubernetes接受Helm的清单，Helm就会更新发布记录，将其
+标记为已部署（deployed）。
+pending-upgrad（挂起-升级）
+当Helm升级开始时，会为安装创建一个新的发布版本（例如
+v2），其状态设置为pending-upgrade。
+superseded（已取代）
+在运行升级时，将更新上次部署的发布版本，并将其标记为已取
+代（superseded），新升级的版本将从pending-upgrade更改为
+deployed。
+pending-rollback（挂起-回滚）
+如果创建了回滚，则会创建一个新的发布版本（例如v3），其状
+态设置为pending-rollback，直到Kubernetes接受该发布版本清单。
+然后它被标记为deployed，而前一个发布版本被标记为superseded。
+uninstalling（正在卸载）
+更多IT书籍请关注：www.cmsblogs.cn
+
+执行helm uninstall时，将读取最新发布版本，然后将其状态更
+改为uninstalling。
+uninstalled（已卸载）
+如果在删除过程中保留了历史记录，那么当helm uninstall完成
+时，前一个发布版本的状态将更改为uninstalled。
+failed（失败）
+最后，如果在任何操作中，Kubernetes拒绝了Helm提交的清单，
+Helm都会将该发布版本标记为failed。
+3.2.2　列出发布版本
+状态信息在许多Helm命令中都会显示。我们已经看到了pending-
+install是如何在一个--dry-run中出现的。在本节和下一节中，我们
+将看到更多这种情况。
+在上一章中，我们使用helm list查看安装的chart。鉴于我们对
+各种状态的知识，值得再回顾一下helm list。list命令是快速检查版
+本状态的最佳工具。
+例如，假设我们有一个同时安装了drupal和wordpress chart的集
+群。以下是helm list的输出：
+不过，为了显示失败的结果，我们可以运行一个升级命令，我们
+知道该命令将中断：
+更多IT书籍请关注：www.cmsblogs.cn
+
+如错误消息所示，拉取（pull）策略不能设置为NoSuchPolicy。
+这个错误来自Kubernetes API服务器，这意味着Helm提交了清单，而
+Kubernetes拒绝了它。所以我们的发布版本应该是失败的。
+我们可以再次运行helm ls来验证这一点：
+值得再次注意的是，我们最近失败的wordpress安装的REVISION字
+段已经从2增加到了3。即使是失败的版本也附带了修订号。我们将在
+3.3节中了解为什么这很重要。
+3.2.3　使用helm get查找发布的详细信息
+虽然helm list提供了安装的摘要视图，但helm get命令集提供了
+有关特定发布版本的更深入的信息。
+helm get有5个子命令（hooks、manifests、notes、values和
+all）。每个子命令都会检索某个版本的Helm跟踪信息的某些部分。
+使用helm get notes
+更多IT书籍请关注：www.cmsblogs.cn
+
+helm get notes子命令打印发布说明：
+这个输出看起来应该很熟悉，因为helm install和helm upgrade
+都会在成功操作结束时打印发布说明。但是helm get notes提供了一
+种方便的方式来按需获取这些说明。如果你忘记了Drupal站点的URL是
+什么，这将非常有用。
+使用helm get values
+另一个有用的子命令是values。你可以使用它来查看上一个版本
+提供了哪些值。在上一节中，我们升级了WordPress安装并导致它失
+败。我们可以使用helm get values来查看是什么值导致它失败：
+更多IT书籍请关注：www.cmsblogs.cn
+
+我们知道第二次修订是成功的，但是第三次修订失败了。所以我
+们可以看看前面的值有什么变化：
+这样，我们可以看到一个值被删除，一个值被添加。类似这样的
+特性旨在使Helm用户更容易识别错误的来源。
+此命令对于了解版本配置的总体状态也很有用。我们可以使用
+helm get values来查看当前为该版本设置的所有值。为此，我们使
+用--all标志：
+更多IT书籍请关注：www.cmsblogs.cn
+
+当指定--all标志时，Helm将获得按字母顺序排序的完整计算值
+集。这是一个很好的工具，可以查看发行版的确切配置状态。
+查看默认值
+尽管helm get values没有显示默认值的方法，但是你可以看到那
+些带有helm inspect values CHARTNAME的值。这将检查chart本身
+（而不是发布版本）并打印出记录的默认values.yaml文件。因此，我
+们可以使用helm inspect values bitnami/wordpress来查看
+WordPress chart的默认配置。
+更多IT书籍请关注：www.cmsblogs.cn
+
+使用helm get manifest
+我们将讨论的最后一个helm get子命令是helm get manifest。此
+子命令获取Helm使用Chart模板生成的确切YAML清单：
+关于这个命令的一个重要细节是，它不会返回所有资源的当前状
+态。它返回从模板生成的清单。在前面的示例中，我们看到了一个名
+为wordpress-mariadb的Secret。如果我们使用kubectl查询这个
+Secret，则元数据部分如下：
+更多IT书籍请关注：www.cmsblogs.cn
+
+kubectl的输出包含当前存在于Kubernetes中的记录。自模板输出
+后添加了几个字段。一些（如注解）由Helm自己管理，而另一些（如
+更多IT书籍请关注：www.cmsblogs.cn
+
+managedFields和creationTimestamp）由Kubernetes管理。
+Helm再次提供了简化调试的工具。在helm get manifest和
+kubectl get之间，有一些工具可以用来比较Kubernetes认为当前的对
+象是什么，以及chart产生了什么。当应该由Helm管理的资源在Helm外
+部（例如，使用kubectl edit）手动编辑时，这尤其有用。
+有了helm get，我们可以仔细检查一个单独的发布版本。但我们
+将介绍的下一个工具提供了一个有关发布进程的视图。在下一节中，
+我们将了解helm history和helm rollback。
+更多IT书籍请关注：www.cmsblogs.cn
+
+3.3　历史记录和回滚
+在本书中，我们区分了安装和修订。在本章中，我们使用了两个
+安装：mysite和wordpress。当早些时候运行helm list时，可以看到
+每个安装都有三个版本。此外，可以看到wordpress处于失败状态：
+我们可以调查WordPress的发布历史，看看发生了什么。为此，我
+们将使用helm history：
+更多IT书籍请关注：www.cmsblogs.cn
+
+这个命令的输出提供了wordpress发布的良好历史记录。首先安
+装，然后升级并标记为已部署（这意味着升级成功）。但当它再次升
+级时，升级失败了。helm history命令甚至给出了Kubernetes在标记
+发布失败时返回的错误消息。
+从错误消息中，我们知道发布失败是因为我们提供了无效的镜像
+拉取策略。所以我们当然可以通过运行另一个helm upgrade来纠正这
+个问题。但设想一下并不容易查到错误原因的情况。与其在诊断问题
+时让应用程序处于失败状态，不如简单地恢复到以前的版本。
+这就是helm rollback的用途：
+这个命令告诉Helm获取wordpress version 2版本，并将清单重新
+提交给Kubernetes。回滚不会还原到集群的上一个快照。Helm没有追
+踪足够的信息来做到这一点。它会重新提交以前的配置，而
+Kubernetes尝试重置资源以匹配。
+现在我们可以再次使用helm history来查看发生了什么：
+更多IT书籍请关注：www.cmsblogs.cn
+
+回滚操作创建了一个新版本（4）。由于回滚是成功的（并且
+Kubernetes接受了修改），所以这个版本被标记为deployed。注意，
+修订版2现在被标记为已取代（superseded），而失败的第3版仍然被
+标记为失败（failed）。
+因为Helm保存了历史记录，所以在回滚到已知的良好配置之后，
+仍然可以检查失败的版本。
+在大多数情况下，helm rollback是从灾难中恢复过来的良好方
+法。但是，如果手工编辑由Helm管理的资源，可能会出现一个有趣的
+问题。回滚有时会导致一些意外的行为，特别是在Kubernetes资源已
+经被用户手工编辑的情况下。如果这些手工编辑的内容与回滚不冲
+突，Helm和Kubernetes将尝试保留它们。从本质上讲，回滚将在资源
+的当前状态、失败的Helm版本和回滚到的Helm版本之间产生一个三向
+差异。在某些情况下，生成的差异可能导致回滚手工编辑的内容，而
+在其他情况下，这些差异将被合并。在最坏的情况下，某些手工编辑
+的内容可能会被覆盖，而其他相关的编辑内容则会被合并，从而导致
+配置不一致。这是Helm核心维护人员建议不要手工编辑资源的众多原
+因之一。如果所有的编辑都是通过Helm进行的，那么你就可以有效地
+使用Helm工具，而无须猜测。
+更多IT书籍请关注：www.cmsblogs.cn
+
+3.3.1　保留历史和回滚
+在上一章中，我们看到helm uninstall命令有一个名为--keep
+history的标志。通常，删除事件将销毁与该安装相关联的所有发布记
+录。但是当指定--keep history时，即使删除了安装，你也可以看到
+它的历史记录：
+注意，最后一个版本现在标记为已卸载（uninstalled）。当历史
+记录被保留时，你可以回滚已删除的安装：
+现在我们可以看到新部署的版本5：
+更多IT书籍请关注：www.cmsblogs.cn
+
+如果没有--keep history标志，这将不起作用：
+更多IT书籍请关注：www.cmsblogs.cn
+
+3.4　深入了解安装和升级
+在第2章中，我们首先介绍了如何安装和升级Helm包，在本章中，
+我们还介绍了帮助我们使用Helm安装的工具。在本节中，我们将再次
+回到安装和升级，并查看一些高级功能。
+3.4.1　--generate-name和--name-template标志
+Kubernetes的工作方式有一个与命名有关的微妙危险。
+Kubernetes假设名称将具有某些唯一性属性。例如，Deployment对象
+的命名空间中必须具有唯一的名称。也就是说，在命名空间
+mynamespace中不能有两个名为myapp的Deployment。但可以有一个
+Deployment和一个Pod，它们都叫myapp。
+这使得某些任务变得更加复杂。例如，自动部署内容的CI系统必
+须确保这些内容的名称在命名空间中是唯一的。处理这个问题的一种
+方法是Helm提供一个工具来生成唯一的名称（另一种方法是，如果名
+称已经存在，则始终覆盖该名称。有关该方法，请参见下一节）。
+Helm为helm install提供--generate name标志：
+更多IT书籍请关注：www.cmsblogs.cn
+
+使用--generate name标志，我们不再需要提供名称作为helm
+install的第一个参数。Helm根据chart名称和时间戳的组合生成名
+称。在前面的输出中，我们可以看到生成的名称：wordpress-
+1597689085。
+在Helm 2中，“友好的名字”是用形容词和动物的名字产生的。
+因为有人抱怨发布的名字不专业，所以在Helm 3中删除了这种命名模
+式。目前无法重新启用此功能。
+但是，还有一个额外的标志允许你指定命名模板。--name-
+template标志允许你执行以下操作：
+更多IT书籍请关注：www.cmsblogs.cn
+
+在本例中，我们使用了名称模板foo-{{randAlpha 9|lower}}。这
+将使用Helm模板引擎生成一个名称。在接下来的几章中，我们将介绍
+Helm模板引擎。但是名称模板的作用是：{{和}}划分模板的开始和结
+束。在该模板中，我们调用randAlpha函数，从a-z、A-Z字符范围中请
+求一个9个字符的随机字符串。然后我们通过第二个函数（lower）将
+结果“管道化”，该函数将所有内容都小写化。
+查看前面示例的输出，{{randAlpha 9|lower}}的结果是
+yejpiyjmp。所以整个名称模板的结果是foo-yejpiyjmp。
+3.4.2　--create-namespace标志
+Kubernetes中命名的另一个考虑因素与命名空间有关。前面，我
+们看到同一命名空间中的同一类型的两个对象不能有相同的名称。但
+Kubernetes也有一个全局名称的概念。CRD和命名空间都有全局名称。
+因此，命名空间必须是集群范围内唯一的。
+每当Helm遇到全局唯一的名字，它就会采取防御的姿态。在后面
+的章节中，我们将看到chart如何处理全局唯一的名称。但这里值得指
+出的是，Helm 3默认情况下假定，如果你尝试将chart部署到命名空间
+中，则该命名空间已经创建。
+例如，在一个新集群上，这将失败：
+它失败了，因为mynamespace尚未创建，Helm不会自动创建命名空
+间。它不会创建空间，因为命名空间是全局的。安全的假设是，在创
+建命名空间时，它可能需要访问控制（如RBAC）和分配给它的其他东
+西，然后才能在生产中安全地使用。简而言之，它将静默地创建名称
+空间视为无意中创建安全漏洞的机会。
+但是，Helm确实允许你通过显式地声明要创建命名空间来覆盖此
+考虑：
+更多IT书籍请关注：www.cmsblogs.cn
+
+通过添加--create-namespace，我们已经向Helm表明，我们知道
+可能还没有具有该名称的命名空间，只希望创建一个。当然，请确保
+如果在生产实例上使用此标志，会有其他机制来强制执行此新命名空
+间的安全性。
+在helm uninstall上没有类似的--delete-namespace。原因在于
+Helm对全局对象的防御性。创建命名空间后，可以将任意数量的对象
+放入其中，而它们不一定全都是由Helm管理的。当一个命名空间被删
+除时，该命名空间内的所有对象也都被删除。所以Helm不会自动删除
+用--create-namespace创建的命名空间。要删除命名空间，请使用
+kubectl delete namespace（当然，在确保该命名空间中不存在重要
+对象之后再删除）。
+3.4.3　使用helm upgrade--install
+有些系统（如CI管道）用于在每次发生重大事件时自动安装或升
+级chart。例如，许多组织都有管道，每当新代码上传到Git等版本控
+制系统（VCS）时就会触发。GitHub是一种流行的Git托管服务，它甚
+至提供了在合并代码更改时自动部署的工具。
+这样的系统通常在无状态平台上运行基本脚本，而无状态平台没
+有查询Kubernetes的方法。这类系统的用户要求Helm提供一个特性，
+允许在一个命令中支持“安装或升级”。
+为了方便这种行为，Helm维护人员在helm upgrade命令中添加了-
+-install标志。helm upgrade--install命令将安装一个尚不存在的版
+本，或者升级一个以该名称命名的版本。在底层，它通过查询
+更多IT书籍请关注：www.cmsblogs.cn
+
+Kubernetes以获得具有给定名称的发布版。如果该版本不存在，它将
+从升级逻辑切换到安装逻辑。
+例如，我们可以使用完全相同的命令依次运行安装和升级：
+正如我们在第一行输出中看到的，命令的第一次运行导致安装，
+而第二次运行导致升级。
+不过，这个命令确实带来了一些危险。Helm无法确定你提供给
+helm upgrade--install的安装名称是属于你要升级的发布版本，还是
+恰好与你要安装的名称相同。不小心使用此命令可能会导致用另一个
+安装覆盖某个安装。这就是它不是Helm的默认行为的原因。
+更多IT书籍请关注：www.cmsblogs.cn
+
+3.4.4　--wait和--atomic标志
+helm install和helm upgrade的另外两个重要标志修改了Helm操
+作的成功标准。它们是--wait和--atomic标志。
+--wait标志有几种方式可以修改Helm客户端的行为。首先，当
+Helm运行一个安装时，它会在一段时间内保持活动状态（可以使用--
+timeout标志进行修改），在此期间它会监视Kubernetes。它轮询
+Kubernetes API服务器，以获取有关由chart创建的所有pod运行对象
+的信息。例如，DaemonSet、Deployment和StatefulSet（守护程序
+集、部署程序集和状态程序集）都创建pod。因此，使用--wait的Helm
+将一直跟踪这些对象，直到它们创建的pod被标记为由Kubernetes运行
+为止。
+在正常的安装或升级中，只要Kubernetes API服务器接受清单，
+Helm就会将发布标记为成功。这类似于软件包管理器，它认为只要软
+件包内容写入正确的存储位置，就算成功地安装了软件包。
+但是使用--wait，安装成功的标准被修改了。除非Kubernetes
+API服务器接受清单，并且由chart创建的所有pod都在Helm超时过期之
+前达到运行状态，否则chart不会被视为已成功安装。
+因此，带有--wait的安装可能会由于各种原因而失败，包括网络
+延迟、调度程序速度慢、节点忙、镜像拉取速度慢，以及容器完全无
+法启动。
+这种行为被视为一种理想的结果，操作员使用helm install--
+wait来确保不仅成功安装了chart，而且正确启动了生成的应用程序。
+但是，在排除故障时，它确实会引入一些复杂的因素。短暂停机可能
+会导致Helm故障（稍后由Kubernetes解决该故障）。例如，镜像拉取
+延迟可能会导致某个Helm发布版本被标记为失败，即使几分钟后镜像
+拉取可以完成并且应用程序可以启动。
+不过，考虑到这一点，helm install--wait是一个很好的工具，
+可以确保发布版本一直在运行。但在自动化系统（如CI）中使用时，
+可能会导致虚假故障。在CI中使用--wait的一个建议是使用长--
+timeout（5或10分钟），以确保Kubernetes有时间解决任何瞬时故
+障。
+更多IT书籍请关注：www.cmsblogs.cn
+
+第二种策略是使用--atomic标志而不是--wait标志。除非发布失
+败，否则此标志导致的行为与--wait相同。然后，它将自动回滚到最
+后一个成功的版本，而不是将该版本标记为失败（failed）并退出。
+在自动化系统中，--atomic标志更能抵抗中断，因为它的最终结果不
+太可能出现故障（不过，请记住，不保证回滚一定会成功）。
+正如--wait可以出于Kubernetes本身可以解决的过渡原因将发布
+版本标记为失败一样，--atomic可能会出于同样的原因而触发不必要
+的回滚。因此，建议使用更长的--atomic超时时间（--timeout），特
+别是在与CI系统一起使用时。
+3.4.5　使用--force和--cleanup-on-fail升级
+我们下面看到的最后两个标志修改了Helm处理升级的细微差别的
+方式。
+--force标志在升级用于管理pod（如Pod、Deployment和
+StatefulSet）的资源时修改Helm的行为。通常，当Kubernetes收到修
+改此类对象的请求时，它会确定是否需要重新启动此资源管理的pod。
+例如，某个Deployment可以运行一个pod的五个副本。但是，如果
+Kubernetes接收到Deployment对象的更新，它只会在某些字段被修改
+时重新启动这些pod。
+不过，有时Helm用户希望确保pod重启。这时就用到了--force标
+记。它将删除并重新创建Deployment，而不是修改Deployment（或类
+似对象）。这迫使Kubernetes删除旧pod并创建新pod。根据设计，使
+用--force会导致停机（通常只有几秒钟的停机时间）。建议仅在明确
+需要的情况使用--force，而不是作为默认选项。例如，核心维护人员
+不建议在部署到生产环境的CI管道中使用--force。
+修改升级行为的另一种方法是使用--cleanup on fail标志。类似
+于--force，这个标志指示Helm做额外的工作。
+考虑这样一种情况：安装一个创建Kubernetes Secret的chart。
+一个新版本的chart被创建，它创建了第二个Secret。但在安装过程
+中，Helm遇到了一个错误，并将发布标记为失败。第二个Secret有可
+能被挂起。如果使用--wait或--atomic，则更可能出现这种情况，因
+为在Kubernetes接受清单并创建资源之后，这些操作可能会失败。
+更多IT书籍请关注：www.cmsblogs.cn
+
+--cleanup-on-fail标志将尝试修复此情况。如果失败，它将请求
+删除升级期间新创建的每个对象。使用它可能会使调试变得更加困难
+（特别是如果失败是由新创建的对象造成的），但是如果你不想冒险
+在失败后挂起未使用的对象，那么它是很有用的。
+更多IT书籍请关注：www.cmsblogs.cn
+
+3.5　结论
+Helm命令行工具提供了许多有用的命令。第2章介绍了基本命令，
+本章重点介绍了Helm中其他一些有用的命令。本章末尾，我们还重新
+复习了安装和升级命令，体验了使用这些命令的一些更复杂的功能。
+但是，这里并未讨论所有的命令。在接下来的章节中，我们将了
+解用于创建和打包chart的命令、用于签名和验证软件包的命令，以及
+更多用于使用存储库的命令。
+更多IT书籍请关注：www.cmsblogs.cn

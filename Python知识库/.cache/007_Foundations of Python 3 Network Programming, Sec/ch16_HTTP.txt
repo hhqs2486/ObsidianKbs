@@ -1,0 +1,1250 @@
+C H A P T E R   9 
+ 
+■ ■ ■ 
+137
+HTTP 
+The protocols of yore tended to be dense, binary, and decipherable only by Boolean machine logic. But 
+the workhorse protocol of the World Wide Web, named the Hypertext Transfer Protocol (HTTP), is 
+instead based on friendly, mostly-human-readable text. There is probably no better way to start this 
+chapter than to show you what an actual request and response looks like; that way, you will already 
+know the layout of a whole request as we start digging into each of its features. 
+Consider what happens when you ask the urllib2 Python Standard Library to open this URL, which 
+is the RFC that defines the HTTP protocol itself: www.ietf.org/rfc/rfc2616.txt 
+The library will connect to the IETF web site, and send it an HTTP request that looks like this: 
+GET /rfc/rfc2616.txt HTTP/1.1 
+Accept-Encoding: identity 
+Host: www.ietf.org 
+Connection: close 
+User-Agent: Python-urllib/2.6 
+As you can see, the format of this request is very much like that of the headers of an e-mail 
+message—in fact, both HTTP and e-mail messages define their header layout using the same standard: 
+RFC 822. The HTTP response that comes back over the socket also starts with a set of headers, but then 
+also includes a body that contains the document itself that has been requested (which I have truncated): 
+HTTP/1.1 200 OK 
+Date: Wed, 27 Oct 2010 17:12:01 GMT 
+Server: Apache/2.2.4 (Linux/SUSE) mod_ssl/2.2.4 OpenSSL/0.9.8e PHP/5.2.6 with Suhosin- 
+Patch mod_python/3.3.1 Python/2.5.1 mod_perl/2.0.3 Perl/v5.8.8 
+Last-Modified: Fri, 11 Jun 1999 18:46:53 GMT 
+ETag: "1cad180-67187-31a3e140" 
+Accept-Ranges: bytes 
+Content-Length: 422279 
+Vary: Accept-Encoding 
+Connection: close 
+Content-Type: text/plain 
+ 
+Network Working Group                                      R. Fielding 
+Request for Comments: 2616                                   UC Irvine 
+Obsoletes: 2068                                              J. Gettys 
+Category: Standards Track                                   Compaq/W3C 
+... 
+Note that those last four lines are the beginning of RFC 2616 itself, not part of the HTTP protocol. 
+Two of the most important features of this format are not actually visible here, because they pertain 
+to whitespace. First, every header line is concluded by a two-byte carriage-return linefeed sequence, or 
+'\r\n' in Python. Second, both sets of headers are terminated—in HTTP, headers are always 
+
+CHAPTER 9 ■ HTTP 
+138 
+terminated—by a blank line. You can see the blank line between the HTTP response and the document 
+that follows, of course; but in this book, the blank line that follows the HTTP request headers is probably 
+invisible. When viewed as raw characters, the headers end where two end-of-line sequences follow one 
+another with nothing in between them: 
+…Penultimate-Header: value\r\nLast-Header: value\r\n\r\n 
+Everything after that final \n is data that belongs to the document being returned, and not to the 
+headers. It is very important to get this boundary strictly correct when writing an HTTP implementation 
+because, although text documents might still be legible if some extra whitespace works its way in, images 
+and other binary data would be rendered unusable. 
+As this chapter proceeds to explore the features of HTTP, we are going to illustrate the protocol 
+using several modules that come built-in to the Python Standard Library, most notably its urllib2 
+module. Some people advocate the use of HTTP libraries that require less fiddling to behave like a 
+normal browser, like mechanize or even PycURL, which you can find at these locations: 
+http://wwwsearch.sourceforge.net/mechanize/ 
+http://pycurl.sourceforge.net/ 
+But urllib2 is powerful and, when understood, convenient enough to use that I am going to support 
+the Python “batteries included” philosophy and feature it here. Plus, it supports a pluggable system of 
+request handlers that we will find very useful as we progress from simple to complex HTTP exchanges in 
+the course of the chapter. 
+If you examine the source code of mechanize, you will find that it actually builds on top of urllib2; 
+thus, it can be an excellent source of hints and patterns for adding features to the classes already in the 
+Standard Library. It even supports cookies out of the box, which urllib2 makes you enable manually. 
+Note that some features, like gzip compression, are not available by default in either framework, 
+although mechanize makes compression much easier to turn on. 
+I must acknowledge that I have myself learned urllib2, not only from its documentation, but from 
+the web site of Michael Foord and from the Dive Into Python book by Mark Pilgrim. Here are links to 
+each of those resources: 
+http://www.voidspace.org.uk/python/articles/urllib2.shtml 
+http://diveintopython.org/toc/index.html 
+And, of course, RFC 2616 (the link was given a few paragraphs ago) is the best place to start if you are 
+in doubt about some technical aspect of the protocol itself. 
+URL Anatomy 
+Before tackling the inner workings of HTTP, we should pause to settle a bit of terminology surrounding 
+Uniform Resource Locators (URLs), the wonderful strings that tell your web browser how to fetch 
+resources from the World Wide Web. They are a subclass of the full set of possible Uniform Resource 
+Identifiers (URIs); specifically, they are URIs constructed so that they give instructions for fetching a 
+document, instead of serving only as an identifier. 
+For example, consider a very simple URL like the following: http://python.org 
+If submitted to a web browser, this URL is interpreted as an order to resolve the host name 
+python.org to an IP address (see Chapter 4), make a TCP connection to that IP address at the standard 
+HTTP port 80 (see Chapter 3), and then ask for the root document / that lives at that site. 
+Of course, many URLs are more complicated. Imagine, for example, that there existed a service 
+offering pre-scaled thumbnail versions of various corporate logos for an international commerce site we 
+were writing. And imagine that we wanted the logo for Nord/LB, a large German bank. The resulting 
+URL might look something like this: http://example.com:8080/Nord%2FLB/logo?shape=square&dpi=96 
+
+CHAPTER 9 ■ HTTP 
+139
+Here, the URL specifies more information than our previous example did: 
+• 
+The protocol will, again, be HTTP. 
+• 
+The hostname example.com will be resolved to an IP. 
+• 
+This time, port 8080 will be used instead of 80. 
+• 
+Once a connection is complete, the remote server will be asked for the resource 
+named: 
+/Nord%2FLB/logo?shape=square&dpi=96 
+Web servers, in practice, have absolute freedom to interpret URLs as they please; however, the 
+intention of the standard is that this URL be parsed into two question-mark-delimited pieces. The first is 
+a path consisting of two elements: 
+• 
+A Nord/LB path element. 
+• 
+A logo path element. 
+The string following the ? is interpreted as a query containing two terms: 
+• 
+A shape parameter whose value is square. 
+• 
+A dpi parameter whose value is 96. 
+Thus can complicated URLs be built from simple pieces. 
+Any characters beyond the alphanumerics, a few punctuation marks—specifically the set $-
+_.+!*'(),—and the special delimiter characters themselves (like the slashes) must be percent-encoded 
+by following a percent sign % with the two-digit hexadecimal code for the character. You have probably 
+seen %20 used for a space in a URL, for example, and %2F when a slash needs to appear. 
+The case of %2F is important enough that we ought to pause and consider that last URL again. Please 
+note that the following URL paths are not equivalent: 
+Nord%2FLB%2Flogo 
+Nord%2FLB/logo 
+Nord/LB/logo 
+These are not three versions of the same URL path! Instead, their respective meanings are as follows: 
+• 
+A single path component, named Nord/LB/logo. 
+• 
+Two path components, Nord/LB and logo. 
+• 
+Three separate path components Nord, LB, and logo. 
+These distinctions are especially crucial when web clients parse relative URLs, which we will discuss 
+in the next section. 
+The most important Python routines for working with URLs live, appropriately enough, in their own 
+module: 
+>>> from urlparse import urlparse, urldefrag, parse_qs, parse_qsl 
+At least, the functions live together in recent versions of Python—for versions of Pythons older than 
+2.6, two of them live in the cgi module instead: 
+# For Python 2.5 and earlier 
+>>> from urlparse import urlparse, urldefrag 
+>>> from cgi import parse_qs, parse_qsl 
+
+CHAPTER 9 ■ HTTP 
+140 
+With these routines, you can get large and complex URLs like the example given earlier and turn
+them into their component parts, with RFC-compliant parsing already implemented for you: 
+>>> p = urlparse('http://example.com:8080/Nord%2FLB/logo?shape=square&dpi=96')
+>>> p 
+ParseResult(scheme='http', netloc='example.com:8080', path='/Nord%2FLB/logo',
+»   »   »   params='', query='shape=square&dpi=96', fragment='') 
+The query string that is offered by the ParseResult can then be submitted to one of the parsing
+routines if you want to interpret it as a series of key-value pairs, which is a standard way for web forms to
+submit them: 
+>>> parse_qs(p.query) 
+{'shape': ['square'], 'dpi': ['96']} 
+Note that each value in this dictionary is a list, rather than simply a string. This is to support the fact
+that a given parameter might be specified several times in a single URL; in such cases, the values are
+simply appended to the list: 
+>>> parse_qs('mode=topographic&pin=Boston&pin=San%20Francisco')
+{'mode': ['topographic'], 'pin': ['Boston', 'San Francisco']} 
+This, you will note, preserves the order in which values arrive; of course, this does not preserve the
+order of the parameters themselves because dictionary keys do not remember any particular order. If the
+order is important to you, then use the parse_qsl() function instead (the l must stand for “list”): 
+>>> parse_qsl('mode=topographic&pin=Boston&pin=San%20Francisco')
+[('mode', 'topographic'), ('pin', 'Boston'), ('pin', 'San Francisco')] 
+Finally, note that an “anchor” appended to a URL after a # character is not relevant to the HTTP
+protocol. This is because any anchor is stripped off and is not turned into part of the HTTP request.
+Instead, the anchor tells a web client to jump to some particular section of a document after the HTTP
+transaction is complete and the document has been downloaded. To remove the anchor, use
+urldefrag(): 
+>>> u = 'http://docs.python.org/library/urlparse.html#urlparse.urldefrag'
+>>> urldefrag(u)
+('http://docs.python.org/library/urlparse.html', 'urlparse.urldefrag') 
+You can turn a ParseResult back into a URL by calling its geturl() method. When combined with
+the urlencode() function, which knows how to build query strings, this can be used to construct new
+URLs: 
+>>> import urllib, urlparse 
+>>> query = urllib.urlencode({'company': 'Nord/LB', 'report': 'sales'})
+>>> p = urlparse.ParseResult( 
+...     'https', 'example.com', 'data', None, query, None) 
+>>> p.geturl()
+'https://example.com/data?report=sales&company=Nord%2FLB' 
+Note that geturl() correctly escapes all special characters in the resulting URL, which is a strong
+argument for using this means of building URLs rather than trying to assemble strings correctly by hand. 
+Download from www.eBookTM.Com
+
+CHAPTER 9 ■ HTTP 
+141
+Relative URLs 
+Very often, the links used in web pages do not specify full URLs, but relative URLs that are missing 
+several of the usual components. When one of these links needs to be resolved, the client needs to fill in 
+the missing information with the corresponding fields from the URL used to fetch the page in the first 
+place. 
+Relative URLs are convenient for web page designers, not only because they are shorter and thus 
+easier to type, but because if an entire sub-tree of a web site is moved somewhere else, then the links will 
+keep working. The simplest relative links are the names of pages one level deeper than the base page: 
+>>> urlparse.urljoin('http://www.python.org/psf/', 'grants') 
+'http://www.python.org/psf/grants' 
+>>> urlparse.urljoin('http://www.python.org/psf/', 'mission') 
+'http://www.python.org/psf/mission' 
+Note the crucial importance of the trailing slash in the URLs we just gave to the urljoin() function! 
+Without the trailing slash, the call function will decide that the current directory (called officially the base 
+URL) is / rather than /psf/; therefore, it will replace the psf component entirely: 
+>>> urlparse.urljoin('http://www.python.org/psf', 'grants') 
+'http://www.python.org/grants' 
+Like file system paths on the POSIX and Windows operating systems, . can be used for the current 
+directory and .. is the name of the parent: 
+>>> urlparse.urljoin('http://www.python.org/psf/', './mission') 
+'http://www.python.org/psf/mission' 
+>>> urlparse.urljoin('http://www.python.org/psf/', '../news/') 
+'http://www.python.org/news/' 
+>>> urlparse.urljoin('http://www.python.org/psf/', '/dev/') 
+'http://www.python.org/dev' 
+And, as illustrated in the last example, a relative URL that starts with a slash is assumed to live at the 
+top level of the same site as the original URL. 
+Happily, the urljoin() function ignores the base URL entirely if the second argument also happens 
+to be an absolute URL. This means that you can simply pass every URL on a given web page to the 
+urljoin() function, and any relative links will be converted; at the same time, absolute links will be 
+passed through untouched: 
+# Absolute links are safe from change 
+>>> urlparse.urljoin('http://www.python.org/psf/', 'http://yelp.com/') 
+'http://yelp.com/' 
+As we will see in the next chapter, converting relative to absolute URLs is important whenever we 
+are packaging content that lives under one URL so that it can be displayed at a different URL. 
+Instrumenting urllib2 
+We now turn to the HTTP protocol itself. Although its on-the-wire appearance is usually an internal 
+detail handled by web browsers and libraries like urllib2, we are going to adjust its behavior so that we 
+can see the protocol printed to the screen. Take a look at Listing 9–1. 
+
+CHAPTER 9 ■ HTTP 
+142 
+Listing 9–1. An HTTP Request and Response that Prints All Headers 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 9 - verbose_handler.py 
+# HTTP request handler for urllib2 that prints requests and responses. 
+ 
+import StringIO, httplib, urllib2 
+ 
+class VerboseHTTPResponse(httplib.HTTPResponse): 
+»   def _read_status(self): 
+»   »   s = self.fp.read() 
+»   »   print '-' * 20, 'Response', '-' * 20 
+»   »   print s.split('\r\n\r\n')[0] 
+»   »   self.fp = StringIO.StringIO(s) 
+»   »   return httplib.HTTPResponse._read_status(self) 
+ 
+class VerboseHTTPConnection(httplib.HTTPConnection): 
+»   response_class = VerboseHTTPResponse 
+»   def send(self, s): 
+»   »   print '-' * 50 
+»   »   print s.strip() 
+»   »   httplib.HTTPConnection.send(self, s) 
+ 
+class VerboseHTTPHandler(urllib2.HTTPHandler): 
+»   def http_open(self, req): 
+»   »   return self.do_open(VerboseHTTPConnection, req) 
+To allow for customization, the urllib2 library lets you bypass its vanilla urlopen() function and 
+instead build an opener full of handler classes of your own devising—a fact that we will use repeatedly as 
+this chapter progresses. Listing 9–1 provides exactly such a handler class by performing a slight 
+customization on the normal HTTP handler. This customization prints out both the outgoing request 
+and the incoming response instead of keeping them both hidden. 
+For many of the following examples, we will use an opener object that we build right here, using the 
+handler from Listing 9–1: 
+>>> from verbose_http import VerboseHTTPHandler 
+>>> import urllib, urllib2 
+>>> opener = urllib2.build_opener(VerboseHTTPHandler) 
+You can try using this opener against the URL of the RFC that we mentioned at the beginning of this 
+chapter: 
+opener.open('http://www.ietf.org/rfc/rfc2616.txt') 
+The result will be a printout of the same HTTP request and response that we used as our example at 
+the start of the chapter. We can now use this opener to examine every part of the HTTP protocol in more 
+detail. 
+The GET Method 
+When the earliest version of HTTP was first invented, it had a single power: to issue a method called GET 
+that named and returned a hypertext document from a remote server. That method is still the backbone 
+of the protocol today. 
+
+CHAPTER 9 ■ HTTP 
+143
+From now on, I am going to make heavy use of ellipsis (three periods in a row: ...) to omit parts of 
+each HTTP request and response not currently under discussion. That way, we can more easily focus on 
+the protocol features being described. 
+The GET method, like all HTTP methods, is the first thing transmitted as part of an HTTP request, 
+and it is immediately followed by the request headers. For simple GET methods, the request simply ends 
+with the blank line that terminates the headers so the server can immediately stop reading and send a 
+response: 
+>>> info = opener.open('http://www.ietf.org/rfc/rfc2616.txt') 
+-------------------------------------------------- 
+GET /rfc/rfc2616.txt HTTP/1.1 
+... 
+Host: www.ietf.org 
+... 
+-------------------- Response -------------------- 
+HTTP/1.1 200 OK 
+... 
+Content-Type: text/plain 
+The opener’s open() method, like the plain urlopen() function at the top level of urllib2, returns an 
+information object that lets us examine the result of the GET method. You can see that the HTTP request 
+started with a status line containing the HTTP version, a status code, and a short message. The info 
+object makes these available as object attributes; it also lets us examine the headers through a 
+dictionary-like object: 
+>>> info.code 
+200 
+>>> info.msg 
+'OK' 
+>>> sorted(info.headers.keys()) 
+['accept-ranges', 'connection', 'content-length', 'content-type', 
+ 'date', 'etag', 'last-modified', 'server', 'vary'] 
+>>> info.headers['Content-Type'] 
+'text/plain' 
+Finally, the info object is also prepared to act as a file. The HTTP response status line, the headers, 
+and the blank line that follows them have all been read from the HTTP socket, and now the actual 
+document is waiting to be read. As is usually the case with file objects, you can either start reading the 
+info object in pieces through read(N) or readline(); or you can choose to bring the entire data stream 
+into memory as a single string: 
+>>> print info.read().strip() 
+Network Working Group                                      R. Fielding 
+Request for Comments: 2616                                   UC Irvine 
+Obsoletes: 2068                                              J. Gettys 
+Category: Standards Track                                   Compaq/W3C 
+... 
+These are the first lines of the longer text file that you will see if you point your web browser at the 
+same URL. 
+That, then, is the essential purpose of the GET method: to ask an HTTP server for a particular 
+document, so that its contents can be downloaded—and usually displayed—on the local system. 
+
+CHAPTER 9 ■ HTTP 
+144 
+The Host Header 
+You will have noted that the GET request line includes only the path portion of the full URL: GET 
+/rfc/rfc2616.txt HTTP/1.1 
+The other elements have, so to speak, already been consumed. The http scheme determined what 
+protocol would be spoken, and the location www.ietf.org was used as the hostname to which a TCP 
+connection must be made. 
+And in the early versions of HTTP, this was considered enough. After all, the server could tell you 
+were speaking HTTP to it, and surely it also knew that it was the IETF web server—if there were 
+confusion on that point, it would presumably have been the job of the IETF system administrators to 
+sort it out! 
+But in a world of six billion people and four billion IP addresses, the need quickly became clear to 
+support servers that might host dozens of web sites at the same IP. Systems administrators with, say, 
+twenty different domains to host within a large organization were annoyed to have to set up twenty 
+different machines—or to give twenty separate IP addresses to one single machine—simply to work 
+around a limitation of the HTTP/1.0 protocol. 
+And that is why the URL location is now included in every HTTP request. For compatibility, it has 
+not been made part of the GET request line itself, but has instead been stuck into the headers under the 
+name Host: 
+>>> info = opener.open('http://www.google.com/') 
+-------------------------------------------------- 
+GET / HTTP/1.1 
+... 
+Host: www.google.com 
+... 
+-------------------- Response -------------------- 
+HTTP/1.1 200 OK 
+... 
+Depending on how they are configured, servers might return entirely different sites when 
+confronted with two different values for Host; they might present slightly different versions of the same 
+site; or they might ignore the header altogether. But semantically, two requests with different values for 
+Host are asking about two entirely different URLs. 
+When several sites are hosted at a single IP address, those sites are each said to be served by a 
+virtual host, and the whole practice is sometimes referred to as virtual hosting. 
+Codes, Errors, and Redirection 
+All of the HTTP responses we have seen so far specify the HTTP/1.1 protocol version, the return code 200, 
+and the message OK. This indicates that each page was fetched successfully. But there are many more 
+possible response codes. The full list is, of course, in RFC 2616, but here are the most basic responses 
+(and we will discover a few others as this chapter progresses): 
+• 
+200 OK: The request has succeeded. 
+• 
+301 Moved Permanently: The resource that used to live at this URL has been 
+assigned a new URL, which is specified in the Location: header of the HTTP 
+response. And any bookmarks or other local copies of the link can be safely 
+rewritten to the new URL. 
+
+CHAPTER 9 ■ HTTP 
+145
+• 
+303 See Other: The original URL should continue to be used for this request, but 
+on this occasion the response can be found by retrieving a different URL—the one 
+in the response’s Location: header. If the operation was a POST or PUT (which we 
+will learn about later in this chapter), then a 303 means that the operation has 
+succeeded, and that the results can be viewed by doing a GET at the new location. 
+• 
+304 Not Modified: The response would normally be a 200 OK, but the HTTP request 
+headers indicate that the client already possesses an up-to-date copy of the 
+resource, so its body need not be transmitted again, and this response will contain 
+only headers. See the section on caching later in this chapter. 
+• 
+307 Temporary Redirect: This is like a 303, except in the case of a POST or PUT, 
+where a 307 means that the action has not succeeded but needs to be retried with 
+another POST or PUT at the URL specified in the response Location: header. 
+• 
+404 Not Found: The URL does not name a valid resource. 
+• 
+500 Internal Server Error: The web site is broken. Programmer errors, 
+configuration problems, and unavailable resources can all cause web servers to 
+generate this code. 
+• 
+503 Service Unavailable: Among the several other 500-range error messages, this 
+may be the most common. It indicates that the HTTP request cannot be fulfilled 
+because of some temporary and transient service failure. This is the code included 
+when Twitter displays its famous Fail Whale, for example. 
+Each HTTP library makes its own choices about how to handle the various status codes. If its full 
+stack of handlers is left in place, urllib2 will automatically follow redirections. Return codes that cannot 
+be handled, or that indicate any kind of error, are raised as Python exceptions: 
+>>> nonexistent_url = 'http://example.com/better-living-through-http' 
+>>> response = opener.open(nonexistent_url) 
+Traceback (most recent call last): 
+  ... 
+HTTPError: HTTP Error 404: Not Found 
+But these exception objects are special: they also contain all of the usual fields and capabilities of 
+HTTP response information objects. Remember that many web servers include a useful human-readable 
+document when they return an error status. Such a document might include specific information about 
+what has gone wrong. For example, many web frameworks—at least when in development mode—will 
+return exception tracebacks along with their 500 errors when the program trying to generate the web 
+page crashes. 
+By catching the exception, we can both see how the HTTP response looked on the wire (thanks 
+again to the special handler that we have installed in our opener object), and we can assign a name to the 
+exception to look at it more closely: 
+>>> try: 
+...     response = opener.open(nonexistent_url) 
+... except urllib2.HTTPError, e: 
+...     pass 
+-------------------------------------------------- 
+GET /better-living-through-http HTTP/1.1 
+... 
+-------------------- Response -------------------- 
+HTTP/1.1 404 Not Found 
+Date: ... 
+
+CHAPTER 9 ■ HTTP 
+146 
+Server: Apache 
+Content-Length: 285 
+Connection: close 
+Content-Type: text/html; charset=iso-8859–1 
+As you can see, this particular web site does include a human-readable document with a 404 error; 
+the response declares it to be an HTML page that is exactly 285 octets in length. (We will learn more 
+about content length and types later in the chapter.) Like any HTTP response object, this exception can 
+be queried for its status code; it can also be read like a file to see the returned page: 
+>>> e.code 
+404 
+>>> e.msg 
+'Not Found' 
+>>> e.readline() 
+'<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">\n' 
+If you try reading the rest of the file, then deep inside of the HTML you will see the actual error 
+message that a web browser would display for the user: 
+>>> e.read() 
+'...The requested URL /better-living-through-http was not found 
+on this server...' 
+Redirections are very common on the World Wide Web. Conscientious web site programmers, when 
+they undertake a major redesign, will leave 301 redirects sitting at all of their old-style URLs for the sake 
+of bookmarks, external links, and web search results that still reference them. But the volume of 
+redirects might be even greater for the many web sites that have a preferred host name that they want 
+displayed for users, yet also allow users to type any of several different hostnames to bring the site up. 
+The issue of whether a site name begins with www` looms very large in this area. Google, for example, 
+likes those three letters to be included, so an attempt to open the Google home page with the hostname 
+google.com will be met with a redirect to the preferred name: 
+>>> info = opener.open('http://google.com/') 
+-------------------------------------------------- 
+GET / HTTP/1.1 
+... 
+Host: google.com 
+... 
+-------------------- Response -------------------- 
+HTTP/1.1 301 Moved Permanently 
+Location: http://www.google.com/ 
+... 
+-------------------------------------------------- 
+GET / HTTP/1.1 
+... 
+Host: www.google.com 
+... 
+-------------------- Response -------------------- 
+HTTP/1.1 200 OK 
+... 
+You can see that urllib2 has followed the redirect for us, so that the response shows only the final 
+200 response code: 
+>>> info.code 
+200 
+
+CHAPTER 9 ■ HTTP 
+147
+You cannot tell by looking at the response whether a redirect occurred. You might guess that one 
+has taken place if the requested URL does not match the path and Host: header in the response, but that 
+would leave open the possibility that a poorly written server had simply returned the wrong page. The 
+only way that urllib2 will record redirection is if you pass in a Request object instead of simply 
+submitting the URL as a string: 
+>>> request = urllib2.Request('http://www.twitter.com') 
+>>> info = urllib2.urlopen(request) 
+>>> request.redirect_dict 
+{'http://twitter.com/': 1} 
+Obviously, Twitter’s opinion of a leading www is the opposite of Google’s! As you can see, it is on the 
+request—and not the response—where urllib2 records the series of redirections. Of course, you may 
+someday want to manage them yourself, in which case you can create an opener with your own 
+redirection handler that always does nothing: 
+>>> class NoRedirectHandler(urllib2.HTTPRedirectHandler): 
+...     def http_error_302(self, req, fp, code, msg, headers): 
+...         return 
+...     http_error_301 = http_error_303 = http_error_307 = http_error_302 
+>>> no_redirect_opener = urllib2.build_opener(NoRedirectHandler) 
+>>> no_redirect_opener.open('http://www.twitter.com') 
+Traceback (most recent call last): 
+  ... 
+HTTPError: HTTP Error 301: Moved Permanently 
+Catching the exception enables your application to process the redirection according to its own 
+policies. Alternatively, you could embed your application policy in the new redirection class itself, 
+instead of having the error method simply return (as we did here). 
+Payloads and Persistent Connections 
+By default, HTTP/1.1 servers will keep a TCP connection open even after they have delivered their 
+response. This enables you to make further requests on the same socket and avoid the expense of 
+creating a new socket for every piece of data you might need to download. Keep in mind that 
+downloading a modern web page can involve fetching dozens, if not hundreds, of separate pieces of 
+content. 
+The HTTPConnection class provided by urllib2 lets you take advantage of this feature. In fact, all 
+requests go through one of these objects; when you use a function like urlopen() or use the open() 
+method on an opener object, an HTTPConnection object is created behind the scenes, used for that one 
+request, and then discarded. When you might make several requests to the same site, use a persistent 
+connection instead: 
+>>> import httplib 
+>>> c = httplib.HTTPConnection('www.python.org') 
+>>> c.request('GET', '/') 
+>>> original_sock = c.sock 
+>>> content = c.getresponse().read()  # get the whole page 
+>>> c.request('GET', '/about/') 
+>>> c.sock is original_sock 
+True 
+You can see here that two successive requests are indeed using the same socket object. 
+
+CHAPTER 9 ■ HTTP 
+148 
+RFC 2616 does define a header named Connection: that can be used to explicitly indicate that a 
+request is the last one that will be made on a socket. If we insert this header manually, then we force the 
+HTTPConnection object to create a second socket when we ask it for a second page: 
+>>> c = httplib.HTTPConnection('www.python.org') 
+>>> c.request('GET', '/', headers={'Connection': 'close'}) 
+>>> original_sock = c.sock 
+>>> content = c.getresponse().read() 
+>>> c.request('GET', '/about/') 
+>>> c.sock is original_sock 
+False 
+Note that HTTPConnection does not raise an exception when one socket closes and it has to create 
+another one; you can keep using the same object over and over again. This holds true regardless of 
+whether the server is accepting all of the requests over a single socket, or it is sometimes hanging up and 
+forcing HTTPConnection to reconnect. 
+Back in the days of HTTP 1.0 (and earlier), closing the connection was the official way to indicate 
+that the transmission of a document was complete. The Content-Length header is so important today 
+largely because it lets the client read several HTTP responses off the same socket without getting 
+confused about where the next response begins. When a length cannot be provided—say, because the 
+server is streaming data whose end it cannot predict ahead of time—then the server can opt to use 
+chunked encoding, where it sends a series of smaller pieces that are each prefixed with their length. This 
+ensures that there is still a point in the stream where the client knows that raw data will end and HTTP 
+instructions will recommence. RFC 2616 section 3.6.1 contains the definitive description of the chunked-
+encoding scheme. 
+POST And Forms 
+The POST HTTP method was designed to power web forms. When forms are used with the GET method, 
+which is indeed their default behavior, they append the form’s field values to the end of the URL: 
+http://www.google.com/search?q=python+language 
+The construction of such a URL creates a new named location that can be saved; bookmarked; 
+referenced from other web pages; and sent in e-mails, Tweets, and text messages. And for actions like 
+searching and selecting data, these features are perfect. 
+But what about a login form that accepts your e-mail address and password? Not only would there 
+be negative security implications to having these elements appended to the form URL—such as the fact 
+that they would be displayed on the screen in the URL bar and included in your browser history—but 
+surely it would be odd to think of your username and password as creating a new location or page on the 
+web site in question: 
+# Bad idea 
+http://example.com/welcome?email=brandon@rhodesmill.org&pw=aaz9Gog3 
+Building URLs in this way would imply that a different page exists on the example.com web site for 
+every possible password that you could try typing. This is undesirable for obvious reasons. 
+And so the POST method should always be used for forms that are not constructing the name of a 
+particular page or location on a web site, but are instead performing some action on behalf of the caller. 
+Forms in HTML can specify that they want the browser to use POST by specifying that method in their 
+<form> element: 
+<form name="myloginform" action="/access/dummy" method="post"> 
+E-mail: <input type="text" name="e-mail" size="20"> 
+Password: <input type="password" name="password" size="20"> 
+<input type="submit" name="submit" value="Login"> 
+</form> 
+
+CHAPTER 9 ■ HTTP 
+149
+Instead of stuffing form parameters into the URL, a POST carries them in the body of the request. We 
+can perform the same action ourselves in Python by using urlencode to format the form parameters, and 
+then supplying them as a second parameter to any of the urllib2 methods that open a URL. Here is a 
+simple POST to the U.S. National Weather Service that asks about the forecast for Atlanta, Georgia: 
+>>> form = urllib.urlencode({'inputstring': 'Atlanta, GA'}) 
+>>> response = opener.open('http://forecast.weather.gov/zipcity.php', form) 
+-------------------------------------------------- 
+POST /zipcity.php HTTP/1.1 
+... 
+Content-Length: 25 
+Host: forecast.weather.gov 
+Content-Type: application/x-www-form-urlencoded 
+... 
+-------------------------------------------------- 
+inputstring=Atlanta%2C+GA 
+-------------------- Response -------------------- 
+HTTP/1.1 302 Found 
+... 
+Location: http://forecast.weather.gov/MapClick.php?CityName=Atlanta&state=GA 
+&site=FFC&textField1=33.7629&textField2=-84.4226&e=1 
+... 
+-------------------------------------------------- 
+GET /MapClick.php?CityName=Atlanta&state=GA&site=FFC&textField1=33.7629&textField2= 
+-84.4226&e=1 HTTP/1.1 
+... 
+-------------------- Response -------------------- 
+HTTP/1.1 200 OK 
+... 
+Although our opener object is putting a dashed line between each HTTP request and its payload for 
+clarity (a blank line, you will recall, is what really separates headers and payload on the wire) you are 
+otherwise seeing a raw HTTP POST method here. Note these features of the request-responses shown in 
+the example above: 
+• 
+The request line starts with the string POST. 
+• 
+Content is provided (and thus, a Content-Length header). 
+• 
+The form parameters are sent as the body. 
+• 
+The Content-Type for standard web forms is x-www-form-urlencoded. 
+The most important thing to grasp is that GET and POST are most emphatically not simply two 
+different ways to format form parameters! Instead, they actually mean two entirely different things. The 
+GET method means, “I believe that there is a document at this URL; please return it.” The POST method 
+means, “Here is an action that I want performed.” 
+Note that POST must always be the method used for actions on the Web that have side effects. 
+Fetching a URL with GET should never produce any change in the web site from which the page is 
+fetched. Requests submitted with POST, by contrast, can be requests to add, delete, or alter content. 
+
+CHAPTER 9 ■ HTTP 
+150 
+Successful Form POSTs Should Always Redirect 
+You will already have noticed that the POST we performed earlier in this chapter did something very
+interesting: instead of simply returning a status of 200 followed by a page of weather forecast data, it
+instead returned a 302 redirect that urllib2 obeyed by performing a GET for the page named in the
+Location: header. Why add this extra level of indirection, instead of just returning a useful page? 
+The answer is that a web site leaves users in a very difficult position if it answers a POST form
+submission with a literal web page. You will probably recognize these symptoms: 
+•
+The web browser will display the URL to which the POST was made, which is
+generally fairly generic; however, the actual page content will be something quite
+specific. For example, had the query in the previous section not performed its
+redirect, then a user of the form would wind up at the URL /zipcity.php. This
+sounds very general, but the user would be looking at the specific forecast for
+Atlanta. 
+•
+The URL winds up being useless when bookmarked or shared. Because it was the
+form parameters that brought Atlanta up, someone e-mailing the /zipcity.php
+URL to a friend would send them to a page that displays an error instead. For
+example, when the /zipcity.php URL is visited without going through the form,
+the NWS web site displays this message: “Nothing was entered in the search box,
+or an incorrect format was used.” 
+•
+The user cannot reload the web page without receiving a frightening warning
+about whether he wants to repeat his action. This is because, to refetch the page,
+his browser would have to resubmit the POST. Per the semantics we discussed
+previously, a POST represents some action that might be dangerous; destructive;
+or, at the very least, repetitive (the user might wind up generating several copies of
+the same tweet or something) if issued several times. Often, a POST that deletes an
+item can only succeed once, and it will show an error page when reloaded. 
+For all of these reasons, well-designed user-facing POST forms always redirect to a page that shows
+the result of the action, and this page can be safely bookmarked, shared, stored, and reloaded. This is an
+important feature of modern browsers: if a POST results in a redirect, then pressing the reload button
+simply refetches the final URL and does not reattempt the whole train of redirects that lead to the
+current location! 
+The one exception is that an unsuccessful POST should immediately display the form again, with its
+fields already filled out—do not make the user type everything again!—and with their errors or omissions
+marked, so that the user can correct them. The reason that a redirect is not appropriate here is that,
+unless the POST parameters are saved somewhere by the web server, the server will not know how to fill
+out the form (or what errors to flag) when the GET arrives a few moments later from the redirected
+browser. 
+Note that early browsers interpreted a 302 response inconsistently, so code 303 was created to
+unambiguously request the right behavior in response to a POST. There seems to be fear among some
+web developers that some ancient browsers might not understand 303; however, I have never actually
+seen any specific browsers named that are still in use that will not interpret this more-correct HTTP
+response code correctly. 
+Download from www.eBookTM.Com
+
+CHAPTER 9 ■ HTTP 
+151
+POST And APIs 
+Almost none of the caveats given in the last two sections apply when an HTTP POST is designed for 
+consumption by a program other than a web browser. This is because all of the issues that hinge upon 
+user interaction, browser history, and the “reload” and “back” buttons will simply not apply. 
+To begin with, a POST designed for use by a program need not use the awkward x-www-form-
+urlencoded data format for its input parameters. Instead, it can specify any combination of content type 
+and input data that its programmer is prepared for it to handle. Data formats like XML, JSON, and BSON 
+are often used. Some services even allow entire documents or images to be posted raw, so long as the 
+request Content-Type: header is set to correctly indicate their type. 
+The next common difference is that API calls made through POST rarely result in redirection; 
+sending a program to another URL to receive the result of such calls (and thus requiring the client to 
+make a second round-trip to the server to perform that download) only makes sense if the whole point of 
+the service is to map requests into references to other URLs. 
+Finally, the range of payload content types returned from API calls is much broader than the kinds 
+of data that can usefully be returned to browsers. Instead of supporting only things like web pages, style 
+sheets, and images, the programs that consume web APIs often welcome rich formatted data like that 
+supported by formats like XML and JSON. Often, a service will choose the same data format for both its 
+POST request and return values, and thus require client programs to use only one data library for 
+coercion, rather than two. 
+Note that many API services are designed for use with a JavaScript program running inside of a web 
+page delivered through a normal GET call. Despite the fact that the JavaScript is running in a browser, 
+such services will act like APIs rather than user form posts: they typically do not redirect, but instead 
+send and receive data payloads (typically) rather than browsable web pages. 
+REST And More HTTP Methods 
+We have just introduced the topic of web-based APIs, which fetch documents and data using GET and 
+POST to specific URLs. Therefore, we should immediately note that many modern web services try to 
+integrate their APIs more tightly with HTTP by going beyond the two most common HTTP methods by 
+implementing additional methods like PUT and DELETE. 
+In general, a web API that is implemented entirely with POST commands remains opaque to proxies, 
+caches, and any other tools that support the HTTP protocol. All they know is that a series of 
+unrepeatable special commands are passing between the client and the server. But they cannot detect 
+whether resources are being queried, created, destroyed, or manipulated. 
+A design pattern named “Representational State Transfer” has therefore been taking hold in many 
+developer communities. This design pattern is based on Roy Fielding’s celebrated 2000 doctoral 
+dissertation that first fully defined the concept. It specifies that the nouns of an API should live at their 
+own URLs. For example, PUT, GET, POST, and DELETE should be used, respectively, to create, fetch, modify, 
+and remove the documents living at these URLs. 
+By coupling this basic recommendation with further guidelines, the REST methodology guides the 
+creation of web services that make more complete use of the HTTP protocol (instead of treating it as a 
+dumb transport mechanism). Such web services also offer quite clean semantics, and can be accelerated 
+by the same caching proxies that are often used to speed the delivery of normal web pages. 
+There are now entire books dedicated to RESTful web services, which I recommend you peruse if 
+you are going to be building programmer web interfaces in the future! 
+Note that HTTP supports arbitrary method names, even though the standard defines specific 
+semantics for GET and POST and all of the rest. Tradition would dictate using the well-known methods 
+defined in the standard unless you are using a specific framework or methodology that recognizes and 
+has defined other methods. 
+
+CHAPTER 9 ■ HTTP 
+152 
+Identifying User Agents and Web Servers 
+You may have noticed that the HTTP request we opened the chapter with advertised the fact that it was 
+generated by a Python program: 
+User-Agent: Python-urllib/2.6 
+This header is optional in the HTTP protocol, and many sites simply ignore or log it. It can be useful 
+when sites want to know which browsers their visitors use most often, and it can sometimes be used to 
+distinguish search engine spiders (bots) from normal users browsing a site. For example, here are a few 
+of the user agents that have hit my own web site in the past few minutes: 
+Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm) 
+Mozilla/5.0 (compatible; YandexBot/3.0; +http://yandex.com/bots) 
+Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.1; SV1; .NET CLR 
+»   1.1.4322; .NET CLR 2.0.50727) 
+Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US) AppleWebKit/534.3 
+»   (KHTML, like Gecko) Chrome/6.0.472.62 Safari/534.3 
+You will note that, the urllib2 user agent string notwithstanding, most clients choose to identify 
+themselves as some form of the original Netscape browser, whose internal code name was Mozilla. But 
+then, in parentheses, these same browsers secretly admit that they are really some other kind of browser. 
+Many web sites are sensitive to the kinds of browsers that view them, most often because their 
+designers were too lazy to make the sites work with anything other than Internet Explorer. If you need to 
+access such sites with urllib2, you can simply instruct it to lie about its identity, and the receiving web 
+site will not know the difference: 
+>>> url = 'https://wca.eclaim.com/' 
+>>> urllib2.urlopen(url).read() 
+'<HTML>...The following are...required...Microsoft Internet Explorer...' 
+>>> agent = 'Mozilla/5.0 (Windows; U; MSIE 7.0; Windows NT 6.0; en-US)' 
+>>> request = urllib2.Request(url) 
+>>> request.add_header('User-Agent', agent) 
+>>> urllib2.urlopen(request).read() 
+'\r\n<HTML>\r\n<HEAD>\r\n\t<TITLE>Eclaim.com - Log In</TITLE>...' 
+There are databases of possible user agent strings online at several sites that you can reference both 
+when analyzing agent strings that your own servers have received, as well as when concocting strings for 
+your own HTTP requests: 
+http://www.zytrax.com/tech/web/browser_ids.htm 
+http://www.useragentstring.com/pages/useragentstring.php 
+Besides using the agent string to enforce compatibility requirements—usually in an effort to reduce 
+development and support costs—some web sites have started using the string to detect mobile browsers 
+and redirect the user to a miniaturized mobile version of the site for better viewing on phones and iPods. 
+A Python project named mobile.sniffer that attempts to support this technique can be found on the 
+Package Index. 
+
+CHAPTER 9 ■ HTTP 
+153
+Content Type Negotiation 
+It is always possible to simply make an HTTP request and let the server return a document with whatever 
+Content-Type: is appropriate for the information we have requested. Some of the usual content types 
+encountered by a browser include the following: 
+text/html 
+text/plain 
+text/css 
+image/gif 
+image/jpeg 
+image/x-png 
+application/javascript 
+application/pdf 
+application/zip 
+If the web service is returning a generic data stream of bytes that it cannot describe more 
+specifically, it can always fall back to the content type: 
+application/octet-stream 
+But some clients do support all content types. Such clients like to encourage servers to send 
+compatible content when several versions of a resource are available. This selection can occur along 
+several axes: older browsers might not know about new, up-and-coming image formats; some browsers 
+can only read certain encodings; and, of course, each user has particular languages that she can read and 
+prefers web sites to deliver content in her native tongue, if possible. 
+Consult RFC 2616 if you find that your Python web client is sophisticated enough that you need to 
+wade into content negotiation. The four headers that will interest you include the following: 
+Accept 
+Accept-Charset 
+Accept-Language 
+Accept-Encoding 
+Each of these headers supports a comma-separated list of items, where each item can be given a 
+weight between one and zero (larger weights indicate more preferred items) by adding a suffix that 
+consists of a semi-colon and q= string to the item. The result will look something like this (using, for 
+illustration, the Accept: header that my Google Chrome browser seems to be currently using): 
+Accept: application/xml,application/xhtml+xml,text/html;q=0.9,text/plain; 
+»   q=0.8,image/png,*/*;q=0.5 
+This indicates that Chrome prefers XML and XHTML, but will accept HTML or even plain text if 
+those are the only document formats available; that Chrome prefers PNG images when it can get them; 
+and that it has no preference between all of the other content types in existence. 
+The HTTP standard also describes the possibility of a client receiving a 300 “Multiple Choices” 
+response and getting to choose its own content type; however, this does not seem to be a widely-
+implemented mechanism, and I refer you to the RFC should you ever need to use it. 
+
+CHAPTER 9 ■ HTTP 
+154 
+Compression 
+While many documents delivered over HTTP are already fairly heavily compressed, including images (so 
+long as they are not raw TIFF or BMP) and file formats like PDF (at the option of the document author), 
+web pages themselves are written in verbose SGML dialects (see Chapter 10) that can consume much 
+less bandwidth if subjected to generic textual compression. Similarly, CSS and JavaScript files also 
+contain very stereotyped patterns of punctuation and repeated variable names, which is very amenable 
+to compression. 
+Web clients can make servers aware that they accept compressed documents by listing the formats 
+they support in a request header, as in this example: 
+Accept-Encoding: gzip 
+For some reason, many sites seem to not offer compression unless the User-Agent: header specifies 
+something they recognize. Thus, to convince Google to compress its Google News page, you have to use 
+urllib2 something like this: 
+>>> request = urllib2.Request('http://news.google.com/') 
+>>> request.add_header('Accept-Encoding', 'gzip') 
+>>> request.add_header('User-Agent', 'Mozilla/5.0') 
+>>> info = opener.open(request) 
+-------------------------------------------------- 
+GET / HTTP/1.1 
+Host: news.google.com 
+User-Agent: Mozilla/5.0 
+Connection: close 
+Accept-Encoding: gzip 
+-------------------- Response -------------------- 
+HTTP/1.1 200 OK 
+Content-Type: text/html; charset=UTF-8 
+... 
+Content-Encoding: gzip 
+... 
+Remember that web servers do not have to perform compression, and that many will ignore your 
+Accept-Encoding: header. Therefore, you should always check the content encoding of the response, and 
+perform decompression only when the server declares that it is necessary: 
+>>> info.headers['Content-Encoding'] == 'gzip' 
+True 
+>>> import gzip, StringIO 
+>>> gzip.GzipFile(fileobj=StringIO.StringIO(info.read())).read() 
+'<!DOCTYPE HTML ...<html>...</html>' 
+As you can see, Python does not let us pass the file-like info response object directly to the GzipFile 
+class because, alas, it lacks a tell() method. In other words, it is not quite file-like enough. Here, we can 
+perform the quick work-around of reading the whole compressed file into memory and then wrapping it 
+in a StringIO object that does support tell(). 
+
+CHAPTER 9 ■ HTTP 
+155
+HTTP Caching 
+Many elements of a typical web site design are repeated on every page you visit, and your browsing 
+would slow to a crawl if every image and decoration had to be downloaded separately for every page you 
+viewed. Well-configured web servers therefore add headers to every HTTP response that allow browsers, 
+as well as any proxy caches between the browser and the server, to continue using a copy of a 
+downloaded resource for some period of time until it expires. 
+You might think that adding a simple expiration date to each resource that could be cached and 
+redisplayed would have been a sufficient innovation. However, given the real-world behaviors of servers, 
+caches, and browsers, it was prudent for the HTTP specification to detail a much more complicated 
+scheme involving several interacting headers. Several pages are expended, for example, on the specific 
+question of how to determine how old a cached copy of a page is. I refer you to RFC 2616 for the real 
+details, but I will cover a few of the most common cases here. 
+There are two basic mechanisms by which servers can support client caching. 
+In the first approach, an HTTP response includes an Expires: header that formats a date and time 
+using the same format as the standard Date: header: 
+Expires: Sun, 21 Jan 2010 17:06:12 GMT 
+However, this requires the client to check its clock—and many computers run clocks that are far 
+ahead of or behind the real current date and time. 
+This brings us to a second, more modern alternative, the Cache-Control header, that depends only 
+on the client being able to correctly count seconds forward from the present. For example, to allow an 
+image or page to be cached for an hour but then insist that it be refetched once the hour is up, a cache 
+control header could be supplied like this: 
+Cache-Control: max-age=3600, must-revalidate 
+When the time comes to validate a cached resource, HTTP offers a very nice shortcut: the client can 
+ask the server to retransmit the resource only if a new version has indeed been released. There are two 
+fields that the client can supply. Either content type is sufficient to convince most servers to answer with 
+only an HTTP header, but no content type or body, if the cached resource is still current. One possibility 
+is to send back the value that the Last-modified: header had in the HTTP response that first requested 
+the item: 
+If-Modified-Since: Sun, 21 Jan 2010 14:06:12 GMT 
+Alternatively, if the server tagged the resource version with a hash or version identifier in an Etag: 
+header—either approach will work, so long as the value always changes between versions of the 
+resource—then the client can send that value back: 
+Etag: BFDS2Cpq/BM6w 
+Note that all of this depends on getting some level of cooperation from the server. If a web server 
+fails to provide any caching guidelines and also does not supply either a Last-modified: or Etag: header 
+for a particular resource, then clients have no choice but to fetch the resource every time it needs to be 
+displayed to a user. 
+Caching is such a powerful technology that many web sites go ahead and put HTTP caches like 
+Squid or Varnish in front of their server farms, so that frequent requests for the most popular parts of 
+their site can be answered without loading down the main servers. Deploying caches geographically can 
+also save bandwidth. In a celebrated question-and-answer session with the readers of Reddit about The 
+Onion’s then-recent migration to Django, the site maintainers—who use a content delivery network 
+(CDN) to transparently serve local caches of The Onion’s web site all over the world—indicated that they 
+were able to reduce their server load by two-thirds by asking the CDN to cache 404 errors! You can read 
+
+CHAPTER 9 ■ HTTP 
+156 
+the report here: http://www.reddit.com/r/django/comments/bhvhz/the_onion_uses_django_and_why_it_ 
+matters_to_us/ 
+Note that web caches also have to worry about invalidating web resources that are hit by a POST, 
+PUT, or DELETE request because any of those operations could presumably change the data that will be 
+returned to users from that resource. Caching proxies are tricky things to write and require a vast 
+attention span with respect to reading standards! 
+Neither urllib2 nor mechanize seem to support caching; so if you need a local cache, you might 
+want to look at the httplib2 module available on the Python Package Index. 
+The HEAD Method 
+It’s possible that you might want your program to check a series of links for validity or whether they have 
+moved, but you do not want to incur the expense of actually downloading the body that would follow the 
+HTTP headers. In this case, you can issue a HEAD request. This is directly possible through httplib, but it 
+can also be performed by urllib2 if you are willing to write a small request class of your own: 
+>>> class HeadRequest(urllib2.Request): 
+...     def get_method(self): 
+...         return 'HEAD' 
+>>> info = urllib2.urlopen(HeadRequest('http://www.google.com/')) 
+>>> info.read() 
+'' 
+You can see that the body of the response is completely empty. 
+HTTPS Encryption 
+With the processors of the late 1990s, the prospect of turning on encryption for a web site was a very 
+expensive one; I remember that at least one vendor even made accelerator cards that would do SSL 
+computations in hardware. But the great gulf that Moore’s law has opened between processor speed and 
+the other subsystems on a computer means that there is no reason not to deploy SSL everywhere that 
+user data or identity needs protection. When Google moved its GMail service to being HTTPS-only, the 
+company asserted that the certificate and encryption routines were only adding a few percent to the 
+server CPU usage. 
+An encrypted URL starts with https: instead of simply http:, uses the default port 443 instead of 
+port 80, and uses TLS; review Chapter 6 to remember how TLS/SSL operates. 
+Encryption places web servers in a dilemma: encryption has to be negotiated before the user can 
+send his HTTP request, lest all of the information in it be divulged; but until the request is transmitted, 
+the server does not know what Host: the request will specify. Therefore, encrypted web sites still live 
+under the old problem of having to use a different IP address for every domain that must be hosted. 
+A technique known as “Server Name Indication” (SNI) has been developed to get around this 
+traditional restriction; however, Python does not yet support it. It appears, though, that a patch was 
+applied to the Python 3 trunk with this feature, only days prior to the time of writing. Here is the ticket in 
+case you want to follow the issue: http://bugs.python.org/issue5639 
+Hopefully, there will be a Python 3 edition of this book within the next year or two that will be able 
+to happily report that SNI is fully supported by urllib2! 
+To use HTTPS from Python, simply supply an https: method in your URL: 
+>>> info = urllib2.urlopen('https://www.ietf.org/rfc/rfc2616.txt') 
+
+CHAPTER 9 ■ HTTP 
+157
+If the connection works properly, then neither your government nor any of the various large and 
+shadowy corporations that track such things should be able to easily determine either the search term 
+you used or the results you viewed. 
+HTTP Authentication 
+The HTTP protocol came with a means of authentication that was so poorly thought out and so badly 
+implemented that it seems to have been almost entirely abandoned. When a server was asked for a page 
+to which access was restricted, it was supposed to return a response code: 
+HTTP/1.1 401 Authorization Required 
+... 
+WWW-Authenticate: Basic realm="voetbal" 
+... 
+This indicated that the server did not know who was requesting the resource, so it could not decide 
+whether to grant permission. By asking for Basic authentication, the site would induce the web browser 
+to pop up a dialog box asking for a username and password. The information entered would then be sent 
+back in a header as part of a second request for exactly the same resource. The authentication token was 
+generated by doing base64 encoding on the colon-separated username and password: 
+>>> import base64 
+>>> print base64.b64encode("guido:vanOranje!") 
+Z3VpZG86dmFuT3JhbmplIQ== 
+This, of course, just protects any special characters in the username and password that might have 
+been confused as part of the headers themselves; it does not protect the username and password at all, 
+since they can very simply be decoded again: 
+>>> print base64.b64decode("Z3VpZG86dmFuT3JhbmplIQ==") 
+guido:vanOranje! 
+Anyway, once the encoded value was computed, it could be included in the second request like this: 
+Authorization: Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ== 
+An incorrect password or unknown user would elicit additional 401 errors from the server, resulting 
+in the pop-up box appearing again and again. Finally, if the user got it right, she would either be shown 
+the resource or—if she in fact did not have permission—be shown a response code like the following: 
+403 Forbidden 
+Python supports this kind of authentication through a handler that, as your program uses it, can 
+accumulate a list of passwords. It is very careful to keep straight which passwords go with which web 
+sites, lest it send the wrong one and allow one web site operator to learn your password to another site! It 
+also checks the realm string specified by the server in its WWW-Authenticate header; this allows a single 
+web site to have several separate areas inside that each take their own set of usernames and passwords. 
+The handler can be created and populated with a single password like this: 
+auth_handler =  .HTTPBasicAuthHandler() 
+auth_handler.add_password(realm='voetbal', uri='http://www.onsoranje.nl/', 
+»   »   »   »   »   »     user='guido', passwd='vanOranje!') 
+The resulting handler can be passed into build_opener(), just as we did with our debugging handler 
+early in this chapter. 
+
+CHAPTER 9 ■ HTTP 
+158 
+Concern over revealing passwords lead to the development of “digest authentication” in the late 
+1990s; however, if you are going to support user authentication on a site, then you should probably go all 
+the way and use HTTPS so that everything gets protected, plain-text passwords and all. See the 
+documentation for the HTTPDigestAuthHandler in urllib2 if you need to write a client that supports it. 
+Unfortunately, browser support for any kind of HTTP authentication is very poor—most do not 
+even provide a logout button!—so you should avoid designing sites that use these mechanisms. We will 
+learn about the modern alternative in the next section. 
+Cookies 
+The actual mechanism that powers user identity tracking, logging in, and logging out of modern web 
+sites is the cookie. The HTTP responses sent by a server can optionally include a number of Set-cookie: 
+headers that browsers store on behalf of the user. In every subsequent request made to that site—or 
+even to any of its sub-domains, if the cookie allows that—the browser will include a Cookie: header 
+corresponding to each cookie that has been set. 
+How can cookies be used?  
+The most obvious use is to keep up with user identity. To support logging in, a web site can deploy a 
+normal form that asks for your username and password (or e-mail address and password, or whatever). 
+If the form is submitted successfully, then the response can include a cookie that says, “this request is 
+from the user Ken.” Every subsequent request that the browser makes for a document, image, or 
+anything else under that domain will include the cookie and let the site know who is requesting it. And 
+finally, a “Log out” button can be provided that clears the cookie from the browser. 
+Obviously, the cookie cannot really be formatted so it just baldly asserts a user’s identity because 
+users would figure this out and start writing their own cookies that let them assume other user identities. 
+Therefore, one of following two approaches is used in practice: 
+• 
+The server can store a random unguessable value in the cookie that also gets 
+written to its back-end database. Incoming cookies are then checked against the 
+database. Sessions can be made to time out by deleting entries from this database 
+once they reach a certain age. 
+• 
+The cookie can be a block of data that is encrypted with a secret key held only by 
+the web service. Upon decryption, it would contain a user identifier and a 
+timestamp that prevented it from being honored if it were too old. 
+Cookies can also be used for feats other than simply identifying users. For example, a site can issue a 
+cookie to every browser that connects, enabling it to track even casual visitors. This approach enables an 
+online store to let visitors start building a shopping cart full of items—and even check out and complete 
+their purchase—without ever being forced to create an account. Since most e-commerce sites also like 
+to support accounts for the convenience of returning customers, they may also need to program their 
+servers to support merging a temporary shopping cart with a permanent per-customer shopping cart in 
+case someone arrives, selects several items, and then logs in and winds up being an already-existing 
+user. 
+From the point of view of a web client, cookies are moderately short strings that have to be stored 
+and then divulged when matching requests are made. The Python Standard Library puts this logic in its 
+own module, cookielib, whose CookieJar objects can be used as small cookie databases by the 
+HTTPCookieProcessor in urllib2. To see its effect, you need go no further than the front page of Google, 
+which sets cookies in the mere event of an unknown visitor arriving at the site for the first time. Here is 
+how we create a new opener that knows about cookies: 
+
+CHAPTER 9 ■ HTTP 
+159
+>>> import cookielib 
+>>> cj = cookielib.CookieJar() 
+>>> cookie_opener = urllib2.build_opener(VerboseHTTPHandler, 
+...   urllib2.HTTPCookieProcessor(cj)) 
+Opening the Google front page will result in two different cookies getting set: 
+>>> response = cookie_opener.open('http://www.google.com/') 
+-------------------------------------------------- 
+GET / HTTP/1.1 
+... 
+-------------------- Response -------------------- 
+HTTP/1.1 200 OK 
+... 
+Set-Cookie: PREF=ID=94381994af6d5c77:FF=0:TM=1288205983:LM=1288205983:S=Mtwivl7EB73uL5Ky; 
+ expires=Fri, 26-Oct-2012 18:59:43 GMT; path=/; domain=.google.com 
+Set-Cookie: NID=40=rWLn_I8_PAhUF62J0yFLtb1-AoftgU0RvGSsa81FhTvd4vXD91iU5DOEdxSVt4otiISY- 
+3RfEYcGFHZA52w3-85p-hujagtB9akaLnS0QHEt2v8lkkelEGbpo7oWr9u5; expires=Thu, 28-Apr-2011 
+ 18:59:43 GMT; path=/; domain=.google.com; HttpOnly 
+... 
+If you consult the cookielib documentation, you will find that you can do more than query and 
+modify the cookies that have been set. You can also automatically store them in a file, so that they 
+survive from one Python session to the next. You can even create cookie processors that implement your 
+own custom policies with respect to which cookies to store and which to divulge. 
+Note that if we visit another Google page—the options page, for example—then both of the cookies 
+set previously get submitted in the same Cookie header, separated by a semicolon: 
+>>> response = cookie_opener.open('http://www.google.com/intl/en/options/') 
+-------------------------------------------------- 
+GET /intl/en/options/ HTTP/1.1 
+... 
+Cookie: PREF=ID=94381994af6d5c77:FF=0:TM=1288205983:LM=1288205983:S=Mtwivl7EB73uL5Ky; 
+ NID=40=rWLn_I8_PAhUF62J0yFLtb1-AoftgU0RvGSsa81FhTvd4vXD91iU5DOEdxSVt4otiISY- 
+3RfEYcGFHZA52w3-85p-hujagtB9akaLnS0QHEt2v8lkkelEGbpo7oWr9u5 
+... 
+-------------------- Response -------------------- 
+HTTP/1.1 200 OK 
+... 
+Servers can constrain a cookie to a particular domain and path, in addition to setting a Max-age or 
+expires time. Unfortunately, some browsers ignore this setting, so sites should never base their security 
+on the assumption that the expires time will be obeyed. Therefore, servers can mark cookies as secure; 
+this ensures that such cookies are only transmitted with HTTPS requests to the site and never in 
+unsecure HTTP requests. We will see uses for this in the next session. 
+Some browsers also obey a non-standard HttpOnly flag, which you can see in one of the Google 
+cookies shown a moment ago. This flag hides the cookie from any JavaScript programs running on a web 
+page. This is an attempt to make cross-site scripting attacks more difficult, as we will soon learn. 
+Note that there are other mechanisms besides cookies available if a particularly aggressive domain 
+wants to keep track of your activities; many of the best ideas have been combined in a project called 
+“evercookie”: http://samy.pl/evercookie/ 
+I do not recommend using these approaches in your own applications; instead, I recommend using 
+standard cookies, so that intelligent users have at least a chance at opting to control your monitoring! 
+
+CHAPTER 9 ■ HTTP 
+160 
+But you should know that these other mechanisms exist if you are writing web clients, proxies, or even if
+you simply browse the Web yourself and are interested in controlling your identity. 
+HTTP Session Hijacking 
+A perpetual problem with cookies is that web site designers do not seem to realize that cookies need to
+be protected as zealously as your username and password. While it is true that well-designed cookies
+expire and will no longer be accepted as valid by the server, cookies—while they last—give exactly as
+much access to a web site as a username and password. If someone can make requests to a site with your
+login cookie, the site will think it is you who has just logged in. 
+Some sites do not protect cookies at all: they might require HTTPS for your username and password,
+but then return you to normal HTTP for the rest of your session. And with every HTTP request, your
+session cookies are transmitted in the clear for anyone to intercept and start using. 
+Other sites are smart enough to protect subsequent page loads with HTTPS, even after you have left
+the login page, but they forget that static data from the same domain, like images, decorations, CSS files,
+and JavaScript source code, will also carry your cookie. The better alternatives are to either send all of
+that information over HTTPS, or to carefully serve it from a different domain or path that is outside the
+jurisdiction of the session cookie. 
+And despite the fact this problem has existed for years, at the time of writing it is once again back in
+the news with the celebrated release of Firesheep. Sites need to learn that session cookies should always
+be marked as secure, so that browsers will not divulge them over insecure links. 
+Earlier generations of browsers would refuse to cache content that came in over HTTPS, and that
+might be where some developers got into the habit of not encrypting most of their web site. But modern
+browsers will happily cache resources fetched over HTTPS—some will even save it on disk if the Cache-
+control: header is set to public—so there are no longer good reasons not to encrypt everything sent
+from a web site. Remember: If your users really need privacy, then exposing even what images,
+decorations, and JavaScript they are downloading might allow an observer to guess which pages they are
+visiting and which actions they are taking on your site. 
+Should you happen to observe or capture a Cookie: header from an HTTP request that you observe,
+remember that there is no need to store it in a CookieJar or represent it as a cookielib object at all.
+Indeed, you could not do that anyway because the outgoing Cookie: header does not reveal the domain
+and path rules that the cookie was stored with. Instead, just inject the Cookie: header raw into the
+requests you make to the web site: 
+request = urllib2.Request(url)
+request.add_header('Cookie', intercepted_value)
+info = urllib2.urlopen(request) 
+As always, use your powers for good and not evil! 
+Cross-Site Scripting Attacks 
+The earliest experiments with scripts that could run in web browsers revealed a problem: all of the HTTP
+requests made by the browser were done with the authority of the user’s cookies, so pages could cause
+quite a bit of trouble by attempting to, say, POST to the online web site of a popular bank asking that
+money be transferred to the attacker’s account. Anyone who visited the problem site while logged on to
+that particular bank in another window could lose money. 
+To address this, browsers imposed the restriction that scripts in languages like JavaScript can only
+make connections back to the site that served the web page, and not to other web sites. This is called the
+“same origin policy.” 
+Download from www.eBookTM.Com
+
+CHAPTER 9 ■ HTTP 
+161
+So the techniques to attack sites have evolved and mutated. Today, would-be attackers find ways 
+around this policy by using a constellation of attacks called cross-site scripting (known by the acronym 
+XSS to prevent confusion with Cascading Style Sheets). These techniques include things like finding the 
+fields on a web page where the site will include snippets of user-provided data without properly 
+escaping them, and then figuring out how to craft a snippet of data that will perform some 
+compromising action on behalf of the user or send private information to a third party. Next, the would-
+be attackers release a link or code containing that snippet onto a popular web site, bulletin board, or in 
+spam e-mails, hoping that thousands of people will click and inadvertently assist in their attack against 
+the site. 
+There are a collection of techniques that are important for avoiding cross-site scripting; you can find 
+them in any good reference on web development. The most important ones include the following: 
+• 
+When processing a form that is supposed to submit a POST request, always 
+carefully disregard any GET parameters. 
+• 
+Never support URLs that produce some side effect or perform some action simply 
+through being the subject of a GET. 
+• 
+In every form, include not only the obvious information—such as a dollar amount 
+and destination account number for bank transfers—but also a hidden field with a 
+secret value that must match for the submission to be valid. That way, random 
+POST requests that attackers generate with the dollar amount and destination 
+account number will not work because they will lack the secret that would make 
+the submission valid. 
+While the possibilities for XSS are not, strictly speaking, problems or issues with the HTTP protocol 
+itself, it helps to have a solid understanding of them when you are trying to write any program that 
+operates safely on the World Wide Web. 
+WebOb 
+We have seen that HTTP requests and responses are each represented by ad-hoc objects in urllib2. 
+Many Python programmers find its interface unwieldy, as well as incomplete! But, in their defense, the 
+objects seem to have been created as minimal constructs, containing only what urllib2 needed to 
+function. 
+But a library called WebOb is also available for Python (and listed on the Python Package Index) that 
+contains HTTP request and response classes that were designed from the other direction: that is, they 
+were intended all along as general-purpose representations of HTTP in all of its low-level details. You 
+can learn more about them at the WebOb project web page: http://pythonpaste.org/webob/ 
+This library’s objects are specifically designed to interface well with WSGI, which makes them useful 
+when writing HTTP servers, as we will see in Chapter 11. 
+Summary 
+The HTTP protocol sounds simple enough: each request names a document (which can be an image or 
+program or whatever), and responses are supposed to supply its content. But the reality, of course, is 
+rather more complicated, as its main features to support the modern Web have driven its specification, 
+RFC 2616, to nearly 60,000 words. In this chapter, we tried to capture its essence in around 10,000 words 
+and obviously had to leave things out. Along the way, we discussed (and showed sample Python code) 
+for the following concepts: 
+
+CHAPTER 9 ■ HTTP 
+162 
+• 
+URLs and their structure. 
+• 
+The GET method and fetching documents. 
+• 
+How the Host: header makes up for the fact that the hostname from the URL is not 
+included in the path that follows the word GET. 
+• 
+The success and error codes returned in HTTP responses and how they induce 
+browser actions like redirection. 
+• 
+How persistent connections can increase the speed at which HTTP resources can 
+be fetched. 
+• 
+The POST method for performing actions and submitting forms. 
+• 
+How redirection should always follow the successful POST of a web form. 
+• 
+That POST is often used for web service requests from programs and can directly 
+return useful information. 
+• 
+Other HTTP methods exist and can be used to design web-centric applications 
+using a methodology called REST. 
+• 
+Browsers identify themselves through a user agent string, and some servers are 
+sensitive to this value. 
+• 
+Requests often specify what content types a client can display, and well-written 
+servers will try to choose content representations that fit these constraints. 
+• 
+Clients can request—and servers can use—compression that results in a page 
+arriving more quickly over the network. 
+• 
+Several headers and a set of rules govern which HTTP-delivered documents can 
+and cannot be cached. 
+• 
+The HEAD command only returns the headers. 
+• 
+The HTTPS protocol adds TLS/SSL protection to HTTP. 
+• 
+An old and awkward form of authentication is supported by HTTP itself. 
+• 
+Most sites today supply their own login form and then use cookies to identify 
+users as they move across the site. 
+• 
+If a cookie is captured, it can allow an attacker to view a web site as though the 
+attacker were the user whose cookie was stolen. 
+• 
+Even more difficult classes of attack exist on the modern dynamic web, collectively 
+called cross-site-scripting attacks. 
+Armed with the knowledge and examples in this chapter, you should be able to use the urllib2 
+module from the Standard Library to fetch resources from the Web and even implement primitive 
+browser behaviors like retaining cookies. 
+ 

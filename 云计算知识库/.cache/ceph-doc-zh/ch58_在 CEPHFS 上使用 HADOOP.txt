@@ -1,0 +1,128 @@
+要查看设置的配额：
+getfattr -n ceph.quota.max_bytes /some/dir
+getfattr -n ceph.quota.max_files /some/dir
+需要留意的是，如果这些扩展属性的值是0 ，就说明没设置配额。
+要删除配额：
+setfattr -n ceph.quota.max_bytes -v 0 /some/dir
+setfattr -n ceph.quota.max_files -v 0 /some/dir
+在CEPHFS 上使用HADOOP
+Ceph 文件系统可作为Hadoop 文件系统（HDFS ）的落地式替代品，本章描述了Ceph 用于
+Hadoop 存储的安装和配置过程。
+依赖关系
+
+CephFS 的Java 接口
+
+Hadoop 的CephFS 插件
+Important
+当前要求Hadoop 1.1.x 稳定版系列。
+安装
+在CephFS 上使用Hadoop 有三个必要条件。首先，必须有一个运行的Ceph 。建设一个
+Ceph 集群和文件系统不是本章的讨论范围，请参考Ceph 安装文档。
+
+另外两个必要条件是Hadoop 安装和Ceph 文件系统Java 软件包，包括Java 的CephFS
+Hadoop 插件。后续步骤分别是把依赖添加到Hadoop 的环境变量CLASSPATH 、更改
+Hadoop 配置让它使用Ceph 文件系统。
+CEPHFS JAVA 软件包
+
+CephFS Hadoop 插件(hadoop-cephfs.jar)
+安装Hadoop 时的依赖取决于你怎么部署的，一般来说，这些依赖必须安装到Hadoop 集群的
+各节点、且必须能从CLASSPATH 里找到。典型做法是把另加的jar 文件放
+入hadoop/lib 目录、或编辑hadoop-env.sh 中的HADOOP_CLASSPATH 变量。
+Hadoop 集群内的各参与节点都必须安装原生Ceph 文件系统客户端。
+HADOOP 配置
+本段描述了用于控制Ceph 的Hadoop 配置选项，这些选项应该写于Hadoop 配置文
+件conf/core-site.xml 。
+Property
+Value
+Notes
+fs.default.name
+Ceph URI
+ceph://[monaddr:port]/
+ceph.conf.file
+Local path to ceph.conf
+/etc/ceph/ceph.conf
+ceph.conf.options
+Comma separated list of Ceph
+configuration key/value pairs
+opt1=val1,opt2=val2
+ceph.root.dir
+Mount root directory
+Default value: /
+
+Property
+Value
+Notes
+ceph.mon.address
+Monitor address
+host:port
+ceph.auth.id
+Ceph user id
+Example: admin
+ceph.auth.keyfile
+Ceph key file
+ceph.auth.keyring
+Ceph keyring file
+ceph.object.size
+Default file object size in bytes
+Default value (64MB):
+67108864
+ceph.data.pools
+List of Ceph data pools for storing file.
+Default value: default Ceph
+pool.
+ceph.localize.reads
+Allow reading from file replica objects
+Default value: true
+对每文件定制副本数的支持
+Hadoop 文件系统接口允许用户在创建文件时定制复制因子（例如每块3 个副本）。然而对象
+复制因子在Ceph 里是以每存储池为单位进行控制的，并且Ceph 文件系统默认会包含一个预
+配置的存储池。因此，在Ceph 之上运行Hadoop 时，为支持每文件复制策略，必须创建多个
+有非默认复制因子的存储池，且必须配置Hadoop 让它自动选择合适存储池。
+额外的数据存储池用ceph.data.pools 指定，此选项的值是逗号分隔的一溜存储池名字。
+此选项被忽略或为空时将使用默认存储池。例如，下面的配置会使Hadoop 在为文件选择存储
+池时考虑pool1 、pool2 、pool5 ：
+
+<property>
+<name>ceph.data.pools</name>
+<value>pool1,pool2,pool5</value>
+</property>
+Hadoop 不会自动创建存储池。要创建一个指定复制因子的存储池，可
+用ceph osd pool create 命令、然后用ceph osd pool set 设置存储池
+的size 属性。更多的创建、配置手册见RADOS 存储池文档。
+存储池创建、配置完毕后，必须把新存储池可用于数据存储的消息告知元数据服务，
+用ceph mds add_data_pool 命令告知，这样存储池就可存储文件系统数据了。
+首先创建存储池。本例中，我们创建hadoop1 存储池，其复制因子为1 。
+ceph osd pool create hadoop1 100
+ceph osd pool set hadoop1 size 1
+下一步，找出存储池ID ，命令为ceph osd dump 。例如，找出刚创建的hadoop1 存储
+池：
+ceph osd dump | grep hadoop1
+输出应该类似：
+pool 3 'hadoop1' rep size 1 min_size 1 crush_ruleset 0...
+其中，3 是存储池id 。下面我们用前述ID 把存储池注册为数据存储池，用于存储文件系统数
+据。
+
+ceph mds add_data_pool 3
+最后配置Hadoop ，让它在为新文件选择目标存储池时考虑此存储池。
+<property>
+<name>ceph.data.pools</name>
+<value>hadoop1</value>
+</property>
+存储池选择规则
+下面的规则描述了Hadoop 如何根据期望复制因子从ceph.data.pools 配置的一堆存储
+池中选择一个存储池的规则。
+1.
+未指定存储池时用Ceph 的默认data 存储池；
+2.
+复制因子相同时，定制存储池优先于Ceph 的默认data 存储池；
+3.
+复制因子和期望值相同的存储池会被选择；
+4.
+否则，选择复制因子和期望值最接近的存储池，或者复制因子最大的。
+存储池选择调试
+Hadoop 不确定存储池复制因子时会产生日志（如它未被配置为数据存储池），日志消息长相
+如下：
+Error looking up replication of pool: <pool name>
+未能选到复制数准确匹配的存储池时Hadoop 也会产生日志，其长相如下：
+selectDataPool path=<path> pool:repl=<name>:<value>
+wanted=<value>

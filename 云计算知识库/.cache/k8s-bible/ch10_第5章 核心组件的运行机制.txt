@@ -1,0 +1,1067 @@
+第5章　核心组件的运行机制
+5.1　Kubernetes API Server原理解析
+总体来看，Kubernetes API Server的核心功能是提供Kubernetes各类
+资源对象（如Pod、RC、Service等）的增、删、改、查及Watch等HTTP
+REST接口，成为集群内各个功能模块之间数据交互和通信的中心枢
+纽，是整个系统的数据总线和数据中心。除此之外，它还是集群管理的
+API入口，是资源配额控制的入口，提供了完备的集群安全机制。
+5.1.1　Kubernetes API Server概述
+Kubernetes 
+API 
+Server通过一个名为kube-apiserver的进程提供服
+务，该进程运行在Master上。在默认情况下，kube-apiserver进程在本机
+的8080端口（对应参数--insecure-port）提供REST服务。我们可以同时
+启动HTTPS安全端口（--secure-port=6443）来启动安全机制，加强
+REST API访问的安全性。
+我们通常通过命令行工具kubectl与Kubernetes API Server交互，它
+们之间的接口是RESTful API。为了测试和学习Kubernetes API Server提
+供的接口，我们也可以使用curl命令行工具进行快速验证。
+比如，登录Master并运行下面的curl命令，得到以JSON方式返回的
+Kubernetes API的版本信息：
+
+可以运行下面的命令查看Kubernetes API Server目前支持的资源对
+象的种类：
+根据以上命令的输出，我们可以运行下面的curl命令，分别返回集
+群中的Pod列表、Service列表、RC列表等：
+
+如果只想对外暴露部分REST服务，则可以在Master或其他节点上
+运行kubectl proxy进程启动一个内部代理来实现。
+运行下面的命令，在8001端口启动代理，并且拒绝客户端访问RC
+的API：
+运行下面的命令进行验证：
+kubectl proxy具有很多特性，最实用的一个特性是提供简单有效的
+安全机制，比如在采用白名单限制非法客户端访问时，只需增加下面这
+个参数即可：
+最后一种方式是通过编程方式调用Kubernetes API Server。具体使
+用场景又细分为以下两种。
+第1种使用场景：运行在Pod里的用户进程调用Kubernetes API，通
+常用来实现分布式集群搭建的目标。比如下面这段来自谷歌官方的
+
+Elasticsearch集群例子中的代码，Pod在启动的过程中通过访问Endpoints
+的API，找到属于elasticsearch-logging这个Service的所有Pod副本的IP地
+址，用来构建集群，如图5.1所示。
+图5.1　应用程序通过编程方式访问API Server
+在上述使用场景中，Pod中的进程是如何知道API Server的访问地址
+的呢？答案很简单：Kubernetes API Server本身也是一个Service，它的
+名称就是kubernetes，并且它的ClusterIP地址是ClusterIP地址池里的第1
+个地址！另外，它所服务的端口是HTTPS端口443，通过kubectl 
+get
+service命令可以确认这一点：
+
+第2种使用场景：开发基于Kubernetes的管理平台。比如调用
+Kubernetes 
+API来完成Pod、Service、RC等资源对象的图形化创建和管
+理界面，此时可以使用Kubernetes及各开源社区为开发人员提供的各语
+言版本的Client Library。后面会介绍通过编程方式访问API Server的一些
+细节技术。
+由于API Server是Kubernetes集群数据的唯一访问入口，因此安全性
+与高性能成为API Server设计和实现的两大核心目标。通过采用HTTPS
+安全传输通道与CA签名数字证书强制双向认证的方式，API Server的安
+全性得以保障。此外，为了更细粒度地控制用户或应用对Kubernetes资
+源对象的访问权限，Kubernetes启用了RBAC访问控制策略，之后会深
+入讲解这一安全策略。
+API Server的性能是决定Kubernetes集群整体性能的关键因素，因此
+Kubernetes的设计者综合运用以下方式来最大程度地保证API Server的性
+能。
+（1）API Server拥有大量高性能的底层代码。在API Server源码中
+使用协程（Coroutine）+队列（Queue）这种轻量级的高性能并发代码，
+使得单进程的API Server具备超强的多核处理能力，从而以很快的速度
+并发处理大量的请求。
+（2）普通List接口结合异步Watch接口，不但完美解决了
+Kubernetes中各种资源对象的高性能同步问题，也极大提升了Kubernetes
+集群实时响应各种事件的灵敏度。
+（3）采用了高性能的etcd数据库而非传统的关系数据库，不仅解决
+了数据的可靠性问题，也极大提升了API Server数据访问层的性能。在
+常见的公有云环境中，一个3节点的etcd集群在轻负载环境中处理一个请
+求的时间可以少于1ms，在重负载环境中可以每秒处理超过30000个请
+求。
+
+正是由于采用了上述提升性能的方法，API Server可以支撑很大规
+模的Kubernetes集群。目前Kubernetes 1.19版本的集群可支持的最大规模
+如下：
+◎　最多支持5000个Node；
+◎　最多支持150000个Pod；
+◎　每个Node最多支持100个Pod；
+◎　最多支持300000个容器。
+5.1.2　API Server架构解析
+API Server架构从上到下可以分为以下几层，如图5.2所示。
+（1）API层：主要以REST方式提供各种API接口，除了有
+Kubernetes资源对象的CRUD和Watch等主要API，还有健康检查、UI、
+日志、性能指标等运维监控相关的API。Kubernetes从1.11版本开始废弃
+Heapster监控组件，转而使用Metrics Server提供Metrics API接口，进一
+步完善了自身的监控能力。
+（2）访问控制层：当客户端访问API接口时，访问控制层负责对用
+户身份鉴权，验明用户身份，核准用户对Kubernetes资源对象的访问权
+限，然后根据配置的各种资源访问许可逻辑（Admission Control），判
+断是否允许访问。
+（3）注册表层：Kubernetes把所有资源对象都保存在注册表
+（Registry）中，针对注册表中的各种资源对象都定义了资源对象的类
+型、如何创建资源对象、如何转换资源的不同版本，以及如何将资源编
+码和解码为JSON或ProtoBuf格式进行存储。
+（4）etcd数据库：用于持久化存储Kubernetes资源对象的KV数据
+库。etcd的Watch API接口对于API Server来说至关重要，因为通过这个
+接口，API Server创新性地设计了List-Watch这种高性能的资源对象实时
+同步机制，使Kubernetes可以管理超大规模的集群，及时响应和快速处
+理集群中的各种事件。
+
+图5.2　API Server的架构
+从本质上看，API 
+Server与常见的MIS或ERP系统中的DAO模块类
+似，可以将主要处理逻辑视作对数据库表的CRUD操作。这里解读API
+Server中资源对象的List-Watch机制。图5.3以一个完整的Pod调度过程为
+例，对API Server的List-Watch机制进行说明。
+
+图5.3　Pod调度过程中的List-Watch机制
+首先，借助etcd提供的Watch 
+API接口，API 
+Server可以监听
+（Watch）在etcd上发生的数据操作事件，比如Pod创建事件、更新事
+件、删除事件等，在这些事件发生后，etcd会及时通知API 
+Server。图
+5.3中API 
+Server与etcd之间的交互箭头表明了这个过程：当一个
+ReplicaSet对象被创建并保存到etcd中后（图中的2.Create 
+RepliatSet箭
+头），etcd会立即发送一个对应的Create事件给API 
+Server（图中的
+3.Send RepliatSet Create Event箭头），与其类似的6、7、10、11箭头都
+针对Pod的创建、更新事件。
+然后，为了让Kubernetes中的其他组件在不访问底层etcd数据库的
+情况下，也能及时获取资源对象的变化事件，API 
+Server模仿etcd的
+Watch API接口提供了自己的Watch接口，这样一来，这些组件就能近乎
+实时地获取自己感兴趣的任意资源对象的相关事件通知了。图5.3中的
+controller-manager、scheduler、kubelet等组件与API Server之间的3个标
+记为“List-Watch”的虚线框表明了这个过程。同时，在监听自己感兴趣
+的资源时，客户端可以增加过滤条件，以List-Watch 3为例，node1节点
+上的kubelet进程只对自己节点上的Pod事件感兴趣。
+最后，Kubernetes 
+List-Watch用于实现数据同步的代码逻辑。客户
+
+端首先调用API Server的List接口获取相关资源对象的全量数据并将其缓
+存到内存中，然后启动对应资源对象的Watch协程，在接收到Watch事
+件后，再根据事件的类型（比如新增、修改或删除）对内存中的全量资
+源对象列表做出相应的同步修改。从实现上来看，这是一种全量结合增
+量的、高性能的、近乎实时的数据同步方式。
+在资源对象的增删改操作中，最复杂的应该是“改（更新）”操作
+了，因为关键的一些资源对象都是有状态的对象，例如Pod、
+Deployment等。很多时候，我们只需修改已有的某个资源对象的某些属
+性，并保持其他属性不变，对于这样特殊又实用的更新操作，
+Kubernetes最初是通过命令行实现的，并通过kubectl apply命令实现资源
+对象的更新操作，用户无须提供完整的资源对象YAML文件，只需将要
+修改的属性写入YAML文件中提交命令即可，但这也带来一些新的问
+题：
+◎　如果用户希望通过编程方式提供与kubectl apply一样的功能，
+则只能自己开发类似的代码或者只能调用Go语言的kubectl apply模块来
+实现；
+◎　kubectl命令行自己实现的这种Patch的代码随着Kubernetes资源
+对象版本的不断增加，变得越来越复杂，在兼容性和代码维护方面变得
+越来越复杂。
+因此，Kubernetes从1.14版本开始引入Server-side 
+apply特性，即在
+API Server中完整实现kubectl apply的能力，到1.18版本时更新到Beta阶
+段，新版本将跟踪并管理所有新Kubernetes对象的字段变更，确保用户
+及时了解哪些资源在何时进行过更改。
+接下来说说API Server中的另一处精彩设计。我们知道，对于不断
+迭代更新的系统，对象的属性一定是在不断变化的，API接口的版本也
+在不断升级，此时就会面临版本问题，即同一个对象不同版本之间的数
+据转换问题及API接口版本的兼容问题。后面这个问题解决起来比较容
+易，即定义不同的API版本号（比如v1alpha1、v1beta1）来加以区分，
+但前面的问题就有点麻烦了，比如数据对象经历v1alpha1、v1beta1、
+v1beta1、v1beta2等变化后最终变成v1版本，此时该数据对象存在5个版
+本，如果这5个版本之间的数据两两直接转换，就存在很多逻辑组合，
+变成一种典型的网状网络，如图5.4所示，为此我们不得不增加很多重
+
+复的转换代码。
+上述直接转换的设计模式还存在另一个不可控的变数，即每增加一
+个新的对象版本，之前每个版本的对象就都需要增加一个到新版本对象
+的转换逻辑。如此一来，对直接转换的实现就更难了。于是，API
+Server针对每种资源对象都引入了一个相对不变的internal版本，每个版
+本只要支持转换为internal版本，就能够与其他版本进行间接转换。于是
+对象版本转换的拓扑图就简化成了如图5.5所示的星状图。
+图5.4　对象版本转换的拓扑图
+本节最后简单说说Kubernetes中的CRD在API Server中的设计和实现
+机制。根据Kubernetes的设计，每种官方内建的资源对象如Node、
+
+Pod、Service等的实现都包含以下主要功能。
+（1）资源对象的元数据（Schema）的定义：可以将其理解为数据
+库Table的定义，定义了对应资源对象的数据结构，官方内建资源对象
+的元数据定义是固化在源码中的。
+（2）资源对象的校验逻辑：确保用户提交的资源对象的属性的合
+法性。
+（3）资源对象的CRUD操作代码：可以将其理解为数据库表的
+CRUD代码，但比后者更难，因为API Server对资源对象的CRUD操作都
+会保存到etcd数据库中，对处理性能的要求也更高，还要考虑版本兼容
+性和版本转换等复杂问题。
+（4）资源对象相关的“自动控制器”（如RC、Deployment等资源对
+象背后的控制器）：这是很重要的一个功能。Kubernetes是一个以自动
+化为核心目标的平台，用户给出期望的资源对象声明，运行过程中由资
+源背后的“自动控制器”确保对应资源对象的数量、状态、行为等始终符
+合用户的预期。
+类似地，每个自定义CRD的开发人员都需要实现上面的功能。为了
+降低编程难度与工作量，API Server的设计者们做出了大量努力，使得
+直接编写YAML定义文件即可实现以上前3个功能。对于唯一需要编程
+的第4个功能，由于API Server提供了大量的基础API库，特别是易用的
+List-Watch的编程框架，所以CRD自动控制器的编程难度大大降低。
+
+图5.5　星状图
+5.1.3　独特的Kubernetes Proxy API接口
+前面讲到，Kubernetes API Server最主要的REST接口是资源对象的
+增、删、改、查接口，除此之外，它还提供了一类很特殊的REST接口
+—Kubernetes 
+Proxy 
+API接口，这类接口的作用是代理REST请求，即
+Kubernetes API Server把收到的REST请求转发到某个Node上的kubelet守
+护进程的REST端口，由该kubelet进程负责响应。
+首先说说Kubernetes Proxy API里关于Node的相关接口。该接口的
+REST路径为/api/v1/nodes/{name}/proxy，其中{name}为节点的名称或IP
+地址，包括以下几个具体接口：
+
+例如，当前Node的名称为k8s-node-1，用以下命令即可获取在该节
+点上运行的所有Pod：
+需要说明的是，这里获取的Pod的信息数据来自Node而非etcd数据
+库，所以两者可能在某些时间点有所偏差。此外，如果kubelet进程在启
+动时包含--enable-debugging-handlers=true参数，那么Kubernetes 
+Proxy
+API还会增加下面的接口：
+
+接下来说说Kubernetes Proxy API里关于Pod的相关接口，通过这些
+接口，我们可以访问Pod里某个容器提供的服务（如Tomcat在8080端口
+的服务）：
+下面用第1章Java Web例子中的Tomcat Pod来说明上述Proxy接口的
+用法。
+首先，得到Pod的名称：
+然后，运行下面的命令，会输出Tomcat的首页，即相当于访问
+http：//localhost：8080/：
+我们也可以在浏览器中访问上面的地址，比如Master的IP地址是
+192.168.18.131，我们在浏览器中输入http：//<apiserver-ip>：<apiserver-
+port>/api/v1/namespaces/default/pods/myweb-g9pmm/proxy，就能够访问
+Tomcat的首页了；而如果输入/api/v1/namespaces/default/pods/myweb-
+g9pmm/proxy/demo，就能访问Tomcat中Demo应用的页面了。
+看到这里，你可能明白Pod的Proxy接口的作用和意义了：在
+Kubernetes集群之外访问某个Pod容器的服务（HTTP服务）时，可以用
+
+Proxy API实现，这种场景多用于管理目的，比如逐一排查Service的Pod
+副本，检查哪些Pod的服务存在异常。
+最后说说Service。Kubernetes Proxy API也有Service的Proxy接口，
+其接口定义与Pod的接口定义基本一
+样：/api/v1/namespaces/{namespace}/services/{name}/proxy。比如，若我
+们想访问myweb服务的/demo页面，则可以在浏览器中输入
+http：//<apiserver-ip>：<apiserver-
+port>/api/v1/namespaces/default/services/myweb/proxy/demo/。
+5.1.4　集群功能模块之间的通信
+从图5.6可以看出，Kubernetes API Server作为集群的核心，负责集
+群各功能模块之间的通信。集群内的各个功能模块通过API Server将信
+息存入etcd中，当需要获取和操作这些数据时，则通过API Server提供的
+REST接口（用GET、LIST或WATCH方法）来实现，从而实现各模块之
+间的信息交互。
+常见的一个交互场景是kubelet进程与API Server的交互。每个Node
+上的kubelet每隔一个时间周期就会调用一次API Server的REST接口报告
+自身状态，API Server在接收到这些信息后，会将节点状态信息更新到
+etcd中。此外，kubelet也通过API 
+Server的Watch接口监听Pod信息，如
+果监听到新的Pod副本被调度绑定到本节点，则执行Pod对应的容器创建
+和启动逻辑；如果监听到Pod对象被删除，则删除本节点上相应的Pod容
+器；如果监听到修改Pod的信息，kubelet就会相应地修改本节点的Pod容
+器。
+
+图5.6　Kubernetes结构图
+另一个交互场景是kube-controller-manager进程与API 
+Server的交
+互。kube-controller-manager中的Node Controller模块通过API Server提供
+的Watch接口实时监控Node的信息，并做相应的处理。
+还有一个比较重要的交互场景是kube-scheduler与API 
+Server的交
+互。Scheduler在通过API Server的Watch接口监听到新建Pod副本的信息
+后，会检索所有符合该Pod要求的Node列表，开始执行Pod调度逻辑，
+在调度成功后将Pod绑定到目标节点上。
+为了缓解集群各模块对API Server的访问压力，各功能模块都采用
+
+了缓存机制来缓存数据。各功能模块定时从API Server上获取指定的资
+源对象信息（通过List-Watch方法），然后将这些信息保存到本地缓存
+中，功能模块在某些情况下不直接访问API Server，而是通过访问缓存
+数据来间接访问API Server。
+我们知道，在Kubernetes集群中，Node上的kubelet和kube-proxy组
+件都需要与kube-apiserver通信。为增加传输安全性而采用HTTPS方式
+时，需要为每个Node组件都生成kube-apiserver用的CA签发的客户端证
+书，但规模较大时，这种客户端证书的颁发需要大量的工作，同样会增
+加集群扩展的复杂度。为了简化流程，Kubernetes引入了TLS
+Bootstraping机制来自动颁发客户端证书，为此增加了一种名为Bootstrap
+Token的特殊Token，在1.18版本时Bootstrap Token成为正式稳定特性。
+5.1.5　API Server网络隔离的设计
+Kubernetes的一些功能特性也与公有云提供商密切相关，例如负载
+均衡服务、弹性公网IP、存储服务等，具体实现都需要与API 
+Server通
+信，也属于运营商内部重点保障的安全区域。此外，公有云提供商提供
+Kubernetes服务时，考虑到安全问题，会要求以API 
+Server为核心的
+Master节点的网络与承载客户应用的Node节点的网络实现某种程度
+的“安全隔离”。为此，API Server增加了SSH安全通道的相关代码，让公
+有云提供商可以通过这个SSH安全通道实现API 
+Server相关的服务接口
+调用，但这也使得API Server变得臃肿，带来了升级、部署及演进的额
+外负担。之后，Kubernetes社区给出了全新的API Server Network Proxy
+特性的设计思路，这一特性于Kubernetes 1.16 版本时进入Alpha阶段，
+于1.17版本时达到Beta阶段。
+API Server Network Proxy的核心设计思想是将API Server放置在一
+个独立的网络中，与Node节点的网络相互隔离，然后增加独立的
+Network 
+Proxy进程来解决这两个网络直接的连通性（Connectivity）问
+题，如图5.7所示。
+
+图5.7　API Server Network Proxy的核心设计思想示意图
+当前Beta版本的具体实现方式是在Master节点的网络里部署
+Konnectivity Server，同时在Node节点的网络里部署Konnectivity Agent，
+两者之间建立起安全链接，对通信协议可以采用标准的HTTP或者
+gRPC，此设计允许Node节点网络被划分为多个独立的分片，这些分片
+都通过Konnectivity Server/Agent建立的安全链接与API Server实现点对
+点的连通。
+引入API Server Network Proxy机制以实现Master网络与Node网络的
+安全隔离的做法，具有以下优势。
+（1）Connectivity proxy（Konnectivity Server/Agent）可以独立扩
+
+展，不会影响到API Server的发展，集群管理员可以部署适合自己的各
+种Connectivity proxy的实现，具有更好的自主性和灵活性。
+（2）通过采用自定义的Connectivity 
+proxy，也可以实现VPN网络
+的穿透等高级网络代理特性，同时访问API Server的所有请求都可以方
+便地被Connectivity proxy记录并审计分析，这进一步提升了系统的安全
+性。
+（3）这种网络代理分离的设计将Master网络与Node网络之间的连
+通性问题从API Server中剥离出来，提升了API Server代码的内聚性，降
+低了API Server的代码复杂性，也有利于进一步提升API Server的性能和
+稳定性。同时，Connectivity proxy崩溃时也不影响API Server的正常运
+行，API 
+Server仍然可以正常提供其主要服务能力，即资源对象的
+CRUD服务。
+5.2　Controller Manager原理解析
+一般来说，智能系统和自动系统通常会通过一个“操作系统”不断修
+正系统的工作状态。在Kubernetes集群中，每个Controller都是这样的一
+个“操作系统”，它们通过API Server提供的（List-Watch）接口实时监控
+集群中特定资源的状态变化，当发生各种故障导致某资源对象的状态变
+化时，Controller会尝试将其状态调整为期望的状态。比如当某个Node
+意外宕机时，Node 
+Controller会及时发现此故障并执行自动化修复流
+程，确保集群始终处于预期的工作状态下。Controller 
+Manager是
+Kubernetes中各种操作系统的管理者，是集群内部的管理控制中心，也
+是Kubernetes自动化功能的核心。
+如图5.8所示，Controller Manager内部包含Replication Controller、
+Node Controller、ResourceQuota Controller、Namespace Controller、
+ServiceAccount 
+Controller、Token 
+Controller、Service 
+Controller、
+Endpoint Controller、Deployment Controller、Router Controller、Volume
+Controller等各种资源对象的控制器，每种Controller都负责一种特定资
+源的控制流程，而Controller Manager正是这些Controller的核心管理者。
+
+图5.8　Controller Manager结构图
+由于ServiceAccount Controller与Token Controller是与安全相关的两
+个控制器，并且与Service Account、Token密切相关，所以会在后续的章
+节中对它们进行分析。而Router Controller是公有云厂商提供的进行节点
+扩缩容时管理节点路由的控制器，比如谷歌GCE平台里动态添加一个虚
+机节点作为Node节点时，相应的路由策略、防火墙规则等配置无须用户
+手工设置，都能依靠Router Controller自动完成。
+在Kubernetes集群中与Controller 
+Manager并重的另一个组件是
+Kubernetes Scheduler，它的作用是将待调度的Pod（包括通过API Server
+新创建的Pod及RC为补足副本而创建的Pod等）通过一些复杂的调度流
+程计算出最佳目标节点，将Pod绑定到目标节点上。本章最后会介绍
+Kubernetes Scheduler调度器的基本原理。
+5.2.1　副本调度控制器
+在Kubernetes中存在两个功能相似的副本控制器：Replication
+Controller及Deployment Controller。
+为了区分Controller Manager中的Replication Controller（副本控制
+器）和资源对象Replication 
+Controller，我们将资源对象Replication
+Controller简写为RC，而本节中的Replication 
+Controller是指副本控制
+
+器，以便于后续分析。
+Replication Controller的核心作用是确保集群中某个RC关联的Pod副
+本数量在任何时候都保持预设值。如果发现Pod的副本数量超过预设
+值，则Replication 
+Controller会销毁一些Pod副本；反之，Replication
+Controller会自动创建新的Pod副本，直到符合条件的Pod副本数量达到
+预设值。需要注意：只有当Pod的重启策略是Always时
+（RestartPolicy=Always），Replication Controller才会管理该Pod的操作
+（例如创建、销毁、重启等）。在通常情况下，Pod对象被成功创建后
+都不会消失，唯一的例外是Pod处于succeeded或failed状态的时间过长
+（超时参数由系统设定），此时该Pod会被系统自动回收，管理该Pod的
+副本控制器将在其他工作节点上重新创建、运行该Pod副本。
+RC中的Pod模板就像一个模具，模具制作出来的东西一旦离开模
+具，它们之间就再也没关系了。同样，一旦Pod被创建完毕，无论模板
+如何变化，甚至换成一个新的模板，也不会影响到已经创建的Pod了。
+此外，Pod可以通过修改它的标签来脱离RC的管控，该方法可以用于将
+Pod从集群中迁移、数据修复等的调试。对于被迁移的Pod副本，RC会
+自动创建一个新的副本替换被迁移的副本。
+随着Kubernetes的不断升级，旧的RC已不能满足需求，所以有了
+Deployment。Deployment可被视为RC的替代者，RC及对应的Replication
+Controller已不再升级、维护，Deployment及对应的Deployment
+Controller则不断更新、升级新特性。Deployment Controller在工作过程
+中实际上是在控制两类相关的资源对象：Deployment及ReplicaSet。在
+我们创建Deployment资源对象之后，Deployment 
+Controller也默默创建
+了对应的ReplicaSet，Deployment的滚动升级也是Deployment Controller
+通过自动创建新的ReplicaSet来支持的。
+下面总结Deployment Controller的作用，如下所述。
+（1）确保在当前集群中有且仅有N个Pod实例，N是在RC中定义的
+Pod副本数量。
+（2）通过调整spec.replicas属性的值来实现系统扩容或者缩容。
+（3）通过改变Pod模板（主要是镜像版本）来实现系统的滚动升
+级。
+
+最后总结Deployment Controller的典型使用场景，如下所述。
+（1）重新调度（Rescheduling）。如前面所述，不管想运行1个副
+本还是1000个副本，副本控制器都能确保指定数量的副本存在于集群
+中，即使发生节点故障或Pod副本被终止运行等意外状况。
+（2）弹性伸缩（Scaling）。手动或者通过自动扩容代理修改副本
+控制器spec.replicas属性的值，非常容易实现增加或减少副本的数量。
+（3）滚动更新（Rolling Updates）。副本控制器被设计成通过逐个
+替换Pod来辅助服务的滚动更新。
+5.2.2　Node Controller
+kubelet进程在启动时通过API Server注册自身节点信息，并定时向
+API Server汇报状态信息，API Server在接收到这些信息后，会将这些信
+息更新到etcd中。在etcd中存储的节点信息包括节点健康状况、节点资
+源、节点名称、节点地址信息、操作系统版本、Docker版本、kubelet版
+本等。节点健康状况包含就绪（True）、未就绪（False）、未知
+（Unknown）三种。
+Node Controller通过API Server实时获取Node的相关信息，实现管理
+和监控集群中各个Node的相关控制功能，Node Controller的核心工作流
+程如图5.9所示。
+
+图5.9　Node Controller的核心工作流程
+对流程中关键点的解释如下。
+（1）Controller Manager在启动时如果设置了--cluster-cidr参数，那
+么为每个没有设置Spec.PodCIDR的Node都生成一个CIDR地址，并用该
+CIDR地址设置节点的Spec.PodCIDR属性，这样做的目的是防止不同节
+点的CIDR地址发生冲突。
+（2）逐个读取Node信息，多次尝试修改nodeStatusMap中的节点状
+态信息，将该节点信息和在Node Controller的nodeStatusMap中保存的节
+
+点信息做比较。如果判断出没有收到kubelet发送的节点信息、第1次收
+到节点kubelet发送的节点信息，或在该处理过程中节点状态变成非健康
+状态，则在nodeStatusMap中保存该节点的状态信息，并用Node
+Controller所在节点的系统时间作为探测时间和节点状态变化时间。如果
+判断出在指定时间内收到新的节点信息，且节点状态发生变化，则在
+nodeStatusMap中保存该节点的状态信息，并用Node Controller所在节点
+的系统时间作为探测时间和节点状态变化时间。如果判断出在指定时间
+内收到新的节点信息，但节点状态没发生变化，则在nodeStatusMap中
+保存该节点的状态信息，并用Node Controller所在节点的系统时间作为
+探测时间，将上次节点信息中的节点状态变化时间作为该节点的状态变
+化时间。如果判断出在某段时间（gracePeriod）内没有收到节点状态信
+息，则设置节点状态为“未知”，并且通过API Server保存节点状态。
+（3）逐个读取节点信息，如果节点状态变为非就绪状态，则将节
+点加入待删除队列，否则将节点从该队列中删除。如果节点状态为非就
+绪状态，且系统指定了Cloud 
+Provider，则Node 
+Controller调用Cloud
+Provider查看节点，若发现节点故障，则删除etcd中的节点信息，并删除
+与该节点相关的Pod等资源的信息。
+5.2.3　ResourceQuota Controller
+作为完备的企业级的容器集群管理平台，Kubernetes也提供了
+ResourceQuota Controller（资源配额管理）这一高级功能，资源配额管
+理确保指定的资源对象在任何时候都不会超量占用系统物理资源，避免
+由于某些业务进程在设计或实现上的缺陷导致整个系统运行紊乱甚至意
+外宕机，对整个集群的平稳运行和稳定性都有非常重要的作用。
+目前Kubernetes支持如下三个层次的资源配额管理。
+（1）容器级别，可以对CPU和Memory进行限制。
+（2）Pod级别，可以对一个Pod内所有容器的可用资源进行限制。
+（3）Namespace级别，为Namespace（多租户）级别的资源限制，
+包括：Pod数量、Replication 
+Controller数量、Service数量、
+ResourceQuota数量、Secret数量和可持有的PV数量。
+
+Kubernetes的配额管理是通过Admission Control（准入控制）来控制
+的，Admission 
+Control当前提供了两种方式的配额约束，分别是
+LimitRanger与ResourceQuota，其中LimitRanger作用于Pod和Container；
+ResourceQuota则作用于Namespace，限定一个Namespace里各类资源的
+使用总额。
+如图5.10所示，如果在Pod定义中同时声明了LimitRanger，则用户
+通过API Server请求创建或修改资源时，Admission Control会计算当前配
+额的使用情况，如果不符合配额约束，则创建对象失败。对于定义了
+ResourceQuota的Namespace，ResourceQuota 
+Controller组件会定期统计
+和生成该Namespace下各类对象的资源使用总量，统计结果包括Pod、
+Service、RC、Secret和Persistent 
+Volume等对象实例的个数，以及该
+Namespace下所有Container实例的资源使用量（目前包括CPU和内
+存），然后将这些统计结果写入etcd的resourceQuotaStatusStorage目录
+（resourceQuotas/status）下。写入resourceQuotaStatusStorage的内容包含
+Resource名称、配额值（ResourceQuota对象中spec.hard域下包含的资源
+的值）、当前使用的值（ResourceQuota Controller统计的值）。随后这
+些统计信息被Admission 
+Control使用，以确保相关Namespace下的资源
+配额总量不会超过ResourceQuota中的限定值。
+
+图5.10　ResourceQuota Controller流程图
+5.2.4　Namespace Controller
+
+用户通过API Server可以创建新的Namespace并将其保存在etcd中，
+Namespace Controller定时通过API Server读取这些Namespace的信息。如
+果Namespace被API标识为优雅删除（通过设置删除期限实现，即设置
+DeletionTimestamp属性），则将该NameSpace的状态设置成Terminating
+并保存在etcd中。同时，Namespace 
+Controller删除该Namespace下的
+ServiceAccount、RC、Pod、Secret、PersistentVolume、ListRange、
+ResourceQuota和Event等资源对象。
+在Namespace的状态被设置成Terminating后，由Admission
+Controller的NamespaceLifecycle插件来阻止为该Namespace创建新的资
+源。同时，在Namespace Controller删除该Namespace中的所有资源对象
+后，Namespace 
+Controller会对该Namespace执行finalize操作，删除
+Namespace的spec.finalizers域中的信息。
+如果Namespace Controller观察到Namespace设置了删除期限，同时
+Namespace的spec.finalizers域值是空的，那么Namespace 
+Controller将通
+过API Server删除该Namespace资源。
+5.2.5　Service Controller与Endpoints Controller
+在讲解Endpoints Controller之前，让我们先看看Service、Endpoints
+与Pod的关系。如图5.11所示，Endpoints表示一个Service对应的所有Pod
+副本的访问地址，Endpoints 
+Controller就是负责生成和维护所有
+Endpoints对象的控制器。
+
+图5.11　Service、Endpoints与Pod的关系
+Endpoints Controller负责监听Service和对应的Pod副本的变化，如果
+监测到Service被删除，则删除和该Service同名的Endpoints对象。如果监
+测到新的Service被创建或者修改，则根据该Service信息获得相关的Pod
+列表，然后创建或者更新Service对应的Endpoints对象。如果监测到Pod
+的事件，则更新它所对应的Service的Endpoints对象（增加、删除或者修
+改对应的Endpoint条目）。
+那么，Endpoints对象是在哪里被使用的呢？答案是每个Node上的
+kube-proxy进程，kube-proxy进程获取每个Service的Endpoints，实现了
+Service的负载均衡功能。在后续章节中会深入讲解这部分内容。
+接下来说说Service Controller的作用，它其实是Kubernetes集群与外
+部的云平台之间的一个接口控制器。Service 
+Controller监听Service的变
+化，如果该Service是一个LoadBalancer类型的
+Service（externalLoadBalancers=true），则Service 
+Controller确保该
+Service对应的LoadBalancer实例在外部的云平台上被相应地创建、删除
+及更新路由转发表（根据Endpoints的条目）。
+
+5.3　Scheduler原理解析
+前面深入分析了Controller Manager及其所包含的各个组件的运行机
+制，本节将继续对Kubernetes中负责Pod调度的重要功能模块—
+Kubernetes Scheduler的工作原理和运行机制进行深入分析。
+我们知道，Kubernetes 
+Scheduler是负责Pod调度的进程（组件），
+随着Kubernetes功能的不断增强和完善，Pod调度也变得越来越复杂，
+Kubernetes Scheduler内部的实现机制也在不断优化，从最初的两阶段调
+度机制（Predicates 
+&Priorities）发展到后来的升级版的调度框架
+（Scheduling Framework），以满足越来越复杂的调度场景。
+为什么Kubernetes里的Pod调度会如此复杂？这主要是因为
+Kubernetes要努力满足各种类型应用的不同需求并且努力“让大家和平共
+处”。Kubernetes集群里的Pod有无状态服务类、有状态集群类及批处理
+类三大类，不同类型的Pod对资源占用的需求不同，对节点故障引发的
+中断/恢复及节点迁移方面的容忍度都不同，如果再考虑到业务方面不
+同服务的Pod的优先级不同带来的额外约束和限制，以及从租户（用
+户）的角度希望占据更多的资源增加稳定性和集群拥有者希望调度更多
+的Pod提升资源使用率两者之间的矛盾，则当这些相互冲突的调度因素
+都被考虑到时，如何进行Pod调度就变成一个很棘手的问题了。
+为什么Kubernetes Scheduler的设计实现从一开始就比较复杂呢？我
+们知道，一开始，Scheduler就被设计成两阶段调度机制，而到了1.5版
+本以后，新的Scheduling 
+Framework变得更加复杂，其原因其实很简
+单：调度这个事情无论让机器怎么安排，都不可能完全满足每个用户
+（应用）的需求。因此，让用户方便地根据自己的需求去做定制和扩
+展，就变成一个很重要也很实用的特性了。升级后的Scheduling
+Framework在这方面也做得更好了。
+5.3.1　Scheduler的调度流程
+Kubernetes 
+Scheduler在整个系统中承担了“承上启下”的重要功
+能，“承上”是指它负责接收Controller 
+Manager创建的新Pod，为其安排
+
+一个落脚的“家”—目标Node；“启下”是指安置工作完成后，目标Node上
+的kubelet服务进程接管后续工作，负责Pod生命周期中的“下半生”。
+具体来说，Kubernetes Scheduler的作用是将待调度的Pod（API新创
+建的Pod、Controller Manager为补足副本而创建的Pod等）按照特定的调
+度算法和调度策略绑定（Binding）到集群中某个合适的Node上，并将
+绑定信息写入etcd中。在整个调度过程中涉及三个对象，分别是待调度
+Pod列表、可用Node列表及调度算法和策略。简单地说，就是通过调度
+算法为待调度Pod列表中的每个Pod都从Node列表中选择一个最适合的
+Node。
+随后，目标节点上的kubelet通过API 
+Server监听到Kubernetes
+Scheduler产生的Pod绑定事件，然后获取对应的Pod清单，下载Image镜
+像并启动容器。完整的流程如图5.12所示。
+图5.12　Scheduler流程图
+
+Scheduler只跟API Server打交道，其输入和输入如下。
+◎　输入：待调度的Pod和全部计算节点的信息。
+◎　输出：目标Pod要“安家”的最优节点（或者暂时不存在）。
+Scheduler在调度算法方面的升级主要如下。
+◎　v1.2版本引入了Scheduler Extender，支持外部扩展。
+◎　v1.5版本为调度器的优先级算法引入了Map/Reduce的计算模
+式。
+◎　v1.15版本实现了基于Scheduling Framework的方式，开始支持
+组件化开发。
+◎　v1.18版本将所有策略（Predicates与Priorities）全部组件化，将
+默认的调度流程切换为Scheduling Framework。
+◎　v1.19版本将抢占过程组件化，同时支持Multi 
+Scheduling
+Profile。
+考虑到新的Scheduling 
+Framework的代码和功能大部分来自之前旧
+的两阶段调度流程，所以这里有必要先介绍一下旧版本的两阶段调度流
+程。旧版本的Kubernetes 
+Scheduler的调度总体上包括两个阶段：过滤
+（Filtering）+打分（Scoring），随后就是绑定目标节点，完成调度。
+（1）过滤阶段：遍历所有目标Node，筛选出符合要求的候选节
+点。在此阶段，Scheduler会将不合适的所有Node节点全部过滤，只留下
+符合条件的候选节点。其具体方式是通过一系列特定的Filter对每个
+Node都进行筛选，筛选完成后通常会有多个候选节点供调度，从而进入
+打分阶段；如果结果集为空，则表示当前还没有符合条件的Node节点，
+Pod会维持在Pending状态。
+（2）打分阶段：在过滤阶段的基础上，采用优选策略（xxx
+Priorities）计算出每个候选节点的积分，积分最高者胜出，因为积分最
+高者表示最佳人选。挑选出最佳节点后，Scheduler会把目标Pod安置到
+此节点上，调度完成。
+在过滤阶段中提到的Predicates是一系列过滤器，每种过滤器都实现
+一种节点特征的检测，比如磁盘（NoDiskConflict）、主机
+
+（PodFitsHost）、节点上的可用端口（PodFitsPorts）、节点标签
+（CheckNodeLabelPresence）、CPU和内存资源（PodFitsResources）、
+服务亲和性（CheckServiceAffinity）等。在打分阶段提到的Priorities则
+用来对满足条件的Node节点进行打分，常见的Priorities包含
+LeastRequestedPriority（选出资源消耗最小的节点）、
+BalancedResourceAllocation（选出各项资源使用率最均衡的节点）及
+CalculateNodeLabelPriority（优先选择含有指定Label的节点）等。
+Predicates与Priorities合在一起被称为Kubernetes Scheduling Policies，需
+要特别注意。
+5.3.2　Scheduler Framework
+考虑到旧版本的Kubernetes Scheduler不足以支持更复杂和灵活的调
+度场景，因此在Kubernetes 
+1.5版本中出现一个新的调度机制——
+Scheduler Framework。从整个调度流程来看，新的Scheduler Framework
+是在旧流程的基础上增加了一些扩展点（基于调度Stage的扩展点），
+同时支持用户以插件的方式（Plugin）进行扩展。新的调度流程如图
+5.13所示。
+
+图5.13　新的调度流程
+下面是对新流程中这些扩展点的说明。
+◎　QueueSort：对调度队列中待调度的Pod进行排序，一次只能启
+用一个队列排序插件。
+◎　PreFilter：在过滤之前预处理或检查Pod或集群的信息，可以将
+Pod标记为不可调度。
+◎　Filter：相当于调度策略中的Predicates，用于过滤不能运行Pod
+的节点。过滤器的调用顺序是可配置的，如果没有一个节点通过所有过
+滤器的筛选，Pod则将被标记为不可调度。
+
+◎　PreScore：是一个信息扩展点，可用于预打分工作。
+◎　Score：给完成过滤阶段的节点打分，调度器会选择得分最高
+的节点。
+◎　Reserve：是一个信息扩展点，当资源已被预留给Pod时，会通
+知插件。这些插件还实现了Unreserve接口，在Reserve期间或之后出现
+故障时调用。
+◎　Permit：可以阻止或延迟Pod绑定。
+◎　PreBind：在Pod绑定节点之前执行。
+◎　Bind：将Pod与节点绑定。绑定插件是按顺序调用的，只要有
+一个插件完成了绑定，其余插件就都会跳过。绑定插件至少需要一个。
+◎　PostBind：是一个信息扩展点，在Pod绑定节点之后调用。
+目前常用的插件如下。
+◎　PrioritySort：提供默认的基于优先级的排序。实现的扩展点为
+QueueSort。
+◎　ImageLocality：选择已经存在Pod运行所需容器镜像的节点。
+实现的扩展点为Score。
+◎　TaintToleration：实现污点和容忍。实现的扩展点为Filter、
+Prescore、Score。
+◎　NodeName：检查Pod指定的节点名称与当前节点是否匹配。实
+现的扩展点为Filter。
+◎　NodePorts：检查Pod请求的端口在节点上是否可用。实现的扩
+展点为PreFilter、Filter。
+◎　NodeAffinity：实现节点选择器和节点亲和性。实现的扩展点
+为Filter、Score。
+◎　SelectorSpread：对于属于Services、ReplicaSets和StatefulSets的
+Pod，偏好跨多个节点部署。实现的扩展点为PreScore、Score。
+◎　PodTopologySpread：实现Pod拓扑分布。实现的扩展点为
+PreFilter、Filter、PreScore、Score。
+
+◎　NodeResourcesFit：检查节点是否拥有Pod请求的所有资源。实
+现的扩展点为PreFilter、Filter。
+◎　DefaultPreemption：提供默认的抢占机制。实现的扩展点为
+PostFilter。
+◎　NodeResourcesBalancedAllocation：在调度Pod时选择资源使用
+更为均衡的节点。实现的扩展点为Score。
+◎　NodeResourcesLeastAllocated：选择资源分配较少的节点，实
+现的扩展点为Score。
+◎　VolumeBinding：检查节点是否有请求的卷，或是否可以绑定
+请求的卷。实现的扩展点为PreFilter、Filter、Reserve、PreBind。
+◎　InterPodAffinity：实现Pod间的亲和性与反亲和性。实现的扩
+展点为PreFilter、Filter、PreScore、Score。
+◎　DefaultBinder：提供默认的绑定机制。实现的扩展点为Bind。
+显而易见，这种扩展方式远远超过之前Scheduling Policies的能力，
+随后在Kubernetes 
+1.18版本中引入了全新的Scheduler配置特性——
+Scheduling Profiles，并在该版本中默认生效，随之而来的旧版本调度机
+制中的Scheduling Policies则被逐步淘汰。
+为了使用Scheduling Profiles对Scheduler进行自定义配置，我们可以
+编写一个Profiles配置文件，并通过--config参数传递到kube-scheduler服
+务中。下面是一个具体的例子：
+
+从该例子中可以看到，对在调度的什么阶段开启或关闭哪些插件，
+我们都可以灵活定义，插件本身也更聚焦于自己所关注的特定阶段，因
+此更容易实现自定义插件。
+5.3.3　多调度器特性
+Kubernetes自带一个默认调度器，从1.2版本开始引入自定义调度器
+的特性，支持使用用户实现的自定义调度器，多个自定义调度器可以与
+默认的调度器同时运行，由Pod选择是用默认的调度器调度还是用某个
+自定义调度器调度。支持多调度器的特性到1.6版本时达到Beta阶段，但
+该特性的实现方式不够令人满意，因为用户需要自己编译、打包一个完
+整的Scheduler进程，以二进制或者容器的方式启动和运行，这个过程烦
+琐并且实施起来相对困难。除此之外，多个调度器进程同时运行，还存
+在资源竞争的风险和隐患。所以Kubernetes一直在考虑另一种解决思
+
+路，即通过一个Scheduler进程加上多个配置文件的方式来实现全新的多
+调度器特性。而新设计的Scheduling 
+Profiles满足了这一需求，这就是
+Multiple Scheduling Profiles特性，我们只要针对不同的调度规则编写不
+同的Profile配置文件，并给它们起一个自定义Scheduler的名称，然后把
+这个配置文件传递给Kubernetes 
+Scheduler加载、生效，Kubernetes
+Scheduler就立即实现了多调度器支持的“多重影分身”特效。再回头看看
+5.3.2节的Scheduling Profiles配置文件，就能立刻明白了：
+在以上KubeSchedulerConfiguration配置声明中，我们看到系统默认
+的Scheduler名为default-scheduler，默认的Scheduler包括之前提到的常见
+的插件扩展，在这个配置文件中新增了一个名为no-scoring-scheduler的
+自定义Scheduler，我们在自定义Scheduler中可以根据自己的需求开启或
+关闭指定的插件。
+5.4　kubelet运行机制解析
+在Kubernetes集群中，在每个Node（又称Minion）上都会启动一个
+kubelet服务进程。该进程用于处理Master下发到本节点的任务，管理
+Pod及Pod中的容器。每个kubelet进程都会在API Server上注册节点自身
+的信息，定期向Master汇报节点资源的使用情况，并通过cAdvisor监控
+
+容器和节点资源。
+5.4.1　节点管理
+节点通过设置kubelet的启动参数“--register-node”，来决定是否向
+API 
+Server注册自己。如果该参数的值为true，那么kubelet将试着通过
+API Server注册自己。在自注册时，kubelet启动时还包含下列参数。
+◎　--api-servers：API Server的位置。
+◎　--kubeconfig：kubeconfig文件，用于访问API Server的安全配置
+文件。
+◎　--cloud-provider：云服务商（IaaS）地址，仅用于公有云环境
+中。
+一开始，每个kubelet进程都被授予创建和修改任何节点的权限，后
+来这个安全漏洞被修复。Kubernetes限制了kubelet的权限，仅允许它修
+改和创建其所在节点的权限。如果在集群运行过程中遇到集群资源不足
+的情况，用户就很容易通过添加机器及运用kubelet的自注册模式来实现
+扩容。在某些情况下，Kubernetes集群中的某些kubelet没有选择自注册
+模式，用户需要自己去配置Node的资源信息，同时告知Node上kubelet
+API Server的位置。集群管理者能够创建和修改节点信息，如果其希望
+手动创建节点信息，则通过设置kubelet的启动参数“--register-
+node=false”即可完成。
+kubelet在启动时通过API Server注册节点信息，并定时向API Server
+发送节点的新消息，API 
+Server在接收到这些信息后，会将其写入etcd
+中。通过kubelet的启动参数--node-status-update-frequency可设置kubelet
+每隔多长时间向API Server报告节点的状态，默认为10s。
+5.4.2　Pod管理
+kubelet通过以下方式获取在自身Node上要运行的Pod清单。
+（1）静态Pod配置文件：kubelet通过启动参数--config指定目录下
+
+的Pod YAML文件（默认目录为/etc/kubernetes/manifests/），kubelet会持
+续监控指定目录下的文件变化，以创建或删除Pod。这种类型的Pod没有
+通过kube-controller-manager进行管理，被称为“静态Pod”。另外，可以
+通过启动参数--file-check-frequency设置检查该目录的时间间隔，默认为
+20s。
+（2）HTTP端点（URL）：通过--manifest-url参数设置，通过--http-
+check-frequency设置检查该HTTP端点数据的时间间隔，默认为20s。
+（3）API Server：kubelet通过API Server监听etcd目录，同步Pod列
+表。
+所有以非API 
+Server方式创建的Pod都叫作Static 
+Pod。kubelet将
+Static Pod的状态汇报给API Server，API Server为该Static Pod创建一个
+Mirror Pod与其匹配。Mirror Pod的状态将真实反映Static Pod的状态。当
+Static Pod被删除时，与之相对应的Mirror Pod也会被删除。在本章中只
+讨论通过API Server获得Pod清单的方式。kubelet通过API Server Client使
+用Watch加List的方式监听/registry/nodes/$当前节点的名称
+和/registry/pods目录，将获取的信息同步到本地缓存中。
+kubelet监听etcd，所有针对Pod的操作都会被kubelet监听。如果发现
+有新的绑定到本节点的Pod，则按照Pod清单的要求创建该Pod。
+如果发现本地的Pod需要被修改，则kubelet会做出相应的修改，比
+如在删除Pod中的某个容器时，会通过Docker Client删除该容器。如果发
+现本地的Pod需要被删除，则kubelet会删除相应的Pod，并通过Docker
+Client删除Pod中的容器。
+kubelet读取监听到的信息，如果是创建和修改Pod任务，则做如下
+处理。
+（1）为该Pod创建一个数据目录。
+（2）从API Server中读取该Pod清单。
+（3）为该Pod挂载外部卷（External Volume）。
+（4）下载Pod用到的Secret。
+（5）检查已经运行在节点上的Pod，如果该Pod没有容器或Pause容
+器（kubernetes/pause镜像创建的容器）没有启动，则先停止Pod里所有
+
+容器的进程。如果在Pod中有需要删除的容器，则删除这些容器。
+（6）用kubernetes/pause镜像为每个Pod都创建一个容器。该Pause
+容器用于接管Pod中所有其他容器的网络。每创建一个新的Pod，kubelet
+都会先创建一个Pause容器，然后创建其他容器。kubernetes/pause镜像
+大概有200KB，是个非常小的容器镜像。
+（7）为Pod中的每个容器都做如下处理。
+◎　为容器计算一个哈希值，然后用容器的名称去查询对应Docker
+容器的哈希值。若查找到容器，且二者的哈希值不同，则停止Docker中
+容器的进程，并停止与之关联的Pause容器的进程；若二者相同，则不
+做任何处理。
+◎　如果容器被终止，且容器没有指定的restartPolicy（重启策
+略），则不做任何处理。
+◎　调用Docker 
+Client下载容器镜像，调用Docker 
+Client运行容
+器。
+5.4.3　容器健康检查
+Pod通过两类探针来检查容器的健康状态。一类是LivenessProbe探
+针，用于判断容器是否健康并反馈给kubelet，如果LivenessProbe探针探
+测到容器不健康，则kubelet将删除该容器，并根据容器的重启策略做相
+应的处理；如果一个容器不包含LivenessProbe探针，则kubelet会认为该
+容器的LivenessProbe探针返回的值永远是Success。另一类是
+ReadinessProbe探针，用于判断容器是否启动完成，且准备接收请求。
+如果ReadinessProbe探针检测到容器启动失败，则Pod的状态将被修改，
+Endpoint Controller将从Service的Endpoint中删除包含该容器所在Pod的IP
+地址的Endpoint条目。
+kubelet定期调用容器中的LivenessProbe探针来诊断容器的健康状
+况。LivenessProbe包含以下3种实现方式。
+（1）ExecAction：在容器内部运行一个命令，如果该命令的退出
+状态码为0，则表明容器健康。
+
+（2）TCPSocketAction：通过容器的IP地址和端口号执行TCP检
+查，如果端口能被访问，则表明容器健康。
+（3）HTTPGetAction：通过容器的IP地址和端口号及路径调用
+HTTP Get方法，如果响应的状态码大于或等于200且小于或等于400，则
+认为容器状态健康。
+LivenessProbe探针被包含在Pod定义的spec.containers.{某个容器}
+中。下面的示例展示了两种Pod中的容器健康检查方式：HTTP检查和容
+器命令执行检查。
+（1）本示例实现了通过容器命令执行检查：
+kubelet在容器中运行“cat/tmp/health”命令，如果该命令返回的值为
+0，则表明容器处于健康状态，否则表明容器处于不健康状态。
+（2）本示例实现了对容器的HTTP检查：
+
+kubelet发送一个HTTP请求到本地主机、端口及指定的路径，来检
+查容器的健康状况。
+5.4.4　cAdvisor资源监控
+在Kubernetes集群中，应用程序的执行情况可以在不同的级别监测
+到，这些级别包括容器、Pod、Service和整个集群。作为Kubernetes集群
+的一部分，Kubernetes希望提供给用户详细的各个级别的资源使用信
+息，这将使用户深入地了解应用的执行情况，并找到应用中可能的瓶
+颈。
+cAdvisor是一个开源的分析容器资源使用率和性能特性的代理工
+具，它是因为容器而产生的，因此自然支持Docker容器。在Kubernetes
+项目中，cAdvisor被集成到Kubernetes代码中，kubelet则通过cAdvisor获
+取其所在节点及容器上的数据。cAdvisor自动查找其所在Node上的所有
+容器，自动采集CPU、内存、文件系统和网络使用的统计信息。在大部
+分Kubernetes集群中，cAdvisor都通过它所在Node的4194端口暴露一个
+简单的UI。
+如图5.14所示是cAdvisor的一个截图。kubelet作为连接Kubernetes
+Master和各Node的桥梁，管理运行在Node上的Pod和容器。kubelet将每
+个Pod都转换成它的成员容器，同时从cAdvisor上获取单独的容器使用
+统计信息，然后通过该REST API暴露这些聚合后的Pod资源使用的统计
+信息。
+
+图5.14　cAdvisor的一个截图
+cAdvisor只能提供2～3min的监控数据，对性能数据也没有持久
+
+化，因此在Kubernetes的早期版本中需要依靠Heapster来实现集群范围内
+全部容器性能指标的采集和查询功能。从Kubernetes 1.8版本开始，性能
+指标数据的查询接口升级为标准的Metrics API，后端服务则升级为全新
+的Metrics 
+Server。因此，cAdvisor在4194端口提供的UI和API服务从
+Kubernetes 1.10版本开始进入弃用流程，并于 1.12版本时完全关闭。如
+果还希望使用cAdvisor的这个特性，则从1.13版本开始可以通过部署一
+个DaemonSet在每个Node上都启动一个cAdvisor来提供UI和API，请参考
+cAdvisor在GitHub上的说明。
+在新的Kubernetes监控体系中，Metrics 
+Server用于提供Core
+Metrics（核心指标），包括Node和Pod的CPU和内存使用数据。其他
+Custom Metrics（自定义指标）则由第三方组件（如Prometheus）采集和
+存储。
+5.4.5　容器运行时
+kubelet负责本节点上所有Pod的全生命周期管理，其中就包括相关
+容器的创建和销毁这种基本操作。容器的创建和销毁等操作的代码不属
+于Kubernetes的代码范畴，比如目前流行的Docker容器引擎就属于
+Docker公司的产品，所以kubelet需要通过某种进程间的调用方式如
+gRPC来实现与Docker容器引擎之间的调用控制功能。在说明其原理和
+工作机制之前，我们首先要理解一个重要的概念——Container
+Runtime（容器运行时）。
+“容器”这个概念是早于Docker出现的，容器技术最早来自Linux，
+所以又被称为Linux Container。LXC项目是一个Linux容器的工具集，也
+是真正意义上的一个Container Runtime，它的作用就是将用户的进程包
+装成一个Linux容器并启动运行。Docker一开始时就使用了LXC项目代
+码作为Container Runtime来运行容器，但从0.9版本开始被Docker公司自
+研的新一代容器运行时Libcontainer所取代，再后来，Libcontainer的代
+码被改名为runc，被Docker公司捐赠给了OCI组织，成为OCI容器运行时
+规范的第1个标准参考实现。所以，LXC与runC其实都可被看作开源的
+Container 
+Runtime，但它们都属于低级别的容器运行时（low-level
+container runtimes），因为它们不涉及容器运行时所依赖的镜像操作功
+能，比如拉取镜像，也没有对外提远程供编程接口以方便其他应用集
+
+成，所以又有了后来的高级别容器运行时（high-level 
+container
+runtimes），其中最知名的就是Docker公司开源的containerd。containerd
+被设计成嵌入一个更大的系统如Kubernetes中使用，而不是直接由开发
+人员或终端用户使用，containerd底层驱动runc来实现底层的容器运行
+时，对外则提供了镜像拉取及基于gRPC接口的容器CRUD封装接口。发
+展至今，containerd已经从Docker里的一个内部组件，变成一个流行的、
+工业级的开源容器运行时，已经支持容器镜像的获取和存储、容器的执
+行和管理、存储和网络等相关功能。在containerd和runC成为标准化容
+器服务的基石后，上层应用就可以直接建立在containerd和runC之上
+了。如果我们只希望用一个纯粹的、稳定性更好、性能更优的容器运行
+时，就可以直接使用containerd而无须再依赖Docker了。
+除了containerd，还有类似的其他一些高层容器运行时也都在runC
+的基础上发展而来，目前比较流行的有红帽开源的CRI-O、openEuler社
+区开源的iSula等。这些Container Runtime还有另外一个共同特点，即都
+实现了Kubernetes提出的CRI接口规范（Container Runtime Interface），
+可以直接接入Kubernetes中。CRI顾名思义，就是容器运行时接口规
+范，这个规范也是Kubernetes顺应容器技术标准化发展潮流的一个重要
+历史产物，早在Kubernetes 1.5版本中就引入了CRI接口规范。如图5.15
+所示，引入了CRI接口规范后，kubelet就可以通过CRI插件来实现容器
+的全生命周期控制了，不同厂家的Container 
+Runtime只需实现对应的
+CRI插件代码即可，Kubernetes无须重新编译就可以使用更多的容器运
+行时。
+
+图5.15　CRI接口规范示意图
+如图5.16所示，CRI接口规范主要定义了两个gRPC接口服务：
+ImageService和RuntimeService。其中，ImageService提供了从仓库拉取
+镜像、查看和移除镜像的功能；RuntimeService则负责实现Pod和容器的
+生命周期管理，以及与容器的交互（exec/attach/port-forward）。我们知
+道，Pod由一组应用容器组成，其中包含共有的环境和资源约束，这个
+环境在CRI里被称为Pod Sandbox。Container Runtime可以根据自己的内
+部实现来解释和实现自己的Pod Sandbox，比如对于Hypervisor这种容器
+运行时引擎，会把PodSandbox具体实现为一个虚拟机。所以，
+RuntimeService服务接口除了提供了针对Container的相关操作，也提供
+了针对Pod 
+Sandbox的相关操作以供kubelet调用。在启动Pod之前，
+kubelet调用RuntimeService.RunPodSandbox来创建Pod环境，这一过程也
+包括为Pod设置网络资源（分配IP等操作），Pod 
+Sandbox在被激活之
+后，就可以独立地创建、启动、停止和删除用户业务相关的Container
+了，当Pod销毁时，kubelet会在停止和删除Pod Sandbox之前首先停止和
+删除其中的Container。
+
+图5.16　CRI接口规范的工作原理
+本节最后说说容器运行时相关的另外一个重要概念——
+RuntimeClass。
+随着CRI机制的成熟及第三方Container 
+Runtime的不断涌现，用户
+有了新的需求：在一个Kubernetes集群中配置并启用多种Container
+Runtime，不同类型的Pod可以选择不同特性的Container 
+Runtime来运
+行，以实现资源占用或者性能、稳定性等方面的优化，这就是
+RuntimeClass出现的背景和动力。Kubernetes从1.12版本开始引入
+RuntimeClass，用于在启动容器时选择特定的容器运行时，目前为Beta
+阶段。以下面的RuntimeClass例子为例：
+
+其中，handler参数是对应的CRI配置名称，指定Container 
+Runtime
+的类型，一旦创建好RuntimeClass资源，我们就可以通过Pod中的
+spec.runtimeClassName字段与它进行关联了。当目标Pod被调度到某个
+具体的kubelet时，kubelet就会通过CRI接口调用指定的Container Runtime
+来运行该Pod，如果指定的RuntimeClass不存在，无法运行相应的
+Container Runtime，那么Pod会进入Failed状态。
+5.5　kube-proxy运行机制解析
+为了支持集群的水平扩展和高可用性，Kubernetes抽象出了Service
+的概念。Service是对一组Pod的抽象，它会根据访问策略（如负载均衡
+策略）来访问这组Pod。
+Kubernetes在创建服务时会为服务分配一个虚拟IP地址，客户端通
+过访问这个虚拟IP地址来访问服务，服务则负责将请求转发到后端的
+Pod上。这其实就是一个反向代理，但与普通的反向代理有一些不同：
+它的IP地址是虚拟，若想从外面访问，则还需要一些技巧；它的部署和
+启停是由Kubernetes统一自动管理的。
+在很多情况下，Service只是一个概念，而真正将Service的作用落实
+的是它背后的kube-proxy服务进程。只有理解了kube-proxy的原理和机
+制，我们才能真正理解Service的实现逻辑。
+
+5.5.1　第一代Proxy
+我们知道，在Kubernetes集群的每个Node上都会运行一个kube-
+proxy服务进程，我们可以把这个进程看作Service的透明代理兼负载均
+衡器，其核心功能是将到某个Service的访问请求转发到后端的多个Pod
+实例上。
+起初，kube-proxy进程是一个真实的TCP/UDP代理，类似HA
+Proxy，负责转发从Service到Pod的访问流量，这被称为userspace（用户
+空间代理）模式。如图5.17所示，当某个客户端Pod以ClusterIP地址访问
+某个Service时，这个流量就被Pod所在Node的iptables转发给kube-proxy
+进程，然后由kube-proxy建立起到后端Pod的TCP/UDP连接，再将请求
+转发到某个后端Pod上，并在这个过程中实现负载均衡功能。
+图5.17　Service的负载均衡转发规则
+关于ClusterIP与NodePort的实现原理，以及kube-proxy与API Server
+的交互过程，图5.18给出了详细的说明，由于这是已淘汰的kube-proxy
+的实现方式，所以不再赘述。
+
+图5.18　kube-proxy工作原理示意图
+此外，Service的ClusterIP与NodePort等概念是kube-proxy服务通过
+iptables的NAT转换实现的，kube-proxy在运行过程中动态创建与Service
+相关的iptables规则，这些规则实现了将访问服务（ClusterIP或
+NodePort）的请求负载分发到后端Pod的功能。由于iptables机制针对的
+
+是本地的kube-proxy端口，所以在每个Node上都要运行kube-proxy组
+件，这样一来，在Kubernetes集群内部，我们可以在任意Node上发起对
+Service的访问请求。综上所述，由于kube-proxy的作用，客户端在
+Service调用过程中无须关心后端有几个Pod，中间过程的通信、负载均
+衡及故障恢复都是透明的。
+5.5.2　第二代Proxy
+从1.2版本开始，Kubernetes将iptables作为kube-proxy的默认模式，
+其工作原理如图5.19所示，iptables模式下的第二代kube-proxy进程不再
+起到数据层面的Proxy的作用，Client向Service的请求流量通过iptables的
+NAT机制直接发送到目标Pod，不经过kube-proxy进程的转发，kube-
+proxy进程只承担了控制层面的功能，即通过API Server的Watch接口实
+时跟踪Service与Endpoint的变更信息，并更新Node节点上相应的iptables
+规则。
+
+图5.19　第二代Proxy的工作原理示意图
+根据Kubernetes的网络模型，一个Node上的Pod与其他Node上的Pod
+应该能够直接建立双向的TCP/IP通信通道，所以如果直接修改iptables规
+则，则也可以实现kube-proxy的功能，只不过后者更加高端，因为是全
+自动模式的。与第一代的userspace模式相比，iptables模式完全工作在内
+核态，不用再经过用户态的kube-proxy中转，因而性能更强。
+kube-proxy针对Service和Pod创建的一些主要iptables规则如下。
+◎　KUBE-CLUSTER-IP：在masquerade-all=true或clusterCIDR指定
+的情况下对Service ClusterIP地址进行伪装，以解决数据包欺骗问题。
+◎　KUBE-EXTERNAL-IP：将数据包伪装成Service的外部IP地
+址。
+◎　KUBE-LOAD-BALANCER、KUBE-LOAD-BALANCER-
+
+LOCAL：伪装Load Balancer类型的Service流量。
+◎　KUBE-NODE-PORT-TCP、KUBE-NODE-PORT-LOCAL-
+TCP、KUBE-NODE-PORT-UDP、KUBE-NODE-PORT-LOCAL-UDP：
+伪装NodePort类型的Service流量。
+5.5.2　第三代Proxy
+第二代的iptables模式实现起来虽然简单，性能也提升很多，但存在
+固有缺陷：在集群中的Service和Pod大量增加以后，每个Node节点上
+iptables中的规则会急速膨胀，导致网络性能显著下降，在某些极端情况
+下甚至会出现规则丢失的情况，并且这种故障难以重现与排查。于是
+Kubernetes从1.8版本开始引入第三代的IPVS（IP Virtual Server）模式，
+如图5.20所示。IPVS在Kubernetes 1.11版本中升级为GA稳定版本。
+图5.20　第三代Proxy的工作原理示意图
+iptables与IPVS虽然都是基于Netfilter实现的，但因为定位不同，二
+者有着本质的差别：iptables是为防火墙设计的；IPVS专门用于高性能
+负载均衡，并使用更高效的数据结构（哈希表），允许几乎无限的规模
+
+扩张，因此被kube-proxy采纳为第三代模式。
+与iptables相比，IPVS拥有以下明显优势：
+◎　为大型集群提供了更好的可扩展性和性能；
+◎　支持比iptables更复杂的复制均衡算法（最小负载、最少连接、
+加权等）；
+◎　支持服务器健康检查和连接重试等功能；
+◎　可以动态修改ipset的集合，即使iptables的规则正在使用这个集
+合。
+由于IPVS无法提供包过滤、airpin-masquerade tricks（地址伪装）、
+SNAT等功能，因此在某些场景（如NodePort的实现）下还要与iptables
+搭配使用。在IPVS模式下，kube-proxy又做了重要的升级，即使用
+iptables的扩展ipset，而不是直接调用iptables来生成规则链。
+iptables规则链是一个线性数据结构，ipset则引入了带索引的数据结
+构，因此当规则很多时，也可以高效地查找和匹配。我们可以将ipset简
+单理解为一个IP（段）的集合，这个集合的内容可以是IP地址、IP网
+段、端口等，iptables可以直接添加规则对这个“可变的集合”进行操作，
+这样做的好处在于大大减少了iptables规则的数量，从而减少了性能损
+耗。假设要禁止上万个IP访问我们的服务器，则用iptables的话，就需要
+一条一条地添加规则，会在iptables中生成大量的规则；但是用ipset的
+话，只需将相关的IP地址（网段）加入ipset集合中即可，这样只需设置
+少量的iptables规则即可实现目标。

@@ -1,0 +1,961 @@
+第   章 
+理解OpenGL 
+本项目将创建一个简单的程序，利用OpenGL 和GLFW 来
+显示纹理贴图的正方形。OpenGL 为图形处理单元（GPU）增加
+了一个软件接口，而GLFW 是一个窗口工具包。我们还将学习
+如何使用类似C 语言的OpenGL 着色语言（GLSL）来编写着色
+器，即在GPU 上执行的代码。着色器为OpenGL 中的计算带来
+巨大的灵活性。我会展示如何用GLSL 着色器来变换几何图形并
+上色，创建一个旋转的、带纹理的多边形（如图9-1 所示）。 
+GPU 经过优化，以并行的方式对大量数据反复地执行相同的操作，这让它们在
+做这样的工作时，比中央处理单元（CPU）快得多。除了渲染计算机图形，它们也
+用于通用计算，现在有一些专门的语言让你用GPU 硬件完成这样的工作。本项目
+将利用GPU、OpenGL 和着色器。 
+Python 是一种极好的“胶水”语言。对于其他语言（如C 语言）编写的库，有
+大量的Python 绑定，让你在Python 中使用它们。本章和第10 章、第11 章，将使
+用PyOpenGL，即OpenGL 的Python 绑定，来创建计算机图形。 
+OpenGL 是一个“状态机”，有点像一个电器开关，有两种状态：开和关。如果
+从一种状态切换到另一种，开关就保持在这种新状态。然而，OpenGL 比简单的电
+器开关更复杂，它更像一个交换机，有许多开关和表盘。一旦更改特定设置的状态，
+9
+
+122 Python 极客项目编程 
+它就保持为关，直到你打开。如果一个 OpenGL 调用绑定到某个对象上了，那随后
+的相关调用都会发送给这个对象，直到解除绑定。
+图9-1  本章项目生成的最终图像一个旋转的多边形，它带有一个星形图案。 
+利用着色器，这个方形的多边形边界被剪裁成一个黑色圆圈
+下面是本项目引入的一些概念：
+•
+使用针对OpenGL 的GLFW 窗口库；
+•
+使用GLSL 编写顶点和片段着色器；
+•
+进行纹理贴图；
+•
+使用三维变换。
+首先，我们来看看OpenGL 的工作原理。
+9.1  老式OpenGL 
+在大多数计算机图形系统中，绘图的方式是将一些顶点发送给处理管线，管线
+由一系列功能模块互相连接而成。最近，OpenGL 应用编程接口（API）从固定功能
+的图形管线转为可编程的图形管线。我们将专注于现代的OpenGL，但因为在网络
+上会看到许多“老式”OpenGL 的例子，我会让你看看这个API 过去的样子，以更
+好地感受所发生的变化。
+
+第9 章  理解OpenGL 123 
+例如，下面这个简单的老式OpenGL 程序在屏幕上绘制一个黄色的矩形。 
+import sys 
+from OpenGL.GLUT import * 
+from OpenGL.GL import * 
+def display(): 
+ glClear (GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT) 
+ glColor3f (1.0, 1.0, 0.0) 
+ glBegin(GL_QUADS) 
+ glVertex3f (-0.5, -0.5, 0.0) 
+ glVertex3f (0.5, -0.5, 0.0) 
+ glVertex3f (0.5, 0.5, 0.0) 
+ glVertex3f (-0.5, 0.5, 0.0) 
+ glEnd() 
+ glFlush(); 
+glutInit(sys.argv) 
+glutInitDisplayMode(GLUT_SINGLE|GLUT_RGB) 
+glutInitWindowSize(400, 400) 
+glutCreateWindow("oldgl") 
+glutDisplayFunc(display) 
+glutMainLoop() 
+图9-2 展示了结果。 
+图9-2  简单的老式OpenGL 程序的输出 
+
+124 Python 极客项目编程 
+使用老式OpenGL，要为三维图元（在这个例子中，是一个GL_QUAD，即矩
+形）指定各个顶点，但随后每个顶点需要被分别发送到GPU，这是低效的方式。这
+种老式编程模式伸缩性不好，如果几何图形变得复杂，程序就会很慢。对于屏幕上
+的顶点和像素如何变换，它只提供有限的控制（在本项目中可以看到，用新的可编
+程管线的范式，可以克服这些限制）。
+9.2  现代OpenGL：三维图形管线 
+为了让你感受现代OpenGL 如何在较高层面上工作，让我们利用一系列的操作，
+即通常所谓的“三维图形管线”，在屏幕上画一个三角形。图9-3 给出了OpenGL 三
+维图形管线的简化表示。
+图9-3  （简化的）OpenGL 图形管线 
+在第一步，通过定义在三维空间中的三角形的顶点，并指定每个顶点相关联的
+颜色，我们定义了三维几何图形。接下来，变换这些顶点：第一次变换将这些顶点
+放在三维空间中，第二次变换将三维坐标投影到二维空间。根据照明等因素，对应
+顶点的颜色值也在这一步中计算，这在代码中通常称为“顶点着色器”。
+接着，将几何图形“光栅化”（从几何物体转换为像素），针对每个像素，执行
+另一个名为“片段着色器”的代码块。正如顶点着色器作用于三维顶点，片段着色
+器作用于光栅化后的二维像素。
+最后，像素经过一系列帧缓冲区操作，其中，它经过“深度缓冲区检验”（检
+查一个片段是否遮挡另一个）、“混合”（用透明度混合两个片段）以及其他操作，
+其当前的颜色与帧缓冲区中该位置已有的颜色结合。这些变化最终体现在最后的帧
+缓冲区上，通常显示在屏幕上。
+9.2.1  几何图元 
+因为OpenGL 是一个底层图形库，你不能要求它直接画出一个立方体或球体，
+但建立在它之上的库可以完成这样的任务。OpenGL 只理解底层的几何图元，如点、
+线和三角形。
+
+第9 章  理解OpenGL 125 
+现代OpenGL 只支持GL_POINTS、GL_LINES、GL_LINE_STRIP、GL_LINE_ 
+LOOP、GL_TRIANGLES、GL_TRIANGLE_STRIP 和GL_TRIANGLE_ FAN 等图元
+类型。图9-4 展示了图元的顶点是如何组织的。显示的每个顶点是一个三维坐标，
+形如(x, y, z)。 
+图9-4  OpenGL 的图元 
+要在OpenGL 中绘制球体，首先要在数学上定义球体的几何图形，并计算其三
+维顶点。然后，将这些顶点组合为基本的几何图元。例如，可以将每组三个顶点组
+成一个三角形。然后，可以用OpenGL 渲染这些顶点。 
+9.2.2  三维变换 
+不学三维变换，就不懂计算机图形学。三维变换的概念都很简单易懂。你有一
+个物体，能对它做怎么呢？可以移动、拉伸（或挤压）或旋转。也可以做其他事情，
+但这3 个任务是物体最常见的操作或变换：平移、缩放和旋转。除了这些常用的变
+换，还得用透视投影将三维物体映射到屏幕的二维平面。这些变换都应用于你要变
+换的物体上。
+虽然你可能熟悉（x, y, z）形式的三维坐标，但在三维计算机图形中使用（x, y, 
+z, w）形式的坐标，即齐次坐标（这些坐标来自数学的一个分支，即射影几何，这
+超出了本书的范围）。
+
+126 Python 极客项目编程 
+其次坐标允许用4×4 的矩阵来表示这些常见的三维变换。但对于这些OpenGL
+项目，你只要知道齐次坐标（x, y, z, w）相当于三维坐标(x/w, y/w, z/w, 1.0)。三维的
+点（1.0, 2.0, 3.0）可以用齐次坐标表示为（1.0, 2.0, 3.0, 1.0）。 
+下面是用变换矩阵进行三维变换的一个例子。看看矩阵乘法如何将一个点(x, y, 
+z, 1.0)变换为(x + tx, y + ty, z + tz, 1.0)。 
+1
+0
+0
+0
+1
+0
+0
+0
+1
+1
+0
+0
+0
+1
+1
+x
+x
+y
+y
+z
+z
+t
+x
+t
+x
+t
+y
+t
+y
+z
+t
+z
+t
++
+
+
+
+
+
+
+
+
+
+
++
+
+
+
+
+
+×
+=
+
+
+
+
+
++
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+在OpenGL 中经常会遇到两个术语：模型视图变换和投影变换。随着现代
+OpenGL 中可定制的着色器的问世，模型视图和投影都只是普通的变换。从历史上
+看，在老式OpenGL 版本中，模型视图变换用于三维模型，将它置于空间中，而投
+影变换将三维坐标映射到二维平面，用于显示，你会马上看到。模型视图变换是用
+户定义的变换，让你放置三维物体，投影变换是三维映射到二维的变换。
+两种最常用的三维图形投影变换是“正投影”和“透视投影”，但这里只会用
+到透视投影，这是由“视角”（眼睛能看到的范围）、“近裁剪平面”（最接近眼睛的
+平面）、“远裁剪平面”（离眼睛最远的平面）和“纵横比”（近平面的宽度与高度之
+比）来确定的。这些参数共同构成了一个摄像机模型，决定了三维形状如何映射到
+二维屏幕上，如图9-5 所示。图中的截头金字塔是“视景体”。“眼睛”是摄像机的
+三维位置（对于正投影，眼睛将在无穷远处，金字塔将变成长方体）。
+图9-5  透视投影摄像机模型 
+
+第9 章  理解OpenGL 127 
+透视投影完成后，在光栅扫描之前，图元将会被远近裁剪平面切割（或剔除），
+如图9-5 所示。远近裁剪平面的选择，要让希望出现在屏幕上的三维物体位于视景
+体之内，否则，它们将被裁剪。
+9.2.3  着色器 
+你已见过着色器如何融入现代OpenGL 的可编程图形管线了。现在，我们来看
+看一对简单的顶点和片段着色器，了解GLSL 的工作原理。 
+顶点着色器 
+下面是一个简单的顶点着色器：
+ #version 330 core 
+ in vec3 aVert; 
+ uniform mat4 uMVMatrix; 
+ uniform mat4 uPMatrix; 
+ out vec4 vCol; 
+void main() { 
+ // apply transformations 
+ 
+ gl_Position = uPMatrix * uMVMatrix * vec4(aVert, 1.0); 
+ // set color 
+ 
+ vCol = vec4(1.0, 0.0, 0.0, 1.0); 
+} 
+ 
+在行，将着色器中使用的GLSL 版本设置为3.3。然后，用关键字in 为顶点
+着色器定义一个输入，名为aVert，类型为vec3（三维向量）。在行和行，定
+义两个类型为mat4（4×4 的矩阵）的变量，分别对应于模型视图和投影矩阵。这
+些变量的uniform 前缀表明，在执行顶点着色器，对一组顶点进行指定的渲染调用
+时，它们不会改变。在行用out 定义了顶点着色器的输出，其类型为vec4（4D 向
+量，保存红、绿、蓝和alpha 通道），是一个颜色变量。 
+接下来是main()函数，这是顶点着色器程序开始的地方。在行计算出
+gl_Position 的值，方法是利用传入的uniform 矩阵来变换输入的aVert。GLSL 变量
+gl_Position 用于保存变换后的顶点。在行，将顶点着色器的输出颜色设为红色，
+没有透明度，值为（1，0，0，1）。管线中的下一个着色器用它作为输入。 
+片段着色器 
+现在来看一个简单的片段着色器：
+ #version 330 core 
+ in vec4 vCol; 
+
+128 Python 极客项目编程 
+ out vec4 fragColor; 
+void main() { 
+ // use vertex color 
+ 
+ fragColor = vCol; 
+} 
+ 
+在行设置着色器的GLSL 版本后，行设置vCol 作为片段着色器的输入。这
+个变量vCol 曾被设为顶点着色器输出（回忆一下，顶点着色器针对三维场景中的
+每个顶点执行，而片段着色器针对屏幕上的每个像素执行）。
+在光栅化期间（发生在顶点着色器和片段着色器之间），OpenGL 将变换后的顶
+点转换为像素，通过在顶点颜色之间插值，计算顶点之间像素的颜色。
+在行，定义了输出颜色变量fragColor，在行，插值计算出的颜色被设置为
+输出。默认情况下，也是在大多数情况下，片段着色器的预期输出是屏幕，设置的
+颜色最终会出现在屏幕上（除非受到一些操作的影响，诸如发生在图形管线中最后
+阶段的深度测试）。
+要让GPU 执行着色器代码，需要编译和链接，成为硬件理解的指令。 OpenGL
+提供了一些方法来做到这一点，它报告详细的编译和链接错误，这有助于开发着色
+器代码。
+编译过程也会为着色器中声明的变量产生一张位置（索引）表，用它可以连接
+Python 代码中的变量和着色器中的变量。 
+9.2.4  顶点缓冲区 
+顶点缓冲区是OpenGL 着色器使用的一种重要机制。现代图形硬件和OpenGL
+旨在处理大量的三维几何图形。因此，OpenGL 内建了一些机制，帮助将数据从程
+序传输到GPU。程序中绘制三维几何图形的典型计划将执行以下操作： 
+1．为三维几何图形的每个顶点，定义坐标、颜色和其他属性的数组； 
+2．创建一个顶点数组对象（VAO），并绑定到它； 
+3．为每个属性，创建顶点缓冲区对象（VBO），针对每个顶点来定义； 
+4．绑定到该VBO，并设置缓冲区数据使用预先定义的数组； 
+5．指定着色器中使用的顶点属性的数据和位置； 
+6．启用顶点的各种属性； 
+7．渲染数据。 
+用顶点来定义三维几何图形之后，可以创建并绑定到一个顶点数组对象。 VAO
+是一种方便的方式，将几何图形分组坐标、颜色等多个数组。然后，针对每个顶点
+的每个属性，可以创建一个顶点缓冲区对象，并将三维数据设置给它。VBO 将顶点
+数据保存在GPU 内存中。现在，剩下的就是连接缓冲区数据，以便从着色器中访
+问它。通过一些调用，它们使用着色器中用到的变量的位置，来实现这一点。
+
+第9 章  理解OpenGL 129 
+9.2.5  纹理贴图 
+接下来，看看纹理贴图：本章将使用的一种重要计算机图形技术。“纹理贴图”
+利用三维物体上的二维图片，让场景有逼真的感觉（就像演出的舞台背景）。纹理
+通常从一个图像文件中读取，被拉伸并覆盖一个几何区域，将二维坐标（范围为
+[0,1]）映射到多边形的三维坐标上。例如，图9-6 展示一幅图像覆盖在立方体的一
+个面上（我用GL_TRIANGLE_STRIP 图元来绘制立方体各面，顶点的顺序由面上
+的线来表示）。
+在图9-6 中，纹理的（0，0）角映射到立方体表面的左下顶点。类似地，可以
+看到纹理的其他角如何映射，最终的效果就是纹理被“粘贴”到这个立方体表面。
+立方体表面本身的几何图形被定义为一个三角形带，这些顶点曲折排列，从底到左
+上，再从底到右上。纹理是非常强大和灵活的计算机图形工具，你会在第11 章中
+看到。
+图9-6  纹理贴图 
+9.2.6  显示OpenGL 
+现在来谈谈如何让OpenGL 在屏幕上绘制东西。保存所有OpenGL 状态信息
+的实体叫做“OpenGL 上下文”。上下文具有一个可视的、窗口状的区域，OpenGL
+的绘制在其中进行，每个进程或应用程序的每次运行可以有多个上下文，但每个
+线程在同一时刻只能有一个当前上下文（好在，窗口工具包将负责大多数的上下
+文处理）。
+要让OpenGL 的输出出现在屏幕的窗口中，就需要操作系统的帮助。对于这些
+项目，你将使用GLFW，它是一个轻量级的跨平台C 库，可以让你创建和管理
+OpenGL 上下文，在窗口中显示三维图形，并处理用户的输入，如鼠标点击和按键。
+（附录A 介绍了这个库的安装细节。） 
+
+130 Python 极客项目编程 
+因为要用Python 写代码，而不是C 语言，所以还要使用GLFW 的Python 绑定
+（glfw.py，在本书代码库的common 目录中可以找到），它可以让你用Python 访问
+GLFW 的所有功能。 
+9.3  所需模块 
+我们将使用PyOpenGL（一个流行的OpenGL Python 绑定）来渲染，并用numpy
+数组来表示三维坐标和变换矩阵。
+9.4  代码 
+让我们用OpenGL 创建一个简单的Python 应用程序。要查看完整的项目代码，
+请直接跳到9.5 节。 
+9.4.1  创建OpenGL 窗口 
+第一件事就是设置GLFW，以便有一个OpenGL 窗口显示渲染的结果。我创建
+了一个RenderWindow 类来做这件事。 
+下面是这个类的初始化代码：
+class RenderWindow: 
+ """GLFW Rendering window class""" 
+ def __init__(self): 
+ # save current working directory 
+ cwd = os.getcwd() 
+ # initialize glfw 
+ 
+ glfw.glfwInit() 
+ # restore cwd 
+ os.chdir(cwd) 
+ # version hints 
+ 
+ glfw.glfwWindowHint(glfw.GLFW_CONTEXT_VERSION_MAJOR, 3) 
+ glfw.glfwWindowHint(glfw.GLFW_CONTEXT_VERSION_MINOR, 3) 
+ glfw.glfwWindowHint(glfw.GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE) 
+ glfw.glfwWindowHint(glfw.GLFW_OPENGL_PROFILE, 
+ glfw.GLFW_OPENGL_CORE_PROFILE) 
+ # make a window 
+ self.width, self.height = 640, 480 
+ self.aspect = self.width/float(self.height) 
+ 
+ self.win = glfw.glfwCreateWindow(self.width, self.height, 
+ b'simpleglfw') 
+ # make the context current 
+ 
+ glfw.glfwMakeContextCurrent(self.win) 
+
+第9 章  理解OpenGL 131 
+在行初始化GLFW 库。然后，从行开始，将OpenGL 版本设置为OpenGL 3.3
+的核心模式。在行，创建尺寸为640×480 的、支持OpenGL 的窗口。最后，在
+行，让它成为当前上下文，然后就可以进行OpenGL 调用了。 
+接下来，进行一些初始化调用。
+ # initialize GL 
+ 
+ glViewport(0, 0, self.width, self.height) 
+ 
+ glEnable(GL_DEPTH_TEST) 
+ 
+ glClearColor(0.5, 0.5, 0.5, 1.0) 
+在行，设置视口或屏幕尺寸（宽度和高度），OpenGL 将在其中渲染三维场
+景。在行，用GL_DEPTH_TEST 打开深度测试。在行，将渲染过程中调用
+glClear()时的背景颜色设置为50％的灰色，Alpha 设置为1.0（Alpha 是像素透明
+度的度量）。
+9.4.2  设置回调 
+下一步，在GLFW 窗口中为用户接口事件注册一些事件回调，这样就可以响应
+鼠标点击和按键。
+ # set window callbacks 
+ glfw.glfwSetMouseButtonCallback(self.win, self.onMouseButton) 
+ glfw.glfwSetKeyCallback(self.win, self.onKeyboard) 
+ glfw.glfwSetWindowSizeCallback(self.win, self.onSize) 
+这段代码分别设置了鼠标按钮、键盘按键和窗口大小调整的回调。每当一个事
+件发生时，注册为回调的函数就执行。
+键盘回调 
+来看看键盘回调：
+ def onKeyboard(self, win, key, scancode, action, mods): 
+ #print 'keyboard: ', win, key, scancode, action, mods 
+ 
+ if action == glfw.GLFW_PRESS: 
+ # ESC to quit 
+ if key == glfw.GLFW_KEY_ESCAPE: 
+ 
+   self.exitNow = True 
+ else: 
+ # toggle cut 
+ 
+ self.scene.showCircle = not self.scene.showCircle 
+每次键盘事件发生时，onKeyboard()回调就被调用。该函数的参数被填充了有
+用的信息，如发生事件的类型（例如key-up 或key-down），以及按了哪个键。代码
+glfw.GLFW_PRESS 是说只查找keydown（或PRESS）事件。在行，如果按下
+ESC 键，就设置退出标志。如果按下其他任何键，翻转showCircle 布尔值，它将传
+入片段着色器。 
+
+132 Python 极客项目编程 
+调整窗口大小事件 
+下面是调整窗口大小事件的处理：
+ def onSize(self, win, width, height): 
+ #print 'onsize: ', win, width, height 
+ self.width = width 
+ self.height = height 
+ self.aspect = width/float(height) 
+ 
+ glViewport(0, 0, self.width, self.height) 
+每次窗口大小变化时，调用glViewport()重置图形尺寸，确保三维场景正确绘制
+在屏幕上。同时将尺寸保存在width 和height 中，改变后的窗口的纵横比保存在
+aspect 中。 
+主循环 
+现在来到程序的主循环（GLFW 不提供默认的程序循环）。 
+ def run(self): 
+ # initializer timer 
+ 
+ glfw.glfwSetTime(0) 
+ t = 0.0 
+ 
+ while not glfw.glfwWindowShouldClose(self.win) and not self.exitNow: 
+ # update every x seconds 
+ 
+ currT = glfw.glfwGetTime() 
+ if currT - t > 0.1: 
+ # update time 
+ t = currT 
+ # clear 
+ 
+ glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT) 
+ # build projection matrix 
+ 
+ pMatrix = glutils.perspective(45.0, self.aspect, 0.1, 100.0) 
+ 
+ mvMatrix = glutils.lookAt([0.0, 0.0, -2.0], [0.0, 0.0, 0.0], 
+ [0.0, 1.0, 0.0]) 
+ # render 
+ 
+ self.scene.render(pMatrix, mvMatrix) 
+ # step 
+ 
+ self.scene.step() 
+ 
+ glfw.glfwSwapBuffers(self.win) 
+ # poll for and process events 
+ 
+ glfw.glfwPollEvents() 
+ # end 
+ glfw.glfwTerminate() 
+在主循环中，glfw.glfwSetTime()将GLFW 计时器重置为0 行。你将用这个计
+时器定期重新绘制图形。while 循环从行开始，只有在窗口关闭或exitNow 设为
+True 时退出。循环退出时，glfw.glfwTerminate()被调用，完全关闭GLFW。 
+
+第9 章  理解OpenGL 133 
+在循环中，glfw.glfwGetTime()取得当前计时器的值，用它来计算自上次绘图
+以来的时间。这里设置期望的间隔（在这个例子中是0.1 秒，即100 毫秒），从而可
+以调整帧渲染的速度。
+接着，在行，glClear()清除了深度和颜色缓冲区，用设置的背景颜色替换它
+们，准备画下一帧。在行，用glutils.py（下一节将详细探讨）中定义的perspective()
+方法，计算投影矩阵。这里，要求45 度视场，近/远裁剪平面的距离为0.1/100.0。
+然后，利用glutils.py 中定义的lookAt()方法，在行设置模型视图矩阵。将眼睛位
+置设置在（0，0，-2），用一个“向上”矢量(0, 1, 0)看向原点(0, 0, 0)。然后，在
+行调用scene 对象上的render()方法，传入这些矩阵，在行调用scene.step()，以便
+更新所需的时间步长变量。在行，调用glfwSwapBuffers()，交换前后缓冲区，从
+而显示更新的三维图像。行的glfwPollEvents()调用检查所有UI 事件，将控制返
+回给while 循环。 
+双缓冲
+双缓冲是平滑更新屏幕上图形的渲染技术。系统维护两个缓冲区：一个前缓
+冲区和后缓冲区。三维渲染先被渲染到后缓冲区，完成时，前缓冲区与后缓冲区
+交换内容。由于缓冲区更新快速发生，这种技术产生了更流畅的视觉效果，尤其
+是在动画时。双缓冲和链接到OS 的其他特征一样，是由窗口工具包（在这个例
+子中是GLFW）提供的。 
+9.4.3  Scene 类 
+现在来看看Scene 类，它负责初始化和绘制三维几何图形。 
+class Scene: 
+ """ OpenGL 3D scene class""" 
+ # initialization 
+ def __init__(self): 
+ # create shader 
+ 
+ self.program = glutils.loadShaders(strVS, strFS) 
+ 
+ glUseProgram(self.program) 
+在Scene 类的构造函数中，先编译并加载着色器。要做到这一点，我利用了工
+具方法loadShaders()，它定义在glutils.py 中，为一系列的OpenGL 调用提供了一
+个方便的封装，这些调用从字符串加载着色器，编译它们，并将它们链接成一个
+OpenGL程序对象。因为OpenGL是一个状态机，所以需要在行调用glUseProgram(),
+设置代码使用特定的“程序对象”（因为一个项目可能有多个程序）。
+现在，将Python 代码中的变量与着色器中的变量连接起来。 
+ self.pMatrixUniform = glGetUniformLocation(self.program, b'uPMatrix') 
+ self.mvMatrixUniform = glGetUniformLocation(self.program, b'uMVMatrix') 
+
+134 Python 极客项目编程 
+ # texture 
+ self.tex2D = glGetUniformLocation(self.program, b'tex2D') 
+这段代码利用glGetUniformLocation()方法，取得变量uPMatrix、uMVMatrix
+和tex2D 在顶点和片段着色器中的位置。然后这些位置可以用来为着色器变量
+赋值。
+定义三维几何图形 
+先为正方形定义三维几何图形。
+ # define triangle strip vertices 
+ 
+ vertexData = numpy.array( 
+ [-0.5, -0.5, 0.0, 
+ 0.5, -0.5, 0.0, 
+ -0.5, 0.5, 0.0, 
+ 0.5, 0.5, 0.0], numpy.float32) 
+ # set up vertex array object (VAO) 
+ 
+ self.vao = glGenVertexArrays(1) 
+ glBindVertexArray(self.vao) 
+ # vertices 
+ 
+ self.vertexBuffer = glGenBuffers(1) 
+ glBindBuffer(GL_ARRAY_BUFFER, self.vertexBuffer) 
+ # set buffer data 
+ 
+ glBufferData(GL_ARRAY_BUFFER, 4*len(vertexData), vertexData, 
+   GL_STATIC_DRAW) 
+ # enable vertex array 
+ 
+ glEnableVertexAttribArray(0) 
+ # set buffer data pointer 
+ 
+ glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, None) 
+ # unbind VAO 
+ 
+ glBindVertexArray(0) 
+在行，定义三角形带的顶点数组，用于绘制正方形。设想一个以原点为中心，
+边长为1.0 的正方形。该正方形的左下顶点坐标为(-0.5, -0.5, 0.0)，下一个顶点（右
+下）坐标为(0.5, -0.5, 0.0)，依次类推。坐标的顺序是GL_TRIANGLE_STRIP 的顺序。
+在行，创建一个VAO。绑定到该VAO 后，接下来所有调用将绑定到它。在行，
+创建一个VBO 来管理顶点数据的渲染。缓冲区绑定后，第行根据已定义的顶点，
+设置缓冲区数据。
+现在，需要让着色器能访问这些数据了，这在行实现。GlEnableVertexAttrib 
+Array()被调用，下标为0，因为这是你在顶点着色器中设置的顶点数据变量的位
+置。在行，glVertexAttribPointer()设置了顶点属性数组的位置和数据格式。属
+性的下标是0，组件个数是3（使用三维顶点），顶点的数据类型是GL_FLOAT。
+在行取消VAO 绑定，让其他的相关调用不会干扰它。在OpenGL 中，完成工
+作后重置状态是最佳实践。OpenGL 是一个状态机，所以如果留下一个烂摊子，
+它就会一直那样。
+
+第9 章  理解OpenGL 135 
+下面的代码将图像加载为OpenGL 纹理： 
+ # texture 
+ self.texId = glutils.loadTexture('star.png') 
+返回的纹理ID 稍后将用于渲染。 
+下一步，更新Scene 对象中的变量，让正方形在屏幕上旋转： 
+ # step 
+ def step(self): 
+ # increment angle 
+ 
+ self.t = (self.t + 1) % 360 
+ # set shader angle in radians 
+ 
+ glUniform1f(glGetUniformLocation(self.program, 'uTheta'), 
+ math.radians(self.t)) 
+在行，递增角度变量t，并利用取模操作符（%），保持该值在[0，360]的范
+围内。然后，在行利用glUniform1f()方法，在着色器程序中设置该值。像以前一
+样，用glGetUniformLocation()来获得着色器中的uTheta 角变量的位置，而Python
+的math.radians()方法将度转换为弧度。 
+现在来看看主要的渲染代码：
+ # render 
+ def render(self, pMatrix, mvMatrix): 
+ # use shader 
+ 
+ glUseProgram(self.program) 
+ # set projection matrix 
+ 
+ glUniformMatrix4fv(self.pMatrixUniform, 1, GL_FALSE, pMatrix) 
+ # set modelview matrix 
+ glUniformMatrix4fv(self.mvMatrixUniform, 1, GL_FALSE, mvMatrix) 
+ # show circle? 
+ 
+ glUniform1i(glGetUniformLocation(self.program, b'showCircle'), 
+ self.showCircle) 
+ # enable texture 
+ 
+ glActiveTexture(GL_TEXTURE0) 
+ 
+ glBindTexture(GL_TEXTURE_2D, self.texId) 
+ 
+ glUniform1i(self.tex2D, 0) 
+ # bind VAO 
+ 
+ glBindVertexArray(self.vao) 
+ # draw 
+ 
+ glDrawArrays(GL_TRIANGLE_STRIP, 0, 4) 
+ # unbind VAO 
+ 
+ glBindVertexArray(0) 
+在行，设置渲染使用着色器程序。然后，从行开始，利用glUniformMatrix4fv()
+方法，在着色器中设置计算好的投影和模型视图矩阵。在行用glUniform1i()，设
+置片段着色器中showCircle 变量的当前值。OpenGL 有多纹理单元的概念，
+
+136 Python 极客项目编程 
+glActiveTexture()激活纹理单元0（默认值）。在行，绑定前面生成的纹理ID，
+激活它，准备渲染。在行，片段着色器中的sampler2D 变量设为纹理单元0。在
+行，绑定到先前创建的VAO。现在你看到了使用VAO 的好处了：实际绘制之前，
+不需要重复一大堆顶点缓冲相关的调用。在行，glDrawArrays()被调用，渲染绑定
+的顶点缓冲区。图元类型是一个三角形带，有四个顶点要渲染。在行取消绑定
+VAO，这是良好的编码习惯。 
+定义GLSL 着色器 
+现在让我们看看项目中最精彩的部分：GLSL 着色器。这是顶点着色器： 
+#version 330 core 
+ layout(location = 0) in vec3 aVert; 
+ uniform mat4 uMVMatrix; 
+uniform mat4 uPMatrix; 
+uniform float uTheta; 
+ out vec2 vTexCoord; 
+void main() { 
+ // rotational transform 
+ 
+ mat4 rot = mat4( 
+ vec4(cos(uTheta), sin(uTheta), 0.0, 0.0), 
+ vec4(-sin(uTheta), cos(uTheta), 0.0, 0.0), 
+ vec4(0.0, 0.0, 1.0, 0.0), 
+ vec4(0.0, 0.0, 0.0, 1.0) 
+ ); 
+ // transform vertex 
+ 
+ gl_Position = uPMatrix * uMVMatrix * rot * vec4(aVert, 1.0); 
+ // set texture coordinate 
+ 
+ vTexCoord = aVert.xy + vec2(0.5, 0.5); 
+} 
+ 
+在行，用layout 关键字明确设置顶点的位置属性aVert：在这个例子中设置为
+0。从行开始，声明一些uniform 变量：投影和模型视图矩阵和旋转角度。这些将
+在Python 代码中设置。在行，设置一个二维矢量vTexCoord，作为这个着色器的
+输出。它将作为片段着色器的输入。在着色器的main()方法中，在行设立旋转矩
+阵，它围绕z 轴旋转给定的角度。在行，利用投影、模型视图和旋转矩阵级联来
+计算gl_Position。在行，设置一个二维向量作为纹理坐标。你可能还记得，你定
+义了三角形带，表示以原点为中心、边长为1.0 的正方形。因为纹理坐标的范围是
+[0,1]，所以可以通过在x 值和y 值上增加(0.5, 0.5)，从顶点坐标来生成它们。这也
+展示了着色器的计算的能力和巨大的灵活性。纹理坐标和其他变量不是神圣不可侵
+犯的，你可以将它们设置为任何东西。
+现在，来看看片段着色器：
+
+第9 章  理解OpenGL 137 
+#version 330 core 
+ in vec4 vCol; 
+in vec2 vTexCoord; 
+ uniform sampler2D tex2D; 
+ uniform bool showCircle; 
+ out vec4 fragColor; 
+void main() { 
+ if (showCircle) { 
+ // discard fragment outside circle 
+ 
+ if (distance(vTexCoord, vec2(0.5, 0.5)) > 0.5) { 
+ discard; 
+ } 
+ else { 
+ 
+ fragColor = texture(tex2D, vTexCoord); 
+ } 
+ } 
+ else { 
+ 
+ fragColor = texture(tex2D, vTexCoord); 
+ } 
+} 
+ 
+从行开始，定义了片段着色器的输入：就是设置为顶点着色器的输出变量的
+那些颜色和纹理坐标变量。回想一下，片段着色器基于每个像素操作，因此，对这
+些变量设置的值是针对当前像素的值，在整个多边形中内插。在行声明了
+sampler2D 变量，它被连接到一个特定的纹理单元，用于查找纹理值。在行，声
+明了布尔型uniform 标志showCircle，这是从Python 代码中设置的，在行，声明
+了fragColor，作为片段着色器的输出。默认情况下，会显示在屏幕上（经过最后的
+帧缓冲区操作，如深度测试和混合）。
+如果没有设置showCircle 标志，在行，使用GLSL 的texture()方法来查找纹
+理颜色值，利用了纹理坐标和采样。实际上，你只是用星形图像来设置三角形带的
+纹理。但如果showCircle 标志为真，在行，用GLSL 的内置方法distance，来检
+查当前像素离多边形的中心有多远。出于这个目的，它使用（内插的）纹理坐标，
+这是由顶点着色器传入的。如果该距离大于某一阈值（在本例中是0.5），就调用
+GLSL 的discard 方法，丢弃当前像素。如果该距离小于阈值，就在行设置来自纹
+理的适当颜色。事实上，这样做就忽略了以正方形的中点为中心、半径为0.5 的圆
+之外的像素，从而在showCircle 设置时，切割该多边形，放入圆中。 
+9.5  完整代码 
+这个简单的OpenGL 应用程序的完整代码分为两个文件：simpleglfw.py，包含
+下面展示的代码，并可以在https://github.com/electronut/pp/tree/master/simplegl/找到；
+glutils.py，包括一些辅助方法，让生活更轻松，可以在common 目录中找到。 
+
+138 Python 极客项目编程 
+import OpenGL 
+from OpenGL.GL import * 
+import numpy, math, sys, os 
+import glutils 
+import glfw 
+strVS = """ 
+#version 330 core 
+layout(location = 0) in vec3 aVert; 
+uniform mat4 uMVMatrix; 
+uniform mat4 uPMatrix; 
+uniform float uTheta; 
+out vec2 vTexCoord; 
+void main() { 
+ // rotational transform 
+ mat4 rot = mat4( 
+ vec4(cos(uTheta), sin(uTheta), 0.0, 0.0), 
+ vec4(-sin(uTheta), cos(uTheta), 0.0, 0.0), 
+ vec4(0.0, 0.0, 1.0, 0.0), 
+ vec4(0.0, 0.0, 0.0, 1.0) 
+ ); 
+ // transform vertex 
+ gl_Position = uPMatrix * uMVMatrix * rot * vec4(aVert, 1.0); 
+ // set texture coordinate 
+ vTexCoord = aVert.xy + vec2(0.5, 0.5); 
+} 
+""" 
+strFS = """ 
+#version 330 core 
+in vec2 vTexCoord; 
+uniform sampler2D tex2D; 
+uniform bool showCircle; 
+out vec4 fragColor; 
+void main() { 
+ if (showCircle) { 
+ // discard fragment outside circle 
+ if (distance(vTexCoord, vec2(0.5, 0.5)) > 0.5) { 
+ discard; 
+ } 
+ else { 
+ fragColor = texture(tex2D, vTexCoord); 
+ } 
+ } 
+ else { 
+
+第9 章  理解OpenGL 139 
+ fragColor = texture(tex2D, vTexCoord); 
+ } 
+} 
+""" 
+class Scene: 
+ """ OpenGL 3D scene class""" 
+ # initialization 
+ def __init__(self): 
+ # create shader 
+ self.program = glutils.loadShaders(strVS, strFS) 
+ glUseProgram(self.program) 
+ self.pMatrixUniform = glGetUniformLocation(self.program, b'uPMatrix') 
+ self.mvMatrixUniform = glGetUniformLocation(self.program, b'uMVMatrix') 
+ # texture 
+ self.tex2D = glGetUniformLocation(self.program, b'tex2D') 
+ # define triange strip vertices 
+ vertexData = numpy.array( 
+ [-0.5, -0.5, 0.0, 
+ 0.5, -0.5, 0.0, 
+ -0.5, 0.5, 0.0, 
+ 0.5, 0.5, 0.0], numpy.float32) 
+ # set up vertex array object (VAO) 
+ self.vao = glGenVertexArrays(1) 
+ glBindVertexArray(self.vao) 
+ # vertices 
+ self.vertexBuffer = glGenBuffers(1) 
+ glBindBuffer(GL_ARRAY_BUFFER, self.vertexBuffer) 
+ # set buffer data 
+ glBufferData(GL_ARRAY_BUFFER, 4*len(vertexData), vertexData, 
+   GL_STATIC_DRAW) 
+ # enable vertex array 
+ glEnableVertexAttribArray(0) 
+ # set buffer data pointer 
+ glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, None) 
+ # unbind VAO 
+ glBindVertexArray(0) 
+ # time 
+ self.t = 0 
+ # texture 
+ self.texId = glutils.loadTexture('star.png') 
+ # show circle? 
+ self.showCircle = False 
+ # step 
+ def step(self): 
+ # increment angle 
+ self.t = (self.t + 1) % 360 
+ # set shader angle in radians 
+
+140 Python 极客项目编程 
+ glUniform1f(glGetUniformLocation(self.program, 'uTheta'), 
+ math.radians(self.t)) 
+ # render 
+ def render(self, pMatrix, mvMatrix): 
+ # use shader 
+ glUseProgram(self.program) 
+ # set projection matrix 
+ glUniformMatrix4fv(self.pMatrixUniform, 1, GL_FALSE, pMatrix) 
+ # set modelview matrix 
+ glUniformMatrix4fv(self.mvMatrixUniform, 1, GL_FALSE, mvMatrix) 
+ # show circle? 
+ glUniform1i(glGetUniformLocation(self.program, b'showCircle'), 
+ self.showCircle) 
+ # enable texture 
+ glActiveTexture(GL_TEXTURE0) 
+ glBindTexture(GL_TEXTURE_2D, self.texId) 
+ glUniform1i(self.tex2D, 0) 
+ # bind VAO 
+ glBindVertexArray(self.vao) 
+ # draw 
+ glDrawArrays(GL_TRIANGLE_STRIP, 0, 4) 
+ # unbind VAO 
+ glBindVertexArray(0) 
+class RenderWindow: 
+ """GLFW Rendering window class""" 
+ def __init__(self): 
+ # save current working directory 
+ cwd = os.getcwd() 
+ # initialize glfw - this changes cwd 
+ glfw.glfwInit() 
+ # restore cwd 
+ os.chdir(cwd) 
+ # version hints 
+ glfw.glfwWindowHint(glfw.GLFW_CONTEXT_VERSION_MAJOR, 3) 
+ glfw.glfwWindowHint(glfw.GLFW_CONTEXT_VERSION_MINOR, 3) 
+ glfw.glfwWindowHint(glfw.GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE) 
+ glfw.glfwWindowHint(glfw.GLFW_OPENGL_PROFILE, 
+ glfw.GLFW_OPENGL_CORE_PROFILE) 
+ # make a window 
+ self.width, self.height = 640, 480 
+ self.aspect = self.width/float(self.height) 
+ self.win = glfw.glfwCreateWindow(self.width, self.height, 
+ b'simpleglfw') 
+
+第9 章  理解OpenGL 141 
+ # make context current 
+ glfw.glfwMakeContextCurrent(self.win) 
+ # initialize GL 
+ glViewport(0, 0, self.width, self.height) 
+ glEnable(GL_DEPTH_TEST) 
+ glClearColor(0.5, 0.5, 0.5, 1.0) 
+ # set window callbacks 
+ glfw.glfwSetMouseButtonCallback(self.win, self.onMouseButton) 
+ glfw.glfwSetKeyCallback(self.win, self.onKeyboard) 
+ glfw.glfwSetWindowSizeCallback(self.win, self.onSize) 
+ # create 3D 
+ self.scene = Scene() 
+ # exit flag 
+ self.exitNow = False 
+ def onMouseButton(self, win, button, action, mods): 
+ #print 'mouse button: ', win, button, action, mods 
+ pass 
+ def onKeyboard(self, win, key, scancode, action, mods): 
+ #print 'keyboard: ', win, key, scancode, action, mods 
+ if action == glfw.GLFW_PRESS: 
+ # ESC to quit 
+ if key == glfw.GLFW_KEY_ESCAPE: 
+   self.exitNow = True 
+ else: 
+ # toggle cut 
+ self.scene.showCircle = not self.scene.showCircle 
+ def onSize(self, win, width, height): 
+ #print 'onsize: ', win, width, height 
+ self.width = width 
+ self.height = height 
+ self.aspect = width/float(height) 
+ glViewport(0, 0, self.width, self.height) 
+ def run(self): 
+ # initializer timer 
+ glfw.glfwSetTime(0) 
+ t = 0.0 
+ while not glfw.glfwWindowShouldClose(self.win) and not self.exitNow: 
+ # update every x seconds 
+ currT = glfw.glfwGetTime() 
+ if currT - t > 0.1: 
+ # update time 
+ t = currT 
+ # clear 
+ glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT) 
+
+142 Python 极客项目编程 
+ # build projection matrix 
+ pMatrix = glutils.perspective(45.0, self.aspect, 0.1, 100.0) 
+ mvMatrix = glutils.lookAt([0.0, 0.0, -2.0], [0.0, 0.0, 0.0], 
+ [0.0, 1.0, 0.0]) 
+ # render 
+ self.scene.render(pMatrix, mvMatrix) 
+ # step 
+ self.scene.step() 
+ glfw.glfwSwapBuffers(self.win) 
+ # poll for and process events 
+ glfw.glfwPollEvents() 
+ # end 
+ glfw.glfwTerminate() 
+ def step(self): 
+ # clear 
+ glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT) 
+ # build projection matrix 
+ pMatrix = glutils.perspective(45.0, self.aspect, 0.1, 100.0) 
+ mvMatrix = glutils.lookAt([0.0, 0.0, -2.0], [0.0, 0.0, 0.0], 
+ [0.0, 1.0, 0.0]) 
+ # render 
+ self.scene.render(pMatrix, mvMatrix) 
+ # step 
+ self.scene.step() 
+ glfw.SwapBuffers(self.win) 
+ # poll for and process events 
+ glfw.PollEvents() 
+# main() function 
+def main(): 
+ print("Starting simpleglfw. " 
+ "Press any key to toggle cut. Press ESC to quit.") 
+ rw = RenderWindow() 
+   rw.run() 
+# call main 
+if __name__ == '__main__': 
+ main() 
+9.6  运行OpenGL 应用程序 
+下面是该项目的运行示例：
+$python simpleglfw.py 
+输出如图9-1 所示。 
+
+第9 章  理解OpenGL 143 
+现在，让我们快速浏览一下在glutils.pie 中定义的一些工具方法。这个方法加
+载图像，作为OpenGL 纹理： 
+def loadTexture(filename): 
+ """load OpenGL 2D texture from given image file""" 
+ 
+ img = Image.open(filename) 
+ 
+ imgData = numpy.array(list(img.getdata()), np.int8) 
+ 
+ texture = glGenTextures(1) 
+ 
+ glBindTexture(GL_TEXTURE_2D, texture) 
+ 
+ glPixelStorei(GL_UNPACK_ALIGNMENT, 1) 
+ 
+ glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE) 
+ glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE) 
+ 
+ glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR) 
+ glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR) 
+ 
+ glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img.size[0], img.size[1], 
+   0, GL_RGBA, GL_UNSIGNED_BYTE, imgData) 
+ return texture 
+在行，loadTexture()函数用Python 图像库（PIL）的Image 模块读取图像
+文件。然后在行，获取Image 对象的数据，放入8 位的numpy 数组，在行，
+创建一个OpenGL 纹理对象，这是在OpenGL 中利用纹理做任何事的先决条件。
+在行，执行现在你比较熟悉的绑定texture 对象，这样所有后来纹理相关的设
+置都应用于该对象。在行，将数据的拆包对齐设置为1，这意味着该图像数据
+被硬件认为是1 字节（或8 位）的数据。从行开始，告诉OpenGL 如何处理边
+缘的纹理。在这个例子中，在几何图形的边缘截取纹理颜色（指定纹理坐标时，
+惯例是使用字母S 和T 表示轴，而不是x 和y）。在行和下一行，指定插值类
+型，在拉伸或压缩纹理来覆盖多边形时采用。在这个例子中，指定为“线性滤波”。
+在行，设置绑定纹理中的图像数据。此时，图像数据传送到显存，纹理准备好
+使用了。
+9.7  小结 
+恭喜你完成了使用Python 和OpenGL 的第一个程序。你已踏上进入三维图形编
+程迷人世界的旅程。
+9.8  实验 
+下面有一些修改这个项目的想法。
+1．这个项目中，顶点着色器围绕z 轴（0，0，1）旋转正方形。你能让它绕
+轴（1，1，0）旋转吗？可以用两种方式实现：第一，修改着色器中的旋转矩阵，
+第二，在Python 代码计算这个矩阵，将它作为一个uniform 传入着色器。两种方
+法都试一下。
+
+144 Python 极客项目编程 
+2．这个项目中，纹理坐标在顶点着色器内产生，并传入片段着色器。这是一
+种方法，它有效只是因为三角形带的顶点选择了方便的值。请将纹理坐标作为单独
+的属性传入顶点着色器，类似于顶点传入的方式。现在，你能让星形纹理平铺三角
+形带吗？不是显示一颗星，而是在正方形上生成4×4 的星星网格（提示：使用大
+于1.0 的纹理坐标，并将glTexParameterf()中的GL_TEXTURE_WRAP_S/T 参数设
+置为GL_REPEAT）。 
+3．只修改片段着色器，能让你的正方形如图9-7 所示（提示：使用GLSL 的
+sin()函数）？ 
+图9-7  使用片段着色器来画出同心圆 

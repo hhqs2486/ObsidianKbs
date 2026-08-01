@@ -1,0 +1,2053 @@
+第3章　深入掌握Pod
+接下来，让我们深入探索Pod的应用、配置、调度、升级及扩缩
+容，开始Kubernetes容器编排之旅。
+本章将对Kubernetes如何发布与管理容器应用进行详细说明和示
+例，主要包括Pod和容器的使用、应用配置管理、Pod的控制和调度管
+理、Pod的升级和回滚，以及Pod的扩缩容机制等内容。
+3.1　Pod定义详解
+YAML格式的Pod定义文件的完整内容如下：
+
+
+
+
+对其中各属性的详细说明如表3.1所示。
+表3.1　对Pod定义文件模板中各属性的详细说明
+
+
+续表
+
+
+续表
+
+
+续表
+
+
+3.2　Pod的基本用法
+在对Pod的用法进行说明之前，有必要先对Docker容器中应用的运
+行要求进行说明。
+在使用Docker时，可以使用docker 
+run命令创建并启动一个容器。
+而在Kubernetes系统中对长时间运行容器的要求是：其主程序需要一直
+在前台运行。如果我们创建的Docker镜像的启动命令是后台执行程序，
+例如Linux脚本：
+则在kubelet创建包含这个容器的Pod之后运行完该命令，即认为Pod
+执行结束，将立刻销毁该Pod。如果为该Pod定义了
+ReplicationController，则系统会监控到该Pod已经终止，之后根据RC定
+义中Pod的replicas副本数量生成一个新的Pod。一旦创建新的Pod，就在
+运行完启动命令后陷入无限循环的过程中。这就是Kubernetes需要我们
+自己创建Docker镜像并以一个前台命令作为启动命令的原因。
+对于无法改造为前台执行的应用，也可以使用开源工具Supervisor
+辅助进行前台运行的功能。Supervisor提供了一种可以同时启动多个后
+台应用，并保持Supervisor自身在前台执行的机制，可以满足Kubernetes
+对容器的启动要求。关于Supervisor的安装和使用，请参考官网的文档
+说明。
+接下来讲解Pod对容器的封装和应用。
+Pod可以由1个或多个容器组合而成。在上一节Guestbook的例子
+中，名为frontend的Pod只由一个容器组成：
+
+这个frontend Pod在成功启动之后，将启动1个Docker容器。
+另一种场景是，当frontend和redis两个容器应用为紧耦合的关系，
+并组合成一个整体对外提供服务时，应将这两个容器打包为一个Pod，
+如图3.1所示。
+
+图3.1　包含两个容器的Pod
+配置文件frontend-localredis-pod.yaml的内容如下：
+
+属于同一个Pod的多个容器应用之间相互访问时仅需通过localhost就
+可以通信，使得这一组容器被“绑定”在一个环境中。
+在Docker容器kubeguide/guestbook-php-frontend：localredis的PHP网
+页中，直接通过URL地址“localhost：6379”对同属于一个Pod的redis-
+master进行访问。guestbook.php的内容如下：
+
+
+运行kubectl create命令创建该Pod：
+查看已经创建的Pod：
+可以看到READY信息为2/2，表示Pod中的两个容器都成功运行
+了。
+查看这个Pod的详细信息，可以看到两个容器的定义及创建的过程
+（Event事件信息）：
+
+
+
+
+3.3　静态Pod
+静态Pod是由kubelet进行管理的仅存在于特定Node上的Pod。它们
+不能通过API Server进行管理，无法与ReplicationController、Deployment
+或者DaemonSet进行关联，并且kubelet无法对它们进行健康检查。静态
+Pod总是由kubelet创建的，并且总在kubelet所在的Node上运行。
+创建静态Pod有两种方式：配置文件方式和HTTP方式。
+1.配置文件方式
+首先，需要设置kubelet的启动参数“--pod-manifest-path”（或者在
+kubelet配置文件中设置staticPodPath，这也是新版本推荐的设置方式，--
+pod-manifest-path参数将被逐渐弃用），指定kubelet需要监控的配置文
+件所在的目录，kubelet会定期扫描该目录，并根据该目录下的.yaml
+或.json文件进行创建操作。
+假设配置目录为/etc/kubelet.d/，配置启动参数为--pod-manifest-
+path=/etc/kubelet.d/，然后重启kubelet服务。
+在/etc/kubelet.d目录下放入static-web.yaml文件，内容如下：
+
+等待一会儿，查看本机中已经启动的容器：
+可以看到一个Nginx容器已经被kubelet成功创建了出来。
+
+到Master上查看Pod列表，可以看到这个static pod：
+由于静态Pod无法通过API Server直接管理，所以在Master上尝试删
+除这个Pod时，会使其变成Pending状态，且不会被删除。
+删除该Pod的操作只能是到其所在Node上将其定义文件static-
+web.yaml从/etc/kubelet.d目录下删除。
+2.HTTP方式
+通过设置kubelet的启动参数“--manifest-url”，kubelet将会定期从该
+URL地址下载Pod的定义文件，并以.yaml或.json文件的格式进行解析，
+然后创建Pod。其实现方式与配置文件方式是一致的。
+
+3.4　Pod容器共享Volume
+同一个Pod中的多个容器能够共享Pod级别的存储卷Volume。
+Volume可以被定义为各种类型，多个容器各自进行挂载操作，将一个
+Volume挂载为容器内部需要的目录，如图3.2所示。
+图3.2　Pod中多个容器共享Volume
+在下面的例子中，在Pod内包含两个容器：tomcat和busybox，在
+Pod级别设置Volume“app-logs”，用于tomcat容器向其中写日志文件，
+busybox容器从中读日志文件。
+配置文件pod-volume-applogs.yaml的内容如下：
+
+
+这里设置的Volume名称为app-logs，类型为emptyDir（也可以设置
+为其他类型，详见第1章对Volume概念的说明），挂载到tomcat容器内
+的/usr/local/tomcat/logs目录下，同时挂载到logreader容器内的/logs目录
+下。tomcat容器在启动后会向/usr/local/tomcat/logs目录写文件，logreader
+容器就可以读取其中的文件了。
+logreader容器的启动命令为tail-f/logs/catalina*.log，我们可以通过
+kubectl logs命令查看logreader容器的输出内容：
+这个文件为tomcat生成的日志文件/usr/local/tomcat/logs/catalina.
+<date>.log的内容。登录tomcat容器进行查看：
+
+3.5　Pod的配置管理
+应用部署的一个最佳实践是将应用所需的配置信息与程序分离，这
+样可以使应用程序被更好地复用，通过不同的配置也能实现更灵活的功
+能。将应用打包为容器镜像后，可以通过环境变量或者外挂文件的方式
+在创建容器时进行配置注入，但在大规模容器集群的环境中，对多个容
+器进行不同的配置将变得非常复杂。Kubernetes从1.2版本开始提供了一
+
+种统一的应用配置管理方案—ConfigMap。本节对ConfigMap的概念和
+用法进行详细讲解。
+3.5.1　ConfigMap概述
+ConfigMap供容器使用的典型用法如下。
+（1）生成容器内的环境变量。
+（2）设置容器启动命令的启动参数（需设置为环境变量）。
+（3）以Volume的形式挂载为容器内部的文件或目录。
+ConfigMap以一个或多个key：value的形式保存在Kubernetes系统中
+供应用使用，既可以用于表示一个变量的值（例如apploglevel=info），
+也可以用于表示一个完整配置文件的内容（例如server.xml=<？
+xml...>...）。
+我们可以通过YAML文件或者直接使用kubectl create configmap命令
+行的方式来创建ConfigMap。
+3.5.2　创建ConfigMap资源对象
+1.通过YAML文件方式创建
+在下面的例子cm-appvars.yaml中展示了将几个应用所需的变量定义
+为ConfigMap的用法：
+
+运行kubectl create命令创建该ConfigMap：
+查看创建好的ConfigMap：
+
+
+在下面的例子中展示了将两个配置文件server.xml和
+logging.properties定义为ConfigMap的用法，设置key为配置文件的别
+名，value则是配置文件的全部文本内容：
+
+
+
+
+运行kubectl create命令创建该ConfigMap：
+查看创建好的ConfigMap：
+
+查看已创建的ConfigMap的详细内容，可以看到两个配置文件的全
+文：
+
+
+
+
+
+2.通过kubectl命令行方式创建
+不使用YAML文件，直接通过kubectl create configmap也可以创建
+ConfigMap，可以使用参数--from-file或--from-literal指定内容，并且可以
+在一行命令中指定多个参数。
+（1）通过--from-file参数从文件中进行创建，可以指定key的名
+称，也可以在一个命令行中创建包含多个key的ConfigMap，语法如下：
+（2）通过--from-file参数在目录下进行创建，该目录下的每个配置
+文件名都被设置为key，文件的内容被设置为value，语法如下：
+（3）使用--from-literal时会从文本中进行创建，直接将指定的
+key#=value#创建为ConfigMap的内容，语法如下：
+下面对这几种用法举例说明。
+例如，在当前目录下含有配置文件server.xml，可以创建一个包含
+该文件内容的ConfigMap：
+
+假设在configfiles目录下包含两个配置文件server.xml和
+logging.properties，创建一个包含这两个文件内容的ConfigMap：
+
+使用--from-literal参数进行创建的示例如下：
+
+容器应用对ConfigMap的使用有以下两种方法。
+（1）通过环境变量获取ConfigMap中的内容。
+（2）通过Volume挂载的方式将ConfigMap中的内容挂载为容器内
+部的文件或目录。
+3.5.3　在Pod中使用ConfigMap
+1.通过环境变量方式使用ConfigMap
+以前面创建的ConfigMap“cm-appvars”为例：
+
+在Pod“cm-test-pod”的定义中，将ConfigMap“cm-appvars”中的内容
+以环境变量（APPLOGLEVEL和APPDATADIR）方式设置为容器内部
+的环境变量，容器的启动命令将显示这两个环境变量的值（"env|grep
+APP"）：
+
+运行kubectl create-f命令创建该Pod，由于是测试Pod，所以该Pod在
+
+运行完启动命令后将会退出，并且不会被系统自动重启
+（restartPolicy=Never）：
+运行kubectl get pods--show-all命令查看已经停止的Pod：
+查看该Pod的日志，可以看到启动命令env|grep 
+APP的运行结果如
+下：
+这说明容器内部的环境变量使用ConfigMap cm-appvars中的值进行
+了正确设置。
+Kubernetes从1.6版本开始引入了一个新的字段envFrom，实现了在
+Pod环境中将ConfigMap（也可用于Secret资源对象）中所有定义的
+key=value自动生成为环境变量：
+
+通过这个定义，在容器内部将会生成如下环境变量：
+需要说明的是，环境变量的名称受POSIX命名规范（[a-zA-Z_][a-
+zA-Z0-9_]*）约束，不能以数字开头。如果包含非法字符，则系统将跳
+过该条环境变量的创建，并记录一个Event来提示环境变量无法生成，
+但并不阻止Pod的启动。
+2.通过volumeMount使用ConfigMap
+在如下所示的cm-appconfigfiles.yaml例子中包含两个配置文件的定
+
+义：server.xml和logging.properties。
+
+
+
+
+在Pod“cm-test-app”的定义中，将ConfigMap“cm-appconfigfiles”中的
+内容以文件的形式挂载到容器内部的/configfiles目录下。Pod配置文件
+cm-test-app.yaml的内容如下：
+
+创建该Pod：
+登录容器，查看到在/configfiles目录下存在server.xml和
+logging.properties文件，它们的内容就是ConfigMap“cm-appconfigfiles”中
+两个key定义的内容：
+
+如果在引用ConfigMap时不指定items，则使用volumeMount方式在
+容器内的目录下为每个item都生成一个文件名为key的文件。
+Pod配置文件cm-test-app.yaml的内容如下：
+
+创建该Pod：
+登录容器，查看到在/configfiles目录下存在key-loggingproperties和
+key-serverxml文件，文件的名称来自在ConfigMap cm-appconfigfiles中定
+
+义的两个key的名称，文件的内容则为value的内容：
+3.5.4　使用ConfigMap的限制条件
+使用ConfigMap的限制条件如下。
+◎　ConfigMap必须在Pod之前创建，Pod才能引用它。
+◎　如果Pod使用envFrom基于ConfigMap定义环境变量，则无效的
+环境变量名称（例如名称以数字开头）将被忽略，并在事件中被记录为
+InvalidVariableNames。
+◎　ConfigMap受命名空间限制，只有处于相同命名空间中的Pod才
+可以引用它。
+◎　ConfigMap无法用于静态Pod。
+3.6　在容器内获取Pod信息（Downward
+API）
+我们知道，Pod的逻辑概念在容器之上，Kubernetes在成功创建Pod
+之后，会为Pod和容器设置一些额外的信息，例如Pod级别的Pod名称、
+Pod IP、Node IP、Label、Annotation、容器级别的资源限制等。在很多
+应用场景中，这些信息对容器内的应用来说都很有用，例如使用Pod名
+称作为日志记录的一个字段用于标识日志来源。为了在容器内获取Pod
+级别的这些信息，Kubernetes提供了Downward API机制来将Pod和容器
+的某些元数据信息注入容器环境内，供容器应用方便地使用。
+Downward API可以通过以下两种方式将Pod和容器的元数据信息注
+入容器内部。
+
+（1）环境变量：将Pod或Container信息设置为容器内的环境变量。
+（2）Volume挂载：将Pod或Container信息以文件的形式挂载到容
+器内部。
+下面通过几个例子对Downward API的用法进行说明。
+3.6.1　环境变量方式
+通过环境变量的方式可以将Pod信息或Container信息注入容器运行
+环境中，下面通过两个例子进行说明。
+1）将Pod信息设置为容器内的环境变量
+下面的例子通过Downward API将Pod的IP、名称和所在命名空间注
+入容器的环境变量中，Pod的YAML文件内容如下：
+
+
+注意，环境变量不直接设置value，而是设置valueFrom对Pod的元数
+据进行引用。
+在本例中通过对Downward API的设置使用了以下Pod的元数据信息
+设置环境变量。
+◎　spec.nodeName：Pod所在Node的名称。
+◎　metadata.name：Pod名称。
+◎　metadata.namespace：Pod所在命名空间的名称。
+◎　status.podIP：Pod的IP地址。
+◎　spec.serviceAccountName：Pod使用的ServiceAccount名称。
+运行kubectl create命令创建这个Pod：
+查看Pod的日志，可以看到容器启动命令将环境变量的值打印出
+来：
+
+我们从日志中可以看到Pod的Node IP、Pod名称、命名空间名称、
+Pod 
+IP、ServiceAccount名称等信息都被正确设置到了容器的环境变量
+中。
+也可以通过kubectl exec命令登录容器查看环境变量的设置：
+2）将Container信息设置为容器内的环境变量
+下面的例子通过Downward 
+API将Container的资源请求和资源限制
+信息设置为容器内的环境变量，Pod的YAML文件内容如下：
+
+
+
+在本例中通过Downward 
+API将以下Container的资源限制信息设置
+为环境变量。
+◎　requests.cpu：容器的CPU请求值。
+◎　limits.cpu：容器的CPU限制值。
+◎　requests.memory：容器的内存请求值。
+◎　limits.memory：容器的内存限制值。
+运行kubectl create命令创建Pod：
+查看Pod的日志：
+我们从日志中可以看到Container的requests.cpu、limits.cpu、
+requests.memory、limits.memory等信息都被正确保存到了容器内的环境
+变量中。
+3.6.2　Volume挂载方式
+
+通过Volume挂载方式可以将Pod信息或Container信息挂载为容器内
+的文件，下面通过两个例子进行说明。
+1）将Pod信息挂载为容器内的文件
+下面的例子通过Downward API将Pod的Label、Annotation信息通过
+Volume挂载为容器中的文件：
+
+
+在Pod的volumes字段中使用Downward API的方法：通过fieldRef字
+段设置需要引用Pod的元数据信息，将其设置到volume的items中。在本
+例中使用了以下Pod元数据信息。
+◎　metadata.labels：Pod的Label列表。
+◎　metadata.namannotations：Pod的Annotation列表。
+然后，通过容器级别volumeMounts的设置，系统会基于volume中各
+item的path名称生成文件。根据上面的设置，系统将在容器内
+的/etc/podinfo目录下生成labels和annotations两个文件，在labels文件中将
+包含Pod的全部Label列表，在annotations文件中将包含Pod的全部
+Annotation列表。
+运行kubectl create命令创建Pod：
+查看Pod的日志，可以看到容器启动命令将挂载文件的内容打印出
+来：
+
+进入容器，查看挂载的文件：
+查看文件labels的内容：
+
+2）将Container信息挂载为容器内的文件
+下面的例子通过Downward 
+API将Container的资源限制信息通过
+Volume挂载为容器中的文件：
+
+
+在本例中通过Downward 
+API设置将以下Container的资源限制信息
+设置到Volume中。
+◎　requests.cpu：容器的CPU请求值。
+◎　limits.cpu：容器的CPU限制值。
+◎　requests.memory：容器的内存请求值。
+◎　limits.memory：容器的内存限制值。
+运行kubectl create命令创建Pod：
+
+查看Pod的日志，可以看到容器启动命令将挂载文件的内容打印出
+来：
+进入容器，查看挂载的文件：
+查看文件cpu_limit的内容：
+
+3.6.3　Downward API支持设置的Pod和Container
+信息
+Downward API支持设置的Pod和Container信息如下。
+1）可以通过fieldRef设置的元数据如下。
+◎　metadata.name：Pod名称。
+◎　metadata.namespace：Pod所在的命名空间名称。
+◎　metadata.uid：Pod的UID，从Kubernetes 1.8.0-alpha.2版本开始
+支持。
+◎　metadata.labels['<KEY>']：Pod某个Label的值，通过<KEY>进
+行引用，从Kubernetes 1.9版本开始支持。
+◎　metadata.annotations['<KEY>']：Pod某个Annotation的值，通过
+<KEY>进行引用，从Kubernetes 1.9版本开始支持。
+2）可以通过resourceFieldRef设置的数据如下。
+◎　Container级别的CPU Limit。
+◎　Container级别的CPU Request。
+◎　Container级别的Memory Limit。
+◎　Container级别的Memory Request。
+◎　Container级别的临时存储空间（ephemeral-storage）Limit，从
+Kubernetes 1.8.0-beta.0版本开始支持。
+◎　Container级别的临时存储空间（ephemeral-storage）Request，
+从Kubernetes 1.8.0-beta.0版本开始支持。
+3）对以下信息通过fieldRef字段进行设置。
+
+◎　metadata.labels：Pod的Label列表，每个Label都以key为文件
+名，value为文件内容，每个Label各占一行。
+◎　metadata.namannotations：Pod的Annotation列表，每个
+Annotation都以key为文件名，value为文件内容，每个Annotation各占一
+行。
+4）以下Pod的元数据信息可以被设置为容器内的环境变量。
+◎　status.podIP：Pod的IP地址。
+◎　spec.serviceAccountName：Pod使用的ServiceAccount名称。
+◎　spec.nodeName：Pod所在Node的名称，从Kubernetes 
+1.4.0-
+alpha.3版本开始支持。
+◎　status.hostIP：Pod所在Node的IP地址，从Kubernetes 
+1.7.0-
+alpha.1版本开始支持。
+Downward API在volume subPath中的应用
+有时，容器内挂载目录的子路径（volumeMounts.subPath）也需要
+使用Pod或Container的元数据信息，Kubernetes从1.11版本开始支持通过
+Downward API对子路径的名称进行设置，引入了一个新的subPathExpr
+字段，到1.17版本达到Stable阶段。用户可以将Pod或Container信息先使
+用Downward 
+API设置到环境变量上，再通过subPathExpr将其设置为
+subPath的名称。
+通过Kubernetes提供的Downward 
+API机制，只需经过一些简单配
+置，容器内的应用就可以直接使用Pod和容器的某些元数据信息了。
+3.7　Pod生命周期和重启策略
+Pod在整个生命周期中被系统定义为各种状态，熟悉Pod的各种状态
+对于理解如何设置Pod的调度策略、重启策略是很有必要的。
+Pod的状态如表3.2所示。
+表3.2　Pod的状态
+
+Pod的重启策略（RestartPolicy）应用于Pod内的所有容器，并且仅
+在Pod所处的Node上由kubelet进行判断和重启操作。当某个容器异常退
+出或者健康检查（详见下节）失败时，kubelet将根据RestartPolicy的设
+置进行相应的操作。
+Pod的重启策略包括Always、OnFailure和Never，默认值为Always。
+◎　Always：当容器失效时，由kubelet自动重启该容器。
+◎　OnFailure：当容器终止运行且退出码不为0时，由kubelet自动
+重启该容器。
+◎　Never：不论容器运行状态如何，kubelet都不会重启该容器。
+kubelet重启失效容器的时间间隔以sync-frequency乘以2n来计算，例
+如1、2、4、8倍等，最长延时5min，并且在成功重启后的10min后重置
+该时间。
+Pod的重启策略与控制方式息息相关，当前可用于管理Pod的控制器
+包括ReplicationController、Job、DaemonSet，还可以通过kubelet管理
+（静态Pod）。每种控制器对Pod的重启策略要求如下。
+◎　RC和DaemonSet：必须设置为Always，需要保证该容器持续运
+行。
+
+◎　Job：OnFailure或Never，确保容器执行完成后不再重启。
+◎　kubelet：在Pod失效时自动重启它，不论将RestartPolicy设置为
+什么值，也不会对Pod进行健康检查。
+结合Pod的状态和重启策略，表3.3列出一些常见的状态转换场景。
+表3.3　一些常见的状态转换场景
+3.8　Pod健康检查和服务可用性检查
+Kubernetes对Pod的健康状态可以通过三类探针来检查：
+LivenessProbe、ReadinessProbe及StartupProbe，其中最主要的探针为
+LivenessProbe与ReadinessProbe，kubelet会定期执行这两类探针来诊断
+容器的健康状况。
+（1）LivenessProbe探针：用于判断容器是否存活（Running状
+态），如果LivenessProbe探针探测到容器不健康，则kubelet将“杀掉”该
+容器，并根据容器的重启策略做相应的处理。如果一个容器不包含
+
+LivenessProbe探针，那么kubelet认为该容器的LivenessProbe探针返回的
+值永远是Success。
+（2）ReadinessProbe探针：用于判断容器服务是否可用（Ready状
+态），达到Ready状态的Pod才可以接收请求。对于被Service管理的
+Pod，Service与Pod 
+Endpoint的关联关系也将基于Pod是否Ready进行设
+置。如果在运行过程中Ready状态变为False，则系统自动将其从Service
+的后端Endpoint列表中隔离出去，后续再把恢复到Ready状态的Pod加回
+后端Endpoint列表。这样就能保证客户端在访问Service时不会被转发到
+服务不可用的Pod实例上。需要注意的是，ReadinessProbe也是定期触发
+执行的，存在于Pod的整个生命周期中。
+（3）StartupProbe探针：某些应用会遇到启动比较慢的情况，例如
+应用程序启动时需要与远程服务器建立网络连接，或者遇到网络访问较
+慢等情况时，会造成容器启动缓慢，此时ReadinessProbe就不适用了，
+因为这属于“有且仅有一次”的超长延时，可以通过StartupProbe探针解决
+该问题。
+以上探针均可配置以下三种实现方式。
+（1）ExecAction：在容器内部运行一个命令，如果该命令的返回
+码为0，则表明容器健康。
+在下面的例子中，通过运行cat/tmp/health命令来判断一个容器运行
+是否正常。在该Pod运行后，将在创建/tmp/health文件10s后删除该文
+件，而LivenessProbe健康检查的初始探测时间（initialDelaySeconds）为
+15s，探测结果是Fail，将导致kubelet“杀掉”该容器并重启它：
+
+
+（2）TCPSocketAction：通过容器的IP地址和端口号执行TCP检
+查，如果能够建立TCP连接，则表明容器健康。
+在下面的例子中，通过与容器内的localhost：80建立TCP连接进行
+健康检查：
+（3）HTTPGetAction：通过容器的IP地址、端口号及路径调用
+HTTP Get方法，如果响应的状态码大于等于200且小于400，则认为容器
+健康。
+在下面的例子中，kubelet定时发送HTTP请求到localhost：
+
+80/_status/healthz来进行容器应用的健康检查：
+对于每种探测方式，都需要设置initialDelaySeconds和
+timeoutSeconds两个参数，它们的含义分别如下。
+◎　initialDelaySeconds：启动容器后进行首次健康检查的等待时
+间，单位为s。
+◎　timeoutSeconds：健康检查发送请求后等待响应的超时时间，
+单位为s。当超时发生时，kubelet会认为容器已经无法提供服务，将会
+
+重启该容器。
+如下代码片段是StartupProbe探针的一个参考配置，可以看到，这
+个Pod可以有长达30×10=300s的超长启动时间：
+Kubernetes的Pod可用性探针机制可能无法满足某些复杂应用对容器
+内服务可用状态的判断，所以Kubernetes从1.11版本开始，引入了Pod
+Ready++特性对Readiness探测机制进行扩展，在1.14版本时达到GA稳定
+版本，称其为Pod Readiness Gates。Pod Readiness Gates给予了Pod之外
+的组件控制某个Pod就绪的能力，通过Pod Readiness Gates机制，用户可
+以设置自定义的Pod可用性探测方式来告诉Kubernetes某个Pod是否可
+用，具体使用方式是用户提供一个外部的控制器（Controller）来设置相
+应Pod的可用性状态。
+Pod的Readiness Gates在Pod定义中的ReadinessGate字段进行设置。
+下面的例子设置了一个类型为www.example.com/feature-1的新Readiness
+Gate：
+
+新增的自定义Condition的状态（status）将由用户自定义的外部控
+制器设置，默认值为False。Kubernetes将在判断全部readinessGates条件
+都为True时，才设置Pod为服务可用状态（Ready为True）。
+
+3.9　玩转Pod调度
+在Kubernetes平台上，我们很少会直接创建一个Pod，在大多数情况
+下会通过RC、Deployment、DaemonSet、Job等控制器完成对一组Pod副
+本的创建、调度及全生命周期的自动控制任务。
+在最早的Kubernetes版本里是没有这么多Pod副本控制器的，只有一
+个Pod副本控制器RC（Replication Controller），这个控制器是这样设计
+实现的：RC独立于所控制的Pod，并通过Label标签这个松耦合关联关系
+控制目标Pod实例的创建和销毁，随着Kubernetes的发展，RC也出现了
+新的继任者——Deployment，用于更加自动地完成Pod副本的部署、版
+本更新、回滚等功能。
+严谨地说，RC的继任者其实并不是Deployment，而是ReplicaSet，
+因为ReplicaSet进一步增强了RC标签选择器的灵活性。之前RC的标签选
+择器只能选择一个标签，而ReplicaSet拥有集合式的标签选择器，可以
+选择多个Pod标签，如下所示：
+与RC不同，ReplicaSet被设计成能控制多个不同标签的Pod副本。
+比如，应用MyApp目前发布了v1与v2两个版本，用户希望MyApp的Pod
+副本数保持为3个，可以同时包含v1和v2版本的Pod，就可以用
+ReplicaSet来实现这种控制，写法如下：
+
+其实，Kubernetes的滚动升级就是巧妙运用ReplicaSet的这个特性来
+实现的，同时，Deployment也是通过ReplicaSet来实现Pod副本自动控制
+功能的。我们不应该直接使用底层的ReplicaSet来控制Pod副本，而应该
+通过管理ReplicaSet的Deployment对象来控制副本，这是来自官方的建
+议。
+在大多数情况下，我们希望Deployment创建的Pod副本被成功调度
+到集群中的任何一个可用节点，而不关心具体会调度到哪个节点。但
+是，在真实的生产环境中的确也存在一种需求：希望某种Pod的副本全
+部在指定的一个或者一些节点上运行，比如希望将MySQL数据库调度
+到一个具有SSD磁盘的目标节点上，此时Pod模板中的NodeSelector属性
+就开始发挥作用了，上述MySQL定向调度案例的实现方式可分为以下
+两步。
+（1）把具有SSD磁盘的Node都打上自定义标签disk=ssd。
+（2）在Pod模板中设定NodeSelector的值为“disk：ssd”。
+如此一来，Kubernetes在调度Pod副本的时候，就会先按照Node的
+标签过滤出合适的目标节点，然后选择一个最佳节点进行调度。
+上述逻辑看起来既简单又完美，但在真实的生产环境中可能面临以
+下令人尴尬的问题。
+（1）如果NodeSelector选择的Label不存在或者不符合条件，比如
+这些目标节点此时宕机或者资源不足，该怎么办？
+（2）如果要选择多种合适的目标节点，比如SSD磁盘的节点或者
+超高速硬盘的节点，该怎么办？Kubernetes引入了NodeAffinity（节点亲
+
+和性设置）来解决该需求。
+在真实的生产环境中还存在如下所述的特殊需求。
+（1）不同Pod之间的亲和性（Affinity）。比如MySQL数据库与
+Redis中间件不能被调度到同一个目标节点上，或者两种不同的Pod必须
+被调度到同一个Node上，以实现本地文件共享或本地网络通信等特殊需
+求，这就是PodAffinity要解决的问题。
+（2）有状态集群的调度。对于ZooKeeper、Elasticsearch、
+MongoDB、Kafka等有状态集群，虽然集群中的每个Worker节点看起来
+都是相同的，但每个Worker节点都必须有明确的、不变的唯一ID（主机
+名或IP地址），这些节点的启动和停止次序通常有严格的顺序。此外，
+由于集群需要持久化保存状态数据，所以集群中的Worker节点对应的
+Pod不管在哪个Node上恢复，都需要挂载原来的Volume，因此这些Pod
+还需要捆绑具体的PV。针对这种复杂的需求，Kubernetes提供了
+StatefulSet这种特殊的副本控制器来解决问题，在Kubernetes 1.9版本发
+布后，StatefulSet才可用于正式生产环境中。
+（3）在每个Node上调度并且仅仅创建一个Pod副本。这种调度通
+常用于系统监控相关的Pod，比如主机上的日志采集、主机性能采集等
+进程需要被部署到集群中的每个节点，并且只能部署一个副本，这就是
+DaemonSet这种特殊Pod副本控制器所解决的问题。
+（4）对于批处理作业，需要创建多个Pod副本来协同工作，当这些
+Pod副本都完成自己的任务时，整个批处理作业就结束了。这种Pod运行
+且仅运行一次的特殊调度，用常规的RC或者Deployment都无法解决，
+所以Kubernetes引入了新的Pod调度控制器Job来解决问题，并继续延伸
+了定时作业的调度控制器CronJob。
+与单独的Pod实例不同，由RC、ReplicaSet、Deployment、
+DaemonSet等控制器创建的Pod副本实例都是归属于这些控制器的，这
+就产生了一个问题：控制器被删除后，归属于控制器的Pod副本该何去
+何从？在Kubernetes 1.9之前，在RC等对象被删除后，它们所创建的Pod
+副本都不会被删除；在Kubernetes 
+1.9以后，这些Pod副本会被一并删
+除。如果不希望这样做，则可以通过kubectl命令的--cascade=false参数来
+取消这一默认特性：
+
+接下来深入理解和实践这些Pod调度控制器的各种功能和特性。
+3.9.1　Deployment或RC：全自动调度
+Deployment或RC的主要功能之一就是自动部署一个容器应用的多
+份副本，以及持续监控副本的数量，在集群内始终维持用户指定的副本
+数量。
+下面是一个Deployment配置的例子，使用这个配置文件可以创建一
+个ReplicaSet，这个ReplicaSet会创建3个Nginx应用的Pod：
+
+运行kubectl create命令创建这个Deployment：
+
+查看Deployment的状态：
+该状态说明Deployment已创建好所有3个副本，并且所有副本都是
+最新的可用的。
+通过运行kubectl 
+get 
+rs和kubectl 
+get 
+pods可以查看已创建的
+ReplicaSet（RS）和Pod的信息。
+从调度策略上来说，这3个Nginx Pod由系统全自动完成调度。它们
+各自最终运行在哪个节点上，完全由Master的Scheduler经过一系列算法
+
+计算得出，用户无法干预调度过程和结果。
+除了使用系统自动调度算法完成一组Pod的部署，Kubernetes也提供
+了多种丰富的调度策略，用户只需在Pod的定义中使用NodeSelector、
+NodeAffinity、PodAffinity、Pod驱逐等更加细粒度的调度策略设置，就
+能完成对Pod的精准调度。下面对这些策略进行说明。
+3.9.2　NodeSelector：定向调度
+Kubernetes Master上的Scheduler服务（kube-scheduler进程）负责实
+现Pod的调度，整个调度过程通过执行一系列复杂的算法，最终为每个
+Pod都计算出一个最佳的目标节点，这一过程是自动完成的，通常我们
+无法知道Pod最终会被调度到哪个节点上。在实际情况下，也可能需要
+将Pod调度到指定的一些Node上，可以通过Node的标签（Label）和Pod
+的nodeSelector属性相匹配，来达到上述目的。
+（1）首先通过kubectl label命令给目标Node打上一些标签：
+这里为k8s-node-1节点打上一个zone=north标签，表明它是“北方”的
+一个节点：
+上述命令行操作也可以通过修改资源定义文件的方式，并运行
+kubectl replace-f xxx.yaml命令来完成。
+（2）然后，在Pod的定义中加上nodeSelector的设置，以redis-
+master-controller.yaml为例：
+
+
+运行kubectl 
+create-f命令创建Pod，scheduler就会将该Pod调度到拥
+有“zone=north”标签的Node上。
+使用kubectl get pods-o wide命令可以验证Pod所在的Node：
+如果我们给多个Node都定义了相同的标签（例如zone=north），则
+scheduler会根据调度算法从这组Node中挑选一个可用的Node进行Pod调
+度。
+通过基于Node标签的调度方式，我们可以把集群中具有不同特点的
+Node都贴上不同的标签，例
+如“role=frontend”“role=backend”“role=database”等标签，在部署应用时就
+可以根据应用的需求设置NodeSelector来进行指定Node范围的调度。
+需要注意的是，如果我们指定了Pod的nodeSelector条件，且在集群
+中不存在包含相应标签的Node，则即使在集群中还有其他可供使用的
+Node，这个Pod也无法被成功调度。
+除了用户可以自行给Node添加标签，Kubernetes也会给Node预定义
+一些标签，包括：
+◎　kubernetes.io/hostname；
+◎　beta.kubernetes.io/os（从1.14版本开始更新为稳定版，到1.18版
+本删除）；
+◎　beta.kubernetes.io/arch（从1.14版本开始更新为稳定版，到1.18
+版本删除）；
+◎　kubernetes.io/os（从1.14版本开始启用）；
+◎　kubernetes.io/arch（从1.14版本开始启用）。
+用户也可以使用这些系统标签进行Pod的定向调度。
+
+NodeSelector通过标签的方式，简单实现了限制Pod所在节点的方
+法。亲和性调度机制则极大扩展了Pod的调度能力，主要的增强功能如
+下。
+◎　更具表达力（不仅仅是“符合全部”的简单情况）。
+◎　可以使用软限制、优先采用等限制方式，代替之前的硬限制，
+这样调度器在无法满足优先需求的情况下，会退而求其次，继续运行该
+Pod。
+◎　可以依据节点上正在运行的其他Pod的标签来进行限制，而非
+节点本身的标签。这样就可以定义一种规则来描述Pod之间的亲和或互
+斥关系。
+亲和性调度功能包括节点亲和性（NodeAffinity）和Pod亲和性
+（PodAffinity）两个维度的设置。节点亲和性与NodeSelector类似，增
+强了上述前两点优势；Pod的亲和与互斥限制则通过Pod标签而不是节点
+标签来实现，也就是上面第4点内容所陈述的方式，同时具有前两点提
+到的优点。
+NodeSelector将会继续被使用，随着节点亲和性越来越能够体现
+nodeSelector的功能，最终NodeSelector会被废弃。
+3.9.3　NodeAffinity：Node亲和性调度
+NodeAffinity意为Node亲和性的调度策略，是用于替换NodeSelector
+的全新调度策略。目前有两种节点亲和性表达。
+◎　RequiredDuringSchedulingIgnoredDuringExecution：必须满足指
+定的规则才可以调度Pod到Node上（功能与nodeSelector很像，但是使用
+的是不同的语法），相当于硬限制。
+◎　PreferredDuringSchedulingIgnoredDuringExecution：强调优先满
+足指定规则，调度器会尝试调度Pod到Node上，但并不强求，相当于软
+限制。多个优先级规则还可以设置权重（weight）值，以定义执行的先
+后顺序。
+IgnoredDuringExecution的意思是：如果一个Pod所在的节点在Pod运
+
+行期间标签发生了变更，不再符合该Pod的节点亲和性需求，则系统将
+忽略Node上Label的变化，该Pod能继续在该节点上运行。
+下面的例子设置了NodeAffinity调度的如下规则。
+◎　requiredDuringSchedulingIgnoredDuringExecution：要求只运行
+在amd64的节点上（beta.kubernetes.io/arch In amd64）。
+◎　preferredDuringSchedulingIgnoredDuringExecution：要求尽量运
+行在磁盘类型为ssd（disk-type In ssd）的节点上。
+代码如下：
+
+
+从上面的配置中可以看到In操作符，NodeAffinity语法支持的操作
+符包括In、NotIn、Exists、DoesNotExist、Gt、Lt。虽然没有节点排斥功
+能，但是用NotIn和DoesNotExist就可以实现排斥的功能了。
+NodeAffinity规则设置的注意事项如下。
+◎　如果同时定义了nodeSelector和nodeAffinity，那么必须两个条
+件都得到满足，Pod才能最终运行在指定的Node上。
+◎　如果nodeAffinity指定了多个nodeSelectorTerms，那么其中一个
+能匹配成功即可。
+◎　如果在nodeSelectorTerms中有多个matchExpressions，则一个节
+点必须满足所有matchExpressions才能运行该Pod。
+3.9.4　PodAffinity：Pod亲和与互斥调度策略
+在实际的生产环境中有一类特殊的Pod调度需求：存在某些相互依
+赖、频繁调用的Pod，它们需要被尽可能地部署在同一个Node节点、机
+架、机房、网段或者区域（Zone）内，这就是Pod之间的亲和性；反
+之，出于避免竞争或者容错的需求，我们也可能使某些Pod尽可能地远
+离某些特定的Pod，这就是Pod之间的反亲和性或者互斥性。
+Pod间的亲和性与反亲和性调度策略从Kubernetes 
+1.4版本开始引
+入。简单地说，就是相关联的两种或多种Pod是否可以在同一个拓扑域
+
+中共存或者互斥，前者被称为Pod 
+Affinity，后者被称为Pod 
+Anti
+Affinity。那么，什么是拓扑域，如何理解这个新概念呢？一个拓扑域
+由一些Node节点组成，这些Node节点通常有相同的地理空间坐标，比
+如在同一个机架、机房或地区，我们一般用region表示机架、机房等的
+拓扑区域，用Zone表示地区这样跨度更大的拓扑区域。在极端情况下，
+我们也可以认为一个Node就是一个拓扑区域。为此，Kubernetes内置了
+如下一些常用的默认拓扑域：
+◎　kubernetes.io/hostname；
+◎　topology.kubernetes.io/region；
+◎　topology.kubernetes.io/zone。
+需要注意的是，以上拓扑域是由Kubernetes自己维护的，在Node节
+点初始化时，controller-manager会为Node打上许多标签，比如
+kubernetes.io/hostname这个标签的值就会被设置为Node节点的
+hostname。另外，公有云厂商提供的Kubernetes服务或者使用cloud-
+controller-manager创建的集群，还会给Node打上
+topology.kubernetes.io/region和topology.kubernetes.io/zone标签，以确定
+各个节点所属的拓扑域。
+Pod亲和与互斥的调度具体做法，就是通过在Pod的定义上增加
+topologyKey属性，来声明对应的目标拓扑区域内几种相关联的Pod
+要“在一起或不在一起”。与节点亲和相同，Pod亲和与互斥的条件设置
+也是requiredDuringSchedulingIgnoredDuringExecution和
+preferredDuringSchedulingIgnoredDuringExecution。Pod的亲和性被定义
+于PodSpec的affinity字段的podAffinity子字段中；Pod间的互斥性则被定
+义于同一层次的podAntiAffinity子字段中。
+下面通过实例来说明Pod间的亲和性和互斥性策略设置。
+1.参照目标Pod
+首先，创建一个名为pod-flag的Pod，带有标签security=S1和
+app=nginx，后面的例子将使用pod-flag作为Pod亲和与互斥的目标Pod：
+
+2.Pod的亲和性调度
+下面创建第2个Pod来说明Pod的亲和性调度，这里定义的亲和标签
+是“security=S1”，对应上面的Pod“pod-flag”，topologyKey的值被设置
+为“kubernetes.io/hostname”：
+
+创建Pod之后，使用kubectl get pods-o wide命令可以看到，这两个
+Pod在同一个Node上运行。
+有兴趣的读者还可以测试一下，在创建这个Pod之前，删掉这个节
+点的“kubernetes.io/hostname”标签，重复上面的创建步骤，将会发现Pod
+一直处于Pending状态，这是因为找不到满足条件的Node了。
+
+3.Pod的互斥性调度
+创建第3个Pod，我们希望它不与目标Pod运行在同一个Node上：
+
+这里要求这个新Pod与security=S1的Pod为同一个zone，但是不与
+app=nginx的Pod为同一个Node。创建Pod之后，同样用kubectl get pods-o
+wide来查看，会看到新的Pod被调度到了同一Zone内的不同Node上。
+与节点亲和性类似，Pod亲和性的操作符也包括In、NotIn、Exists、
+DoesNotExist、Gt、Lt。
+原则上，topologyKey可以使用任意合法的标签Key赋值，但是出于
+性能和安全方面的考虑，对topologyKey有如下限制。
+
+◎　在Pod亲和性和RequiredDuringScheduling的Pod互斥性的定义
+中，不允许使用空的topologyKey。
+◎　如果Admission 
+controller包含了
+LimitPodHardAntiAffinityTopology，那么针对Required DuringScheduling
+的Pod互斥性定义就被限制为kubernetes.io/hostname，要使用自定义的
+topologyKey，就要改写或禁用该控制器。
+◎　在PreferredDuringScheduling类型的Pod互斥性定义中，空的
+topologyKey会被解释为kubernetes.io/hostname、failure-
+domain.beta.kubernetes.io/zone及failure-domain.beta.kubernetes.io/region的
+组合。
+◎　如果不是上述情况，就可以采用任意合法的topologyKey了。
+PodAffinity规则设置的注意事项如下。
+◎　除了设置Label 
+Selector和topologyKey，用户还可以指定
+Namespace列表进行限制，同样，使用Label Selector对Namespace进行选
+择。Namespace的定义和Label 
+Selector及topologyKey同级。省略
+Namespace的设置，表示使用定义了affinity/anti-affinity的Pod所在的命名
+空间。如果Namespace被设置为空值（""），则表示所有命名空间。
+◎　在所有关联requiredDuringSchedulingIgnoredDuringExecution的
+matchExpressions全都满足之后，系统才能将Pod调度到某个Node上。
+关于Pod亲和性和互斥性调度的更多信息可以参考其设计文档的说
+明。
+3.9.5　Taints和Tolerations（污点和容忍）
+前面介绍的NodeAffinity节点亲和性，是在Pod上定义的一种属性，
+使得Pod能够被调度到某些Node上运行（优先选择或强制要求）。Taint
+则正好相反，它让Node拒绝Pod的运行。简单地说，被标记为Taint的节
+点就是存在问题的节点，比如磁盘要满、资源不足、存在安全隐患要进
+行升级维护，希望新的Pod不会被调度过来，但被标记为Taint的节点并
+非故障节点，仍是有效的工作节点，所以仍需将某些Pod调度到这些节
+点上时，可以通过使用Toleration属性来实现。
+
+在默认情况下，在Node上设置一个或多个Taint之后，除非Pod明确
+声明能够容忍这些污点，否则无法在这些Node上运行。可以用kubectl
+taint命令为Node设置Taint信息：
+这个设置为node1加上了一个Taint。该Taint的键为key，值为
+value，Taint的效果是NoSchedule。这意味着除非Pod明确声明可以容忍
+这个Taint，否则不会被调度到node1上。
+然后，需要在Pod上声明Toleration。下面的两个Toleration都被设置
+为可以容忍（Tolerate）具有该Taint的Node，使得Pod能够被调度到
+node1上：
+或
+Pod的Toleration声明中的key和effect需要与Taint的设置保持一致，
+并且满足以下条件之一。
+
+◎　operator的值是Exists（无须指定value）。
+◎　operator的值是Equal并且value相等。
+如果不指定operator，则默认值为Equal。
+另外，有如下两个特例。
+◎　空的key配合Exists操作符能够匹配所有键和值。
+◎　空的effect匹配所有effect。
+在上面的例子中，effect的取值为NoSchedule，还可以取值为
+PreferNoSchedule，这个值的意思是优先，也可以算作NoSchedule的软
+限制版本—一个Pod如果没有声明容忍这个Taint，则系统会尽量避免把
+这个Pod调度到这一节点上，但不是强制的。后面还会介绍另一个
+effect“NoExecute”。
+系统允许在同一个Node上设置多个Taint，也可以在Pod上设置多个
+Toleration。Kubernetes调度器处理多个Taint和Toleration的逻辑顺序为：
+首先列出节点中所有的Taint，然后忽略Pod的Toleration能够匹配的部
+分，剩下的没被忽略的Taint就是对Pod的效果了。下面是几种特殊情
+况。
+◎　如果在剩余的Taint中存在effect=NoSchedule，则调度器不会把
+该Pod调度到这一节点上。
+◎　如果在剩余的Taint中没有NoSchedule效果，但是有
+PreferNoSchedule效果，则调度器会尝试不把这个Pod指派给这个节点。
+◎　如果在剩余的Taint中有NoExecute效果，并且这个Pod已经在该
+节点上运行，则会被驱逐；如果没有在该节点上运行，则也不会再被调
+度到该节点上。
+例如，我们这样对一个节点进行Taint设置：
+
+然后在Pod上设置两个Toleration：
+这样的结果是该Pod无法被调度到node1 上，这是因为第 3 个Taint
+没有匹配的Toleration。但是如果该Pod已经在node1上运行了，那么在运
+行时设置第3个Taint，它还能继续在node1上运行，这是因为Pod可以容
+忍前两个Taint。
+一般来说，如果给Node加上effect=NoExecute的Taint，那么在该
+Node上正在运行的所有无对应Toleration的Pod都会被立刻驱逐，而具有
+相应Toleration的Pod永远不会被驱逐。不过，系统允许给具有NoExecute
+效果的Toleration加入一个可选的tolerationSeconds字段，这个设置表明
+Pod可以在Taint添加到Node之后还能在这个Node上运行多久（单位为
+s）：
+
+上述定义的意思是，如果Pod正在运行，所在节点都被加入一个匹
+配的Taint，则这个Pod会持续在这个节点上存活3600s后被逐出。如果在
+这个宽限期内Taint被移除，则不会触发驱逐事件。
+Taint和Toleration是一种处理节点并且让Pod进行规避或者驱逐Pod
+的弹性处理方式，下面列举一些常见的用例。
+1.独占节点
+如果想要拿出一部分节点专门给一些特定应用使用，则可以为节点
+添加这样的Taint：
+然后给这些应用的Pod加入对应的Toleration。这样，带有合适
+Toleration的Pod就会被允许同使用其他节点一样使用有Taint的节点。
+通过自定义Admission Controller也可以实现这一目标。如果希望让
+这些应用独占一批节点，并且确保它们只能使用这些节点，则还可以给
+这些Taint节点加入类似的标签dedicated=groupName，然后Admission
+Controller需要加入节点亲和性设置，要求Pod只会被调度到具有这一标
+签的节点上。
+2.具有特殊硬件设备的节点
+在集群里可能有一小部分节点安装了特殊的硬件设备（如GPU芯
+
+片），用户自然会希望把不需要占用这类硬件的Pod排除在外，以确保
+对这类硬件有需求的Pod能够被顺利调度到这些节点上。
+可以用下面的命令为节点设置Taint：
+然后在Pod中利用对应的Toleration来保障特定的Pod能够使用特定
+的硬件。
+和上面独占节点的示例类似，使用Admission Controller来完成这一
+任务会更方便。例如，Admission 
+Controller使用Pod的一些特征来判断
+这些Pod，如果可以使用这些硬件，就添加Toleration来完成这一工作。
+要保障需要使用特殊硬件的Pod只被调度到安装这些硬件的节点上，则
+还需要一些额外的工作，比如将这些特殊资源使用opaque-int-resource的
+方式对自定义资源进行量化，然后在PodSpec中进行请求；也可以使用
+标签的方式来标注这些安装有特别硬件的节点，然后在Pod中定义节点
+亲和性来实现这个目标。
+3.定义Pod驱逐行为，以应对节点故障
+前面提到的NoExecute这个Taint效果对节点上正在运行的Pod有以下
+影响。
+◎　没有设置Toleration的Pod会被立刻驱逐。
+◎　配置了对应Toleration的Pod，如果没有为tolerationSeconds赋
+值，则会一直留在这一节点中。
+◎　配置了对应Toleration的Pod且指定了tolerationSeconds值，则会
+在指定的时间后驱逐。注意，在节点发生故障的情况下，系统将会以限
+速（rate-limiting）模式逐步给Node设置Taint，这样就能避免在一些特
+定情况下（比如Master暂时失联）有大量的Pod被驱逐。
+注意，Kubernetes会自动给Pod添加下面几种Toleration：
+◎　key为node.kubernetes.io/not-ready，并配置
+
+tolerationSeconds=300；
+◎　key为node.kubernetes.io/unreachable，并配置
+tolerationSeconds=300。
+以上添加的这种自动机制保证了在某些节点发生一些临时性问题
+时，Pod默认能够继续停留在当前节点运行5min等待节点恢复，而不是
+立即被驱逐，从而避免系统的异常波动。
+另外，Kubernetes从1.6版本开始引入两个与Taint相关的新特性：
+TaintNodesByCondition及TaintBasedEvictions，用来改善异常情况下的
+Pod调度与驱逐问题，比如在节点内存吃紧、节点磁盘空间已满、节点
+失联等情况下，是否自动驱逐某些Pod或者暂时保留这些Pod等待节点恢
+复正常。这个过程的完整逻辑基本如下。
+（1）不断地检查所有Node状态，设置对应的Condition。
+（2）不断地根据Node Condition设置对应的Taint。
+（3）不断地根据Taint驱逐Node上的Pod。
+其中，检查Node的状态并设置Node的Taint就是
+TaintNodesByCondition特性，即在Node满足某些特定的条件时，自动为
+Node节点添加Taint。目前主要有以下几种条件。
+◎　node.kubernetes.io/not-ready：节点未就绪。对应NodeCondition
+Ready为False的情况。
+◎　node.kubernetes.io/unreachable：节点不可触达。对应
+NodeCondition Ready为Unknown的情况。
+◎　node.kubernetes.io/out-of-disk：节点磁盘空间已满。
+◎　node.kubernetes.io/network-unavailable：节点网络不可用。
+◎　node.kubernetes.io/unschedulable：节点不可调度。
+◎　node.cloudprovider.kubernetes.io/uninitialized：如果kubelet是
+由“外部”云服务商启动的，则该污点用来标识某个节点当前为不可用状
+态。在云控制器（cloud-controller-manager）初始化这个节点以后，
+kubelet会将此污点移除。
+
+自Kubernetes 
+1.13开始，上述两个特性被默认启用。
+TaintNodesByCondition这个特性只会为节点添加NoSchedule效果的污
+点，TaintBasedEviction则为节点添加NoExecute效果的污点。在
+TaintBasedEvictions特性被开启之后，kubelet会在有资源压力时对相应
+的Node节点自动加上对应的NoExecute效果的Taint，例如
+node.kubernetes.io/memory-pressure、node.kubernetes.io/disk-pressure。如
+果Pod没有设置对应的Toleration，则这部分Pod将被驱逐，以确保节点
+不会崩溃。
+3.9.6　Pod Priority Preemption：Pod优先级调度
+对于运行各种负载（如Service、Job）的中等规模或者大规模的集
+群来说，出于各种原因，我们需要尽可能提高集群的资源利用率。而提
+高资源利用率的常规做法是采用优先级方案，即不同类型的负载对应不
+同的优先级，同时允许集群中的所有负载所需的资源总量超过集群可提
+供的资源，在这种情况下，当发生资源不足的情况时，系统可以选择释
+放一些不重要的负载（优先级最低的），保障最重要的负载能够获取足
+够的资源稳定运行。
+在Kubernetes 1.8版本之前，当集群的可用资源不足时，在用户提交
+新的Pod创建请求后，该Pod会一直处于Pending状态，即使这个Pod是一
+个很重要（很有身份）的Pod，也只能被动等待其他Pod被删除并释放资
+源，才能有机会被调度成功。Kubernetes 1.8版本引入了基于Pod优先级
+抢占（Pod Priority Preemption）的调度策略，此时Kubernetes会尝试释
+放目标节点上低优先级的Pod，以腾出空间（资源）安置高优先级的
+Pod，这种调度方式被称为“抢占式调度”。在Kubernetes 1.11版本中，该
+特性升级为Beta版本，默认开启，在后续的Kubernetes 
+1.14版本中正式
+Release。如何声明一个负载相对其他负载更重要？我们可以通过以下几
+个维度来定义：Priority：优先级；QoS：服务质量等级；系统定义的其
+他度量指标。
+优先级抢占调度策略的核心行为分别是驱逐（Eviction）与抢占
+（Preemption），这两种行为的使用场景不同，效果相同。Eviction是
+kubelet进程的行为，即当一个Node资源不足（under resource pressure）
+时，该节点上的kubelet进程会执行驱逐动作，此时kubelet会综合考虑
+
+Pod的优先级、资源申请量与实际使用量等信息来计算哪些Pod需要被驱
+逐；当同样优先级的Pod需要被驱逐时，实际使用的资源量超过申请量
+最大倍数的高耗能Pod会被首先驱逐。对于QoS等级为“Best Effort”的Pod
+来说，由于没有定义资源申请（CPU/Memory Request），所以它们实际
+使用的资源可能非常大。Preemption则是Scheduler执行的行为，当一个
+新的Pod因为资源无法满足而不能被调度时，Scheduler可能（有权决
+定）选择驱逐部分低优先级的Pod实例来满足此Pod的调度目标，这就是
+Preemption机制。
+需要注意的是，Scheduler可能会驱逐Node 
+A上的一个Pod以满足
+Node B上的一个新Pod的调度任务。比如下面的这个例子：
+一个低优先级的Pod A在Node A（属于机架R）上运行，此时有一个高优先级的
+Pod 
+B等待调度，目标节点是同属机架R的Node 
+B，其中一个或全部都定义了anti-
+affinity规则，不允许在同一个机架上运行，此时Scheduler只好“丢车保帅”，驱逐低优
+先级的Pod A以满足高优先级的Pod B的调度需求。
+Pod优先级调度示例如下。
+首先，由集群管理员创建PriorityClass，PriorityClass不属于任何命
+名空间：
+上述YAML文件定义了一个名为high-priority的优先级类别，优先级
+为100000，数字越大，优先级越高，超过一亿的数字被系统保留，用于
+指派给系统组件。
+
+我们可以在任意Pod上引用上述Pod优先级类别：
+如果发生了需要抢占的调度，高优先级Pod就可能抢占节点N，并
+将其低优先级Pod驱逐出节点N，高优先级Pod的status信息中的
+nominatedNodeName字段会记录目标节点N的名称。需要注意，高优先
+级Pod仍然无法保证最终被调度到节点N上，在节点N上低优先级Pod被
+驱逐的过程中，如果有新的节点满足高优先级Pod的需求，就会把它调
+度到新的Node上。而如果在等待低优先级的Pod退出的过程中，又出现
+了优先级更高的Pod，调度器就会调度这个更高优先级的Pod到节点N
+上，并重新调度之前等待的高优先级Pod。
+优先级抢占的调度方式可能会导致调度陷入“死循环”状态。当
+Kubernetes集群配置了多个调度器（Scheduler）时，这一行为可能就会
+发生，比如下面这个例子：
+Scheduler A为了调度一个（批）Pod，特地驱逐了一些Pod，因此在集群中有了空
+
+余的空间可以用来调度，此时Scheduler 
+B恰好抢在Scheduler 
+A之前调度了一个新的
+Pod，消耗了相应的资源，因此，当Scheduler A清理完资源后正式发起Pod的调度时，
+却发现资源不足，被目标节点的kubelet进程拒绝了调度请求！这种情况的确无解，因
+此最好的做法是让多个Scheduler相互协作来共同实现一个目标。
+高优先级Pod抢占节点并驱逐低优先级的Pod，这个问题对于普通的
+服务型的Pod来说问题不大，但对于执行批处理任务的Pod来说就可能是
+个灾难，当一个高优先级的批处理任务的Pod创建后，正在执行批处理
+任务的某个低优先级的Pod可能因为资源不足而被驱逐，从而导致对应
+的批处理任务被搁置。为了避免这个问题发生，PriorityClass增加了一
+个新的属性——preemptionPolicy，当它的值为
+preemptionLowerPriorty（默认）时，就执行抢占功能，当它的值被设置
+为Never时，就默认不抢占资源，而是静静地排队，等待自己的调度机
+会。
+最后要指出一点：使用优先级抢占的调度策略可能会导致某些Pod
+永远无法被成功调度。因此优先级调度不但增加了系统的复杂性，还可
+能带来额外不稳定的因素。因此，一旦发生资源紧张的局面，首先要考
+虑的是集群扩容，如果无法扩容，则再考虑有监管的优先级调度特性，
+比如结合基于命名空间的资源配额限制来约束任意优先级抢占行为。
+3.9.7　DaemonSet：在每个Node上都调度一个Pod
+DaemonSet是Kubernetes 1.2 版本新增的一种资源对象，用于管理在
+集群中的每个Node上仅运行一份Pod的副本实例，如图3.3所示。
+
+图3.3　DaemonSet示例
+这种用法适合有这种需求的应用。
+◎　在每个Node上都运行一个GlusterFS存储或者Ceph存储的
+Daemon进程。
+◎　在每个Node上都运行一个日志采集程序，例如Fluentd或者
+Logstach。
+◎　在每个Node上都运行一个性能监控程序，采集该Node的运行
+性能数据，例如Prometheus Node Exporter、collectd、New Relic agent或
+者Ganglia gmond等。
+DaemonSet的Pod调度策略与RC类似，除了使用系统内置的算法在
+每个Node上进行调度，也可以在Pod的定义中使用NodeSelector或
+NodeAffinity来指定满足条件的Node范围进行调度。
+下面的例子定义了为在每个Node上都启动一个fluentd容器，配置文
+件fluentd-ds.yaml的内容如下，其中挂载了物理机的两个目
+录“/var/log”和“/var/lib/docker/containers”：
+
+
+
+使用kubectl create命令创建该DaemonSet：
+查看创建好的DaemonSet和Pod，可以看到在每个Node上都创建了
+一个Pod：
+DaemonSet调度不同于普通的Pod调度，所以没有用默认的
+Kubernetes Scheduler进行调度，而是通过专有的DaemonSet Controller进
+行调度。但是随着Kubernetes版本的改进和调度特性不断丰富，产生了
+一些难以解决的矛盾，最主要的两个矛盾如下。
+◎　普通的Pod是在Pending状态触发调度并被实例化的，
+DaemonSet Controller并不是在这个状态调度Pod的，这种不一致容易误
+导和迷惑用户。
+◎　Pod优先级调度是被Kubernetes Scheduler执行的，而DaemonSet
+Controller并没有考虑到Pod优先级调度的问题，也产生了不一致的结
+果。
+
+从Kubernetes 
+1.18开始，DaemonSet的调度默认切换到Kubernetes
+Scheduler进行，从而一劳永逸地解决了以上问题及未来可能的新问题。
+因为默认切换到了Kubernetes Scheduler统一调度Pod，因此DaemonSet也
+能正确处理Taints和Tolerations的问题。
+3.9.8　Job：批处理调度
+Kubernetes从1.2版本开始支持批处理类型的应用，我们可以通过
+Kubernetes Job资源对象来定义并启动一个批处理任务。批处理任务通常
+并行（或者串行）启动多个计算进程去处理一批工作项（Work
+item），处理完成后，整个批处理任务结束。按照批处理任务实现方式
+的不同，批处理任务可以分为如图3.4所示的几种模式。
+
+图3.4　批处理任务的几种模式
+◎　Job Template Expansion模式：一个Job对象对应一个待处理的
+Work 
+item，有几个Work 
+item就产生几个独立的Job，通常适合Work
+item数量少、每个Work item要处理的数据量比较大的场景，比如有一个
+100GB的文件作为一个Work item，总共有10个文件需要处理。
+◎　Queue with Pod Per Work Item模式：采用一个任务队列存放
+Work item，一个Job对象作为消费者去完成这些Work item，在这种模式
+下，Job会启动N个Pod，每个Pod都对应一个Work item。
+◎　Queue with Variable Pod Count模式：也是采用一个任务队列存
+放Work item，一个Job对象作为消费者去完成这些Work item，但与上面
+
+的模式不同，Job启动的Pod数量是可变的。
+还有一种被称为Single Job with Static Work Assignment的模式，也
+是一个Job产生多个Pod，但它采用程序静态方式分配任务项，而不是采
+用队列模式进行动态分配。
+如表3.4所示是这几种模式的一个对比。
+表3.4　批处理任务的模式对比
+考虑到批处理的并行问题，Kubernetes将Job分以下三种类型。
+（1）Non-parallel 
+Jobs：通常一个Job只启动一个Pod，除非Pod异
+常，才会重启该Pod，一旦此Pod正常结束，Job将结束。
+（2）Parallel Jobs with a fixed completion count：并行Job会启动多
+个Pod，此时需要设定Job的.spec.completions参数为一个正数，当正常结
+束的Pod数量达至此参数设定的值后，Job结束。此外，Job
+的.spec.parallelism参数用来控制并行度，即同时启动几个Job来处理
+Work item。
+（3）Parallel Jobs with a work queue：任务队列方式的并行Job需要
+一个独立的Queue，Work 
+item都在一个Queue中存放，不能设置Job
+的.spec.completions参数，此时Job有以下特性。
+
+◎　每个Pod都能独立判断和决定是否还有任务项需要处理。
+◎　如果某个Pod正常结束，则Job不会再启动新的Pod。
+◎　如果一个Pod成功结束，则此时应该不存在其他Pod还在工作的
+情况，它们应该都处于即将结束、退出的状态。
+◎　如果所有Pod都结束了，且至少有一个Pod成功结束，则整个
+Job成功结束。
+下面分别讲解常见的三种批处理模式在Kubernetes中的应用示例。
+首先是Job Template Expansion模式，由于在这种模式下每个Work
+item都对应一个Job实例，所以这种模式首先定义一个Job模板，模板里
+的主要参数是Work item的标识，因为每个Job都处理不同的Work item。
+如下所示的Job模板（文件名为job.yaml.txt）中的$ITEM可以作为任务项
+的标识：
+
+通过下面的操作，生成了3个对应的Job定义文件并创建Job：
+
+观察Job的运行情况：
+然后，我们看看Queue with Pod Per Work Item模式，在这种模式下
+需要一个任务队列存放Work item，比如RabbitMQ，客户端程序先把要
+处理的任务变成Work 
+item放入任务队列，然后编写Worker程序、打包
+镜像并定义成为Job中的Work Pod。Worker程序的实现逻辑是从任务队
+列中拉取一个Work item并处理，在处理完成后结束进程。并行度为2的
+
+Demo示意图如图3.5所示。
+图3.5　并行度为2的Demo示意图
+最后，我们看看Queue with Variable Pod Count模式，如图3.6所示。
+由于这种模式下，Worker程序需要知道队列中是否还有等待处理的
+Work 
+item，如果有就取出来处理，否则就认为所有工作完成并结束进
+程，所以任务队列通常要采用Redis或者数据库来实现。
+
+图3.6　Queue with Variable Pod Count模式示意图
+3.9.9　Cronjob：定时任务
+Kubernetes从1.5版本开始增加了一种新类型的Job，即类似Linux
+Cron的定时任务Cron Job，下面看看如何定义和使用这种类型的Job。
+首先，确保Kubernetes的版本为1.8及以上。
+其次，需要掌握Cron 
+Job的定时表达式，它基本上照搬了Linux
+Cron的表达式，格式如下：
+其中每个域都可出现的字符如下。
+◎　Minutes：可出现“，”“-”“*”“/”这4个字符，有效范围为0～59的
+整数。
+◎　Hours：可出现“，”“-”“*”“/”这4个字符，有效范围为0～23的整
+数。
+◎　DayofMonth：可出现“，”“-”“*”“/”“？”“L”“W”“C”这8个字符，
+有效范围为1～31的整数。
+◎　Month：可出现“，”“-”“*”“/”这4个字符，有效范围为1～12的
+整数或JAN～DEC。
+◎　DayofWeek：可出现“，”“-”“*”“/”“？”“L”“C”“#”这8个字符，
+有效范围为1～7的整数或SUN～SAT。1表示星期天，2表示星期一，以
+此类推。
+表达式中的特殊字符“*”与“/”的含义如下。
+◎　*：表示匹配该域的任意值，假如在Minutes域使用“*”，则表示
+每分钟都会触发事件。
+◎　/：表示从起始时间开始触发，然后每隔固定时间触发一次，
+例如在Minutes域设置为5/20，则意味着第1次触发在第5min时，接下来
+
+每20min触发一次，将在第25min、第45min等时刻分别触发。
+比如，我们要每隔1min执行一次任务，则Cron表达式如下：
+掌握这些基本知识后，就可以编写一个Cron Job的配置文件了：
+
+该例子定义了一个名为hello的Cron Job，任务每隔1min执行一次，
+运行的镜像是busybox，运行的命令是Shell脚本，脚本运行时会在控制
+台输出当前时间和字符串“Hello from the Kubernetes cluster”。
+
+接下来运行kubectl create命令完成创建：
+然后每隔1min运行kubectl get cronjob hello查看任务状态，发现的确
+每分钟调度了一次：
+还可以通过查找Cron Job对应的容器，验证每隔1min产生一个容器
+的事实：
+
+查看任意一个容器的日志，结果如下：
+
+运行下面的命令，可以更直观地了解Cron Job定期触发任务执行的
+历史和现状：
+其中SUCCESSFUL列为1的每一行都是一个调度成功的Job，以第1
+行的“hello-1498761060”的Job为例，它对应的Pod可以通过下面的方式得
+到：
+查看该Pod的日志：
+
+最后，不需要某个Cron Job时，可以通过下面的命令删除它：
+在Kubernetes 1.9版本后，kubectl命令增加了别名cj来表示cronjob，
+同时kubectl set image/env命令也可以作用在CronJob对象上。
+3.9.10　自定义调度器
+如果Kubernetes调度器的众多特性还无法满足我们的独特调度需
+求，则还可以用自己开发的调度器进行调度。从1.6版本开始，
+Kubernetes的多调度器特性也进入了快速发展阶段。
+一般情况下，每个新Pod都会由默认的调度器进行调度。但是如果
+在Pod中提供了自定义的调度器名称，那么默认的调度器会忽略该Pod，
+转由指定的调度器完成Pod的调度。
+在下面的例子中为Pod指定了一个名为my-scheduler的自定义调度
+器：
+
+如果自定义的调度器还未在系统中部署，则默认的调度器会忽略这
+个Pod，这个Pod将会永远处于Pending状态。
+下面看看如何创建一个自定义的调度器。
+我们可以用任意语言实现简单或复杂的自定义调度器。下面的简单
+例子使用了Bash脚本进行实现，调度策略为随机选择一个Node（注意，
+这个调度器需要通过kubectl proxy来运行）：
+
+一旦这个自定义调度器成功启动，前面的Pod就会被正确调度到某
+个Node上。
+
+3.9.11　Pod容灾调度
+我们可以将Pod的各种常规调度策略认为是将整个集群视为一个整
+体，然后进行“打散或聚合”的调度。当我们的集群是为了容灾而建设的
+跨区域的多中心（多个Zone）集群，即集群中的节点位于不同区域的机
+房时，比如北京、上海、广州、武汉，要求每个中心的应用相互容灾备
+份，又能同时提供服务，此时最好的调度策略就是将需要容灾的应用均
+匀调度到各个中心，当某个中心出现问题时，又自动调度到其他中心均
+匀分布，调度效果如图3.7所示，不管每个中心的Node节点数量如何。
+图3.7　Pod的多中心均匀分布调度效果图
+用普通的基于Node标签选择的调度方式也可以实现上述效果，比如
+为每个Zone都建立一个Deployment，Pod的副本总数除以Zone的数量就
+是每个分区的Pod副本数量。但这样做有个问题：如果某个Zone失效，
+那么这个Zone的Pod就无法迁移到其他Zone。
+另外，topology.kubernetes.io/zone就是Kubernetes默认支持的重要拓
+扑域之一，那是否可以用Pod的亲和性调度来解决这个问题呢？不能，
+因为Pod的亲和性调度用于解决相关联的Pod的调度问题，不能保证被依
+赖的Pod被均匀调度到多个Zone。
+为了满足这种容灾场景下的特殊调度需求，在Kubernetes 1.16版本
+中首次引入Even 
+Pod 
+Spreading特性，用于通过topologyKey属性识别
+
+Zone，并通过设置新的参数topologySpreadConstraints来将Pod均匀调度
+到不同的Zone。举个例子，假如我们的集群被划分为多个Zone，我们有
+一个应用（对应的Pod标签为app=foo）需要在每个Zone均匀调度以实现
+容灾，则可以定义YAML文件如下：
+在以上YAML定义中，关键的参数是maxSkew。maxSkew用于指定
+Pod在各个Zone上调度时能容忍的最大不均衡数：值越大，表示能接受
+的不均衡调度越大；值越小，表示各个Zone的Pod数量分布越均匀。
+为了理解maxSkew，我们需要先理解skew参数的计算公式：
+skew[topo]=count[topo]-min（count[topo]），即每个拓扑区域的skew值
+都为该区域包括的目标Pod数量与整个拓扑区域最少Pod数量的差，而
+maxSkew就是最大的skew值。假如在上面的例子中有3个拓扑区域，分
+别为Zone A、Zone B及Zone C，有3个目标Pod需要调度到这些拓扑区
+域，那么前两个毫无疑问会被调度到Zone A和Zone B，调度效果如图
+3.8所示。
+
+图3.8　Even Pod Spreading调度效果
+那么，第3个Pod会被调度到哪里呢？我们可以手动计算每个Zone的
+skew，首先计算出min（count[topo]）是0，对应Zone C，于是Zone A的
+skew=1-0=1，Zone B的skew=1-0=0，Zone C的skew=0-0=0，于是第3个
+Pod应该被放在Zone 
+C，此时min（count[topo]）的值就变成了1，而实
+际的maxSkew的值为0，符合预期设置。如果我们把maxSkew设置为2，
+则在这种情况下，第3个Pod被放在Zone A或Zone B都是符合要求的。
+有了新的Even Pod Spreading调度特性的加持，再加上之前就已成熟
+的Pod亲和性调度，Kubernetes就可以完美实现特定应用的容灾部署目标
+了。具体做法也很简单：将一个应用中需要部署在一起的几个Pod用亲
+和性调度声明捆绑，然后选择其中一个Pod，加持Even Pod Spreading调
+度规则即可。最终的部署效果图如图3.9所示。
+
+图3.9　应用容灾部署效果图
+3.10　Init Container（初始化容器）
+在很多应用场景中，应用在启动之前都需要进行如下初始化操作。
+◎　等待其他关联组件正确运行（例如数据库或某个后台服务）。
+◎　基于环境变量或配置模板生成配置文件。
+◎　从远程数据库获取本地所需配置，或者将自身注册到某个中央
+数据库中。
+◎　下载相关依赖包，或者对系统进行一些预配置操作。
+Kubernetes 1.3版本引入了一个Alpha版本的新特性init container（初
+始化容器，在Kubernetes 1.5版本时被更新为Beta版本），用于在启动应
+用容器（app container）之前启动一个或多个初始化容器，完成应用容
+器所需的预置条件，如图3.10所示。init container与应用容器在本质上是
+一样的，但它们是仅运行一次就结束的任务，并且必须在成功运行完成
+后，系统才能继续执行下一个容器。根据Pod的重启策略
+（RestartPolicy），当init 
+container运行失败而且设置了
+RestartPolicy=Never时，Pod将会启动失败；而设置RestartPolicy=Always
+时，Pod将会被系统自动重启。
+
+图3.10　init container示意图
+下面以Nginx应用为例，在启动Nginx之前，通过初始化容器
+busybox为Nginx创建一个index.html主页文件。这里为init 
+container和
+Nginx设置了一个共享的Volume，以供Nginx访问init 
+container设置的
+index.html文件：
+
+
+创建这个Pod：
+在运行init 
+container的过程中查看Pod的状态，可见init过程还未完
+成：
+在init container成功运行完成后，系统继续启动Nginx容器，再次查
+看Pod的状态：
+查看Pod的事件，可以看到系统首先创建并运行init 
+container容器
+（名为install），成功后继续创建和运行Nginx容器：
+
+
+启动成功后，登录进Nginx容器，可以看到/usr/share/nginx/html目录
+下的index.html文件为init container所生成，其内容如下：
+init container与应用容器的区别如下。
+（1）init container的运行方式与应用容器不同，它们必须先于应用
+容器执行完成，当设置了多个init 
+container时，将按顺序逐个运行，并
+且只有前一个init container运行成功后才能运行后一个init container。在
+所有init 
+container都成功运行后，Kubernetes才会初始化Pod的各种信
+息，并开始创建和运行应用容器。
+（2）在init container的定义中也可以设置资源限制、Volume的使用
+和安全策略，等等。但资源限制的设置与应用容器略有不同。
+◎　如果多个init container都定义了资源请求/资源限制，则取最大
+的值作为所有init container的资源请求值/资源限制值。
+◎　Pod的有效（effective）资源请求值/资源限制值取以下二者中
+
+的较大值：①所有应用容器的资源请求值/资源限制值之和；②init
+container的有效资源请求值/资源限制值。
+◎　调度算法将基于Pod的有效资源请求值/资源限制值进行计算，
+也就是说init 
+container可以为初始化操作预留系统资源，即使后续应用
+容器无须使用这些资源。
+◎　Pod的有效QoS等级适用于init container和应用容器。
+◎　资源配额和限制将根据Pod的有效资源请求值/资源限制值计算
+生效。
+◎　Pod级别的cgroup将基于Pod的有效资源请求/限制，与调度机制
+一致。
+（3）init container不能设置readinessProbe探针，因为必须在它们成
+功运行后才能继续运行在Pod中定义的普通容器。
+在Pod重新启动时，init container将会重新运行，常见的Pod重启场
+景如下。
+◎　init container的镜像被更新时，init container将会重新运行，导
+致Pod重启。仅更新应用容器的镜像只会使得应用容器被重启。
+◎　Pod的infrastructure容器更新时，Pod将会重启。
+◎　若Pod中的所有应用容器都终止了，并且
+RestartPolicy=Always，则Pod会重启。
+3.11　Pod的升级和回滚
+下面说说Pod的升级和回滚问题。
+当集群中的某个服务需要升级时，我们需要停止目前与该服务相关
+的所有Pod，然后下载新版本镜像并创建新的Pod。如果集群规模比较
+大，则这个工作变成了一个挑战，而且先全部停止然后逐步升级的方式
+会导致较长时间的服务不可用。Kubernetes提供了滚动升级功能来解决
+上述问题。
+
+如果Pod是通过Deployment创建的，则用户可以在运行时修改
+Deployment的Pod定义（spec.template）或镜像名称，并应用到
+Deployment对象上，系统即可完成Deployment的rollout动作，rollout可
+被视为Deployment的自动更新或者自动部署动作。如果在更新过程中发
+生了错误，则还可以通过回滚操作恢复Pod的版本。
+3.11.1　Deployment的升级
+以Deployment nginx为例：
+
+已运行的Pod副本数量有3个：
+现在Pod镜像需要被更新为Nginx：1.9.1，我们可以通过kubectl 
+set
+image命令为Deployment设置新的镜像名称：
+另一种更新的方法是使用kubectl edit命令修改Deployment的配置，
+
+将spec.template.spec.containers[0].image从Nginx：1.7.9更改为Nginx：
+1.9.1：
+镜像名（或Pod定义）一旦发生了修改，则将触发系统完成
+Deployment所有运行Pod的滚动升级操作。可以使用kubectl rollout status
+命令查看Deployment的更新过程：
+查看当前运行的Pod，名称已经更新了：
+
+查看Pod使用的镜像，已经更新为Nginx：1.9.1了：
+那么，Deployment是如何完成Pod更新的呢？
+我们可以使用kubectl describe deployments/nginx-deployment命令仔
+细观察Deployment的更新过程。初始创建Deployment时，系统创建了一
+个ReplicaSet（nginx-deployment-4087004473），并按用户的需求创建了
+3个Pod副本。更新Deployment时，系统创建了一个新的
+ReplicaSet（nginx-deployment-3599678771），并将其副本数量扩展到
+1，然后将旧的ReplicaSet缩减为2。之后，系统继续按照相同的更新策
+略对新旧两个ReplicaSet进行逐个调整。最后，新的ReplicaSet运行了3个
+新版本的Pod副本，旧的ReplicaSet副本数量则缩减为0，如图3.11所示。
+
+图3.11　Pod的滚动升级示意图
+下面列出Deployment nginx-deployment的详细事件信息：
+
+
+运行kubectl get rs命令，查看两个ReplicaSet的最终状态：
+在整个升级过程中，系统会保证至少有两个Pod可用，并且最多同
+时运行4个Pod，这是Deployment通过复杂的算法完成的。Deployment需
+要确保在整个更新过程中只有一定数量的Pod可能处于不可用状态。在
+默认情况下，Deployment确保可用的Pod总数量至少为所需的副本数量
+（DESIRED）减1，也就是最多1个不可用（maxUnavailable=1）。
+Deployment还需要确保在整个更新过程中Pod的总数量不会超过所需的
+副本数量太多。在默认情况下，Deployment确保Pod的总数量最多比所
+需的Pod数量多1个，也就是最多1个浪涌值（maxSurge=1）。
+Kubernetes从1.6版本开始，maxUnavailable和maxSurge的默认值将从1、
+1更新为所需副本数量的25%、25%。
+这样，在升级过程中，Deployment就能够保证服务不中断，并且副
+本数量始终维持为用户指定的数量（DESIRED）。
+在Deployment的定义中，可以通过spec.strategy指定Pod更新的策
+略，目前支持两种策略：Recreate（重建）和RollingUpdate（滚动更
+新），默认值为RollingUpdate。在前面的例子中使用的就是
+RollingUpdate策略。
+◎　Recreate：设置spec.strategy.type=Recreate，表示Deployment在
+更新Pod时，会先“杀掉”所有正在运行的Pod，然后创建新的Pod。
+◎　RollingUpdate：设置spec.strategy.type=RollingUpdate，表示
+Deployment会以滚动更新的方式来逐个更新Pod。同时，可以通过设置
+spec.strategy.rollingUpdate下的两个参数（maxUnavailable和maxSurge）
+来控制滚动更新的过程。
+
+对滚动更新时两个主要参数的说明如下。
+◎　spec.strategy.rollingUpdate.maxUnavailable：用于指定
+Deployment在更新过程中不可用状态的Pod数量的上限。该
+maxUnavailable的数值可以是绝对值（例如5）或Pod期望的副本数量的
+百分比（例如10%），如果被设置为百分比，那么系统会先以向下取整
+的方式计算出绝对值（整数）。而当另一个参数maxSurge被设置为0
+时，maxUnavailable则必须被设置为绝对数值大于0（从Kubernetes 1.6开
+始，maxUnavailable的默认值从1改为25%）。举例来说，当
+maxUnavailable被设置为30%时，旧的ReplicaSet可以在滚动更新开始时
+立即将副本数量缩小到所需副本总数量的70%。一旦新的Pod创建并准
+备好，旧的ReplicaSet就会进一步缩容，新的ReplicaSet又继续扩容，整
+个过程中系统在任意时刻都可以确保可用状态的Pod总数量至少占Pod期
+望副本总数量的70%。
+◎　spec.strategy.rollingUpdate.maxSurge：用于指定在Deployment
+更新Pod的过程中Pod总数量超过Pod期望副本数量部分的最大值。该
+maxSurge的数值可以是绝对值（例如5）或Pod期望副本数量的百分比
+（例如10%）。如果设置为百分比，那么系统会先按照向上取整的方式
+计算出绝对数值（整数）。从Kubernetes 1.6开始，maxSurge的默认值从
+1改为25%。举例来说，当maxSurge的值被设置为30%时，新的
+ReplicaSet可以在滚动更新开始时立即进行副本数量扩容，只需保证新
+旧ReplicaSet的Pod副本数量之和不超过期望副本数量的130%即可。一
+旦旧的Pod被“杀掉”，新的ReplicaSet就会进一步扩容。在整个过程中系
+统在任意时刻都能确保新旧ReplicaSet的Pod副本总数量之和不超过所需
+副本数量的130%。
+这里需要注意多重更新（Rollover）的情况。如果Deployment的上
+一次更新正在进行，此时用户再次发起Deployment的更新操作，那么
+Deployment会为每一次更新都创建一个ReplicaSet，而每次在新的
+ReplicaSet创建成功后，会逐个增加Pod副本数量，同时将之前正在扩容
+的ReplicaSet停止扩容（更新），并将其加入旧版本ReplicaSet列表中，
+然后开始缩容至0的操作。
+例如，假设我们创建一个Deployment，这个Deployment开始创建5
+个Nginx：1.7.9的Pod副本，在这个创建Pod动作尚未完成时，我们又将
+
+Deployment进行更新，在副本数量不变的情况下将Pod模板中的镜像修
+改为Nginx：1.9.1，又假设此时Deployment已经创建了3个Nginx：1.7.9
+的Pod副本，则Deployment会立即“杀掉”已创建的3个Nginx：1.7.9 Pod，
+并开始创建Nginx：1.9.1 
+Pod。Deployment不会在等待Nginx：1.7.9的
+Pod创建到5个之后再进行更新操作。
+还需要注意更新Deployment的标签选择器（Label Selector）的情
+况。通常来说，不鼓励更新Deployment的标签选择器，因为这样会导致
+Deployment选择的Pod列表发生变化，也可能与其他控制器发生冲突。
+如果一定要更新标签选择器，那么请务必谨慎，确保不会出现其他问
+题。关于Deployment标签选择器的更新的注意事项如下。
+（1）添加选择器标签时，必须同步修改Deployment配置的Pod的标
+签，为Pod添加新的标签，否则Deployment的更新会报验证错误而失
+败：
+添加标签选择器是无法向后兼容的，这意味着新的标签选择器不会
+匹配和使用旧选择器创建的ReplicaSets和Pod，因此添加选择器将会导
+致所有旧版本的ReplicaSets和由旧ReplicaSets创建的Pod处于孤立状态
+（不会被系统自动删除，也不受新的ReplicaSet控制）。
+为标签选择器和Pod模板添加新的标签（使用kubectl 
+edit
+deployment命令）后，效果如下：
+
+可以看到新ReplicaSet（nginx-deployment-3661742516）创建的3个
+新Pod：
+（2）更新标签选择器，即更改选择器中标签的键或者值，也会产
+生与添加选择器标签类似的效果。
+（3）删除标签选择器，即从Deployment的标签选择器中删除一个
+或者多个标签，该Deployment的ReplicaSet和Pod不会受到任何影响。但
+需要注意的是，被删除的标签仍会存在于现有的Pod和ReplicaSets上。
+Deployment会自动创建并控制对应的ReplicaSet，给它们增加一个
+名为pod-template-hash的标签。切记，这个标签是不能被手动修改的。
+在什么情况下会触发Deployment的rollout行为呢？只有Pod模板定义
+
+部分（Deployment的.spec.template）的属性发生改变时才会触发
+Deployment的rollout行为，对于其他的比如修改Pod的副本数量
+（spec.replicas）的值，则不会触发rollout行为。
+对于用RC（Replication 
+Controller）来控制Pod的滚动升级，
+Kubernetes之前提供了对应的kubectl rolling-update命令来实现类似的功
+能。该命令通过创建一个新RC，然后自动控制旧RC中的Pod副本数量
+逐渐减少到0，新RC中的Pod副本数量从0逐步增加到目标值，来完成
+Pod的升级。此命令在kuberntes的1.17版本中被标记为DEPRECATED，
+在1.18中不再提供支持。
+3.11.2　Deployment的回滚
+如果在Deployment升级过程中出现意外，比如写错新镜像的名称、
+新镜像还没被放入镜像仓库里、新镜像的配置文件发生不兼容性改变、
+新镜像的启动参数不对，以及因可能更复杂的依赖关系而导致升级失败
+等，就需要回退到之前的旧版本，这时就可以用到Deployment的回滚功
+能了。
+假设在更新Deployment镜像时，将容器镜像名误设置成Nginx：
+1.91（一个不存在的镜像）：
+则这时Deployment的部署过程会卡住：
+所以需要运行Ctrl C命令来终止这个查看命令。
+查看ReplicaSet，可以看到新建的ReplicaSet（nginx-deployment-
+
+3660254150）：
+再查看创建的Pod，会发现新的ReplicaSet创建的1个Pod被卡在镜像
+拉取过程中。
+为了解决上面这个问题，我们需要回滚到之前稳定版本的
+Deployment。首先，用kubectl rollout history命令检查这个Deployment部
+署的历史记录：
+
+我们将Deployment回滚到之前的版本时，只有Deployment的Pod模
+板部分会被修改，在默认情况下，所有Deployment的发布历史记录都被
+保留在系统中（可以配置历史记录数量），以便于我们随时进行回滚操
+作。注意，在创建Deployment时使用--record参数，就可以在CHANGE-
+CAUSE列看到每个版本使用的命令了。
+如果需要查看特定版本的详细信息，则可以加上--revision=<N>参
+数：
+
+现在我们决定撤销本次发布并回滚到上一个部署版本：
+当然，也可以使用--to-revision参数指定回滚到的部署版本号：
+
+这样，该Deployment就回滚到之前的稳定版本了，可以从
+Deployment的事件信息中查看到回滚到版本2的操作过程：
+
+
+3.11.3　暂停和恢复Deployment的部署操作
+对于一次复杂的Deployment配置修改，为了避免频繁触发
+Deployment的更新操作，可以先暂停Deployment的更新操作，然后进行
+配置修改，再恢复Deployment，一次性触发完整的更新操作，就可以避
+免不必要的Deployment更新操作了。
+以之前创建的Nginx为例：
+通过kubectl rollout pause命令暂停Deployment的更新操作：
+然后修改Deployment的镜像信息：
+
+查看Deployment的历史记录，发现并没有触发新的Deployment部署
+操作：
+在暂停Deployment部署之后，可以根据需要进行任意次数的配置更
+新。例如，再次更新容器的资源限制：
+最后，恢复这个Deployment的部署操作：
+可以看到一个新的ReplicaSet被创建出来了：
+
+查看Deployment的事件信息，可以看到Deployment完成了更新：
+
+
+注意，在恢复暂停的Deployment之前，无法回滚该Deployment。
+3.11.4　其他管理对象的更新策略
+Kubernetes从1.6版本开始，对DaemonSet和StatefulSet的更新策略也
+引入类似于Deployment的滚动升级，通过不同的策略自动完成应用的版
+本升级。
+1.DaemonSet的更新策略
+目前DaemonSet的升级策略（updateStrategy）包括两种：OnDelete
+和RollingUpdate。
+（1）OnDelete：DaemonSet的默认升级策略，与1.5及之前版本的
+Kubernetes保持一致。当使用OnDelete作为升级策略时，在创建好新的
+DaemonSet配置之后，新的Pod并不会被自动创建，直到用户手动删除
+旧版本的Pod，才触发新建操作，即只有手工删除了DaemonSet创建的
+Pod副本，新的Pod副本才会被创建出来。如果不设置updateStrategy的
+值，则在Kubernetes 
+1.6之后的版本中会被作为updateStrategy的默认设
+置。
+（2）RollingUpdate：从Kubernetes 
+1.6版本开始引入。当使用
+RollingUpdate作为升级策略对DaemonSet进行更新时，旧版本的Pod将被
+自动“杀掉”，然后自动创建新版本的DaemonSet 
+Pod。整个过程与普通
+Deployment的滚动升级一样是可控的。不过有两点不同于普通Pod的滚
+动升级：一是目前Kubernetes还不支持查看和管理DaemonSet的更新历
+史记录；二是DaemonSet的回滚（Rollback）并不能如同Deployment一
+样直接通过kubectl rollback命令来实现，必须通过再次提交旧版本配置
+的方式实现。
+下面是DaemonSet采用RollingUpdate升级策略的YAML定义：
+
+2.StatefulSet的更新策略
+Kubernetes从1.6版本开始，针对StatefulSet的更新策略逐渐向
+Deployment和DaemonSet的更新策略看齐；1.7版本之后，StatefulSet又
+增加了updateStrategy字段给予用户更强的StatefulSet升级控制能力，并
+实现了RollingUpdate、OnDelete和Partitioned这几种策略，以保证
+StatefulSet中各Pod有序地、逐个地更新，并且能够保留更新历史，也能
+回滚到某个历史版本。如果用户未设置updateStrategy字段，则系统默认
+使用RollingUpdate策略。
+当updateStrategy的值被设置为RollingUpdate时，StatefulSet
+Controller会删除并创建StatefulSet相关的每个Pod对象，其处理顺序与
+StatefulSet终止Pod的顺序一致，即从序号最大的Pod开始重建，每次更
+新一个Pod。注意，如果StatefulSet的Pod Management Policy被设置为
+OrderedReady，则可能在更新过程中发生一些意外，从而导致
+StatefulSet陷入奔溃状态，此时需要用户手动修复。
+当updateStrategy的值被设置为OnDelete时，StatefulSet Controller并
+不会自动更新StatefulSet中的Pod实例，而是需要用户手动删除这些Pod
+并触发StatefulSet 
+Controller创建新的Pod实例来弥补，因此这其实是一
+种手动升级模式。
+updateStrategy也支持特殊的分区升级策略（Partitioned），在这种
+模式下，用户指定一个序号，StatefulSet中序号大于等于此序号的Pod实
+例会全部被升级，小于此序号的Pod实例则保留旧版本不变，即使这些
+
+Pod被删除、重建，也仍然保持原来的旧版本。这种分区升级策略通常
+用于按计划分步骤的系统升级过程中。
+3.12　Pod的扩缩容
+在实际生产系统中，我们经常会遇到某个服务需要扩容的场景，也
+可能会遇到由于资源紧张或者工作负载降低而需要减少服务实例数量的
+场景。此时可以利用Deployment/RC的Scale机制来完成这些工作。
+Kubernetes对Pod的扩缩容操作提供了手动和自动两种模式，手动模
+式通过运行kubectl scale命令或通过RESTful API对一个Deployment/RC进
+行Pod副本数量的设置，即可一键完成。自动模式则需要用户根据某个
+性能指标或者自定义业务指标，并指定Pod副本数量的范围，系统将自
+动在这个范围内根据性能指标的变化进行调整。
+3.12.1　手动扩缩容机制
+以Deployment nginx为例：
+
+已运行的Pod副本数量为3个：
+
+通过kubectl scale命令可以将Pod副本数量从初始的3个更新为5个：
+将--replicas的值设置为比当前Pod副本数量更小的数字，系统将
+会“杀掉”一些运行中的Pod，以实现应用集群缩容：
+
+3.12.2　自动扩缩容机制
+Kubernetes从1.1版本开始，新增了名为Horizontal 
+Pod
+Autoscaler（HPA）的控制器，用于实现基于CPU使用率进行自动Pod扩
+缩容的功能。HPA控制器基于Master的kube-controller-manager服务启动
+参数--horizontal-pod-autoscaler-sync-period定义的探测周期（默认值为
+15s），周期性地监测目标Pod的资源性能指标，并与HPA资源对象中的
+扩缩容条件进行对比，在满足条件时对Pod副本数量进行调整。
+Kubernetes在早期版本中，只能基于Pod的CPU使用率进行自动扩缩
+容操作，关于CPU使用率的数据最早来源于组件，从1.11版本开始，
+Kubernetes正式弃用Heapster并全面转向基于Metrics 
+Server完成数据采
+集。Metrics 
+Server将采集到的Pod性能指标数据通过聚合
+API（Aggregated 
+API）如metrics.k8s.io、custom.metrics.k8s.io和
+external.metrics.k8s.io提供给HPA控制器进行查询。关于聚合API和API
+聚合器（API Aggregator）的概念详见9.4.2节的说明。另外，Kubernetes
+从1.6版本开始，引入了基于应用自定义性能指标的HPA机制，并在1.9
+版本之后逐步成熟。
+本节对Kubernetes的HPA的原理和实践进行详细说明。
+1.HPA的工作原理
+Kubernetes中的某个Metrics 
+Server持续采集所有Pod副本的指标数
+据。HPA控制器通过Metrics Server的API获取这些数据，基于用户定义
+的扩缩容规则进行计算，得到目标Pod的副本数量。当目标Pod副本数量
+与当前副本数量不同时，HPA控制器就向Pod的副本控制器
+（Deployment、RC或ReplicaSet）发起scale操作，调整Pod的副本数量，
+完成扩缩容操作。图3.12展示了HPA体系中的关键组件和工作流程。
+
+接下来首先对HPA能够管理的指标类型、扩缩容算法、HPA对象的
+配置进行详细说明，然后通过一个完整的示例对如何搭建和使用基于自
+定义指标的HPA体系进行说明。
+图3.12　HPA体系中的关键组件和工作流程
+2.指标的类型
+Master的kube-controller-manager服务持续监测目标Pod的某种性能
+指标，以计算是否需要调整副本数量。目前Kubernetes支持的指标类型
+如下。
+◎　Pod资源使用率：Pod级别的性能指标，通常是一个比率值，例
+如CPU使用率。
+◎　Pod自定义指标：Pod级别的性能指标，通常是一个数值，例如
+接收的请求数量。
+◎　Object自定义指标或外部自定义指标：通常是一个数值，需要
+容器应用以某种方式提供，例如通过HTTP URL“/metrics”提供，或者使
+用外部服务提供的指标采集URL。
+Kubernetes HPA当前有以下两个版本。
+◎　autoscaling/v1版本仅支持基于CPU使用率指标的自动扩缩容。
+
+◎　autoscaling/v2版本则支持基于内存使用率指标、自定义指标及
+外部指标的自动扩缩容，并且进一步扩展以支持多指标缩放能力，当定
+义了多个指标时，HPA会跟据每个指标进行计算，其中缩放幅度最大的
+指标会被采纳。
+3.扩缩容算法详解
+Autoscaler控制器从聚合API获取到Pod性能指标数据之后，基于下
+面的算法计算出目标Pod副本数量，与当前运行的Pod副本数量进行对
+比，决定是否需要进行扩缩容操作：
+即当前副本数×（当前指标值/期望的指标值），将结果向上取整。
+以CPU请求数量为例，如果用户设置的期望指标值为100m，当前
+实际使用的指标值为200m，则计算得到期望的Pod副本数量应为两个
+（200/100=2）。如果当前实际使用的指标值为50m，计算结果为0.5，
+则向上取整，值为1，得到目标Pod副本数量应为1个。
+当计算结果与1非常接近时，可以设置一个容忍度让系统不做扩缩
+容操作。容忍度通过kube-controller-manager服务的启动参数--horizontal-
+pod-autoscaler-tolerance进行设置，默认值为0.1（即10%），表示基于上
+述算法得到的结果在[-10%，+10%]区间内，即[0.9，1.1]区间，控制器
+都不会进行扩缩容操作。
+也可以将期望指标值（desiredMetricValue）设置为指标的平均值类
+型，例如targetAverageValue或targetAverageUtilization，此时当前指标值
+（currentMetricValue）的算法为所有Pod副本当前指标值的总和除以Pod
+副本数量得到的平均值。
+此外，存在几种Pod异常的情况，如下所述。
+◎　Pod正在被删除（设置了删除时间戳）：将不会计入目标Pod副
+本数量。
+◎　Pod的当前指标值无法获得：本次探测不会将这个Pod纳入目标
+
+Pod副本数量，后续的探测会被重新纳入计算范围。
+◎　如果指标类型是CPU使用率，则对于正在启动但是还未达到
+Ready状态的Pod，也暂时不会纳入目标副本数量范围。可以通过kube-
+controller-manager服务的启动参数--horizontal-pod-autoscaler-initial-
+readiness-delay设置首次探测Pod是否Ready的延时时间，默认值为30s。
+另一个启动参数--horizontal-pod-autoscaler-cpu-initialization-period设置首
+次采集Pod的CPU使用率的延时时间。
+在计算“当前指标值/期望的指标
+值”（currentMetricValue/desiredMetricValue）时将不会包括上述这些异
+常Pod。
+当存在缺失指标的Pod时，系统将更保守地重新计算平均值。系统
+会假设这些Pod在需要缩容（Scale 
+Down）时消耗了期望指标值的
+100%，在需要扩容（Scale 
+Up）时消耗了期望指标值的0%，这样可以
+抑制潜在的扩缩容操作。
+此外，如果存在未达到Ready状态的Pod，并且系统原本会在不考虑
+缺失指标或NotReady的Pod情况下进行扩展，则系统仍然会保守地假设
+这些Pod消耗期望指标值的0%，从而进一步抑制扩容操作。
+如果在HorizontalPodAutoscaler中设置了多个指标，系统就会对每个
+指标都执行上面的算法，在全部结果中以期望副本数量的最大值为最终
+结果。如果这些指标中的任意一个都无法被转换为期望的副本数量（例
+如无法获取指标的值），系统就会跳过扩缩容操作。
+使用HPA特性时，可能因为指标动态的变化造成Pod副本数量频繁
+变动，这也被称为“抖动“。抖动会影响到业务系统的稳定性，
+Kubernetes 1.12之前的版本提供了一些系统参数来缓解这个问题，不过
+这些参数难以理解和设置。Kubernetes 
+1.12版本增加了全新的参数
+horizontal-pod-autoscaler-downscale-stabilization（kube-controller-manager
+的参数）来解决这个问题，它表示HPA扩缩容过程中的冷却时间，即从
+上次缩容执行结束后，需要经过最少多长时间才可以再次执行缩容动
+作。当前的默认时间是 
+5min，此配置可以让系统更为平滑地进行缩容
+操作，从而消除短时间内指标值快速波动产生的影响。对该参数的调整
+需要根据当前生产环境的实际情况进行并观察结果，若时间过短，则仍
+然可能抖动强烈，若时间过长，则可能导致HPA失效。
+
+最后，在HPA控制器执行扩缩容操作之前，系统会记录扩缩容建议
+信息（Scale Recommendation）。控制器会在操作时间窗口（时间范围
+可以配置）中考虑所有的建议信息，并从中选择得分最高的建议。
+4.HorizontalPodAutoscaler配置详解
+Kubernetes将HorizontalPodAutoscaler资源对象提供给用户来定义扩
+缩容的规则，HorizontalPodAutoscaler资源对象处于Kubernetes的API
+组“autoscaling”中。下面对HorizontalPodAutoscaler的配置和用法进行说
+明。
+（1）基于autoscaling/v1版本的HorizontalPodAutoscaler配置：
+主要参数如下。
+◎　scaleTargetRef：目标作用对象，可以是Deployment、
+ReplicationController或ReplicaSet。
+
+◎　targetCPUUtilizationPercentage：期望每个Pod的CPU使用率都
+为50%，该使用率基于Pod设置的CPU Request值进行计算，例如该值为
+200m，那么系统将维持Pod的实际CPU使用值为100m。
+◎　minReplicas和maxReplicas：Pod副本数量的最小值和最大值，
+系统将在这个范围内进行自动扩缩容操作，并维持每个Pod的CPU使用
+率为50%。
+为了使用autoscaling/v1版本的HorizontalPodAutoscaler，需要预先安
+装Metrics Server，用于采集Pod的CPU使用率。关于Metrics Server的说
+明请参考9.4节的介绍，本节主要对基于自定义指标进行自动扩缩容的
+设置进行说明。
+（2）基于autoscaling/v2beta2版本的HorizontalPodAutoscaler配置：
+
+主要参数如下。
+◎　scaleTargetRef：目标作用对象，可以是Deployment、
+ReplicationController或ReplicaSet。
+◎　minReplicas和maxReplicas：Pod副本数量的最小值和最大值，
+
+系统将在这个范围内进行自动扩缩容操作，并维持每个Pod的CPU使用
+率为50%。
+◎　metrics：目标指标值。在metrics中通过参数type定义指标的类
+型；通过参数target定义相应的指标目标值，系统将在指标数据达到目
+标值时（考虑容忍度的区间，见前面算法部分的说明）触发扩缩容操
+作。
+可以将metrics中的type（指标类型）设置为以下四种，如下所述。
+◎　Resource：指的是当前伸缩对象下Pod的CPU和Memory指标，
+只支持Utilization和AverageValue类型的目标值。对于CPU使用率，在
+target参数中设置averageUtilization定义目标平均CPU使用率。对于内存
+资源，在target参数中设置AverageValue定义目标平均内存使用值。
+◎　Pods：指的是伸缩对象Pod的指标，数据需要由第三方的
+Adapter提供，只允许AverageValue类型的目标值。
+◎　Object：Kubernetes内部对象的指标，数据需要由第三方
+Adapter提供，只支持Value和AverageValue类型的目标值。
+◎　External：指的是Kubernetes外部的指标，数据同样需要由第三
+方Adapter提供，只支持Value和AverageValue类型的目标值。
+其中，AverageValue是根据Pod副本数量计算的平均值指标。
+Resource类型的指标来自Metrics Server自身，即从它所提供的aggregated
+APIs的metrics.k8s.io接口获取数据，Pod类型和Object类型都属于自定义
+指标类型，从Metrics Server的custom.metrics.k8s.io接口获取数据，但需
+要配套Metrics Server的第三方Adapter来提供数据，这些数据一般都属于
+Kubernetes集群自身的参数。而External属于外部指标，基本与Kuberntes
+无关，例如用户使用了公有云服务商提供的消息服务或外部负载均衡
+器，希望基于这些外部服务的性能指标（如消息服务的队列长度、负载
+均衡器的QPS）对自己部署在Kubernetes中的服务进行自动扩缩容操
+作，External指标从Metrics 
+Server的external.metrics.k8s.io接口获取数
+据。
+而具体的指标数据可以通过API“custom.metrics.k8s.io”进行查询，
+要求预先启动自定义Metrics Server服务。
+
+下面是一个类型为Pods的Metrics示例：
+其中，设置Pod的指标名为packets-per-second，在目标指标平均值
+为1000时触发扩缩容操作。
+下面是几个类型为Object的Metrics示例。
+例1，设置指标的名称为requests-per-second，其值来源于
+Ingress“main-route”，将目标值（value）设置为2000，即在Ingress的每
+秒请求数量达到2000个时触发扩缩容操作：
+
+例2，设置指标的名称为http_requests，并且该资源对象具有标签
+verb=GET，在指标平均值达到500时触发扩缩容操作：
+
+我们在使用autoscaling/v2beta1版本时，还可以在同一个
+HorizontalPodAutoscaler资源对象中定义多个类型的指标，系统将针对每
+种类型的指标都计算Pod副本的目标数量，以最大值为准进行扩缩容操
+作。下面是一个具体的示例：
+
+
+下面是一个类型为External的Metrics示例（例3）。
+例3，设置指标的名称为queue_messages_ready，具有
+queue=worker_tasks标签，在目标指标平均值为30时触发自动扩缩容操
+作：
+在使用外部服务的指标时，要安装、部署能够对接到Kubernetes
+HPA模型的监控系统，并且完全了解监控系统采集这些指标的机制，后
+续的自动扩缩容操作才能完成。
+Kubernetes推荐尽量使用类型为Object的HPA配置方式，这可以通
+过使用Operator模式，将外部指标通过CRD（自定义资源）定义为API
+资源对象来实现。
+5.基于自定义指标的HPA实践
+下面通过一个完整的示例，对如何搭建和使用基于自定义指标的
+HPA体系进行说明。
+基于自定义指标进行自动扩缩容时，需要预先部署自定义Metrics
+Server，目前可以使用基于Prometheus、Microsoft 
+Azure、Datadog
+Cluster等系统的Adapter实现自定义Metrics 
+Server，未来还将提供基于
+
+Google Stackdriver的实现自定义Metrics Server。本节基于Prometheus监
+控系统对HPA的基础组件部署和HPA配置进行详细说明。
+基于Prometheus的HPA架构如图3.13所示。
+图3.13　基于Prometheus的HPA架构
+关键组件包括如下。
+◎　Prometheus：定期采集各Pod的性能指标数据。
+◎　Custom Metrics Server：自定义Metrics Server，用Prometheus
+Adapter进行具体实现。它从Prometheus服务采集性能指标数据，通过
+Kubernetes的Metrics Aggregation层将自定义指标API注册到Master的API
+Server中，以/apis/custom.metrics.k8s.io路径提供指标数据。
+◎　HPA 
+Controller：Kubernetes的HPA控制器，基于用户定义的
+HorizontalPodAutoscaler进行自动扩缩容操作。
+接下来对整个系统的部署过程进行说明。
+（1）在Master的API 
+Server中启动Aggregation层，通过设置kube-
+apiserver服务的下列启动参数进行启动。
+
+◎　--requestheader-client-ca-file=/etc/kubernetes/ssl_keys/ca.crt：客
+户端CA证书。
+◎　--requestheader-allowed-names=：允许访问的客户端common
+names列表，通过header中由--requestheader-username-headers参数指定的
+字段获取。客户端common 
+names的名称需要在client-ca-file中进行配
+置，将其设置为空值时，表示任意客户端都可以访问。
+◎　--requestheader-extra-headers-prefix=X-Remote-Extra-：请求头
+中需要检查的前缀名。
+◎　--requestheader-group-headers=X-Remote-Group：请求头中需要
+检查的组名。
+◎　--requestheader-username-headers=X-Remote-User：请求头中需
+要检查的用户名。
+◎　--proxy-client-cert-
+file=/etc/kubernetes/ssl_keys/kubelet_client.crt：在请求期间验证
+Aggregator的客户端CA证书。
+◎　--proxy-client-key-
+file=/etc/kubernetes/ssl_keys/kubelet_client.key：在请求期间验证
+Aggregator的客户端私钥。
+配置kube-controller-manager服务中HPA的相关启动参数（可选配
+置）如下。
+◎　--horizontal-pod-autoscaler-sync-period=10s：HPA控制器同步
+Pod副本数量的时间间隔，默认值为15s。
+◎　--horizontal-pod-autoscaler-downscale-stabilization=1m0s：执行
+缩容操作的等待时长，默认值为5min。
+◎　--horizontal-pod-autoscaler-initial-readiness-delay=30s：等待Pod
+达到Ready状态的时延，默认值为30min。
+◎　--horizontal-pod-autoscaler-tolerance=0.1：扩缩容计算结果的容
+忍度，默认值为0.1，表示[-10%，+10%]。
+（2）部署Prometheus，这里使用Operator模式进行部署。
+
+首先，使用下面的YAML文件部署prometheus-operator：
+
+
+这个prometheus-operator会自动创建名为monitoring.coreos.com的
+CRD资源。
+然后，通过Operator的配置部署Prometheus服务：
+
+
+确认Prometheus Operator和Prometheus服务正常运行：
+（3）部署自定义Metrics Server，这里以Prometheus Adapter的实现
+进行部署，这里将它们部署在一个新的命名空间custom-metrics中。下面
+的YAML文件主要包含Namespace、ConfigMap、Deployment、Service和
+自定义API资源custom.metrics.k8s.io/v1beta1。
+Namespace的定义如下：
+ConfigMap的定义如下：
+
+
+
+
+
+
+Deployment的定义如下：
+
+
+Service的定义如下：
+APIService的定义如下：
+
+通过kubectl创建完成后，确认custom-metrics-server容器正常运行：
+（4）部署应用程序，它会在HTTP 
+URL“/metrics”路径提供名为
+http_requests_total的指标值：
+
+
+部署成功之后，可以在应用的URL“/metrics”中查看指标
+http_requests_total的值：
+（5）创建一个Prometheus的ServiceMonitor对象，用于监控应用程
+序提供的指标：
+
+关键配置参数如下。
+◎　Selector：设置为Pod的Label“app：sample-app”。
+◎　Endpoints：设置为在Service中定义的端口名称“http”。
+（6）创建一个HorizontalPodAutoscaler对象，用于为HPA控制器提
+供用户期望的自动扩缩容配置：
+
+关键配置参数如下。
+◎　scaleTargetRef：设置HPA的作用对象为之前部署的
+
+Deployment“sample-app”。
+◎　type=Pods：设置指标类型为Pods，表示从Pod中获取指标数
+据。
+◎　metric.name=http_requests：将指标的名称设置
+为“http_requests”，是自定义Metrics 
+Server将应用程序提供的指
+标“http_requests_total”经过计算转换成的一个新比率值，即
+sum（rate（http_requests_total{namespace="xx"，pod="xx"}[1m]）） by
+pod，指过去1min内全部Pod指标http_requests_total总和的每秒平均值。
+◎　target：将指标http_requests的目标值设置为500m，类型为
+AverageValue，表示基于全部Pod副本数据计算平均值。目标Pod的副本
+数量将使用公式“http_requests当前值/500m”进行计算。
+◎　minReplicas和maxReplicas：将扩缩容区间设置为1～10（单位
+是Pod副本）。
+此时可以通过查看自定义Metrics 
+Server提供的
+URL“custom.metrics.k8s.io/v1beta1”查看Pod的指标是否已被成功采集，
+并通过聚合API进行查询：
+从结果中可以看到正确的value值，说明自定义Metrics Server工作正
+常。
+
+查看HorizontalPodAutoscaler的详细信息，可以看到其成功从自定义
+Metrics Server处获取了应用的指标数据，可以进行扩缩容操作：
+
+（7）对应用的服务地址发起HTTP访问请求，验证HPA自动扩容机
+
+制。例如，可以使用如下脚本对应用进行压力测试：
+一段时间之后，观察HorizontalPodAutoscaler和Pod数量的变化，可
+以看到自动扩容的过程：
+
+发现Pod数量扩容到了10个（被maxReplicas参数限制的最大值）：
+
+停止访问应用服务，等待一段时间后，观察HorizontalPodAutoscaler
+和Pod数量的变化，可以看到缩容操作：
+
+
+发现Pod的数量已经缩容到最小值1：
+3.13　使用StatefulSet搭建MongoDB集群
+本节以MongoDB为例，使用StatefulSet完成MongoDB集群的创建，
+为每个MongoDB实例在共享存储（本例使用GlusterFS）中都申请一片
+存储空间，以实现一个无单点故障、高可用、可动态扩展的MongoDB
+集群。该部署架构如图3.14所示。
+
+图3.14　使用StatefulSet部署MongoDB集群的架构
+3.13.1　前提条件
+在创建StatefulSet之前，需要确保在Kubernetes集群中管理员已经创
+建好共享存储，并能够与StorageClass对接，以实现动态存储供应的模
+式。本节的示例将使用GlusterFS作为共享存储（GlusterFS的部署方法参
+见8.3节的说明）。
+
+3.13.2　部署StatefulSet
+为了完成MongoDB集群的搭建，需要部署以下三个资源对象。
+◎　一个StorageClass：用于StatefulSet自动为各个应用Pod申请
+PVC。
+◎　一个Headless Service：用于设置MongoDB实例的域名。
+◎　一个StatefulSet。
+首先，创建一个StorageClass对象。storageclass-fast.yaml文件的内容
+如下：
+运行kubectl create命令创建该StorageClass：
+接下来，创建对应的Headless Service。mongo-sidecar作为MongoDB
+集群的管理者，将使用此Headless Service来维护各个MongoDB实例之间
+的集群关系，以及集群规模变化时的自动更新。mongo-headless-
+
+service.yaml文件的内容如下：
+运行kubectl create命令创建该Headless Service：
+最后，创建MongoDB 
+StatefulSet。statefulset-mongo.yaml文件的内
+容如下：
+
+
+
+对其中的主要配置说明如下。
+（1）在该StatefulSet的定义中包括两个容器：mongo和mongo-
+sidecar。mongo是主服务程序，mongo-sidecar是将多个mongo实例进行
+集群设置的工具。mongo-sidecar中的环境变量如下。
+◎　MONGO_SIDECAR_POD_LABELS：设置为mongo容器的标
+签，用于sidecar查询它所要管理的MongoDB集群实例。
+◎　KUBERNETES_MONGO_SERVICE_NAME：它的值为
+mongo，表示sidecar将使用mongo这个服务名来完成MongoDB集群的设
+置。
+（2）replicas=3表示这个MongoDB集群由3个mongo实例组成。
+（3）volumeClaimTemplates是StatefulSet最重要的存储设置。在
+annotations段设置volume.beta.kubernetes.io/storage-class="fast"表示使用
+名为fast的StorageClass自动为每个mongo 
+Pod实例都分配后端存储。
+resources.requests.storage=100Gi表示为每个mongo实例都分配100GiB的
+磁盘空间。
+使用kubectl create命令创建这个StatefulSet：
+最终可以看到StatefulSet依次创建并启动了3个mongo Pod实例，它
+们的名字依次为mongo-0、mongo-1、mongo-2：
+
+StatefulSet会用volumeClaimTemplates中的定义为每个Pod副本都创
+建一个PVC实例，每个PVC实例的名称都由StatefulSet定义中
+volumeClaimTemplates的名称和Pod副本的名称组合而成，查看系统中的
+PVC便可以验证这一点：
+下面是mongo-0这个Pod中的Volume设置，可以看到系统自动为其
+挂载了对应的PVC：
+
+至此，一个由3个实例组成的MongoDB集群就创建完成了，其中的
+每个实例都拥有稳定的名称（DNS域名格式）和独立的存储空间。
+3.13.3　查看MongoDB集群的状态
+登录任意一个mongo Pod，在mongo命令行界面用rs.status（）命令
+查看MongoDB集群的状态，可以看到mongo集群已通过sidecar完成了创
+建。在集群中包含3个节点，每个节点的名称都是StatefulSet设置的DNS
+域名格式的网络标识名称：
+◎　mongo-0.mongo.default.svc.cluster.local；
+◎　mongo-1.mongo.default.svc.cluster.local；
+◎　mongo-2.mongo.default.svc.cluster.local。
+同时，可以看到3个mongo实例各自的角色（PRIMARY或
+SECONDARY）也都进行了正确的设置：
+
+
+
+
+
+对于需要访问这个mongo集群的Kubernetes集群内部的客户端来
+说，可以通过Headless Service“mongo”获取后端的所有Endpoints列表，
+并组合为数据库链接串，例如“mongodb：//mongo-0.mongo，mongo-
+1.mongo，mongo-2.mongo：27017/dbname_？”。
+3.13.4　StatefulSet的常见应用场景
+下面对MongoDB集群常见的两种场景进行操作，说明StatefulSet对
+有状态应用的自动化管理功能。
+1.MongoDB集群的扩容
+假设在系统运行过程中，3个mongo实例不足以满足业务的要求，
+这时就需要对mongo集群进行扩容。仅需要通过对StatefulSet进行scale操
+作，就能实现在mongo集群中自动添加新的mongo节点。
+使用kubectl scale命令将StatefulSet设置为4个实例：
+
+等待一会儿，看到第4个实例mongo-3创建成功：
+进入某个实例查看mongo集群的状态，可以看到第4个节点已经加
+入：
+
+
+同时，系统也为mongo-3分配了一个新的PVC用于保存数据，此处
+不再赘述，有兴趣的读者可自行查看系统为mongo-3绑定的Volume设置
+和后端GlusterFS共享存储的资源分配情况。
+2.自动故障恢复（MongoDB集群的高可用）
+假设在系统运行过程中，某个mongo实例或其所在主机发生故障，
+则StatefulSet将会自动重建该mongo实例，并保证其身份（ID）和使用
+的数据（PVC）不变。
+以mongo-0实例发生故障为例，StatefulSet将会自动重建mongo-0实
+例，并为其挂载之前分配的PVC“mongo-persistent-storage-mongo-
+0”。“mongo-0”服务在重新启动后，原数据库中的数据不会丢失，可继
+续使用。
+
+进入某个实例查看mongo集群的状态，mongo-0发生故障前在集群
+中的角色为PRIMARY，在其脱离集群后，mongo集群会自动选出一个
+SECONDARY节点提升为PRIMARY节点（本例中为mongo-2）。重启
+后的mongo-0则会成为一个新的SECONDARY节点：
+
+
+从上面的例子中可以看出，Kubernetes使用StatefulSet来搭建有状态
+的应用集群（MongoDB、MySQL等），同部署无状态的应用一样简
+便。Kubernetes能够保证StatefulSet中各应用实例在创建和运行的过程
+中，都具有固定的身份标识和独立的后端存储；还支持在运行时对集群
+规模进行扩容、保障集群的高可用等非常重要的功能。

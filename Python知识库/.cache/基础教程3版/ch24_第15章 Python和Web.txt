@@ -1,0 +1,725 @@
+256  第15 章 Python 和Web 
+Python和Web 
+本章讨论Python Web编程的一些方面。Web编程涉及的范围极广，为激发你的学习兴趣，这
+里挑选了其中三个重要的主题：屏幕抓取、CGI和mod_python。 
+另外还给出了一些指南，帮助你寻找适合用于开发更复杂的Web应用和Web服务的工具包。
+有关详尽的CGI使用示例，请参阅第25章和第26章。有关Web服务协议XML-RPC的使用示例，请
+参阅第27章。 
+15.1 屏幕抓取 
+屏幕抓取是通过程序下载网页并从中提取信息的过程。这种技术很有用，在网页中有你要在
+程序中使用的信息时，就可使用它。当然，如果网页是动态的，即随时间而变化，这就更有用了。
+如果网页不是动态的，你可手工下载一次并提取其中的信息。（当然，最理想的情况是，可通过
+Web服务来获取这些信息，这将在本章后面讨论。） 
+从概念上说，这种技术非常简单：下载数据并对其进行分析。例如，你可使用urllib来获取
+网页的HTML代码，再使用正则表达式（参见第10章）或其他技术从中提取信息。例如，假设你
+要从Python Job Board（http://python.org/jobs）提取招聘单位的名称和网站。通过查看该网页的源
+代码，你发现可在类似于下面的链接中找到名称和URL： 
+<a href="/jobs/1970/">Python Engineer</a> 
+代码清单15-1所示的示例程序使用urllib和re来提取所需的信息。 
+代码清单15-1 简单的屏幕抓取程序 
+from urllib.request import urlopen 
+import re 
+p = re.compile('<a href="(/jobs/\\d+)/">(.*?)</a>') 
+text = urlopen('http://python.org/jobs').read().decode() 
+for url, name in p.findall(text):  
+   print('{} ({})'.format(name, url)) 
+这些代码当然有改进的空间，但已经做得非常出色了。然而，这种方法至少存在3个缺点。 
+正则表达式一点都不容易理解。如果HTML代码和查询都更复杂，正则表达式将更难以理
+解和维护。
+第15 章
+                          
+
+15.1 屏幕抓取  257 
+1 
+2 
+3 
+4 
+5 
+15 
+6 
+7 
+8 
+9 
+10 
+11 
+12 
+13 
+14 
+它对付不了独特的HTML内容，如CDATA部分和字符实体（如&amp;）。遇到这样的东西
+时，这个程序很可能束手无策。
+正则表达式依赖于HTML代码的细节，而不是更抽象的结构。这意味着只要网页的结构发生
+细微的变化，这个程序可能就不管用（等你阅读本书时，它可能已经不管用了）。 
+针对基于正则表达式的方法存在的问题，接下来将讨论两种可能的解决方案。一是结合使用
+程序Tidy（一个Python库）和XHTML解析；二是使用专为屏幕抓取而设计的Beautiful Soup库。 
+注意 还有其他Python屏幕抓取工具。例如，你可能想查看Ka-Ping Yee的scrape.py（http://zesty.ca/ 
+python）。 
+15.1.1 Tidy 和XHTML 解析 
+Python标准库为解析HTML和XML等结构化格式提供了强大的支持（参见“Python库参考手
+册”中的Structured Markup Processing Tools部分）。XML和XML解析将在第22章更深入地讨论，
+这里只介绍处理XHTML所需的工具。XHTML是HTML 5规范描述的两种具体语法之一，也是一
+种XML格式。这里介绍的大部分内容也适用于HTML。 
+如果每个网页包含的XHTML都正确而有效，解析工作将非常简单。问题是较老的HTML方
+言不那么严谨，虽然有人指责这些不严谨的方言，但有些人对这些指责置若罔闻。原因可能在于
+大多数Web浏览器都非常宽容，即便面对的是最混乱、最无意义的HTML，也会尽最大努力将其
+渲染出来。这为网页制作者提供了方便，可能让他们感到满意，却让屏幕抓取工作变得难得多。 
+标准库提供的通用的HTML解析方法是基于事件的：你编写事件处理程序，供解析程序处理
+数据时调用。标准库模块html.parser让你能够以这种方式对极不严谨的HTML进行解析，但要基
+于文档结构来提取数据（如第二个二级标题后面的第一项），在存在标签缺失的情况下恐怕就只
+能靠猜了。如果你愿意，当然可以这样做，但还有另一种方式——使用Tidy。 
+1. Tidy是什么
+Tidy是用于对格式不正确且不严谨的HTML进行修复的工具。它非常聪明，能够修复很多常
+见的错误，从而完成大量你不愿意做的工作。它还提供了极大的配置空间，让你能够开/关各种
+校正。 
+下面是一个错误百出的HTML文件——有些过时的HTML代码，还有些明显的错误（你能找
+出所有的问题吗）： 
+<h1>Pet Shop 
+<h2>Complaints</h3> 
+<p>There is <b>no <i>way</b> at all</i> we can accept returned 
+parrots. 
+<h1><i>Dead Pets</h1> 
+                          
+
+258  第15 章 Python 和Web 
+<p>Our pets may tend to rest at times, but rarely die within the 
+warranty period. 
+<i><h2>News</h2></i> 
+<p>We have just received <b>a really nice parrot. 
+<p>It's really nice.</b> 
+<h3><hr>The Norwegian Blue</h3> 
+<h4>Plumage and <hr>pining behavior</h4> 
+<a href="#norwegian-blue">More information<a> 
+<p>Features: 
+<body> 
+<li>Beautiful plumage 
+下面是Tidy修复后的版本： 
+<!DOCTYPE html> 
+<html> 
+<head> 
+<title></title> 
+</head> 
+<body> 
+<h1>Pet Shop</h1> 
+<h2>Complaints</h2> 
+<p>There is <b>no <i>way</i></b> <i>at all</i> we can accept 
+returned parrots.</p> 
+<h1><i>Dead Pets</i></h1> 
+<p><i>Our pets may tend to rest at times, but rarely die within the 
+warranty period.</i></p> 
+<h2><i>News</i></h2> 
+<p>We have just received <b>a really nice parrot.</b></p> 
+<p><b>It's really nice.</b></p> 
+<hr> 
+<h3>The Norwegian Blue</h3> 
+<h4>Plumage and</h4> 
+<hr> 
+<h4>pining behavior</h4> 
+<a href="#norwegian-blue">More information</a> 
+<p>Features:</p> 
+<ul> 
+<li>Beautiful plumage</li> 
+</ul> 
+</body> 
+</html> 
+当然，Tidy并不能修复HTML文件存在的所有问题，但确实能够确保文件是格式良好的（即
+所有元素都嵌套正确），这让解析工作容易得多。 
+2. 获取Tidy
+有多个用于Python的Tidy库包装器，至于哪个最新并非固定不变的。可像下面这样使用pip
+                          
+
+15.1 屏幕抓取  259 
+1 
+2 
+3 
+4 
+5 
+15 
+6 
+7 
+8 
+9 
+10 
+11 
+12 
+13 
+14 
+来找出可供使用的包装器： 
+$ pip search tidy 
+一个不错的选择是PyTidyLib，可像下面这样安装它： 
+$ pip install pytidylib 
+然而，并非一定要安装Tidy库包装器。如果你使用的是UNIX或Linux系统，很可能已安装了
+命令行版Tidy。另外，不管你使用的是哪种操作系统，都可从Tidy网站（http://html-tidy.org）获
+取可执行的二进制版本。有了二进制版本后，就可使用模块subprocess（或其他包含popen函数的
+模块）来运行Tidy程序了。例如，假设你有一个混乱的HTML文件（messy.html），且在执行路径
+中包含命令行版Tidy，下面的程序将对这个文件运行Tidy并将结果打印出来： 
+from subprocess import Popen, PIPE 
+text = open('messy.html').read() 
+tidy = Popen('tidy', stdin=PIPE, stdout=PIPE, stderr=PIPE) 
+tidy.stdin.write(text.encode()) 
+tidy.stdin.close() 
+print(tidy.stdout.read().decode()) 
+如果Popen找不到tidy，可能需要提供这个可执行文件的完整路径。 
+在实际工作中，你很可能不会打印结果，而是从中提取一些有用的信息，这将在接下来的几
+小节中演示。 
+3. 为何使用XHTML
+XHTML和旧式HTML的主要区别在于，XHTML非常严格，要求显式地结束所有的元素（至
+少就我们当前的目标而言如此）。因此，在HTML中，可通过（使用标签<p>）开始另一个段落来
+结束当前段落，但在XHTML中，必须先（使用标签</p>）显式地结束当前段落。这让XHTML
+解析起来容易得多，因为你能清楚地知道何时进入或离开各种元素。XHTML的另一个优点是，
+它是一种XML方言，可使用各种出色的工具（如XPath）来处理，但本章不会利用这一点。有关
+XML的详细信息，请参阅第22章。有关如何使用XPath的详细信息，请参阅http://www.w3schools. 
+com/xml/xml:xpath.asp。 
+要对Tidy生成的格式良好的XHTML进行解析，一种非常简单的方式是使用标准库模块
+html.parser中的HTMLParser类。 
+4. 使用HTMLParser
+使用HTMLParser意味着继承它，并重写各种事件处理方法，如handle_starttag和handle_data。
+表15-1概述了相关的方法以及解析器在什么时候自动调用它们。 
+                          
+
+260  第15 章 Python 和Web 
+表15-1 HTMLParser中的回调方法 
+回调方法
+何时被调用
+handle_starttag(tag, attrs) 
+遇到开始标签时调用。attrs是一个由形如(name, value)的元组组成的序列 
+handle_startendtag(tag, attrs)
+遇到空标签时调用。默认分别处理开始标签和结束标签 
+handle_endtag(tag) 
+遇到结束标签时调用 
+handle_data(data) 
+遇到文本数据时调用 
+handle_charref(ref) 
+遇到形如&#ref;的字符引用时调用 
+handle_entityref(name) 
+遇到形如&name;的实体引用时调用 
+handle_comment(data) 
+遇到注释时；只对注释内容调用 
+handle_decl(decl) 
+遇到形如<!...>的声明时调用 
+handle_pi(data) 
+用于处理指令 
+unknown_decl(data) 
+遇到未知声明时调用 
+就屏幕抓取而言，通常无需实现所有的解析器回调方法（事件处理程序），也可能无需创建
+整个文档的抽象表示（如文档树）就能找到所需的内容。只需跟踪找到目标内容所需的信息就可
+以了。（有关这个主题的更详细信息，请参阅第22章；该章讨论了如何使用SAX来解析XML。）
+代码清单15-2所示程序解决的问题与代码清单15-1相同，但使用的是HTMLParser。 
+代码清单15-2 使用模块HTMLParser的屏幕抓取程序 
+from urllib.request import urlopen 
+from html.parser import HTMLParser 
+def isjob(url): 
+   try: 
+    a, b, c, d = url.split('/') 
+   except ValueError: 
+    return False 
+   return a == d == '' and b == 'jobs' and c.isdigit() 
+class Scraper(HTMLParser): 
+   in_link = False 
+   def handle_starttag(self, tag, attrs): 
+ attrs = dict(attrs) 
+ url = attrs.get('href', '') 
+ if tag == 'a' and isjob(url): 
+  self.url = url 
+  self.in_link = True 
+  self.chunks = [] 
+   def handle_data(self, data): 
+ if self.in_link: 
+  self.chunks.append(data) 
+                          
+
+15.1 屏幕抓取  261 
+1 
+2 
+3 
+4 
+5 
+15 
+6 
+7 
+8 
+9 
+10 
+11 
+12 
+13 
+14 
+   def handle_endtag(self, tag): 
+ if tag == 'a' and self.in_link: 
+  print('{} ({})'.format(''.join(self.chunks), self.url)) 
+  self.in_link = False 
+text = urlopen('http://python.org/jobs').read().decode() 
+parser = Scraper() 
+parser.feed(text) 
+parser.close() 
+有几点需要注意。首先，这里没有使用Tidy，因为这个网页的HTML格式足够良好。如果你
+运气好，可能发现并不需要使用Tidy。另外，我使用了一个布尔状态变量（属性）来跟踪自己是
+否位于相关的链接中。在事件处理程序中，我检查并更新这个属性。其次，handle_starttag的参
+数是一个由形如(key, value)的元组组成的列表，因此我使用dict将它们转换为字典，以便管理。 
+方法handle_data（和属性chunks）可能需要稍做说明。它使用的技术在基于事件的结构化标
+记（如HTML和XML）解析中很常见：不是假定通过调用handle_data一次就能获得所需的所有
+文本，而是假定这些文本分成多个块，需要多次调用handle_data才能获得。导致这种情况的原
+因有多个——缓冲、字符实体、忽略的标记等，因此需要确保获取所有的文本。接下来，为了（在
+方法handle_endtag中）输出结果，我将所有的文本块合并在一起。为运行这个解析器，调用其
+方法feed将并text作为参数，然后调用其方法close。 
+在有些情况下，这样的解决方案比使用正则表达式更健壮——应对输入数据变化的能力更
+强。然而，你可能持反对意见，理由是与使用正则表达式相比，这种解决方案的代码更繁琐，还
+可能不那么清晰易懂。面对更复杂的提取任务时，支持这种解决方案的论据可能更有说服力，但
+即便如此，还是让人依稀觉得一定有更好的办法。如果你不介意多安装一个模块，确实有更佳的
+办法，下面就来介绍。 
+15.1.2 Beautiful Soup 
+Beautiful Soup是一个小巧而出色的模块，用于解析你在Web上可能遇到的不严谨且格式糟糕
+的HTML。Beautiful Soup网站（http://crummy.com/software/BeautifulSoup）称： 
+那个糟糕的网页并非出自你的手笔。你只是想从中提取一些数据。Beautiful Soup
+将向你伸出援手。 
+下载并安装Beautiful Soup易如反掌。与大多数包一样，你可使用pip来完成这种任务。 
+$ pip install beautifulsoup4 
+你可能想使用pip进行搜索，看看是否有更新的版本。安装Beautiful Soup，编写从Python Job 
+Board提取Python职位的程序非常容易，且代码很容易理解，如代码清单15-3所示。这个程序不检
+查网页的内容，而是在文档结构中导航。 
+                          
+
+262  第15 章 Python 和Web 
+代码清单15-3 使用Beautiful Soup的屏幕抓取程序 
+from urllib.request import urlopen 
+from bs4 import BeautifulSoup 
+text = urlopen('http://python.org/jobs').read() 
+soup = BeautifulSoup(text, 'html.parser') 
+jobs = set() 
+for job in soup.body.section('h2'):  
+   jobs.add('{} ({})'.format(job.a.string, job.a['href'])) 
+print('\n'.join(sorted(jobs, key=str.lower))) 
+我使用要从中抓取文本的HTML代码实例化BeautifulSoup类，然后用各种机制来提取解析树
+的不同部分。例如，使用soup.body来获取文档体，再访问其中的第一个section。使用参数'h2'
+调用返回的对象，这与使用其方法find_all等效——返回其中的所有h2元素。每个h2元素都表示
+一个职位，而我感兴趣的是它包含的第一个链接job.a。属性string是链接的文本内容，而a['href']
+为属性href。你肯定注意到了，在代码清单15-3中，我使用了set和sorted（通过将参数key设置
+为一个函数以忽略大小写）。这些与Beautiful Soup毫无关系，旨在消除重复的职位并按字母顺序
+打印它们，从而让这个程序更有用。 
+如果你要抓取（本章后面将讨论的）RSS feed，可使用另一个与Beautiful Soup相关的工具，
+名为Scrape ‘N’ Feed（http://crummy.com/software/ScrapeNFeed）。 
+15.2 使用CGI 创建动态网页 
+本章的第一部分讨论了客户端技术，下面将注意力转向服务器端。本节讨论基本的Web编程
+技术：通用网关接口（CGI）。CGI是一种标准机制，Web服务器可通过它将（通常是通过Web表
+达提供的）查询交给专用程序（如你编写的Python程序），并以网页的方式显示查询结果。这是
+一种创建Web应用的简单方式，让你无需编写专用的应用程序服务器。有关Python CGI编程的详
+细信息，请参阅Python网站的Web编程主题指南（http://wiki.python.org/moin/WebProgramming）。 
+Python CGI编程的关键工具是模块cgi，另一个对开发CGI脚本很有帮助的模块是cgitb，将
+在15.2.6节详细介绍。 
+要让CGI脚本能够通过Web进行访问（和运行），必须将其放在Web服务器能够访问的地方、
+添加!#行并设置合适的文件权限。接下来依次介绍这三个步骤。 
+15.2.1 第一步：准备Web 服务器 
+这里假设你能够访问Web服务器。换而言之，你能够将内容发布到Web。通常，要将内容发
+布到Web，只需将网页、图像等放入特定的目录（在UNIX中通常为public_html）即可。如果你不
+知道如何将内容发布到Web，请咨询Internet服务提供商（ISP）或系统管理员。 
+                          
+
+15.2 使用CGI 创建动态网页  263 
+1 
+2 
+3 
+4 
+5 
+15 
+6 
+7 
+8 
+9 
+10 
+11 
+12 
+13 
+14 
+提示 如果你使用的是macOS系统，应随操作系统一起安装了Apache Web服务器。要开启这个
+服务器，可在系统首选项中的共享首选项面板中选择复选框“Web共享”。 
+如果你只是想尝试使用CGI，可在Python中使用模块http.server直接运行一个临时Web服务
+器。与其他模块一样，可通过向Python可执行文件提供开关-m来导入并运行这个模块。如果同时
+指定了--cgi，启动的服务器将支持CGI。请注意，这个服务器将提供运行它时所在目录中的文件，
+因此务必确保这个目录中没有机密内容。 
+$ python -m http.server --cgi 
+Serving HTTP on 0.0.0.0 port 8000 ... 
+如果现在将浏览器指向http://127.0.0.1:8000或http://localhost:8000，将看到运行这个服务器所
+在目录的内容。另外，你还将看到服务器提供的有关连接的信息。 
+CGI程序也必须放在可通过Web访问的目录中。另外，必须将其标识为CGI脚本，以免Web
+服务器以网页的方式提供其源代码。为此，有两种常见的方式： 
+将脚本放在子目录cgi-bin中；
+将脚本文件的扩展名指定为.cgi。
+具体的工作原理随服务器而异。如果你心存疑虑，请咨询ISP或系统管理员。（例如，如果你
+使用的是Apache，可能需要对目标目录启用ExecCGI选项。）如果你使用的是模块http.server中的
+服务器，应使用子目录cgi-bin。 
+15.2.2 第二步：添加!#行 
+将脚本放到正确的位置（还可能给它指定特定的文件扩展名）后，必须在其开头添加一个!#
+行。第1章说过，通过添加!#行，无需显式地执行Python解释器就能执行脚本。通常，这只是提
+供了便利，但对CGI脚本来说却至关重要，因为如果没有!#行，Web服务器将不知道如何执行脚
+本。（Web服务器只知道脚本可能是使用Perl、Ruby等其他编程语言编写的。）一般而言，只需在
+脚本开头添加如下行即可： 
+#!/usr/bin/env python 
+请注意，它必须是第一行（之前没有空行）。如果这样做不管用，就得确定Python可执行文
+件的准确位置，并在!#行中使用完整的目录，如下所示： 
+#!/usr/bin/python 
+如果同时安装了Python 2和Python 3，可能需要将python替换为python3（前面的env解决方案
+亦如此）。如果这样做也不管用，可能存在你看不到的错误，具体地说是!#行以\r\n而不是\n结
+尾，把Web服务器搞糊涂了。请务必将脚本保存为UNIX风格的纯文本文件。 
+在Windows中，可使用Python可执行文件的完整路径，如下所示： 
+#!C:\Python36\python.exe 
+                          
+
+264  第15 章 Python 和Web 
+15.2.3 第三步：设置文件权限 
+需要做的最后一件事情是设置合适的文件权限（至少当Web服务器运行在UNIX或Linux系统
+中时如此）。必须确保谁都可以读取和执行你的脚本文件（否则Web服务器将无法运行它），同时
+确保只有你才能写入（这样其他任何人都不能修改你的脚本）。 
+提示 如果你在Windows中编辑脚本，而它存储在UNIX磁盘服务器中（你可使用Samba或FTP
+来访问它），则当你修改脚本后，其文件权限可能发生变化。因此，如果你的脚本无法运
+行，请确定其文件权限依然是正确的。 
+在UNIX中，修改文件权限（或文件模式）的命令为chmod。要修改文件权限，只需通过普通
+用户账户或专为完成Web任务而建立的账户执行下面的命令（这里假设脚本名为somescript.cgi。 
+chmod 755 somescript.cgi 
+做好所有这些准备工作后，就应该能够像打开网页一样打开脚本以执行它。 
+注意 在浏览器中，不应像打开本地文件那样打开脚本，而必须使用完整的HTTP URL来打开它，
+这样才能通过Web（Web服务器）取回它。 
+通常，CGI脚本不能修改计算机上的任何文件。要让它能够修改文件，必须显式地赋予它权
+限。为此，有两种选择：如果有root（系统管理员）权限，可为脚本专门创建一个用户账户，并
+调整需要修改的文件的所有者；如果没有root权限，可设置该文件的文件权限，让系统中的所有
+用户（包括Web服务器用来运行CGI脚本的账户）都能写入这个文件。要设置这样的文件权限，
+可使用如下命令： 
+chmod 666 editable_file.txt 
+警告 使用文件模式666存在潜在的安全风险。除非你知道这样做的后果，否则最好不要这样做。 
+15.2.4 CGI 安全风险 
+使用CGI程序存在一些安全风险。如果你允许CGI脚本对服务器中的文件执行写入操作，那
+么这可能被人利用来破坏数据——除非编写脚本时非常小心。同样，如果直接将用户提供的数据
+作为Python代码（如使用exec或eval）或shell命令（如使用os.system或模块subprocess）执行，
+就可能执行恶意的命令，进而面临极大的风险。即便在SQL查询中使用用户提供的字符串也很危
+险，除非你预先仔细审查这些字符串。SQL注入是一种常见的攻击系统的方式。 
+15.2.5 简单的CGI 脚本 
+最简单的CGI脚本类似于代码清单15-4。 
+                          
+
+15.2 使用CGI 创建动态网页  265 
+1 
+2 
+3 
+4 
+5 
+15 
+6 
+7 
+8 
+9 
+10 
+11 
+12 
+13 
+14 
+代码清单15-4 简单的CGI脚本 
+#!/usr/bin/env python 
+print('Content-type: text/plain') 
+print()# 打印一个空行，以结束首部 
+print('Hello, world!') 
+如果将这些代码保存为文件simple1.cgi并通过Web服务器打开它，将看到一个网页，其中只
+包含纯文本Hello, world!。要通过Web服务器打开这个文件，必须将其放在Web服务器能够访问的
+地方。在典型的UNIX环境中，可将其放在主目录下的目录public_html中，这样就可使用URL 
+http://localhost/~username/simple1.cgi（将username替换为你的用户名）来打开它。有关这方面的
+详情，请咨询ISP或系统管理员。如果你使用了目录cgi-bin，也可将这个文件命名为simple1.py。 
+如你所见，这个程序写入到标准输出（如使用print）的内容都出现在网页中——至少大部
+分内容都如此。事实上，首先打印的是HTTP首部，这些行包含有关网页的信息。这里关心的唯
+一首部是Content-type。如你所见，Content-type后面跟着一个冒号、一个空格和类型名
+text/plain。这指出这个网页是纯文本的。要指出网页是HTML的，应将这行修改成下面这样： 
+print('Content-type: text/html') 
+打印所有的首部后，打印了一个空行，以指出接下来为文档本身。如你所见，这里的文档只
+包含字符串'Hello, world!'。 
+15.2.6 使用cgitb 进行调试 
+有时候，编程错误可能导致程序终止，并因未捕获的异常而显示栈跟踪。通过CGI运行程序
+时，如果出现这种情况，可能导致Web服务器显示毫无帮助的错误消息甚至黑色网页。如果你能
+够访问服务器日志（例如，如果你使用的是http.server），可能能够在这里找到蛛丝马迹。然而，
+为帮助调试CGI脚本，标准库提供了一个很有用的模块，名为cgitb（用于CGI栈跟踪）。通过导
+入这个模块并调用其中的函数enable，可显示一个很有用的网页，其中包含有关什么地方出了问
+题的信息。代码清单15-5演示了如何使用模块cgitb。 
+代码清单15-5 显示栈跟踪的CGI脚本（faulty.cgi） 
+#!/usr/bin/env python 
+import cgitb; cgitb.enable() 
+print('Content-type: text/html\n') 
+print(1/0) 
+print('Hello, world!') 
+在浏览器中通过Web 服务器访问这个脚本时，结果如图15-1 所示。 
+                          
+
+266  第15 章 Python 和Web 
+图15-1 模块cgitb显示的CGI栈跟踪 
+请注意，程序开发好后，应关闭这种cgitb功能，因为栈跟踪页面并非供程序的普通用户查
+看的
+①。 
+15.2.7 使用模块cgi 
+到目前为止，所有CGI脚本都只生成输出，而没有使用任何形式的输入。输入是通过HTML
+表单（将在下一节介绍）以键值对（字段）的方式提供给CGI脚本的。在CGI脚本中，可使用模
+块cgi中的FieldStorage类来获取这些字段。当你创建FieldStorage实例（应只创建一个）时，它
+将从请求中取回输入变量（字段），并通过一个类似于字典的接口将它们提供给脚本。要访问
+FieldStorage中的值，可通过普通的键查找，但出于一些技术原因（与文件上传相关，这里不讨
+论），FieldStorage的元素并不是你要的值。例如，即便你知道请求包含一个名为name的值，也不
+能像下面这样做： 
+form = cgi.FieldStorage() 
+name = form['name'] 
+而必须这样做： 
+form = cgi.FieldStorage() 
+name = form['name'].value 
+一种更简单的获取值的方式是使用方法getvalue。它类似于字典的方法get，但返回项目的
+value属性的值，如下所示： 
+form = cgi.FieldStorage() 
+name = form.getvalue('name', 'Unknown') 
+在这个示例中，提供了一个默认值（'Unknown'）。如果没有提供，默认值将为None。在字段
+没有值时，将使用默认值。 
+—————————— 
+① 另一种选择是关闭显示功能，将错误记录到文件中。有关这方面的详细信息，请参阅“Python库参考手册”。
+                          
+
+15.2 使用CGI 创建动态网页  267 
+1 
+2 
+3 
+4 
+5 
+15 
+6 
+7 
+8 
+9 
+10 
+11 
+12 
+13 
+14 
+代码清单15-6是一个使用cgi.FieldStorage的简单示例。 
+代码清单15-6 从FieldStorage中获取单个值的CGI脚本（simple2.cgi） 
+#!/usr/bin/env python 
+import cgi 
+form = cgi.FieldStorage() 
+name = form.getvalue('name', 'world') 
+print('Content-type: text/plain\n') 
+print('Hello, {}!'.format(name)) 
+在不使用表单的情况下调用CGI脚本 
+CGI脚本的输入通常来自提交的表单，但调用CGI脚本时也可直接指定参数。为此可在指
+向脚本的URL后面加上问号，再加上用&分隔的键值对。例如，如果指向代码清单15-6所示
+脚本的URL为http://www.example.com/simple2.cgi，可这样使用参数name=Gumby和age=42来调
+用这个脚本：http://www.example.com/simple2.cgi?name=Gumby&age=42。如果这样做，这个
+CGI脚本将显示消息Hello, Gumby!而不是Hello, World!（请注意，没有使用参数age）。要创建
+这样的URL查询，可使用模块urllib.parse中的方法urlencode： 
+>>> urlencode({'name': 'Gumby', 'age': '42'}) 
+'age=42&name=Gumby' 
+你可结合使用这种策略和urllib来创建能够与CGI脚本交互的屏幕抓取程序。然而，与
+其在服务器端和客户端都采取这种做法，还不如使用Web服务，这将在15.4节介绍。 
+15.2.8 简单的表单 
+有了处理用户请求的工具，该来创建用户可提交的表单了。这个表单可以是独立的页面，但
+这里将它放在脚本中。 
+要深入地了解如何编写HTML表单（或HTML），可参考介绍HTML的优秀著作（当地书店可
+能就有不少）。另外，在网上也能找到很多有关这个主题的信息。与往常一样，发现值得模仿的
+优秀网页后，可在浏览器中查看其源代码，方法是从菜单中选择“查看源代码”之类的选项（具
+体是哪个选项取决于你使用的浏览器）。 
+注意 从CGI脚本中获取信息的主要方式有两种：方法GET和方法POST。就本章而言，两者的
+差别并不重要。大致上，GET用于获取信息并在URL中进行查询编码，而POST可用于任
+何类型的查询，但对查询进行编码的方式稍有不同。 
+                          
+
+268  第15 章 Python 和Web 
+回到我们的脚本，代码清单15-7是扩展后的版本。 
+代码清单15-7 包含HTML表单的问候脚本（simple3.cgi） 
+#!/usr/bin/env python 
+import cgi 
+form = cgi.FieldStorage() 
+name = form.getvalue('name', 'world') 
+print("""Content-type: text/html 
+<html>  
+  <head> 
+   <title>Greeting Page</title> 
+  </head> 
+  <body> 
+   <h1>Hello, {}!</h1> 
+ <form action='simple3.cgi'> 
+   Change name <input type='text' name='name' /> 
+   <input type='submit' /> 
+   </form> 
+  </body> 
+</html> 
+""".format(name)) 
+在这个脚本开头，与以前一样获取CGI参数name，并将默认值设置为'world'。如果在浏览器
+中打开这个脚本时没有提交任何值，将使用默认值。 
+接下来，打印了一个简单的HTML页面，其中的标题包含参数name的值。另外，这个页面还
+包含一个HTML表单，该表单的属性action被设置为脚本的名称（simple3.cgi）。这意味着提交表
+单后，将再次运行这个脚本。这个表单只包含一个输入元素——名为name的文本框。因此，如果
+你在文本框中输入新名字并提交表单，标题将发生变化，因为现在参数name包含值。 
+图15-2显示了通过Web服务器访问代码清单15-7所示脚本的结果。 
+图15-2 执行代码清单15-7所示CGI脚本的结果 
+                          
+
+15.3 使用Web 框架  269 
+1 
+2 
+3 
+4 
+5 
+15 
+6 
+7 
+8 
+9 
+10 
+11 
+12 
+13 
+14 
+15.3 使用Web 框架 
+对于重要的Web应用，大多数人都不会直接为其编写CGI脚本，而是选择使用Web框架，因
+为它会替你完成很多繁重的工作。这样的框架有很多，后面将提及其中的几个，但现在要将注意
+力放在既简单又有用的Flask（http://flask.pocoo.org）上。使用pip很容易安装这个框架。 
+$ pip install flask 
+假设你编写了一个计算幂的函数。 
+def powers(n=10): 
+   return ', '.join(str(2**i) for i in range(n)) 
+而且想让每个人都能使用它！要使用Flask来实现这个目标，首先使用合适的名称实例化Flask
+类，并将这个函数的URL路径告诉它。 
+from flask import Flask 
+app = Flask(__name__) 
+@app.route('/') 
+def powers(n=10): 
+   return ', '.join(str(2**i) for i in range(n)) 
+如果这个脚本名为powers.py，就可像下面这样让Flask运行它（这里假设是在UNIX风格的
+shell中）： 
+$ export FLASK_APP=powers.py 
+$ flask run  
+* Serving Flask app "powers"
+* Running on http://127.0.0.1:5000/ (Press CTRL+C to quit)
+最后两行是Flask的输出。如果你在浏览器中输入上面的URL，将看到函数powers返回的字符
+串。你也可给这个函数指定更具体的路径。例如，如果使用route('/powers')而不是('/')，这个
+函数将位于http://127.0.0.1:5000/powers。这样，你就可设置多个函数，每个函数的URL各不相同。 
+你甚至能向函数提供参数。要指定参数，可使用尖括号，例如'/powers/<n>'。这样，斜杠
+后面的内容将作为关键字参数n的值。但这样提供的是一个字符串，而这里需要的是一个整数。
+为执行转换，可使用route('/powers/<int:n>')。这样修改后，如果重新启动Flask，并访问URL 
+http://127.0.0.1:5000/powers/3，将得到输出1, 2, 4。 
+Flask还有很多其他的功能，其文档也很容易理解。如果要尝试简单的服务器端Web应用开发，
+建议你看看这些文档。 
+其他Web 应用框架 
+还有很多其他的Web框架，大小皆有。有的晦涩难懂，有些定期召开推广会议。表15-2列出
+了几个流行的框架，更完整的清单请参阅Python网页（https://wiki.python.org/moin/WebFrameworks）。 
+                          
+
+270  第15 章 Python 和Web 
+表15-2 Python Web应用框架 
+名  称
+网  站
+Django
+https://djangoproject.com
+TurboGears
+http://turbogears.org
+web2py
+http://web2py.com
+Grok
+https://pypi.python.org/pypi/grok 
+Zope2
+https://pypi.python.org/pypi/Zope2 
+Pyramid
+https://trypyramid.com
+15.4 Web 服务：更高级的抓取 
+Web服务有点像对计算机友好的网页。它们基于让程序能够通过网络交换信息的标准和协
+议——通常其中一个程序请求信息或服务（客户端或服务请求者），而另一个程序提供信息或
+服务（服务器或服务提供者）。确实，Web服务器很容易理解，而且看起来与前面讨论的网络编
+程很像，不过也存在差别。 
+Web服务通常运行在极高的抽象层级中，将HTTP（Web使用的协议）用作底层协议。在这个
+协议上面，它们使用更为面向内容的协议（如XML格式）来对请求和响应进行编码。这意味着
+Web服务器可作为Web服务的平台。正如本节的标题指出的，它将Web抓取提高到另一个层级。
+你可将Web服务看作为计算机客户（而不是人类）设计的动态网页。 
+有些Web服务标准非常复杂，但在不涉及任何复杂方面的情况下也能完成很多任务。本节将
+简要地介绍这个主题，并提供在哪里能够找到所需工具和信息的指南。 
+注意 鉴于实现Web服务的方式众多（且涉及大量的协议），同时每个Web服务系统都可能提供
+多种服务，因此有时必须以客户端能够自动解读的方式描述服务，这被称为元服务。有
+关这种描述的标准是Web服务描述语言（WSDL）。WSDL是一种XML格式，描述了通过
+服务可使用哪些方法以及这些方法的参数和返回值等方面。除支持SOAP等服务协议外，
+很多乃至大部分Web服务工具包都支持WSDL。 
+15.4.1 RSS 和相关内容 
+RSS指的是富网站摘要（Rich Site Summary）、RDF网站摘要（RDF Site Summary）或简易信
+息聚合（Really Simple Syndication），具体指哪个取决于版本。在最简单的情况下，RSS是一种以
+XML方式列出新闻的格式。RSS文档（feed）与其说是静态文档，不如说是服务，因为它们需要
+定期或不定期地更新。它们甚至还需动态地计算，以呈现最新博客更新，等等。另一种作用与RSS
+相同的较新格式是Atom。有关RSS以及相关资源描述框架（RDF）的详细信息，请参阅
+http://www.w3.org/RDF。有关Atom规范请参阅http://tools.ietf.org/html/rfc4287。 
+市面上的RSS阅读器很多，它们通常也能处理其他格式，如Atom。鉴于RSS格式易于处理，
+                          
+
+15.4 Web 服务：更高级的抓取  271 
+1 
+2 
+3 
+4 
+5 
+15 
+6 
+7 
+8 
+9 
+10 
+11 
+12 
+13 
+14 
+因此不断有开发人员探索出它的新用途。例如，有些浏览器（如Mozilla Firefox）允许用户将RSS 
+feed收藏为书签，进而提供一个动态的书签子菜单，其中的菜单项为不同的新闻。RSS还是播客
+的支柱（播客其实就是列出声音文件的RSS feed）。 
+问题是，如果你要编写客户端程序来处理来自多个网站的feed，就必须准备解析多种不同的
+格式，甚至需要对feed条目中的HTML片段进行解析。为此，可使用BeautifulSoup（或其面向XML
+的版本），但更佳的选择是使用Mark Pilgrim开发的Universal Feed Parser（https://pypi.python.org/ 
+pypi/feedparser），因为它能够处理多种feed格式（包括RSS和Atom及其扩展），并在一定程度上支
+持内容清理。Pilgrim还撰写了一篇很有用的文章“Parsing RSS At All Costs”（http://xml.com/ 
+pub/a/2003/01/22/dive-into-xml.html），如果你想自己处理清理，可参考这篇文章。 
+15.4.2 使用XML-RPC 进行远程过程调用 
+除简单的RSS下载和解析机制外，还有远程过程调用。远程过程调用是对基本网络交互的抽
+象：客户端程序请求服务器程序执行计算并返回结果，但这个过程被伪装成简单的过程（函数或
+方法）调用。在客户端代码中，远程过程调用看起来就像普通方法调用，但用来调用方法的对象
+实际上位于另一台计算机中。XML-RPC可能是最简单的远程过程调用机制，它使用HTTP和XML
+来实现网络通信。鉴于这种协议是独立于语言的，使用一种语言编写的客户端程序可轻松地调用
+使用另一种语言编写的服务器程序中的函数。 
+提示 如果在网上搜索，将找到大量用于Python的其他RPC机制。 
+Python标准库提供了对客户端和服务器端XML-RPC编程的支持。有关XML-RPC的使用示
+例，请参阅第27章和第28章。 
+RPC和REST 
+远程过程调用可与表述性状态转义式（REST）网络编程比肩，不过这两种机制有天壤之
+别。基于REST的（RESTful）程序也能让客户端以编程方式访问服务器，但服务器程序不能有
+任何隐藏的状态，返回什么样的数据完全由指定的URL（在HTTP POST中，是客户端提供的
+额外数据）决定。 
+有关REST的详细信息可在网上找到。例如，可参阅维基百科的相关文章（http://en. 
+wikipedia.org/wiki/Representational_State_Transfer）。在RESTful编程中，经常使用的一种协议
+是JavaScript对象表示法（JSON，http://www.json.org），它简单而优雅，让你能够使用纯文本
+格式来表示复杂的对象。标准库模块json提供了对JSON格式的支持。 
+                          
+
+272  第15 章 Python 和Web 
+15.4.3 SOAP 
+SOAP
+①也是一种将XML和HTTP用作底层技术的消息交换协议。与XML-RPC一样，SOAP也
+支持远程过程调用，但SOAP规范比XML-RPC规范复杂得多。SOAP是异步的，支持有关路由的
+元请求，而且类型系统非常复杂（而XML-RPC使用简单而固定的类型集）。 
+当前，没有标准的Python SOAP工具包，可以考虑使用Twisted（http://twistedmatrix.com）、
+ZSI（http://pywebsvcs.sf.net）或SOAPy（http://soapy.sf.net）。有关SOAP的详细信息，请参阅
+http://www.w3.org/TR/soap。 
+15.5 小结 
+下面总结了本章介绍的主题。 
+屏幕抓取：指的是自动下载网页并从中提取信息。程序Tidy及其库版本是很有用的工具，
+可用来修复格式糟糕的HTML，然后使用HTTML解析器进行解析。另一种抓取方式是使
+用Beautiful Soup，即便面对混乱的输入，它也可以处理。
+CGI：通用网关接口是一种创建动态网页的方式，这是通过让Web服务器运行、与客户端
+程序通信并显示结果而实现的。模块cgi和cgitb可用于编写CGI脚本。CGI脚本通常是在
+HTML表单中调用的。
+Flask：一个简单的Web框架，让你能够将代码作为Web应用发布，同时不用过多操心Web
+部分。
+Web应用框架：要使用Python开发复杂的大型Web应用，Web应用框架必不可少。对简单
+的项目来说，Flask是不错的选择；但对于较大的项目，你可能应考虑使用Django或
+TurboGears。
+Web服务：Web服务之于程序犹如网页之于用户。你可以认为，Web服务让你能够以更抽
+象的方式进行网络编程。常用的Web服务标准包括RSS（以及与之类似的RDF和Atom）、
+XML-RPC和SOAP。
+15.5.1 本章介绍的新函数 
+函  数
+描  述
+cgitb.enable()
+在CGI脚本中启用栈跟踪 
+15.5.2 预告 
+你肯定通过运行前面编写的程序对其进行了测试。在下一章，你将学习如何对程序进行真正
+的测试——详尽、系统乃至令人乐此不疲。 
+—————————— 
+① 以前，SOAP指的是简单对象访问协议（Simple Object Access Protocol），但现在不是这样了。
+                          

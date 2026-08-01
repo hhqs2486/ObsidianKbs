@@ -1,0 +1,197 @@
+</domain>
+QEMU 缓存选项
+QEMU 的缓存选项对应下列的Ceph RBD 缓存选项。
+回写：
+rbd_cache = true
+透写：
+rbd_cache = true
+rbd_cache_max_dirty = 0
+无：
+rbd_cache = false
+QEMU 的缓存选项会覆盖Ceph 的默认选项（就是那些Ceph 配置文件里没有的选项）。如
+果你在Ceph 配置文件内设置了RBD 缓存选项，那么它们会覆盖QEMU 缓存选项。如果你
+在QEMU 命令行中设置了缓存选项，它们则会覆盖Ceph 配置文件里的选项。
+通过LIBVIRT 使用CEPH RBD
+libvirt 库是管理程序和软件应用间的一个虚拟机抽象层。通过libvirt ，开发者和系统
+管理员只需要关注这些管理器的一个通用管理框架、通用API 、和通用shell 接口
+（即virsh ）即可，包括：
+
+QEMU/KVM
+
+XEN
+
+
+LXC
+
+VirtualBox
+
+等等
+Ceph 块设备支持QEMU/KVM ，所以你可以通过能与libvirt 交互的软件来使用Ceph 块
+设备。下面的堆栈图解释了libvirt 和QEMU 如何通过librbd 使用Ceph 块设备。
+libvirt 常见于为云解决方案提供Ceph 块设备，像OpenStack 、ClouldStack 。它们
+用libvirt 和QEMU/KVM 交互、QEMU/KVM 再通过librbd 与Ceph 块设备交互。详
+情见块设备与OpenStack 和块设备与CloudStack 。关于如何安装见安装。
+你也可以通过libvirt 、virsh 和libvirt API 使用Ceph 块设备，详情见libvirt 虚拟
+化API 。
+要创建使用Ceph 块设备的虚拟机，请参照下文中的步骤。在示范性实施例中，我们
+用libvirt-pool 作为存储池名、client.libvirt 作为用户名、new-libvirt-
+image 作为映像名。你可以任意命名，但请确保在后续过程中用自己的名字替换掉对应名字。
+配置CEPH
+配置Ceph 用于libvirt ，执行下列步骤：
+1.
+创建——存储池（或者用默认的）。本例用libvirt-pool 作存储池名，设定了
+128 个归置组。
+
+ceph osd pool create libvirt-pool 128 128
+验证存储池是否存在。
+ceph osd lspools
+2.
+创建—— Ceph 用户（0.9.7 及之前的版本用client.admin ），本例
+用client.libvirt 、且权限限制到libvirt-pool 。
+ceph auth get-or-create client.libvirt mon 'allow r'
+osd 'allow class-read object_prefix rbd_children,
+allow rwx pool=libvirt-pool'
+验证名字是否存在。
+ceph auth list
+注：libvirt 访问Ceph 时将用libvirt 作为ID ，而不是client.libvirt 。
+关于ID 和名字不同之处的详细解释请参考用户管理——用户和用户管理——命令行界
+面。
+3.
+用QEMU 在RBD 存储池中创建映像。本例中映像名为new-libvirt-image 、
+存储池为libvirt-pool 。
+qemu-img create -f rbd rbd:libvirt-pool/new-libvirt-
+image 2G
+验证映像是否存在。
+rbd -p libvirt-pool ls
+
+注：你也可以用rbd create 创建映像，但我们建议使用示例中的命令，来顺便确认
+QEMU 可正常运行。
+准备虚拟机管理器
+即使没VM 管理器你也可以用libvirt ，但是用virt-manager 创建域更简单。
+1.
+安装虚拟机管理器，详情见KVM/VirtManager 。
+sudo apt-get install virt-manager
+2.
+下载一个OS 映像（如有必要）。
+3.
+启动虚拟机管理器。
+sudo virt-manager
+新建虚拟机
+要用virt-manager 创建VM ，请按下列步骤：
+1.
+点击Create New Virtual Machine 按钮。
+2.
+命名新虚拟机的域，本例中我们用libvirt-virtual-machine 。你可以任意命
+名，但请在后续命令行和配置实例中替换libvirt-virtual-machine 为你自己
+选择的名字。
+3. libvirt-virtual-machine
+4.
+导入映像。
+/path/to/image/recent-linux.img
+注：请导入一个较新的映像。一些较老的映像未必能正确地重扫虚拟设备。
+
+5.
+配置并启动VM 。
+6.
+可以用virsh list 验证VM 域是否存在。
+sudo virsh list
+7.
+登入VM （root/root ）
+8.
+在修改配置让它使用Ceph 前，请先停止VM 。
+配置VM
+配置VM 使用Ceph 时，切记尽量用virsh 。另外，virsh 命令通常需要root 权限
+（如sudo ），否则不会返回正确结果或提示你需要root 权限。virsh 命令参考见Virsh 命
+令参考。
+1.
+用virsh edit 打开配置文件。
+sudo virsh edit {vm-domain-name}
+<devices> 下应该有<disk> 条目。
+<devices>
+<emulator>/usr/bin/kvm</emulator>
+<disk type='file' device='disk'>
+<driver name='qemu' type='raw'/>
+<source
+file='/path/to/image/recent-linux.img'/>
+<target dev='vda' bus='virtio'/>
+<address type='drive'
+controller='0' bus='0' unit='0'/>
+
+</disk>
+用你的OS 映像路径替换/path/to/image/recent-linux.img 。使用较快
+的virtio 总线的最低内核版本是2.6.25 ，参见Virtio 。
+重要：要用sudo virsh edit 而非文本编辑器，如果你用文本编辑器编辑
+了/etc/libvirt/qemu 下的配置文件，libvirt 未必能识别出这些更改。如
+果/etc/libvirt/qemu 下的XML 文件和sudo virsh dumpxml {vm-
+domain-name} 输出结果内容不同，VM 可能会运行异常。
+2.
+把你创建的Ceph RBD 映像创建为<disk> 条目。
+3. <disk type='network' device='disk'>
+4.
+<source protocol='rbd' name='libvirt-
+pool/new-libvirt-image'>
+5.
+<host name='{monitor-host}'
+port='6789'/>
+6.
+</source>
+7.
+<target dev='vda' bus='virtio'/>
+</disk>
+用你的主机名替换{monitor-host} ，可能还要替换存储池和/或映像名。你可以
+为Ceph monitor 添加多条<host> ，dev 属性是将出现在VM/dev 目录下的逻辑
+设备名。可选的bus 属性是要模拟的磁盘类型，有效的设定值是驱动类型，如ide 、
+scsi 、virtio 、xen 、usb 或sata 。
+关于<disk> 标签及其子标签和属性，详见硬盘。
+8.
+保存文件。
+
+9.
+如果你的Ceph 存储集群启用了Ceph 认证（默认已启用），那么必须生成一个
+secret。
+10.
+cat > secret.xml <<EOF
+11.
+<secret ephemeral='no' private='no'>
+12.
+<usage type='ceph'>
+13.
+<name>client.libvirt
+secret</name>
+14.
+</usage>
+15.
+</secret>
+EOF
+16. 定义secret。
+17.
+sudo virsh secret-define --file secret.xml
+<uuid of secret is output here>
+18. 获取client.libvirt 密钥并把字符串保存于文件。
+ceph auth get-key client.libvirt | sudo tee
+client.libvirt.key
+19. 设置secret 的UUID 。
+
+sudo virsh secret-set-value --secret {uuid of secret}
+--base64 $(cat client.libvirt.key) && rm
+client.libvirt.key secret.xml
+还必须手动设置secret，把下面的<auth> 条目添加到前面的<disk> 标签内（用
+上一命令的输出结果替换掉uuid 值）。
+sudo virsh edit {vm-domain-name}
+然后，把<auth></auth> 标签加进域配置文件：
+...
+</source>
+<auth username='libvirt'>
+<secret type='ceph' uuid='9ec59067-fdbc-
+a6c0-03ff-df165c0587b8'/>
+</auth>
+<target ...
+注：示例ID 是libvirt ，不是第2 步配置Ceph 生成的Ceph
+名client.libvirt 。确保你用的是Ceph 名的ID 部分。如果出于某些原因你需
+要更换secret，必须先执行sudo virsh secret-undefine {uuid} ，然后
+再执行sudo virsh secret-set-value 。
+总结
+一旦完成上面的配置，你就可以启动VM 了。为确认VM 和Ceph 在通信，你可以执行如下过
+程。
+1.
+检查Ceph 是否在运行：

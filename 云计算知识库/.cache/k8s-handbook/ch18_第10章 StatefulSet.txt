@@ -1,0 +1,617 @@
+第10章 StatefulSet
+本章将介绍如何在Kubernetes中使用StatefulSet来部署和管理有
+状态的应用。
+为了便于讨论，本书认为有状态的应用是指会生成并保存有价值
+的数据的应用。比如，如果一个应用会保存客户端的会话数据，并在
+之后的会话中使用它，那么就可以被认为是有状态的应用。其他的例
+子还包括数据库等数据存储型应用。
+本章内容将从以下两部分展开。
+●StatefulSet原理。
+●StatefulSet实战。
+10.1节将介绍StatefulSet的工作方式和使用场景。如果这一节中
+有些内容无法完全理解，也请不要担心，在实战环节将会再次巩固学
+习相关内容。
+10.1 StatefulSet原理
+对比StatefulSet和Deployment将有助于我们理解StatefulSet。
+二者都是Kubernetes API中的一等对象，并且遵循典型的Kubernetes
+控制器架构。这些控制器都通过启动对API Server的监听循环来观察
+集群状态，以便能够及时将当前状态调整至与期望状态保持一致。
+Deployment和StatefulSet都支持自愈、自动扩缩容、滚动更新等特
+性。
+当然，StatefulSet与Deployment还是有显著不同的，
+StatefulSet能够确保以下几点。
+更多IT书籍请关注：www.cmsblogs.cn
+
+●Pod的名字是可预知和保持不变的。
+●DNS主机名是可预知和保持不变的。
+●卷的绑定是可预知和保持不变的。
+以上3个属性构成了Pod的状态，有时也被成为Pod的状态
+ID（stick ID）。状态ID在即使发生故障、扩缩容，以及其他调度操
+作之后，依然保持不变，从而使StatefulSet适用于那些要求Pod保持
+不变的应用中。
+举个简单的例子，由StatefulSet管理的Pod，在发生故障后会被
+新的Pod代替，不过依然保持相同的名字、相同的DNS主机名和相同的
+卷。即使新的Pod在另一个节点上启动，亦是如此。然而Deployment管
+理下的Pod就无法实现这一点。
+下面的YAML代码是一个典型的StatefulSet的定义（部分属性）。
+apiVersion: apps/v1  
+kind: StatefulSet  
+metadata:  
+  name: tkb-sts   
+spec:   
+  selector:  
+    matchLabels:  
+      app: mongo   
+  ServiceName: "tkb-sts"   
+  replicas: 3  
+  template:   
+    metadata:  
+      labels:  
+        app: mongo  
+    spec:  
+      containers:  
+      - name: ctr-mongo   
+        image: mongo:latest 
+        ...
+这个StatefulSet的名字是tkb-sts，它定义了3个基于
+mongo:latest镜像运行的Pod副本。如果将该YAML文件POST到API
+更多IT书籍请关注：www.cmsblogs.cn
+
+Server，并保存到集群存储中，那么具体的创建工作将被安排给集群
+的节点。其中，StatefulSet控制器负责监控集群状态，并确保当前状
+态与期望状态保持一致。
+以上描述过于泛泛，下面我们来探讨一下StatefulSet的主要特
+性，然后再通过例子进行更加深入的体会。
+10.1.1 StatefulSet中Pod的命名
+由StatefulSet管理的所有Pod都会获得一个可预知的、保持不变
+的名字。这些Pod名字对于其启动、自愈、扩缩容、删除、附加卷等操
+作都非常重要。
+StatefulSet的Pod名字遵循<StatefulSetName>-<Integer>的规
+则。其中Integer是一个从零开始的索引号，也就是“一个从0开始的
+整数”。被StatefulSet创建的第一个Pod的索引号为“0”，之后的
+Pod的索引号依次递增。对于前面提到的YAML文件来说，第一个Pod的
+名为tkb-sts-0，第二个名为tkb-sts-1，第三个名为tkb-sts-2。
+请注意，StatefulSet的名字必须是有效的DNS名字，不能使用奇
+怪的字符！很快读者就会知道原因。
+10.1.2 按序创建和删除
+关于StatefulSet的另一个基本特性就是，对Pod的启动和停止是
+受控和有序的。
+StatefulSet每次仅创建一个Pod，并且总是等前一个Pod达到运行
+且就绪状态之后才开始创建下一个Pod。而Deployment在使用
+更多IT书籍请关注：www.cmsblogs.cn
+
+ReplicaSet控制器创建Pod时则是并行开始的，这可能会引发潜在的竞
+态条件（race condition）。
+对于前面的YAML文件的例子，tkb-sts-0 会最先启动，并且在达
+到运行且就绪状态之后，StatefulSet控制器才会创建tkb-sts-1。对
+于tkb-sts-2也是同样的待遇。如图10.1所示。
+图10.1
+注：所谓运行且就绪，表示Pod中所有的容器都处于运行状态，且
+能够对请求提供服务。
+扩缩容操作也遵循同样的规则。例如，当从3个副本扩容到5个副
+本时，会启动一个名为tkb-sts-3的新Pod，并且等待其处于运行且就
+绪状态之后，再创建tkb-sts-4。当缩容时，则遵循相反的规则：控制
+器会首先终止拥有最高索引号的Pod，等待其被完全删除之后，再继续
+删除下一个拥有最高索引号的Pod。
+在缩容的时候Pod是被依序而非并行删除的，这对于许多的有状态
+应用来说意义重大。例如，对于数据存储类的集群化应用来说，如果
+多个副本是被同时删除的话，会面临数据丢失的风险。StatefulSet将
+确保这种情况不会发生，此外，还可以借助
+terminationGracePeriodSeconds这样的参数来调整间隔时间，以控制
+缩容速度。因此，StatefulSet对于数据存储类的集群化应用来说提供
+了许多有益帮助。
+最后需要说明，StatefulSet控制器能够自行完成自愈和扩缩容。
+而Deployment是通过一个独立的ReplicaSet控制器来完成这些操作
+更多IT书籍请关注：www.cmsblogs.cn
+
+的，二者从架构上是不同的。
+10.1.3 删除StatefulSet
+在删除StatefulSet时，需要重点考虑两个问题。
+删除一个StatefulSet并不是按序依次终止所有Pod的，因此，也
+许在删除StatefulSet之前首先将其缩容至0是个不错的主意。
+我们可以使用terminationGracePeriodSeconds来调整间隔时间。
+通常应至少将该参数设置为10，以便让Pod中的应用能够有机会将本地
+缓存中的数据落盘，以及安全地提交进行中的写入操作。
+10.1.4 卷
+卷是StatefulSet Pod的状态ID中的重要组成部分。
+当一个StatefulSet Pod被创建时，所需的卷也会被创建，同时其
+命名方式也有助于确保能够连接到正确的Pod。图10.2中是一个名为
+“ss”的StatefulSet，它有3个副本。从图中可以看出每一个Pod和卷
+（PVC）都是通过名字建立正确的绑定关系的。
+更多IT书籍请关注：www.cmsblogs.cn
+
+图10.2
+卷与Pod通过Kubernetes持久化卷子系统架构
+（PersistentVolumes和PersistentVolumeClaim）实现了解耦。这意
+味着，卷和Pod都有各自独立的生命周期，从而可以避免卷受到Pod的
+故障和删除操作的影响。举例来说，即使一个StatefulSet的Pod发生
+故障或被删除，其关联的卷也不会受影响。因此，当进行Pod的替换
+时，只需要再次连接同一个卷即可。即使替换的新Pod被调度到另一个
+节点上时，亦是如此。
+上述操作同样适用于扩缩容。如果StatefulSet的一个Pod在缩容
+操作中被删除，则当StatefulSet被再次扩容时，新增的Pod会通过名
+字的匹配，继续连接到之前已存在的卷上。
+当不小心删除一个StatefulSet的Pod时——尤其当删除的是最后
+一个Pod副本时——这一特性有助于避免数据丢失。
+10.1.5 故障处理
+StatefulSet控制器会监控集群的状态，并尽力保持当前状态与期
+望状态是同步的。最常见的场景就是发生Pod故障时。假设一个名为
+tkb-stsd的StatefulSet有5个副本，当tkb-sts-3发生故障，控制器会
+启动一个同名的新Pod来替换故障Pod，并连接到同一个卷上。
+不过，假设发生故障的Pod在Kubernetes替换掉它之后恢复正常，
+这时候就有了两个同样的Pod，它们位于同一个网络，连接同一个卷。
+这有可能导致数据损坏。因此，StatefulSet控制器在进行故障处理时
+会非常小心。
+节点宕机的情况也是非常难以处理的。假如，Kubernetes失去了
+某个节点的连接，它如何知道该节点是永久宕机，还是临时的故障
+更多IT书籍请关注：www.cmsblogs.cn
+
+（比如网络抖动、网络分区、Kubelet错误、节点重启）？情况可能会
+更加复杂，控制器可能由于Kubelet无法接收到指令而无法强制删除
+Pod。因此，在Kubernetes替换故障节点上的Pod之前，是需要人工干
+预的。
+10.1.6 网络ID和headless Service
+前面提到，部署为StatefulSet的应用，认为Pod是可预知的、长
+期存在的。因此，应用中的其他组件或其他的应用，可能需要直接连
+接到某个Pod上。为了实现这一点，StatefulSet使用了一个headless
+Service来为每一个Pod副本创建一个可预知的DNS主机名。从而，其他
+应用可以通过向DNS查询所有Pod的信息来实现对这些Pod的直接连接。
+下面的YAML代码定义的StatefulSet将一个名为mongo-prod的
+headless Service作为governing Service。
+apiVersion: v1  
+kind: Service  
+metadata:  
+  name: mongo-prod  
+spec:   
+  clusterIP: None  
+  selector:  
+    app: mongo  
+    env: prod  
+---   
+apiVersion: apps/v1  
+kind: StatefulSet  
+metadata: 
+  name: sts-mongo  
+spec:   
+  ServiceName: mongo-prod 
+下面解释一下headless Service和governing Service两个术语。
+更多IT书籍请关注：www.cmsblogs.cn
+
+所谓的headless Service，就是一个将spec.clusterIP设置为
+None的常规Kubernetes Service对象。当这个headless Service被设
+置为StatefulSet的spec.ServiceName时，它就成为了StatefulSet的
+governing Service。
+在二者如此关联之后，Service会为所匹配的每个Pod副本创建DNS
+SRV记录。其他Pod可以通过对headless Service发起DNS查询来获取
+StatefulSet的信息。本章后续会针对这一用法进行实战介绍，显然，
+应用本身应该是知道如何进行这样的操作的。
+原理部分的介绍就是这些，下面通过一个例子贯穿这些原理来进
+一步理解StatefulSet。
+10.2 StatefulSet实战
+本节我们将部署一个StatefulSet。请注意，本节的例子是为了说
+明StatefulSet的工作原理，帮助我们加深理解，而并非生产环境中的
+配置方式。
+本节的例子可以运行在GCP和GKE的Kubernetes集群上。本书的
+GitHub库中包含可运行于其他云平台上的YAML文件。
+所有相关的YAML文件都位于本书GitHub库的StatefulSet目录下，
+可执行如下命令来克隆代码库。
+$ git clone https://github.com/nigelpoulton/Thek8sBook.git
+整个实战过程，我们会部署3个对象：StorageClass、headless
+Service和StatefulSet。
+为了便于解释，每个对象都进行单独分析和部署。当然，也可以
+将它们放到一个YAML文件中，用3个中划线隔开即可（见代码库
+更多IT书籍请关注：www.cmsblogs.cn
+
+StatefulSet目录下的app.yml文件）。
+10.2.1 部署StorageClass
+StatefulSet需要使用能够自动创建的卷。因此需要以下两个对
+象。
+●StorageClass（SC）。
+●PersistentVolumeClaim（PVC）。
+以下的代码来自/StatefulSets/gcp-sc.yml文件，其中定义了一
+个名为flash的StorageClass对象，它能够动态置备来自GCP的SSD卷
+（type=pd-ssd），这些卷基于GCP持久化磁盘CSI驱动
+（pd.csi.storage.gke.io）。因此，只有运行在GCP或GKE上的、启用
+了CSI驱动的Kubernetes集群方可正常工作。而在诸如AWS、AZure和
+Linode等其他云平台上创建StorageClass的YAML文件也可以在代码库
+中找到。
+apiVersion: storage.k8s.io/v1  
+kind: StorageClass  
+metadata:   
+  name: flash  
+provisioner: pd.csi.storage.gke.io  
+volumeBindingMode: WaitForFirstConsumer 
+allowVolumeExpansion: true  
+parameters:   
+  type: pd-ssd  
+部署StorageClass（请确保使用适合读者实验环境的YAML文
+件）。
+$ kubectl apply -f gcp-sc.yml  
+storageclass.storage.k8s.io/flash created
+更多IT书籍请关注：www.cmsblogs.cn
+
+查看StorageClass是否创建成功。
+$ kubectl get sc  
+NAME   PROVISIONER           RECLAIMPOLICY  
+VOLUMEBINDINGMODE    ALLOWEXPANSION AGE 
+flash  pd.csi.storage.gke.io Delete         
+WaitForFirstConsumer true           5s
+现在StorageClass已经就位，PersistentVolumeClaim（PVC）可
+以基于它来动态创建新的卷了。稍后我们会回来讨论它。
+10.2.2 创建一个governing headless Service
+当讨论到headless Service时，为了帮助理解，我们可以将
+Service想象为一个包含头和身的对象。所谓头，就是暴露在网络上的
+固定的IP，而身则是Service所匹配的所有Pod。因此，一个headless
+Service（无头Service）就是没有ClusterIP的Service对象。
+以下YAML代码来自StatefulSets/headless-svc.yml，它定义了一
+个名为dullahan的没有IP地址（spec.clusterIP: None）的headless
+Service。
+apiVersion: v1  
+kind: Service  
+metadata:  
+  name: dullahan 
+  labels:  
+    app: web  
+spec:  
+  ports:  
+  - port: 80   
+    name: web  
+  clusterIP: None  
+  selector:  
+    app: web 
+更多IT书籍请关注：www.cmsblogs.cn
+
+与普通Service的唯一不同就在于，headless Service必须将
+clusterIP设置为None。
+当headless Service关联到一个StatefulSet时，会为每个匹配到
+StatefulSet的Pod创建可预知的固定DNS解析项。在后续环节我们将会
+看到这一点。
+部署headless Service。
+$ kubectl apply -f headless-svc.yml  
+Service/tkb-sts created
+查看部署情况。
+$ kubectl get svc  
+NAME         TYPE        CLUSTER-IP   EXTERNAL-IP    
+PORT(S)     AGE  
+kubernetes   ClusterIP   10.0.0.1     <none>         
+443/TCP     145m  
+dullahan     ClusterIP   None         <none>         
+80/TCP      10s
+10.2.3 部署StatefulSet
+现在StorageClass和headless Service都已就绪，是时候部署
+StatefulSet了。
+以下的YAML代码来自StatefulSets/sts.yml文件，其中定义了一
+个StatefulSet。请注意，该StatefulSet的配置仅用于学习目的，并
+不适用于生产级别的部署。
+apiVersion: apps/v1  
+kind: StatefulSet  
+metadata:  
+更多IT书籍请关注：www.cmsblogs.cn
+
+  name: tkb-sts  
+spec:   
+  replicas: 3  
+  selector:  
+    matchLabels:  
+      app: web  
+  ServiceName: "dullahan"  
+  template: 
+    metadata:  
+      labels:  
+        app: web  
+    spec:  
+      terminationGracePeriodSeconds: 10   
+      containers:  
+      - name: ctr-web   
+        image: nginx:latest   
+        ports:  
+        - containerPort: 80  
+          name: web  
+        volumeMounts:  
+        - name: webroot   
+          mountPath: /usr/share/nginx/html 
+  volumeClaimTemplates:  
+  - metadata:   
+      name: webroot   
+    spec:  
+      accessModes: [ "ReadWriteOnce" ]  
+      storageClassName: "flash"  
+      resources:  
+        requests:  
+          storage: 1Gi
+有太多内容需要解释，下面依次介绍。
+该StatefulSet的名字是tk-sts。名字是很重要的，因为它的所有
+Pod副本都基于这个名字——都以tkb-sts为前缀。
+spec.replicas属性定义了3个Pod副本，它们将分别被命名为tsk-
+sts-0、tsk-sts-1、tsk-sts-2。它们会被依序创建，并且
+StatefulSet控制器会在等待当前所创建的Pod达到运行且就绪状态后
+才会创建下一个。
+更多IT书籍请关注：www.cmsblogs.cn
+
+spec.ServiceName属性指定了governing Service。其名字是前面
+创建的headless Service，它会为每一个StatefulSet的Pod创建一个
+对应的DNS SRV。而之所以被称为governing Service，是由于它负责
+管理该StatefulSet所有的DNS子域名。
+之后的spec.template部分定义了Pod的模板，包括容器的镜像、
+暴露的端口等。
+最后一段非常重要的内容是spec.volumeClaimTemplates部分。
+本章前面提到，StatefulSet对存储的需求是希望能够动态创建所
+使用的卷。因此用到了StorageClass和
+PersistentVolumeClaim（PVC）。
+现在StorageClass已经就位备用。不过，关于PVC却存在一个有趣
+的挑战。
+StatefulSet的每一个Pod都需要拥有独立的存储。这意味着每个
+Pod需要自己的PVC。然而这是不可能的，因为每个Pod都是基于同一个
+template创建的。这样就得提前为每个Pod创建好PVC，这也不好办，
+因为还要考虑到StatefulSet可能会扩容或缩容。
+显然，这里需要一个更加聪明的基于StatefulSet的方案。这也是
+volumeClaimTemplate（卷申请模板）出现的原因。
+总体来说，volumeClaimTemplate用于在每次创建一个新的Pod副
+本的时候，自动创建一个PVC。它还能够自动为PVC命名，以便实现与
+Pod的准确关联。如此，在StatefulSet的配置中，template部分用来
+定义Pod的模板，而volumeClaimTemplate部分则用来定义PVC。
+下面的YAML代码是例子中StatefulSet应用的
+volumeClaimTemplate部分。它定义了一个名为webroot的申请模板，
+从前面创建的flash StorageClass中申请一个10GB的卷。
+volumeClaimTemplates:  
+- metadata:   
+更多IT书籍请关注：www.cmsblogs.cn
+
+    name: webroot  
+  spec:  
+    accessModes: [ "ReadWriteOnce" ] 
+    storageClassName: "flash"  
+    resources:  
+      requests:  
+        storage: 10Gi
+在StatefulSet对象部署之后，会创建3个Pod副本以及3个PVC。
+部署该StatefulSet，并观察所创建的Pod和PVC。
+$ kubectl apply -f sts.yml   
+statefulset.apps/tkb-sts created
+观察StatefulSet创建这3个副本的过程。整个过程可能会持续几
+分钟，期间会创建3个Pod及其关联的PVC，每一个Pod都需要达到“运
+行且就绪”的状态才会创建下一个。
+$ kubectl get sts --watch 
+NAME      READY   AGE   
+tkb-sts   0/3     10s   
+tkb-sts   1/3     23s   
+tkb-sts   2/3     46s   
+tkb-sts   3/3     69s
+根据输出可知，第一个Pod是在大约23s的时候创建好的。然后再
+分别花费23s创建第二个和第三个Pod。
+查看PVC。
+$ kubectl get pvc  
+NAME               STATUS  VOLUME           CAPACITY   
+MODES   STORAGECLASS   AGE  
+webroot-tkb-sts-0  Bound   pvc-1146...f274  10Gi       RWO  
+flash          86s   
+webroot-tkb-sts-1  Bound   pvc-3026...6bcb  10Gi       RWO  
+flash          63s  
+更多IT书籍请关注：www.cmsblogs.cn
+
+webroot-tkb-sts-2  Bound   pvc-2ce7...e56d  10Gi       RWO  
+flash          40s
+此时系统中有3个PVC，每一个都是与对应的StatefulSet Pod同时
+创建的。不难发现，PVC的名字与StatefulSet的名字及其关联的Pod名
+字有关。具体的格式为volumeClaimTemplate名字，后跟通过中划线连
+接的PVC所关联的Pod的名字。
+Pod Name    |     PVC Name  
+tkb-sts-0   <->   webroot-tkb-sts-0 
+tkb-sts-0   <->   webroot-tkb-sts-1 
+tkb-sts-0   <->   webroot-tkb-sts-2 
+此时，StatefulSet已经处于运行状态了，应用的各个副本也都开
+始正常执行了。
+10.2.4 测试点对点发现
+前面提到，与StatefulSet配合的headless Service会为每个与该
+StatefulSet匹配的Pod创建DNS SRV记录。现在已经有1个headless
+Service和3个StatefulSet Pod在运行了，所以也应该有3个DNS SRV记
+录——每个Pod对应一个。
+不过，在开始测试之前，还是有必要花费一点时间来探讨DNS主机
+名和DNS子域名在StatefulSet中是如何发挥作用的。
+默认情况下，Kubernetes会将所有对象置于cluster.local这个
+DNS子域名下。当然，它是可以被用户自定义的，不过多数的实验环境
+还是使用这个子域名，因此我们的例子也是假定使用该子域名。如
+此，Kubernetes会将DNS全限定域名进行如下格式的拼接。
+<object-name>.<Service-name>.<namespace>.svc.cluster.local
+更多IT书籍请关注：www.cmsblogs.cn
+
+svc表明对象是被Service管理的。
+目前我们有3个名为tkb-sts-0、tkb-sts-1、tkb-sts-2的Pod，它
+们被dullahan headless Service管理。那么这3个Pod的全限定DNS域
+名如下。
+●tkb-sts-0.dullahan.default.svc.cluster.local。
+●tkb-sts-1.dullahan.default.svc.cluster.local。
+●tkb-sts-2.dullahan.default.svc.cluster.local。
+为了方便测试，需要准备一个安装有DNS dig工具的测试Pod。然
+后exec进入Pod，使用dig向DNS查询
+dullahan.default.svc.cluster.local子域名中的SRV。
+安装测试Pod的YAML文件请见本书GitHub库
+的/StatefulSets/jump-Pod.yml。
+$ kubectl apply -f jump-Pod.yml 
+Pod/jump-Pod created
+进入测试Pod执行命令。
+$ kubectl exec -it jump-Pod -- bash 
+root@jump-Pod:/#
+此时的终端已经连接到测试Pod，执行以下命令。
+$ dig SRV dullahan.default.svc.cluster.local  
+<Snip>  
+;; ADDITIONAL SECTION:   
+tkb-sts-0.dullahan.default.svc.cluster.local. 30 IN A 
+10.24.1.25 
+tkb-sts-2.dullahan.default.svc.cluster.local. 30 IN A 
+10.24.1.26 
+tkb-sts-1.dullahan.default.svc.cluster.local. 30 IN A 
+更多IT书籍请关注：www.cmsblogs.cn
+
+10.24.0.17 
+<Snip>  
+该查询命令返回了每个Pod的DNS全限定名和IP。其他应用，当然
+也包括该应用自身，都可以使用这种方式来查找StatefulSet的所有
+Pod。
+当然，这种方法能够奏效的前提是，应用必须知道StatefulSet的
+governing Service的名字，而且StatefulSet的Pod必须匹配该
+governing Service的Label筛选器。
+10.2.5 StatefulSet扩缩容
+当StatefulSet进行扩容的时候，都会创建一个Pod和一个PVC。不
+过，当StatefulSet进行缩容的时候，Pod会被删除而PVC仍然保留。也
+就是说，将来再次进行扩容操作的时候只需要创建一个新的Pod即可，
+新Pod会连接保留的PVC。这其中的Pod和PVC的映射关系由StatefulSet
+控制器负责跟踪和管理。
+目前我们有3个StatefulSet Pod副本和3个PVC。编辑sts.yml文
+件，将副本数从3改为2。保存之后，执行以下命令将YAML文件POST到
+集群。
+$ kubectl apply -f sts.yml  
+statefulset.apps/tkb-sts configured
+查看StatefulSet的状态，确认Pod的个数减少为2个。
+$ kubectl get sts tkb-sts   
+NAME      READY   AGE   
+tkb-sts   2/2     14m   
+  
+更多IT书籍请关注：www.cmsblogs.cn
+
+$ kubectl get Pods  
+NAME        READY  STATUS    RESTARTS  AGE 
+tkb-sts-0   1/1    Running   0         15m 
+tkb-sts-1   1/1    Running   0         15m
+可见Pod副本的数量已经降为2，拥有最高索引号的Pod已经被删
+除。不过，PVC仍有3个——请记住，缩容和删除Pod副本的操作不会删
+除相关联的PVC。执行命令予以确认。
+$ kubectl get pvc  
+NAME                STATUS   VOLUME             CAPACITY  
+MODES  STORAGECLASS  AGE 
+webroot-tkb-sts-0   Bound    pvc-1146...f274  10Gi       
+RWO    flash          15m 
+webroot-tkb-sts-1   Bound    pvc-3026...6bcb  10Gi       
+RWO    flash          15m 
+webroot-tkb-sts-2   Bound    pvc-2ce7...e56d  10Gi       
+RWO    flash          15m 
+可见所有的PVC还都在，也就是说如果再次扩容到3个副本的话，
+将只需要创建一个新的Pod即可。“幸存”的PVC名为webroot-tkb-
+sts-2，StatefulSet控制器将会自动将其连接到新的索引号为2的
+Pod。
+编辑sts.yml文件，将副本数改回3并保存。然后将YAML文件再次
+POST到API Server。
+$ kubectl apply -f sts.yml  
+statefulset.apps/tkb-sts configured
+等待几秒后，新的Pod被部署，然后执行以下命令验证。
+$ kubectl get sts tkb-sts  
+NAME      READY   AGE  
+tkb-sts   3/3     20m
+更多IT书籍请关注：www.cmsblogs.cn
+
+Pod数量又回到了3个。检查PVC webroot-tkb-sts-2是否挂载到了
+正确的Pod上。
+$ kubectl describe pvc webroot-tkb-sts-2 | grep Mounted 
+Mounted By:    tkb-sts-2
+如果有任何Pod处于失效状态，那么缩容操作将会被暂停。这是出
+于保护应用的弹性（resiliency）和数据完整性的考虑。
+最后要说明，我们还可以通过StatefulSet的
+spec.PodManagementPolicy属性来调控Pod的启动和停止的顺序。
+该属性的默认设置是OrderedReady，这也就是前面介绍的按序管
+理策略。我们可以通过将这个属性设置为Parallel，使StatefulSet对
+所有Pod的创建和删除操作是并行进行的，这与Deployment是类似的。
+比如，在执行从副本数2到5的扩容操作时，会立即同时创建3个新的
+Pod，而执行从5到2的缩容操作时，同样也是同时删除3个Pod。
+StatefulSet的命名规则依然不变，并且该属性的设置只是作用于扩缩
+容操作，而对滚动升级是没有影响的。
+10.2.6 执行滚动升级
+StatefulSet支持滚动升级，执行该操作的时候只需要在YAML中更
+新镜像版本，然后POST到API Server即可。通过认证和鉴权后，
+StatefulSet控制器会用新Pod替换旧Pod。不过，升级操作总是从索引
+号最大的Pod开始，每次更新一个Pod，直至最小索引号的Pod。控制器
+同样会等新Pod达到运行且就绪状态后才会继续更新下一个Pod。
+更多信息请执行$ kubectl explain sts.spec.updateStrategy来
+了解。
+更多IT书籍请关注：www.cmsblogs.cn
+
+10.2.7 模拟Pod故障
+最简单的模拟Pod故障的方式就是手动删除一个Pod，这并不会导
+致PVC被删除。这时，StatefulSet控制器会检测到当前状态与期望状
+态的不一致，发现一个Pod已经被删除，然后启动一个新的同样的Pod
+来补位。这个新Pod的名字和所连接的PVC保持不变。
+下面我们来测试一下。
+在开始之前确保StatefulSet中有3个健康的Pod。
+$ kubectl get Pods  
+NAME        READY   STATUS   AGE 
+tkb-sts-0   1/1     Running  37m 
+tkb-sts-1   1/1     Running  37m 
+tkb-sts-2   1/1     Running  18m
+我们将删除名为tkb-sts-0的Pod。不过在开始之前，先用$
+kubectl describe命令来确认一下PVC是否被正确连接。当然，这种确
+认并无太大必要，因为可以从volumeClaimTemplate和StatefulSet的
+名字推断出PVC的名字。不过，确认一下也无妨。
+$ kubectl describe Pod tkb-sts-0  
+Name:         tkb-sts-0  
+Namespace:    default  
+<Snip>   
+Status:       Running  
+IP:           10.24.1.13  
+<Snip>  
+Volumes:  
+  webroot:  
+    Type:      PersistentVolumeClaim (a reference to a 
+PersistentVolumeClaim...)   
+    ClaimName: webroot-tkb-sts-0   
+<Snip>
+更多IT书籍请关注：www.cmsblogs.cn
+
+基于以上输出内容可知以下几点。
+●Name：tkb-sts-0。
+●PVC：webroot-tkb-sts-0。
+下面，我们删除tkb-sts-0这个Pod，然后看StatefulSet控制器是
+否能够重建它。
+$ kubectl delete Pod tkb-sts-0  
+Pod "tkb-sts-0" deleted   
+  
+$ kubectl get Pods --watch   
+NAME        READY   STATUS              RESTARTS   AGE 
+tkb-sts-1   1/1     Running             0          43m 
+tkb-sts-2   1/1     Running             0          24m 
+tkb-sts-0   0/1     Terminating         0          43m 
+tkb-sts-0   0/1     Pending             0          0s  
+tkb-sts-0   0/1     ContainerCreating   0          0s  
+tkb-sts-0   1/1     Running             0          34s
+通过在命令末尾添加--watch，可以看到StatefulSet控制器的处
+理过程，它注意到有Pod被删除，然后创建了一个新的来补位——期望
+状态是3个副本，但是当前状态降至2。由于故障比较清晰且便于验
+证，因此控制器能够迅速开始创建新的Pod。
+由命令输出可见，新的Pod依然采用发生故障的Pod的名字，那么
+PVC是否也是一致的呢？
+从以下命令可以得出肯定的答案。
+$ kubectl describe Pod tkb-sts-0 | grep ClaimName 
+    ClaimName: webroot-tkb-sts-0
+10.2.8 删除StatefulSet
+更多IT书籍请关注：www.cmsblogs.cn
+
+本章前面提到，删除StatefulSet并不会按序依次删除Pod。因
+此，如果读者的应用希望Pod能够依次关闭，那么应当首先将
+StatefulSet缩容至0，然后再执行删除操作。
+将StatefulSet缩容至0副本并确认。这个过程可能需要数秒。
+$ kubectl scale sts tkb-sts --replicas=0 
+statefulset.apps/tkb-sts scaled   
+  
+$ kubectl get sts tkb-sts   
+NAME      READY   AGE   
+tkb-sts   0/0    86m  
+StatefulSet已经没有任何副本，此时可以删除它了。
+$ kubectl delete sts tkb-sts  
+statefulset.apps "tkb-sts" deleted
+当然，也可以通过YAML文件来删除StatefulSet：$ kubectl
+delete -f sts.yml。
+此时不妨再次exec到测试Pod，然后执行dig命令来确认SRV记录是
+否已经被从DNS中删除了。
+这时，StatefulSet对象已经被删除了，不过headless Service、
+StorageClass和测试Pod还在。请自行删除它们。
+10.3 总结
+本章介绍了如何创建StatefulSet和管理有状态应用。
+StatefulSet支持自愈、扩容和缩容、滚动升级。回滚操作需要人
+工干预。
+更多IT书籍请关注：www.cmsblogs.cn
+
+StatefulSet创建的每一个Pod副本都有可预知且保持不变的名
+字、DNS主机名和独立的卷。这些都伴随Pod的整个生命周期，包括故
+障处理、重启、扩缩容及其他调度操作。事实上，StatefulSet Pod的
+名字与扩缩容操作和关联存储卷操作是息息相关的。
+不过，StatefulSet只是一个框架。另外，应用在进行内部实现时
+需要配合StatefulSet的特性才能充分利用StatefulSet的优势。
+更多IT书籍请关注：www.cmsblogs.cn

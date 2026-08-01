@@ -1,0 +1,624 @@
+286  第17 章 扩展Python 
+扩展Python 
+Python什么都能做，真的是这样。这门语言功能强大，但有时候速度有点慢。例如，如果要
+编写模拟某种核反应的程序或为下一部《星球大战》电影渲染图形，企图使用Python来编写这样
+的高性能代码可能不是很好的选择。Python的目标是易于使用以及帮助提高开发速度，这种灵活
+性是以牺牲效率为代价的。对大多数常见的编程任务来说，Python无疑足够快，但如果你真的很
+在乎速度，C、C++、Java和Julia等语言通常要快好几个数量级。 
+17.1 鱼和熊掌兼得 
+对于坚信速度至上的读者，我并不鼓励你只使用C语言进行开发。虽然只使用C语言能提高
+程序本身的速度，但肯定会降低编程速度。因此你需要考虑哪一点更重要：是快速编写好程序，
+还是很久以后终于编写出了一个速度极快的程序。如果Python的速度足以满足需求，使用C等低
+级语言带来的痛苦将让这样的选择毫无意义（除非还有其他需求，比如程序将在不适合使用
+Python的嵌入式设备中运行）。 
+本章讨论确实需要进一步提升速度的情形。在这种情况下，最佳的解决方案可能不是完全转
+向C语言（或其他中低级语言），我建议你采用下面的方法（这可满足众多的速度至上需求）。 
+(1) 使用Python开发原型（有关原型开发的详细信息，请参阅第19章）。 
+(2) 对程序进行性能分析以找出瓶颈（有关测试，请参阅第16章）。 
+(3) 使用C（或者C++、C#、Java、Fortran等）扩展重写瓶颈部分。 
+这样得到的架构（包含一个或多个C语言组件的Python框架）将非常强大，因为它兼具这两
+门语言的优点。关键在于选择正确的工具来完成每项任务，这样既能获得使用高级语言（Python）
+开发复杂系统的好处，又能使用低级语言（C）来开发较小（还可能较简单）但速度至关重要的
+组件。 
+注意 还有其他让你转而求助于C语言的原因。例如，如果要编写与怪异硬件交互的低级代码，
+你几乎别无选择。 
+如果编码前就知道系统的哪部分将是瓶颈，可以（而且可能应该）在设计原型时就确保可轻
+松地替换这些关键部分。对于这个观点，可能使用下面的提示来阐述更合适。 
+第17 章
+                          
+
+17.2 简单易行的方式：Jython 和IronPython  287 
+16 
+17 
+3 
+4 
+5 
+15 
+6 
+7 
+8 
+9 
+10 
+11 
+12 
+13 
+14 
+提示 将潜在的瓶颈封装起来。 
+最终你可能发现并不需要使用C扩展来替换这些瓶颈（这可能是因为运行程序的计算机的速
+度更高了），但至少存在选择的空间。 
+扩展能够找到用武之地的另一种常见情形是遗留代码。你可能想重用一些代码，但这些代码
+是使用其他语言（如C）编写的。在这种情况下，可将这些代码“包装”起来（编写一个提供合
+适接口的小型C语言库），并使用这个包装器来创建Python扩展。 
+在接下来的几节中，我将简要地介绍如何扩展Python的经典C语言实现（为此可手工编写所
+有的代码，也可使用工具SWIG），以及如何扩展其他两种实现：Jython和IronPython。另外，还
+将讨论访问外部代码的其他方式。 
+反过来
+本章着重介绍使用编译型语言为Python程序编写扩展。但别忘了，下面的做法也有用武
+之地：使用编译型语言编写程序，并在其中嵌入Python解释器来执行少量的脚本和扩展。在
+这种情况下，嵌入Python追求的不是速度而是灵活性。从很多方面说，这与编写编译型扩展
+的目的是一样的，也是为了鱼和熊掌兼得，只是重点不同。 
+现实世界的很多系统都使用了这种嵌入方法。例如，很多计算机游戏（它们几乎都是使用
+编译型语言编写的，其代码库几乎都是为最大限度提高速度而开发的）都使用诸如Python等动
+态语言来描述高级行为（如游戏中角色的“智力”），而主代码引擎负责图形等方面。 
+正文提到的CPython、Jython和IronPython文档也讨论了嵌入方法，以帮助你采用这种
+方法。 
+如果你要使用速度很快的高级语言Julia（http://julialang.org），同时访问既有的Python库，
+可使用PyCall.jl库（https://github.com/stevengj/PyCall.jl）。 
+17.2 简单易行的方式：Jython 和IronPython 
+如果使用Jython（http://jython.org）或IronPython（http://ironpython.net），可轻松地使用原生
+模块来扩展Python，因为Jython和IronPython能够让你访问底层语言中的模块和类（对Jython来说，
+底层语言为Java；对IronPython来说，为C#和其他.NET语言），从而无需像扩展CPython那样遵循
+特定的API。你只需实现所需的功能，就可在Python中使用它们，就像变魔术一样。例如，在Jython
+中，可直接访问Java标准库；而在IronPython中，可直接访问C#标准库。 
+代码清单17-1展示了一个简单的Java类。 
+代码清单17-1 一个简单的Java类（JythonTest.java） 
+public class JythonTest { 
+                          
+
+288  第17 章 扩展Python 
+   public void greeting() {  
+   System.out.println("Hello, world!"); 
+   } 
+} 
+可使用Java编译器（如javac）来编译这个类。 
+$ javac JythonTest.java 
+提示 如果你使用Java进行开发，也可使用命令jythonc将Python类编译成Java类，然后就可将其
+导入到Java程序中。 
+编译这个类后，启动Jython（并将.class文件放到当前目录或Java CLASSPATH包含的目录中）。 
+$ CLASSPATH=JythonTest.class jython 
+然后，就可直接导入这个类了。 
+>>> import JythonTest 
+>>> test = JythonTest() 
+>>> test.greeting() 
+Hello, world! 
+看到了吗？一点都不难。 
+Jython属性魔法 
+在与Java类交互方面，Jython有几把刷子。其中最有用的功能是，让你能够像访问普通属
+性一样访问JavaBean属性。在Java中，你使用存取方法来读取或修改这些属性，这意味着如
+果Java实例foo包含方法setBar，就可使用foo.bar = baz，而不是foo.setBar(baz)。同样，如
+果这个实例包含方法getBar或isBar（针对布尔属性），就可使用foo.bar来访问相应属性的值。
+下面来看Jython文档中的一个示例。不用像下面这样做： 
+b = awt.Button() 
+b.setEnabled(False)
+而可这样做： 
+b = awt.Button() 
+b.enabled = False
+实际上，所有属性也都可在构造函数中通过关键字参数来设置。因此可像下面这样做： 
+b = awt.Button(enabled=False) 
+这适用于表示多个参数的元组，也适用于Java成例（如事件监听器）的函数参数。 
+def exit(event): 
+   java.lang.System.exit(0) 
+b = awt.Button("Close Me!", actionPerformed=exit) 
+在Java中，必须实现一个包含方法actionPerformed的类，再使用b.addActionListener来
+添加这个类的实例。 
+                          
+
+17.3 编写C 语言扩展  289 
+16 
+17 
+3 
+4 
+5 
+15 
+6 
+7 
+8 
+9 
+10 
+11 
+12 
+13 
+14 
+代码清单17-2是一个类似的C#类。 
+代码清单17-2 一个简单的C#类（IronPythonTest.cs） 
+using System; 
+namespace FePyTest { 
+ public class IronPythonTest { 
+   public void greeting() { 
+  Console.WriteLine("Hello, world!"); 
+   } 
+  } 
+} 
+使用你选择的编译器来编译这个类。对于Microsoft .NET，命令如下： 
+csc.exe /t:library IronPythonTest.cs 
+要在IronPython中使用这个类，一种方法是将其编译为动态链接库（DLL；有关这方面的细
+节请参阅C#文档），并根据需要修改相关的环境变量（如PATH），然后就应该能够像下面这样使用
+它了（这里使用的是IronPython交互式解释器）： 
+>>> import clr 
+>>> clr.AddReferenceToFile("IronPythonTest.dll") 
+>>> import FePyTest 
+>>> f = FePyTest.IronPythonTest() 
+>>> f.greeting() 
+有关这些Python实现的详细信息，请参阅Jython网站（http://jython.org）和IronPython网站
+（http://ironpython.net）。 
+17.3 编写C 语言扩展 
+这是真正的重点所在。扩展Python通常意味着扩展CPython——使用编程语言C实现的Python
+标准版。 
+提示 有关C语言的基本介绍和背景材料，请参阅维基百科上的C语言词条（http://en.wikipedia. 
+org/wiki/C_programming_language）。要更深入地了解C语言，请参阅Ivor Horton的著作《C
+语言入门经典（第5版）》。有关C语言的权威著作是《C程序设计语言（第2版）》，这是永
+恒的经典，出自C语言之父布莱恩·柯尼汉和丹尼斯·里奇之手。 
+C语言的动态性不如Java和C#，而且对Python来说，编译后的C语言代码也不那么容易理解。
+因此，使用C语言编写Python扩展时，必须遵循严格的API。这个API将在17.3.2节讨论。有几个
+项目力图简化C语言扩展的编写过程，其中比较有名的一个是SWIG，将在17.3.1节讨论（有关其
+他方法，请参阅旁注“其他方法”）。 
+                          
+
+290  第17 章 扩展Python 
+其他方法
+如果你使用Cpython，有很多工具可帮助提高程序的速度，这是通过生成和使用C语言库
+或提高Python代码的速度实现的。下面概述其中的几个。 
+Cython（http://cython.org）：这其实是一个Python编译器！它还提供了扩展的Cython语
+言，该语言基于Greg Ewing开发的项目Pyrex，让你能够使用类似于Python的语法添加
+类型声明和定义C类型。因此，它的效率非常高，并且能够很好地与C扩展模块（包括
+Numpy）交互。
+PyPy（http://pypy.org）：这是一个雄心勃勃而有远见的Python实现——使用的是
+Python。这种实现好像会慢如蜗牛，但通过极其复杂的代码分析和编译，其性能实际
+上超过了CPython。其官网指出：“有传言说PyPy的秘密目标是在速度上超过C语言，
+这是无稽之谈，不是吗？”PyPy的核心是RPython——一种受限的Python方言。RPython
+擅长自动类型推断等，可转换为静态语言、机器码和其他动态语言（如JavaScript）。
+Weave（http://scipy.org）：SciPy发布版的一部分，也有单独的安装包。这个工具让你
+能够在Python代码中以字符串的方式直接包含C或C++代码，并无缝地编译和执行这些
+代码。例如，要快速计算一些数学表达式，就可使用这个工具。Weave还可提高使用
+数字数组的表达式的计算速度（参阅下一条）。
+NumPy（http://numpy.org）：NumPy让你能够使用数字数组，这对分析各种形式的数值
+数据（从股票价值到天文图像）很有帮助。NumPy的优点之一是接口简单，让你无需
+显式地指定众多低级操作。然而，NumPy的主要优点是速度快。对数字数组中的每个
+元素执行很多常见操作时，速度都比使用列表和for循环执行同样的操作快得多，这是
+因为隐式循环是直接使用C语言实现的。数字数组能够很好地与Cython和Weave协同工作。
+ctypes（https://docs.python.org/library/ctypes.html）：模块ctypes最初是Thomas Heller开
+发的一个项目，但现在包含在标准库中。它采用直截了当的方法——让你能够导入既
+有（共享）的C语言库。虽然存在一些限制，但这可能是访问C语言代码的最简单方式
+之一。不需要包装器，也不需要特殊API，只需将库导入就可使用。
+subprocess（https://docs.python.org/3/library/subprocess.html）：这个工具有点与众不
+同。模块subprocess包含在标准库中（标准库中还有一些较老的模块和函数提供了类似
+的功能）。它让你能够在Python中运行外部程序，并通过命令行参数以及标准输入、输
+出和错误流与它们通信。如果对速度要求极高的代码可使用几个批处理作业来完成大
+部分工作，启动外部程序并与之通信所需的时间将很短。在这种情况下，将C语言代
+码放在独立的程序中并将其作为子进程运行很可能是最整洁的解决方案。
+PyCXX（http://cxx.sourceforge.net）：以前名为CXX或CXX/Objects，是一组帮助使用
+C++编写Python扩展的工具。例如，它提供了良好的引用计数支持，可减少犯错的机会。
+SIP（http://www.riverbankcomputing.co.uk/software/sip）：SIP最初是一个开发GUI包PyQt
+的工具，包含一个代码生成器和一个Python模块。它像SWIG那样使用规范文件。
+                          
+
+17.3 编写C 语言扩展  291 
+16 
+17 
+3 
+4 
+5 
+15 
+6 
+7 
+8 
+9 
+10 
+11 
+12 
+13 
+14 
+Boost.Python（http://www.boost.org/libs/python/doc）：Boost.Python让Python和C++能够
+无缝地互操作，可为你解决引用计数和在C++中操作Python对象提供极大的帮助。一
+种使用它的主要方式是，以类似于Python的方式编写C++代码（Boost.Python中的宏为此
+提供了支持），再使用你喜欢的C++编译器将这些代码编译成Python扩展。它虽然与
+SWIG有天壤之别，却能很好地替代SWIG，因此很值得你研究研究。
+17.3.1 SWIG 
+SWIG（http://www.swig.org）指的是简单包装器和接口生成器（simple wrapper and interface 
+generator），是一个适用于多种语言的工具。一方面，它让你能够使用C或C++编写扩展代码；另
+一方面，它自动包装这些代码，让你能够在Tcl、Python、Perl、Ruby和Java等高级语言中使用它
+们。这意味着如果你决定以C语言扩展的方式实现系统的某个部分，而不是直接使用Python实现
+它，也可使用SWIG让这个C语言扩展库可供众多其他语言使用。这在你需要以不同的语言编写
+多个协同工作的子系统时很有用；在这种情况下，C语言（或C++）扩展将成为协作的枢纽。 
+SWIG的安装步骤与其他Python工具相同。 
+可从官网http://www.swig.org下载SWIG。
+很多UNIX/Linux发布版都包含SWIG；很多包管理器都能够让你直接安装它。
+有用于Windows的二进制安装程序。
+自己编译源代码也很简单，只需调用configure和make install即可。
+如果你在安装SWIG时遇到麻烦，应该能够在官网找到帮助信息。 
+1. 用法
+SWIG使用起来很简单，前提条件是有一些C语言代码。 
+(1) 为代码编写一个接口文件。这很像C语言头文件（在比较简单的情况下，可直接使用现有
+的头文件）。 
+(2) 对接口文件运行SWIG，以自动生成一些额外的C语言代码（包装器代码）。 
+(3) 将原来的C语言代码和生成的包装器代码一起编译，以生成共享库。 
+接下来将讨论每个步骤，首先来编写一些C语言代码。 
+2. 回文
+回文（palindrome；如I prefer pi）是忽略空格、标点等后正着读和反着读一样的句子。假设
+你要检测不包含空格、标点等的极长回文（可能是为了分析蛋白质序列之类的东西）。当然，要
+分析的字符串必须非常长，达到纯Python程序无法分析的程度；但这里假设要分析的字符串极长，
+而且需要做大量这样的检查。因此你决定编写一段C语言代码来处理（你也可能找到了现成的代
+码——前面说过，SWIG的主要用途是让你能够在Python中使用既有的C语言代码）。代码清单17-3
+是一种可能的实现。 
+                          
+
+292  第17 章 扩展Python 
+代码清单17-3 一个简单的检测回文的C语言函数（palindrome.c） 
+#include <string.h> 
+int is_palindrome(char *text) {  
+   int i, n=strlen(text); 
+   for (i = 0; I <= n/2; ++i) { 
+ if (text[i] != text[n-i-1]) return 0; 
+   } 
+   return 1; 
+} 
+为了方便比较，代码清单17-4列出了与之等价的纯Python函数。 
+代码清单17-4 检测回文的Python函数 
+def is_palindrome(text): 
+   n = len(text) 
+   for i in range(len(text) // 2): 
+ if text[i] != text[n-i-1]: 
+  return False 
+   return True 
+稍后将演示如何编译和使用这些C语言代码。 
+3. 接口文件
+假设你将代码清单17-3所示的代码存储在文件palindrome.c中，现在应该在文件palindrome.i
+中添加接口描述。在很多情况下，如果定义一个头文件（这里为palindrome.h），SWIG可能能够
+从中获取所需的信息。因此，如果有头文件，可尝试使用它。显式地编写接口文件的原因之一是，
+这样可微调SWIG包装代码的方式，其中最重要的微调是将某些东西排除在外。例如，包装巨大
+的C语言库时，你可能只想将几个函数导出到Python。在这种情况下，可只将要导出的函数放在
+接口文件中。 
+在接口文件中，你只是声明要导出的函数（和变量），就像在头文件中一样。另外，在接口
+文件的开头，有一个由{
+% 和}
+% 界定的部分，可在其中指定要包含的头文件（这里为string.h）。在
+这个部分的前面，还有一个module
+%
+声明，用于指定模块名。（这里介绍的有些选项是可选的。另
+外，使用接口文件可做的事情很多；有关这些方面的详细信息，请参阅SWIG文档。）代码清单17-5
+是这里需要编写的接口文件。 
+代码清单17-5 回文检测库的接口（palindrome.i） 
+module palindrome
+%
+ 
+{
+% 
+#include <string.h> 
+}
+% 
+extern int is_palindrome(char *text); 
+4. 运行SWIG
+运行SWIG可能是整个过程中最容易的部分。虽然有很多命令行开关（要获悉完整的开关列
+                          
+
+17.3 编写C 语言扩展  293 
+16 
+17 
+3 
+4 
+5 
+15 
+6 
+7 
+8 
+9 
+10 
+11 
+12 
+13 
+14 
+表，可执行命令swig -help），但只需使用开关-python就可让SWIG对C语言代码进行包装，以便
+能够在Python中使用。另一个可能很有用的开关是-c++，可用于包装C++库。运行SWIG时，需要
+将接口文件（也可以是头文件）作为参数，如下所示： 
+$ swig -python palindrome.i 
+这将生成两个新文件，分别是palindrome_wrap.c和palindrome.py。 
+5. 编译、链接和使用
+编译可能是最棘手的部分（至少在我看来如此）。要正确地编译，需要知道Python源代码（至
+少是头文件pyconfig.h和Python.h）的存储位置（它们可能分别位于Python安装目录和子目录
+Include中）。你还需根据选择的C语言编译器，使用正确的开关将代码编译成共享库。如果你不知
+道该使用哪些参数和开关，可参阅稍后的一节。 
+下面是一个在Solaris系统中使用编译器cc的示例（这里假设$PYTHON_HOME指向Python安
+装目录）： 
+$ cc -c palindrome.c 
+$ cc -I$PYTHON_HOME -I$PYTHON_HOME/Include -c palindrome_wrap.c 
+$ cc -G palindrome.o palindrome_wrap.o -o _palindrome.so 
+下面是在Linux中使用编译器gcc的示例： 
+$ gcc -c palindrome.c 
+$ gcc -I$PYTHON_HOME -I$PYTHON_HOME/Include -c palindrome_wrap.c 
+$ gcc -shared palindrome.o palindrome_wrap.o -o _palindrome.so 
+可能所有必要的包含文件都在一个地方，如/usr/include/python3.5（版本号随具体情况而异）。
+在这种情况下，像下面这样做就行： 
+$ gcc -c palindrome.c 
+$ gcc -I/usr/include/python3.5 -c palindrome_wrap.c 
+$ gcc -shared palindrome.o palindrome_wrap.o -o _palindrome.so 
+在Windows中（这里也假设从命令行运行编译器gcc），可使用如下命令来创建共享库： 
+$ gcc -shared palindrome.o palindrome_wrap.o C:/Python25/libs/libpython25.a -o_palindrome.dll 
+在macOS中，可像下面这样做（如果你使用的是Python官方安装，PYTHON_HOME将为
+/Library/Frameworks/Python.framework/Versions/Current）： 
+$ gcc -dynamic -I$PYTHON_HOME/include/python3.5 -c palindrome.c 
+$ gcc -dynamic -I$PYTHON_HOME/include/python3.5 -c palindrome_wrap.c 
+$ gcc -dynamiclib palindrome_wrap.o palindrome.o -o _palindrome.so -Wl, -undefined, dynamic_ 
+lookup 
+注意 在Solaris系统中使用编译器gcc时，请在开头两个命令中添加标志-fPIC（紧跟在gcc后面）。
+否则，当你使用最后一个命令链接文件时，编译器将感到迷惑。另外，如果你使用了包
+管理器（这在Linux平台中很常见），可能需要安装一个独立的包（名称类似于python-dev），
+以获得编译扩展所需的头文件。 
+                          
+
+294  第17 章 扩展Python 
+念完这些“黑暗魔咒”后，将得到一个很有用的文件_palindrome.so。它就是共享库，可直
+接导入到Python中（条件是它位于PYTHONPATH包含的目录中，如当前目录中）： 
+>>> import _palindrome 
+>>> dir(_palindrome) 
+['__doc__', '__file__', '__name__', 'is_palindrome'] 
+>>> _palindrome.is_palindrome('ipreferpi') 
+1 
+>>> _palindrome.is_palindrome('notlob') 
+0 
+如果你使用的是较旧的SWIG版本，这就是全部内容。然而，较新的SWIG版本还会生成一些
+Python包装代码（文件palindrome.py），它导入模块_palindrome并执行一些检查工作。如果你不
+想使用文件palindrome.py，只需将其删除并将库链接为palindrome.so即可。 
+使用包装代码的效果与使用共享库相同。 
+>>> import palindrome 
+>>> from palindrome import is_palindrome 
+>>> if is_palindrome('abba'): 
+... 
+ print('Wow -- that never occurred to me ...') 
+... 
+Wow -- that never occurred to me ... 
+6. 穿越编译器“魔法森林”的捷径
+如果你觉得编译过程晦涩难懂，也很正常，很多人都这样认为。如果自动化编译过程［如使
+用生成文件（makefile）］，就需要进行配置：指定Python安装位置、要使用的编译器和选项等。
+通过使用Setuptools可优雅地避免这样做。实际上，它直接支持SWIG，让你无需手工运行SWIG：
+只需编写代码和接口文件，再运行安装脚本。有关这方面的详细信息，请参阅18.3节。 
+17.3.2 手工编写扩展 
+SWIG在幕后做了很多工作，但并非每项工作都是绝对必要的。如果你愿意，可自己编写包
+装代码，也可在C语言代码中直接使用Python C API。 
+Python C API有专门的参考手册，即“Python/C API参考手册”
+（https://docs.python.org/3/c-api）。
+标准库参考手册的相关部分（https://docs.python.org/3/extending）也对这个API做了简要的介绍。
+这里的介绍将更简短。如果你对这里未涉及的内容（有很多）感兴趣，请参阅官方文档。 
+1. 引用计数
+如果你以前未使用过引用计数，它可能是本节最难懂的概念，不过这个概念并不那么复杂。
+在Python中，内存管理是自动完成的：你只管创建对象，当你不再使用时它们就会消失。在C语
+言中，情况并非如此。你必须显式地释放不再使用的对象（更准确地说是内存块），否则程序占
+用的内存将越来越多，这称为内存泄漏（memory leak）。 
+编写Python扩展时，可使用Python在幕后使用的内存管理工具，其中之一就是引用计数。其
+基本理念是，一个对象只要被代码引用（在C语言中是有指向它的指针），就不应将其释放。然而，
+指向对象的引用数为0后，引用数就不可能再增大——没办法创建指向相应对象的新引用。因此
+                          
+
+17.3 编写C 语言扩展  295 
+16 
+17 
+3 
+4 
+5 
+15 
+6 
+7 
+8 
+9 
+10 
+11 
+12 
+13 
+14 
+对象在内存中是自由浮动的。此时，可安全地释放它。引用计数自动完成这个过程。为此，你需
+要遵守一系列规则，这些规则指定了在各种情况下应（使用Python API）将对象的引用计数加1
+或减1；而引用计数变成0后，对象将被自动释放。这意味着没有专门负责管理对象的代码。在函
+数中创建并返回对象后，就可将它抛在脑后，因为你知道，不再需要时它就会消失。 
+为将对象的引用计数加1和减1，可使用两个宏，分别是Py_INCREF和Py_DECREF。有关这两个
+宏的详细用法，请参阅Python文档，这里列出了其中的一些要点。 
+对象不归你所有，但指向它的引用归你所有。一个对象的引用计数是指向它的引用的
+数量。
+对于归你所有的引用，你必须负责在不再需要它时调用Py_DECREF。
+对于你暂时借用的引用，不应在借用完后调用Py_DECREF，因为这是引用所有者的职责。
+警告 对于借来的引用，你绝不能在所有者将其释放后再使用。有关确保安全的更多建议，请
+参阅文档的Thin ice部分。 
+可通过调用Py_INCREF将借来的引用变成自己的。这将创建一个新引用，而借来的引用依
+然归原来的所有者所有。
+通过参数收到对象后，要转移所有权（如将其存储起来）还是仅仅借用完全由你决定，
+但应清楚地说明。如果函数将在Python中调用，完全可以只借用，因为对象在整个函数调
+用期间都存在。然而，如果函数将在C语言中调用，就无法保证对象在函数调用期间都存
+在，因此可能应该创建自己的引用，并在使用完毕后将其释放。
+稍后将介绍一个具体的示例，届时你将对这些要点有更清晰的认识。 
+再谈垃圾收集
+引用计数是一种垃圾收集方式，其中的术语“垃圾”指的是程序不再使用的对象。
+Python还使用一种更尖端的算法来检测循环垃圾，即两个对象相互引用对方（导致它们的引用
+计数不为0），但没有其他的对象引用它们。 
+在Python程序中，可通过模块gc来访问Python垃圾收集器。有关这个模块的详细信息，
+请参阅“Python库参考手册”（https://docs.python.org/3/library/gc.html）。 
+2. 扩展框架
+编写Python的C语言扩展时，需要大量的模板代码，因此SWIG和Cython等工具可提供极大的
+帮助。尽管应自动生成模板代码，但手工编写是种不错的学习体验。在如何组织代码方面有很大
+的选择空间，但这里只介绍一种管用的方式。 
+首先要牢记的是，必须先包含头文件Python.h，再包含其他标准头文件。这是因为在有些平
+台上，Python.h可能会做些重新定义，而其他头文件需要用到这些新定义。因此，请将下面的内
+容作为第一行代码： 
+                          
+
+296  第17 章 扩展Python 
+#include <Python.h> 
+你想给函数指定什么样的名称都可以，但它必须是静态的，返回一个指向PyObject对象的指
+针（归你所有的引用）并接受两个参数（它们也都是指向PyObject的指针）。根据约定，将这两
+个参数分别命名为self和args（其中self为当前对象或NULL，而args是由参数组成的元组）。换而
+言之，函数应类似于下面这样： 
+static PyObject *somename(PyObject *self, PyObject *args) {  
+ PyObject *result; 
+   /* 在这里执行操作，包括分配result*/ 
+   Py_INCREF(result); /* 仅当需要时才这样做！*/ 
+   return result; 
+} 
+参数self仅用于关联的方法中。在其他函数中，这个参数为NULL指针。 
+请注意，可能不需要调用Py_INCREF。如果对象是在函数中创建的（如通过使用Py_BuildValue
+等辅助函数），函数便用于指向它的引用，因此只需返回它即可。然而，如果要从函数返回None，
+应使用既有的对象Py_None。在这种情况下，函数并不拥有指向Py_None的引用，因此必须在返回
+它之前调用Py_INCREF(Py_None)。 
+参数args包含传递给函数的所有参数（参数self除外）。为提取这些参数，可使用
+PyArg_ParseTuple（适用于位置参数）和PyArg_ParseTupleAndKeywords（适用于位置参数和关键
+字参数）。这里只使用位置参数。 
+函数PyArg_ParseTuple的特征标如下： 
+int PyArg_ParseTuple(PyObject *args, char *format, ...); 
+其中格式字符串描述了期望的参数，它后面是要将参数存储到其中的变量的地址。返回值是
+一个布尔值，如果为True意味着一切顺利，否则意味着发生了错误。发生错误时引发异常的准备
+工作已就绪（详细信息请参阅文档），你只需返回NULL来触发这个过程。因此，如果你预期没有
+任何参数（格式字符串为空），下面是一种很有用的参数处理方式： 
+if (!PyArg_ParseTuple(args, "")) {  
+ return NULL; 
+} 
+执行这条语句后，便提取了参数（这里是没有任何参数）。在格式字符串中，"s"表示字符串，
+"i"表示整数，"o"表示Python对象，因此"iis"表示两个整数和一个字符串。还有很多其他的格式
+字符串编码。有关如何编写格式字符串的完整参考，请参阅“Python/C API 参考手册”
+（https://docs.python.org/3/c-api/arg.html）。 
+注意 在扩展模块中，也可创建内置类型和类。这不是很难，但也相当复杂。如果你的主要目
+标是使用C语言编写瓶颈部分，在大部分情况下使用函数就足够了。要了解如何创建类型
+和类，Python文档是不错的参考资料。 
+                          
+
+17.3 编写C 语言扩展  297 
+16 
+17 
+3 
+4 
+5 
+15 
+6 
+7 
+8 
+9 
+10 
+11 
+12 
+13 
+14 
+函数创建好后，还需做些包装工作，让C语言代码充当模块。等我们遇到实际示例时再
+讨论吧。 
+3. 回文
+言归正传，代码清单17-6是手工编写的模块palindrome的Python C API版，其中包含一些有趣
+的新内容。 
+代码清单17-6 另一个回文检查示例（palindrome2.c） 
+#include <Python.h> 
+static PyObject *is_palindrome(PyObject *self, PyObject *args) {  
+   int i, n; 
+ const char *text; 
+   int result; 
+ /* "s"表示一个字符串：*/ 
+ if (!PyArg_ParseTuple(args, "s", &text)) { 
+ return NULL; 
+   } 
+   /* 与旧版的代码大致相同：*/ 
+   n=strlen(text); 
+   result = 1; 
+   for (i = 0; i <= n/2; ++i) { 
+ if (text[i] != text[n-i-1]) { 
+  result = 0; 
+  break; 
+ } 
+   } 
+ /* "i"表示一个整数：*/ 
+   return Py_BuildValue("i", result); 
+} 
+/* 方法/函数列表：*/ 
+static PyMethodDef PalindromeMethods[] = { 
+   /*名称、函数、参数类型、文档字符串 */ 
+ {"is_palindrome", is_palindrome, METH_VARARGS, "Detect palindromes"}, 
+   /* 列表结束标志：*/ 
+   {NULL, NULL, 0, NULL} 
+}; 
+static struct PyModuleDef palindrome = 
+{ 
+   PyModuleDef_HEAD_INIT, 
+   "palindrome", /* 模块名 */ 
+   "",   
+  /* 文档字符串 */ 
+   -1,   
+  /*存储在全局变量中的信号状态 */ 
+   PalindromeMethods 
+}; 
+/* 初始化模块的函数：*/ 
+PyMODINIT_FUNC PyInit_palindrome(void) 
+                          
+
+298  第17 章 扩展Python 
+{ 
+   return PyModule_Create(&palindrome); 
+} 
+在代码清单17-6中，新增的大部分内容都是模板代码。可将palindrome替换为模块名，将
+is_palindrome替换为函数名。如果还有其他函数，只需在数组PyMethodDef中将它们列出。然
+而，需要注意的一点是，初始化函数必须为initmodule，其中module为模块名；否则Python就
+找不到它。 
+现在来编译吧！为此，可以像17.3.1节中那样做，但需要处理的文件只有一个。下面演示了
+如何使用gcc进行编译（在Solaris系统中，别忘了添加开关-fPIC）： 
+$ gcc -I$PYTHON_HOME -I$PYTHON_HOME/Include -shared palindrome2.c -o palindrome.so 
+通常，这将生成一个名为palindrome.so的文件。只要将它放在PYTHONPATH包含的目录（如当
+前目录）中，就可开始使用了： 
+>>> from palindrome import is_palindrome 
+>>> is_palindrome('foobar') 
+0 
+>>> is_palindrome('deified') 
+1 
+就这么简单，现在自己动手去试试吧。不过要小心，别忘了本书前言中Waldi Ravens的名言。 
+17.4 小结 
+扩展Python是个庞大的主题，本章只对其做了蜻蜓点水式的介绍，涉及的内容如下。 
+扩展理念：Python扩展的主要用途有两个——利用既有（遗留）代码和提高瓶颈部分的速
+度。从头开始编写代码时，请尝试使用Python建立原型，找出其中的瓶颈并在需要时使用
+扩展来替换它们。预先将潜在的瓶颈封装起来大有裨益。
+Jython和IronPython：对这些Python实现进行扩展很容易，使用底层语言（对于Jython，
+为Java；对于IronPython，为C#和其他.NET语言）以库的方式实现扩展后，就可在Python
+中使用它们了。
+扩展方法：有很多用于扩展代码或提高其速度的工具，有的让你更轻松地在Python程序中
+嵌入C语言代码，有的可提高数字数组操作等常见运算的速度，有的可提高Python本身的
+速度。这样的工具包括SWIG、Cython、Weave、NumPy、ctypes和subprocess。
+SWIG：SWIG是一款自动为C语言库生成包装代码的工具。包装代码自动处理Python C
+API，使你不必自己去做这样的工作。使用SWIG是最简单、最流行的扩展Python的方式
+之一。
+使用Python/C API：可手工编写可作为共享库直接导入到Python中的C语言代码。为此，
+必须遵循Python/C API：对于每个函数，你都需要负责完成引用计数、提取参数以及创建
+返回值等工作；另外，还需编写将C语言库转换为模块的代码，包括列出模块中的函数以
+及创建模块初始化函数。
+                          
+
+17.4 小结  299 
+16 
+17 
+3 
+4 
+5 
+15 
+6 
+7 
+8 
+9 
+10 
+11 
+12 
+13 
+14 
+17.4.1 本章介绍的新函数 
+函  数
+描  述
+Py_INCREF(obj) 
+将obj的引用计数加1 
+Py_DECREF(obj) 
+将obj的引用计数减1 
+PyArg_ParseTuple(args, fmt, ...) 
+提取位置参数 
+PyArg_ParseTupleAndKeywords(args, kws, fmt, kwlist) 
+提取位置参数和关键字参数 
+PyBuildValue(fmt, value) 
+根据C语言值创建PyObject 
+17.4.2 预告 
+至此，你应该能够编写出很酷的程序了——至少有如何编写很酷程序的点子。如果你要与人
+分享代码之类的东西，下一章介绍的内容将派上用场。 
+                          

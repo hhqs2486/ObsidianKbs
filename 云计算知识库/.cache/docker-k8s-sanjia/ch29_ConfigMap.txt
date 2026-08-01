@@ -1,0 +1,278 @@
+ConfigMap
+前⾯的课程中我们学习了 Servie 的使⽤， Service 是 Kubernetes 系统中⾮常重要的⼀个核⼼概念，
+我们还会在后⾯ 的课程中继续学习 Service 的⼀些使⽤⽅法的。这节课我们来学习另外⼀个⾮常重要
+的资源对象： ConfigMap ，我们知道许多应⽤经常会有从配置⽂件、命令⾏参数或者环境变量中读取
+⼀些配置信息，这些配置信息我们肯定不会直接写死到应⽤程序中去的，⽐如你⼀个应⽤连接⼀
+个 redis 服务，下⼀次想更换⼀个了的，还得重新去修改代码，重新制作⼀个镜像，这肯定是不可取
+的，⽽ ConfigMap 就给我们提供了向容器中注⼊配置信息的能⼒，不仅可以⽤来保存单个属性，也可
+以⽤来保存整个配置⽂件，⽐如我们可以⽤来配置⼀个 redis 服务的访问地址，也可以⽤来保存整
+个 redis 的配置⽂件。
+创建
+ ConfigMap  资源对象使⽤ key-value 形式的键值对来配置数据，这些数据可以在 Pod ⾥⾯使
+⽤， ConfigMap 和我们后⾯要讲到的 Secrets ⽐较类似，⼀个⽐较⼤的区别是 ConfigMap 可以⽐较⽅
+便的处理⼀些⾮敏感的数据，⽐如密码之类的还是需要使⽤ Secrets 来进⾏管理。我们来举个例⼦说
+明下 ConfigMap 的使⽤⽅法：
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: cm-demo
+  namespace: default
+data:
+  data.1: hello
+  data.2: world
+  config: |
+    property.1=value-1
+    property.2=value-2
+    property.3=value-3
+其中配置数据在 data 属性下⾯进⾏配置，前两个被⽤来保存单个属性，后⾯⼀个被⽤来保存⼀个配
+置⽂件。
+当然同样的我们可以使⽤ kubectl create -f xx.yaml 来创建上⾯的 ConfigMap 对象，但是如果我们
+不知道怎么创建 ConfigMap 的话，不要忘记 kubectl 是我们最好的⽼师，可以使⽤ kubectl create
+configmap -h 来查看关于创建 ConfigMap 的帮助信息，
+Examples:
+  # Create a new configmap named my-config based on folder bar
+  kubectl create configmap my-config --from-file=path/to/bar
+  # Create a new configmap named my-config with specified keys instead of file basenames o
+n disk
+  kubectl create configmap my-config --from-file=key1=/path/to/bar/file1.txt --from-file=k
+ey2=/path/to/bar/file2.txt
+  # Create a new configmap named my-config with key1=config1 and key2=config2
+ConfigMap
+165
+
+  kubectl create configmap my-config --from-literal=key1=config1 --from-literal=key2=confi
+g2
+我们可以看到可以从⼀个给定的⽬录来创建⼀个 ConfigMap 对象，⽐如我们有⼀个 testcm 的⽬录，
+该⽬录下⾯包含⼀些配置⽂件， redis 和 mysql 的连接信息，如下：
+$ ls testcm
+redis.conf
+mysql.conf
+$ cat testcm/redis.conf
+host=127.0.0.1
+port=6379
+$ cat testcm/mysql.conf
+host=127.0.0.1
+port=3306
+然后我们可以使⽤ from-file 关键字来创建包含这个⽬录下⾯所以配置⽂件的 ConfigMap ：
+$ kubectl create configmap cm-demo1 --from-file=testcm
+configmap "cm-demo1" created
+其中 from-file 参数指定在该⽬录下⾯的所有⽂件都会被⽤在 ConfigMap ⾥⾯创建⼀个键值对，键的
+名字就是⽂件名，值就是⽂件的内容。
+创建完成后，同样我们可以使⽤如下命令来查看 ConfigMap 列表：
+$ kubectl get configmap
+NAME       DATA      AGE
+cm-demo1   2         17s
+可以看到已经创建了⼀个 cm-demo1 的 ConfigMap 对象，然后可以使⽤ describe 命令查看详细信息：
+kubectl describe configmap cm-demo1
+Name:         cm-demo1
+Namespace:    default
+Labels:       <none>
+Annotations:  <none>
+Data
+====
+mysql.conf:
+----
+host=127.0.0.1
+port=3306
+redis.conf:
+----
+host=127.0.0.1
+port=6379
+Events:  <none>
+ConfigMap
+166
+
+我们可以看到两个 key 是 testcm ⽬录下⾯的⽂件名称，对应的 value 值的话就是⽂件内容，这⾥值
+得注意的是如果⽂件⾥⾯的配置信息很⼤的话， describe 的时候可能不会显示对应的值，要查看键值
+的话，可以使⽤如下命令：
+$ kubectl get configmap cm-demo1 -o yaml
+apiVersion: v1
+data:
+  mysql.conf: |
+    host=127.0.0.1
+    port=3306
+  redis.conf: |
+    host=127.0.0.1
+    port=6379
+kind: ConfigMap
+metadata:
+  creationTimestamp: 2018-06-14T16:24:36Z
+  name: cm-demo1
+  namespace: default
+  resourceVersion: "3109975"
+  selfLink: /api/v1/namespaces/default/configmaps/cm-demo1
+  uid: 6e0f4d82-6fef-11e8-a101-525400db4df7
+除了通过⽂件⽬录进⾏创建，我们也可以使⽤指定的⽂件进⾏创建 ConfigMap ，同样的，以上⾯的配
+置⽂件为例，我们创建⼀个 redis 的配置的⼀个单独 ConfigMap 对象：
+$ kubectl create configmap cm-demo2 --from-file=testcm/redis.conf
+configmap "cm-demo2" created
+$ kubectl get configmap cm-demo2 -o yaml
+apiVersion: v1
+data:
+  redis.conf: |
+    host=127.0.0.1
+    port=6379
+kind: ConfigMap
+metadata:
+  creationTimestamp: 2018-06-14T16:34:29Z
+  name: cm-demo2
+  namespace: default
+  resourceVersion: "3110758"
+  selfLink: /api/v1/namespaces/default/configmaps/cm-demo2
+  uid: cf59675d-6ff0-11e8-a101-525400db4df7
+我们可以看到⼀个关联 redis.conf ⽂件配置信息的 ConfigMap 对象创建成功了，另外值得注意的是 -
+-from-file 这个参数可以使⽤多次，⽐如我们这⾥使⽤两次分别指定 redis.conf 和 mysql.conf ⽂
+件，就和直接指定整个⽬录是⼀样的效果了。
+另外，通过帮助⽂档我们可以看到我们还可以直接使⽤字符串进⾏创建，通过 --from-literal 参数传
+递配置信息，同样的，这个参数可以使⽤多次，格式如下：
+$ kubectl create configmap cm-demo3 --from-literal=db.host=localhost --from-literal=db.por
+t=3306
+configmap "cm-demo3" created
+ConfigMap
+167
+
+$ kubectl get configmap cm-demo3 -o yaml
+apiVersion: v1
+data:
+  db.host: localhost
+  db.port: "3306"
+kind: ConfigMap
+metadata:
+  creationTimestamp: 2018-06-14T16:43:12Z
+  name: cm-demo3
+  namespace: default
+  resourceVersion: "3111447"
+  selfLink: /api/v1/namespaces/default/configmaps/cm-demo3
+  uid: 06eeec7e-6ff2-11e8-a101-525400db4df7
+使⽤
+ ConfigMap 创建成功了，那么我们应该怎么在 Pod 中来使⽤呢？我们说 ConfigMap 这些配置数据可以
+通过很多种⽅式在 Pod ⾥使⽤，主要有以下⼏种⽅式：
+设置环境变量的值
+在容器⾥设置命令⾏参数
+在数据卷⾥⾯创建config⽂件
+⾸先，我们使⽤ ConfigMap 来填充我们的环境变量：
+apiVersion: v1
+kind: Pod
+metadata:
+  name: testcm1-pod
+spec:
+  containers:
+    - name: testcm1
+      image: busybox
+      command: [ "/bin/sh", "-c", "env" ]
+      env:
+        - name: DB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: cm-demo3
+              key: db.host
+        - name: DB_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: cm-demo3
+              key: db.port
+      envFrom:
+        - configMapRef:
+            name: cm-demo1
+这个Pod运⾏后会输出如下⼏⾏：
+$ kubectl logs testcm1-pod
+......
+DB_HOST=localhost
+ConfigMap
+168
+
+DB_PORT=3306
+mysql.conf=host=127.0.0.1
+port=3306
+redis.conf=host=127.0.0.1
+port=6379
+......
+我们可以看到 DB_HOST 和 DB_PORT 都已经正常输出了，另外的环境变量是因为我们这⾥直接把 cm-
+demo1 给注⼊进来了，所以把他们的整个键值给输出出来了，这也是符合预期的。
+另外我们可以使⽤ ConfigMap 来设置命令⾏参数， ConfigMap 也可以被⽤来设置容器中的命令或者参
+数值，如下 Pod :
+apiVersion: v1
+kind: Pod
+metadata:
+  name: testcm2-pod
+spec:
+  containers:
+    - name: testcm2
+      image: busybox
+      command: [ "/bin/sh", "-c", "echo $(DB_HOST) $(DB_PORT)" ]
+      env:
+        - name: DB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: cm-demo3
+              key: db.host
+        - name: DB_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: cm-demo3
+              key: db.port
+运⾏这个 Pod 后会输出如下信息：
+$ kubectl logs testcm2-pod
+localhost 3306
+另外⼀种是⾮常常⻅的使⽤ ConfigMap 的⽅式：通过数据卷使⽤，在数据卷⾥⾯使⽤ ConfigMap ，就
+是将⽂件填⼊数据卷，在这个⽂件中，键就是⽂件名，键值就是⽂件内容：
+apiVersion: v1
+kind: Pod
+metadata:
+  name: testcm3-pod
+spec:
+  containers:
+    - name: testcm3
+      image: busybox
+      command: [ "/bin/sh", "-c", "cat /etc/config/redis.conf" ]
+      volumeMounts:
+      - name: config-volume
+        mountPath: /etc/config
+ConfigMap
+169
+
+  volumes:
+    - name: config-volume
+      configMap:
+        name: cm-demo2
+运⾏这个 Pod 的，查看⽇志：
+$ kubectl logs testcm3-pod
+host=127.0.0.1
+port=6379
+当然我们也可以在 ConfigMap 值被映射的数据卷⾥去控制路径，如下 Pod 定义：
+apiVersion: v1
+kind: Pod
+metadata:
+  name: testcm4-pod
+spec:
+  containers:
+    - name: testcm4
+      image: busybox
+      command: [ "/bin/sh","-c","cat /etc/config/path/to/msyql.conf" ]
+      volumeMounts:
+      - name: config-volume
+        mountPath: /etc/config
+  volumes:
+    - name: config-volume
+      configMap:
+        name: cm-demo1
+        items:
+        - key: mysql.conf
+          path: path/to/msyql.conf
+运⾏这个 Pod 的，查看⽇志：
+$ kubectl logs testcm4-pod
+host=127.0.0.1
+port=3306
+另外需要注意的是，当 ConfigMap 以数据卷的形式挂载进 Pod 的时，这时更新 ConfigMap （或删掉重
+建 ConfigMap ）， Pod 内挂载的配置信息会热更新。这时可以增加⼀些监测配置⽂件变更的脚本，然
+后 reload 对应服务。
+点击查看本⽂视频
+扫描下⾯的⼆维码(或微信搜索 k8s技术圈 )关注我们的微信公众帐号，在微信公众帐号中回复 加群 即
+可加⼊到我们的 kubernetes 讨论群⾥⾯共同学习。
+ConfigMap
+170
+
+k8s技术圈⼆维码
+Copyright © qikqiak.com 2018 all right reserved，powered by GitbookUpdated: 2019-03-12 13:02:30
+ConfigMap
+171

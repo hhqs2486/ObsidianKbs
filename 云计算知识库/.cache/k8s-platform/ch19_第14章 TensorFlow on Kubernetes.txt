@@ -1,0 +1,539 @@
+. .. 
+.. 
+... 
+. .... 
+醺
+翩
+翩
+翩
+. 
+... 
+· 
+.... 
+.... 
+.... 
+翩
+.... 
+.... 
+.... 
+ιz咿矿m M ；第14 章
+TensorFlow on Kubernetes 
+Tensor Flow 是Google 2015 年
+11 月开源的采用数据流图用于数值计算的软件，主要用
+来进行模型的训练与学习，是人工智能训练平台的重要组成部分。由于TensorFlow 本身没
+有调度功能，一般都要借助于Kub巳mete 或Yam 进行调度。同时TensorFlow 也可以以服务
+的方式提供，在租户申请时进行部署，本章主要介绍TensorFlow on Kubemetes 相关的内容。
+14.1 
+TensorFlow 简介
+Tensor Flow 是Google 研发的第二代人工智能学习系统。从TensorFlow 的名称可以看
+出，它是由Tensor 及Flow 组成的，Tensor （张量）代表N 维数组，Flow （流）代表数据流图，
+Tensor Flow 意思为张量从流图的一端流动到另一端计算过程。
+TensorFlow 可被用于语音识
+别或图像识别等多项机器学习和深度学习领域。
+Tensor F low 作为分布式机器学习平台，系统架构如图
+14-1 所示。
+训练库
+|| 
+推导库
+时阳客户端
+l r 
+C＋＋客户端
+CAP! 
+Ma阳集群
+| 
+| 
+数据流执行器
+| 
+内核kernel
+I 
+网络层~~
+设备层~ ~
+图14-1
+TensorFlow 架构图
+
+第14 章
+TensorFlow on Kubernetes •!• 183 
+从架构图中可以看出TensorFlow 由网络层、设备层、内核层、调度执行层、
+API 层组
+成。
+RPC 和RDMA 位于网络层，提供网络层服务，主要负责传递神经网络算法参数。
+CPU
+和GPU 位于设备层，提供设备层服务，主要负责神经网络算法中具体的运算操作。调度
+执行层包括内核Kernel 及数据流执行器两部分。
+内核Kernel 为TensorFlow 中算法操作的
+具体实现，包括卷积操作、激活操作等。
+Master 集群用于构建子图，把子图切割为多个分
+片，并将不同的子图分片调度到不同的设备上运行，
+Master 集群还负责分发子图分片到
+Executor/Work 执行器上。
+Executor/Work 执行器在设备（CPU 、
+GPU 等）上调度执行子图
+操作；并负责向其他Worker 发送和接收图操作的运行结果。
+API 层目前主要提供C 语言的
+API ，通过C API 层将TensorFlow 分割为前端和后端，前端（Python/C++/Java Client ）基于
+C API 触发TensorFlow 后端程序运行。训练库和推导库是模型训练和推导的库函数，为用
+户开发应用模型使用。
+Tensor Flow 涉及两种类型的服务器：
+参数服务器和计算服务器。具体如图
+14 - 2
+所示。
+参数服务器负责存储井管理神经网络
+的参数取值，计算服务器负责参数的梯度。
+图14-2
+TensorFlow 节点调用图
+由于训练的数据多，计算复杂，因此在单机环境下无法训练大型的神经网络，这时可以将
+Tensor Flow 部署在Kubernetes 上进行分布式训练。
+TensorFlow 分布式训练也有两种方式：同步模式及异步模式。同步模式是所有服务器
+先读取参数的取值后再计算参数的灰度，最后统一进行参数的更新，存在快的服务器等待
+慢的服务器的情况，造成资源浪费。异步模式是各个不同服务器自己读取参数取值后计算
+梯度并更新参数，而不需要与其他服务器同步，效率相对较高。
+Tensor Flow 训练平台能在CPU 、
+GPU 上执行训练任务，由于CPU 的并行处理能力
+弱，通常情况下会选择GPU 作为执行逻辑单元。对于在Docker 下如何支持GPU ，之前
+的章节已经介绍了，下文简要介绍Kubernetes 如何支持GPU 以及TensorFlow 如何运行在
+Kubernetes 上的相关实践。
+14.2 
+在Kubernetes 上部署TensorFlow 的价值
+Tensor Flow 仅仅是一个训练框架，但是它不具备在分布式训练环境下需要的框架部署、
+训练任务调度、监控、失败重启、监控检查、服务启停、进程关闭等生命周期管理功能，
+而将它部署到Kubernetes 平台上就具备了这些功能，具体优势如下：
+·解决启动配置复杂问题
+通过基于Kubernetes 的容器云配置中心存储启动参数和环境配置，集群部署时不需要
+登录每台服务器做配置，直接进行配置下发，简化启动过程减少出错。
+
+184 
+•！•
+基于Kub ernetes 的容器云平台实战
+· 缩短训练时间
+在大规模数据集训练时受硬件配置的限制，模型训练时间非常长，有时候会长达几个
+星期，企业业务无法快速上线；在线服务时性能差、能耗高、运行成本昂贵。通过基于
+Kubernetes 的容器云，可以快速弹性按需分配计算资源，提高算力，从而缩短训练时间。
+·统一资源管理
+进行资源统一管理与调度，不需要用户人工维护、分配和回收资源，便于实现多用户、
+多任务场景下的资源管理；原生TensorFlow 深度学习框架无法实现集群监控，需要人工监
+控每台服务器的状态。
+·提供容错功能
+在做分布式模型训练时没有容错机制，当某个节点看机时会导致整个任务失败或者因
+为业务需要进行暂停时，需要重新提交任务，这对于一些动辄需要一个星期才能训练完成
+的模型来说是不可接受的。
+14.3 
+Kubernetes 如何支持GPU
+Kubernetes 支持容器请求GPU 资源（目前仅支持Nvidia GPU ），在深度学习等场景中
+有大量应用。在使用Kubernetes 支持GPU 前，需要Docker 支持GPU,
+Docker 如何支持
+GPU 的内容参见前面的章节。
+在Kubernetes 1.3 中开始支持Nvidia GPU ，但是A lpha 版本，且只能支持单块GPU 卡。
+Kub巳rnet巳S
+1.6 版本更全面地支持GPU ，支持单机多卡功能，但每个Docker 之间是无法共
+享GPU 的，并且每个容器集群必须是同型号的GPU ，如果型号不同就需要配置不同的节点
+标签及选择器。
+Kubernetes 1. 8 版本提供了Device Plugin Framework ，不改变Kubernetes 核心代码，发
+布资源到Kubelet 。
+Vendors 实现一个Devic巳Plugin ，通过手动部署或者使用Daemonset 。
+目标设备包括GPU 、高性能NIC 、
+InfiniBand ，以及可能需要Vendor 特定初始化和建立的
+计算资掘。
+Kubernetes 1.10 版本中Device Plugin 默认状态是打开的，在1.8 版本中是关闭的。
+在Kubernetes 中使用GPU 需要预先配置：
+· 在所有的No de 上需要安装Nv idia 驱动包括Nv idia CUDA Toolkit 和cuDNN 等。
+· 在API 服务器和Kubelet 上开启“ 一fea阳re-gates＝” Accelerators=true”” 。
+• Kubelet 配置使用Docker 容器引擎（默认就是Docker），其他容器引擎暂不支持该特性。
+14.3.1 
+使用方法
+使用资源名http://alpha.kubernetes.io/nvidia-gpu 指定请求GPlJ 的个数，具体文件内容
+如下：
+
+第14 章
+TensorFlow on Kubernetes •!• 185 
+Pod.xml 文件内容：
+apiVersion: vl 
+kind: Pod 
+metadata: 
+name: mytensorflow 
+spec: 
+restartPolicy: Never 
+containers: 
+-
+image: 
+gcr.io/tensorflow / tensor丑ow:latest - gpu
+name: mygpucontainer 
+command :[”python”] 
+env : 
+-
+name: LD LIBRARY PATH 
+value: / usr / lib/ nvidia 
+args: 
+-
+-u 
+-
+-c 
+-
+from tensorflow.python.client import device_lib; print device lib. 
+list local devices() 
+resources: 
+limits: 
+alpha.kubernetes.io/nvidia-gpu: 1 # requests one GPU 
+volumeMounts: 
+- mountPath: /usr / local/nvidia/bin 
+name: bin 
+- mountPath: /usr / lib/nvidia 
+name: lib 
+- mountPath: / usr / lib/ x86 64-linux-gnu / libcuda.so 
+n缸ne: libcuda-so 
+- mountPath: / usr / lib/ x86 64-linux-gnu/ libcuda.so.1 
+n缸ne:
+libcuda - s。－1
+- mountPath: /usr / lib/ x86 64-linux-gnu/ libcuda.so.375 . 66 
+n缸ne:
+libcuda-so-375 - 66 
+volumes: 
+-
+name: bin 
+hostPath: 
+path: / usr/lib/nvidia-375/bin 
+-
+name: lib 
+hostPath: 
+path: / usr / lib/ nvidia-375 
+-
+name: libcuda-so 
+hostPath: 
+path: / usr / lib/ x86 64-linux- gnu/ libcuda.so 
+-
+name: 
+1 工bcuda-so-1
+hostPath: 
+path: / usr/lib/ x86 64-linux-gnu/ libcuda.so.1 
+-
+name: libcuda-so-375-66 
+hostPath: 
+path: / usr/lib/x86 64-linux-gnu/libcuda.so.375 . 66 
+
+186 
+•！•
+基于Kubernetes 的窑器云平台实战
+执行kubectl create -f pod.xml 生成Pod 。
+执行kubectl logs tensorflow 查看日志，显示的日志内容如下：
+叫
+，
+& 
+咱
+t
+<y
+<U
+叮
+，
+”
+n
+巳
+U6 
+p
+＆
+丐
+d
+”
+C
+俨
+2 
+nU
+” 
+u··t 
+pei 
+cpm
+{ 
+/
+yi 
+”tly 
+--
+t 
+··ey
+-- 
+白
+』
+n
+u
+γ
+4
+、
+4
+mloa 
+avmc 
+neeo 
+[
+dml 
+incarnation: 9675741273569321173 
+, 
+name ：”／gpu ：。”
+鸣
+，
+＆
+4· 
+q
+’& 
+叮
+，
+2J 
+2d 
+phJ 
+H
+FO 
+U6 
+p
+ι
+q
+L
+ 
+nURJ
+& 
+.. 
+咱
+i
+··+” 
+B·L·
+- 
+pm
+{
+d 
+Y
+-Li 
+t
+-
+vd 
+--
+tB 
+eva
+--
+u 
+crlb 
+·-
+oa 
+vmc 
+eeo 
+‘
+G
+m
+1
+晶
+incarnation: 7807115828340118187 
+physical_device_desc:”device: O, name: Tesla K80, pci bus id: 
+0000:00:04. 。”
+~ ！§ •GPU 资源必须在r巳sources.limits 中设置，而不是在resources.requests 中设置。
+叩‘
+· 容器可以请求
+l 个或多个GPU ，不能只请求一个GPU 的一部分。
+· 多个容器之间不能共享GPU 。
+· 默认假设所有Node 安装了相同型号的GPU 。
+14.3.2 
+多种型号的GPU
+如果集群No de 节点中安装了多种型号的GPU ，则可以使用Nod巳Affinity 来调度Pod
+到指定GPU 型号的Node 节点上。
+首先，在集群初始化时，需要给No de 打上GPU 型号的标签，代码如下：
+NV 工DIA_GPU_NAME=$ ( nvidia-smi --query-gpu=<gpu_name> 
+--format=csv, noheader 
+--id=O) 
+source / etc / default / kubelet 
+KUBELET_OPTS=” $KUBELET_OPTS --node-labels= 'alpha.kubernetes . io /nvidia-gpu-
+name=$NVIDIA GPU NAME '” 
+echo ” KUBELET OPTS=$KUBELET OPTS”> / etc / default/kubelet 
+然后，在创建Pod 时设置No de Affinity ，代码如下：
+kind: pod 
+apiVersion: vl 
+metadata: 
+annotations: 
+scheduler.alpha.kubernetes.io/affinity: > 
+"nodeAffinity”:{ 
+
+第14 章
+TensorFlow on Kubernetes
+令
+187
+” requiredDuringScheduling 工gnoredDuringExecution ”：｛
+” nodeSelectorTerms": [ 
+” matchExpressions": [ 
+spec: 
+containers: 
+” key”=”alpha.kubernetes.io/nvidia-gpu-name”, 
+” operator”:” In”, 
+”values”:[”Tesla KB 。”，” Tesla
+PlO 。”
+l
+-
+image: gcr.io/tensor丑ow/tensorflow:latest-gpu
+name: gpu- container-1 
+command: [”python”] 
+args: [”-u",”-c ”,” import tensorflow”] 
+resources: 
+limits: 
+alpha.kubernetes.io/nvidia- gpu: 2 
+14.3.3 
+使用CUDA 库
+Nvidia Cuda Toolkit 和cuDNN 等需要预先安装在所有Node 上，为了访问／usr/lib /
+nvidia-375 ，需要将CUDA 库以hostPath Volume 的形式传给容器，创建Pod刀nl 文件，代
+码如下：
+apiVersion: batch/vl 
+ki nd: Job 
+metadata: 
+name: my-nvidia-smi 
+labels: 
+name: nvidia-smi 
+spec: 
+template: 
+metadata: 
+labels: 
+n缸ne: nvidia-smi 
+spec: 
+containers: 
+-
+n缸ne: nvidia-smi 
+image: nvidia/cuda 
+command :[”nvidia-smi”] 
+imagePullPolicy ：工fNotPresent
+resources: 
+
+188 
+•！•
+基于Kubernetes 的窑器云平台实战
+limits: 
+alpha.kubernetes.io/nvidia-gpu: 1 
+vol umeMounts: 
+- mountPath: /usr/local/nvidia/bin 
+name: bin 
+- mountPath: /usr/lib/nvidia 
+name: lib 
+volumes: 
+-
+name: bin 
+hostPath : 
+path: /usr/lib/nvidia-375/bin 
+-
+n缸ne: lib 
+hostPath : 
+path: /usr/lib/nvidia-375 
+restartPolicy: Never 
+执行kubectl create -f pod.yam］，生成Pod 。
+执行kubectl Jogs nvidia-smi-kwdm 查看日志。
+14.4 
+TensorFiow on Kubernetes 架构
+TensorFlow on Kubernetes 架构如图
+14 - 3 所示。
+Resource Manager 
+Job Scheduler 
+. 
+||| 
+TensorFlow App 
+Application Manager 
+Paralled Tensorflow Executor 
+Kubemet 
+GPU Server 
+GPU Server 
+图14-3
+TensorFlow on Kubemetes 架构图
+1 ）使用英伟达GPU 搭建高性能的容器云计算环境。
+2) Docker 容器使用GPU 资源，在一个容器中绑定多个GPU 核，
+Kubernetes 通过
+Docker 使用英伟达GPU 资源池。
+3 ）将TensorFlow 作为一个应用部署到Kubernetes 的环境中，
+TensorFlow 使用
+Kubernetes 管理集群，创建训练用的Pod ，部署PS 参数服务器及Work 进程服务器进行训
+练使用。
+
+第14 章
+TensorFlow on Kubernetes •!• 189 
+14.5 
+TensorFlow 部署实践
+经过前面的实践后，
+Kubernetes 集群环境支持了GPU ，下面介绍如何部署TensorFlow 
+到Kubernetes 集群环境中。
+14.5.1 
+下载镜像
+在TensorFlow 剧官网下载镜像文件，
+gcr. io/tensortlow/tensortlow : latest 镜像是Tens<JrFlow
+提供的官网镜像。
+14.5.2 
+yaml 文件准备
+Tensor Flow 包括参数服务器和计算服务器j
+因此yam ！文件也要分开。具体内容如下：
+· 参数服务器parametes .yaml
+apiVersion : vl 
+ki nd: ReplicationController 
+metadata: 
+name: tensorflow-ps-rc 
+spec: 
+replicas: 3 
+selector: 
+n缸ne: tensorflow-ps 
+template: 
+metadata: 
+labels: 
+name: tensorflow-ps 
+role: ps 
+spec: 
+containers: 
+-
+n缸ne: ps 
+image: gcr.io/tensorflow/tensorflow:latest 
+port s: 
+- containerPort: 5555 
+·计算服务器work . yam!
+apiVersion: vl 
+kind: ReplicationControl ler 
+metadata: 
+name: tensorflow-worker-rc 
+spec: 
+replicas: 3 
+selector: 
+name: tensorflow-worker 
+template: 
+metadata: 
+labels: 
+
+190
+令
+基于Kubernetes 的窑器云平台实战
+spec: 
+name: tensorflow-worker 
+role: worker 
+containers: 
+-
+name: worker 
+image: gcr.io/tensorflow/tensorflow:latest 
+ports: 
+- containerPort: 5555 
+·创建参数服务器服务ps-service.yaml
+apiVersion: vl 
+kind: Service 
+metadata: 
+labels: 
+name: tensorflow-ps 
+role: service 
+name: tensorflow-ps-service 
+spec: 
+ports: 
+- port: 5555 
+targetPort: 5555 
+selector: 
+name: 
+tensor丑ow-ps
+selector: 
+name: tensorflow-worker 
+·创建参数服务器服务worker-service.yam!
+apiVersion: vl 
+kind: Service 
+metadata: 
+labels: 
+name: tensorflow-worker 
+role: service 
+name: tensorflow-wk-service 
+spec: 
+ports: 
+- port: 5555 
+targetPort: 5555 
+selector: 
+n缸ne: tensorflow-worker 
+14.5.3 
+执行命令安装TensorFlow
+执行如下命令以完成TensorFlow 安装工作。
+kubectl create -f parametes.yaml 
+kubectl create -f worker.yaml 
+kubectl create -f parametes-service.yaml 
+kubectl create -f worker-service.yaml 

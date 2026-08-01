@@ -1,0 +1,487 @@
+第5章 Kubernetes Deployment
+本章将介绍Deployment如何为Kubernetes带来自愈、扩缩容、滚
+动升级以及基于版本的回滚等能力。
+本章将分为如下内容。
+●Deployment原理。
+●如何创建一个Deployment。
+●如何进行滚动升级。
+●如何进行回滚。
+5.1 Deployment原理
+这要从应用的源码说起。应用程序源码被编译打包为容器，并被
+装入一个Pod中在Kubernetes运行。不过，Pod没有自愈能力，不能扩
+缩容，也不支持方便的升级和回滚。而Deployment可以。因此，建议
+绝大多数情况下采用Deployment来部署Pod。
+图5.1是Deployment管理Pod的示意图。
+更多IT书籍请关注：www.cmsblogs.cn
+
+图5.1
+需要强调的是，一个Deployment对象只能管理一个Pod模板。例
+如，如果一个应用有两个Pod模板——前端（front-end）和目录服务
+（catalog service），那么就需要两个Deployment。对于图5.1来
+说，则是一个管理Web服务的双Pod副本的Deployment。
+另一点需要指出的是，Deployment是一种完全成熟的Kubernetes
+API对象。因此可以在清单文件中定义它，并POST到API Server端。
+最后需要了解的是，Deployment在底层利用了另一种名为
+ReplicaSet的对象。虽然并不建议直接操作ReplicaSet，不过了解其
+关系是比较重要的。
+总体来说，Deployment使用ReplicaSet来提供自愈和扩缩容能
+力。
+图5.2示意的是与图5.1相同的Pod和Deployment，不过这次增加了
+对ReplicaSet的体现，以及各自分别提供什么特性。
+更多IT书籍请关注：www.cmsblogs.cn
+
+图5.2
+总之，可以理解为Deployment管理ReplicaSet，ReplicaSet管理
+Pod。它们一起使Kubernetes能够出色地进行应用的部署和管理。
+5.1.1 自愈和扩缩容
+Pod很好用，它能够整合多个容器，使容器间共享卷、共享内存，
+以及简化网络等。不过它无法提供任何形式的自愈、扩缩容能力——
+如果运行Pod的节点宕机，那么该Pod不会被再次启动。
+而Deployment能够为Pod提供自愈和扩缩容能力。
+●如果Deployment管理的Pod出现故障，那么它会被替换掉——自
+愈。
+●如果Deployment管理的Pod承担的负载增加，那么可以轻松地扩
+展同样的Pod来处理负载——扩容。
+更多IT书籍请关注：www.cmsblogs.cn
+
+不过请记住，Deployment底层使用了一种名为ReplicaSet的对象
+来完成实际的自愈和扩缩容。然而，ReplicaSet运行在后台，用户应
+该只与Deployment打交道。鉴于此，我们将主要关注Deployment。
+1.围绕“状态”的管理
+在深入介绍之前，先介绍3个对Kubernetes来说非常基础和重要的
+概念。
+●期望状态（desired state）。
+●当前状态（current state / actual state / observed
+state）。
+●声明式模型（declarative model）。
+顾名思义，期望状态是希望达到的状态，当前状态是已经达到的
+状态。
+声明式模型用于告诉Kubernetes什么是期望状态，而无须关心如
+何实现。让Kubernetes来操心如何实现的事情吧。
+2.声明式模型
+首先探讨两种模型：声明式模型和命令式模型。
+声明式模型只关注最终结果——告诉Kubernetes我们想要的什
+么。命令式模型则包含达成最终结果所需的一系列命令——告诉
+Kubernetes如何来实现。
+以下两个简单的例子有助于理解。
+●声明式：我想要一个能够供10个人享用的巧克力蛋糕。
+更多IT书籍请关注：www.cmsblogs.cn
+
+●命令式：开车去商店；购买鸡蛋、牛奶、面粉、可可粉等；开
+车回家；打开烤箱；混合食材；放入烤盘；把烤盘放入烤箱待30min；
+从烤箱中取出并关闭烤箱；加糖衣。
+声明式模型描述我们想要什么（够10个人吃的巧克力蛋糕），而
+命令式模型则是烤制巧克力蛋糕所需的一长串步骤。
+下面看一个更加实际的例子。
+假设现在有一个应用，包含前端和后端两个服务。容器镜像已经
+构建完成，因此针对前后端服务有不同的Pod。为了满足需求，需要5
+个前端Pod实例和2个后端Pod实例。
+如果采用声明式方法，需要编写一个配置文件，用于告诉
+Kubernetes我们希望应用运行起来是什么样子。比如，我想要5个在80
+端口监听的前端Pod的副本，以及2个在27017端口监听的后端Pod的副
+本。这是期望的状态。显然使用YAML格式的配置文件的内容会不一
+样，不过相信读者能理解这一思路。
+一旦定义好期望状态，就只需要把配置文件交给Kubernetes，然
+后坐等Kubernetes来完成具体工作即可。
+不过事情并未到此结束，Kubernetes还会通过定时检测的机制来
+判断运行状态是否正常——当前状态是否与期望状态一致。
+相信我，这是一件美妙的事情。
+命令式模型与声明式模型有显著的不同。命令式模型中没有“期
+望状态”的概念，至少没有关于“期望状态”的记录，只有一系列指
+令清单。
+更加糟糕的是，命令式指令可能有多个变种。例如，启动
+containerd容器的命令与启动gVisor容器的命令是不同的。这会导致
+更多的额外工作和不必要的错误。另外，由于没有声明一个期望状
+态，因此也就没有自愈功能。
+相信我，这并不是一件美妙的事情。
+更多IT书籍请关注：www.cmsblogs.cn
+
+Kubernetes支持两种模型，不过更加青睐于声明式模型。
+3.调谐循环
+期望状态能够实现的基础是底层调谐循环（reconciliation
+loop，也称作control loop）的概念。
+例如，ReplicaSet的底层调谐循环能够定期检查集群中Pod的副本
+数是否达标。如果副本数不足，则增加；如果副本数过多，则销毁一
+些。
+说得清楚一些，即Kubernetes会持续确保当前状态与期望状态保
+持一致。
+如果不一致——也许期望状态是10个副本，但是只有8个在运行
+——Kubernetes会发出红色警告，然后命令控制层进入“应急状
+态”，并再启动两个副本。最棒的一点在于——它会默默完成这一
+切，而不是在凌晨4:20叫醒读者！
+不过并不限于故障场景，调谐循环也可用于扩缩容。
+例如，如果读者POST一个更新的配置，将副本数从3调整为5，则
+“5”就会被注册为该应用新的期望状态。当调谐循环的下一轮开始执
+行时，会注意到数值上的差异，并开启类似的调整操作——发布红色
+警告并再启动两个副本。
+这真是一件美妙的事情。
+5.1.2 使用Deployment进行滚动升级
+除了自愈和扩缩容能力，Deployment还使零停机滚动升级成为可
+能。
+更多IT书籍请关注：www.cmsblogs.cn
+
+前面提到，Deployment利用ReplicaSet来执行底层的一些“跑
+腿”的事情。事实上，每次创建一个Deployment，都会自动生成一个
+管理Pod的ReplicaSet。
+注：最佳实践是，不要直接管理ReplicaSet，而应仅与
+Deployment打交道，让Deployment自行管理ReplicaSet。
+滚动升级的过程是这样的：首先将应用中的每个独立的服务作为
+一个Pod来定义；然后为了方便起见——自愈、扩缩容、滚动升级等
+——将Pod包在Deployment中。因此在创建一个YAML配置文件的时候需
+要定义如下内容。
+●有多少个Pod副本。
+●Pod容器使用什么镜像。
+●使用哪个网络端口。
+●关于如何滚动升级的细节。
+然后把YAML文件POST到API Server，交给Kubernetes完成剩余的
+工作吧。
+一旦全部运行起来，Kubernetes就会启动定时监测，以确保监测
+到的状态和期望状态保持一致。
+到目前为止一切都很不错。
+现在假设某人遇到了一个Bug，并且需要部署一个新的镜像来完成
+修复。因此，他修改了同一个Deployment的YAML文件，将镜像版本更
+新并重新POST到API Server。这会在集群中注册新的期望状态，需要
+同样数量的Pod，但全部都要运行新版的镜像。为了达到这一点，
+Kubernetes基于新镜像的Pod创建了一个新的ReplicaSet。此时就有两
+个ReplicaSet了：一个是包含基于旧版镜像的Pod，一个是新版本的
+Pod。每次Kubernetes增加新ReplicaSet（新版镜像）中的Pod数量的
+时候，都会相应地减少旧ReplicaSet（旧版镜像）中的Pod数量。从
+而，在零宕机的情况下实现了一种平滑的滚动升级。当然，以后的更
+更多IT书籍请关注：www.cmsblogs.cn
+
+新也都可以重复这一过程——只需要更新清单文件（应该保存在版本
+管理系统中）即可。
+这太精妙了！
+图5.3阐释了一个Deployment更新的过程。Deployment在更新前创
+建的ReplicaSet位于左侧，更新后创建了右侧的ReplicaSet。可以看
+到，更新前创建的ReplicaSet已经暂停，并不包含任何Pod。更新后的
+ReplicaSet已经启动了所有Pod。
+图5.3
+着重需要说明的是，旧版的ReplicaSet仍然有完整的配置信息，
+包括旧版的镜像。这一点对理解5.1.3节很重要。
+5.1.3 回滚
+如图5.3所示，旧版的ReplicaSet已经暂停并且不再管理任何
+Pod。然而，仍然保留了所有的配置信息。这使回滚到前一版本成为可
+能。
+更多IT书籍请关注：www.cmsblogs.cn
+
+回滚与滚动升级的过程正好相反：启用旧的ReplicaSet，停用当
+前的ReplicaSet。就是这么简单。
+图5.4阐释了回滚的过程。
+图5.4
+不过事情并非这么简单。Deployment还能智能化地进行“每个Pod
+启动N秒后在启动下一个Pod”这样的操作。此外，还有启动阶段的监
+测（startup probe）、就绪状态的监测（readiness probe），以及
+运行状态的监测（liveness probe）来监控Pod的健康状态。总之，
+Deployment能够出色地完成滚动升级和回滚的任务。
+光说不练假把式，下面来具体上手操作一下Deployment。
+5.2 如何创建一个Deployment
+本节将带领读者基于YAML文件创建一个全新的Kubernetes
+Deployment。当然，也可以使用kubectl run这种命令式的方式，不过
+并不建议。声明式的方式才是正途。
+以下YAML代码段是会用到的Deployment清单文件。读者也可以在
+本书的GitHub库中的deployments目录下找到这个名为deploy.yml的代
+码文件。
+以下的示例假定deploy.yml已经在系统当前路径下了。
+更多IT书籍请关注：www.cmsblogs.cn
+
+apiVersion: apps/v1  #旧版K8s使用apps/v1beta1 
+kind: Deployment  
+metadata:  
+ name: hello-deploy  
+spec:  
+  replicas: 10  
+  selector:  
+    matchLabels:  
+      app: hello-world  
+  minReadySeconds: 10  
+  strategy:  
+    type: RollingUpdate  
+    rollingUpdate:  
+      maxUnavailable: 1  
+      maxSurge: 1  
+  template:  
+    metadata:  
+      labels:  
+        app: hello-world  
+    spec:  
+      containers:  
+      - name: hello-Pod  
+        image: nigelpoulton/k8sbook:latest  
+        ports:  
+        - containerPort: 8080
+警告：本书中使用的镜像并未得到维护，可能隐含一些缺陷或安
+全问题。请谨慎使用。
+下面逐行解释一下上述配置文件的内容。
+第一行指定了所使用的API版本。假定读者使用的是最新版的
+Kubernetes，则Deployment对象是位于apps/v1的API组中的。
+kind告诉Kubernetes现在定义的是一个Deployment对象。
+metadata部分定义Deployment的名字和标签。
+spec部分定义了绝大多数的参数。spec下的内容都与Pod有关。
+spec.replicas告诉Kubernetes需要部署多少个Pod副本。
+spec.selector表明Deployment要管理的Pod所必须具备的标签。
+spec.strategy告诉Kubernetes如何执行更新操作。spec.template下
+更多IT书籍请关注：www.cmsblogs.cn
+
+的内容定义了Deployment管理的Pod模板。这个例子中，Pod模板只有
+一个容器。
+使用kubectl apply来将该配置应用至集群。
+注：kubectl apply会将YAML文件POST到Kubernetes的API
+Server（API服务器端）。
+$ kubectl apply -f deploy.yml  
+deployment.apps/hello-deploy created
+这样该Deployment就已经在集群中被实例化了。
+5.2.1 查看Deployment
+用户可以使用普通的kubectl get和kubectl describe命令来查看
+Deployment的具体信息。
+$ kubectl get deploy hello-deploy  
+NAME          DESIRED   CURRENT  UP-TO-DATE  AVAILABLE  
+AGE   
+hello-deploy  10        10       10          10         
+24s  
+  
+$ kubectl describe deploy hello-deploy  
+Name:         hello-deploy  
+Namespace:    default  
+Selector:     app=hello-world   
+Replicas:               10 desired | 10 updated | 10 total 
+... 
+StrategyType:           RollingUpdate  
+MinReadySeconds:        10  
+RollingUpdateStrategy:  1 max unavailable, 1 max surge  
+Pod Template:  
+  Labels:               app=hello-world  
+  Containers:  
+        hello-Pod:  
+          Image:        nigelpoulton/K8sbook:latest  
+更多IT书籍请关注：www.cmsblogs.cn
+
+          Port:         8080/TCP  
+<SNIP> 
+为了便于阅读，以上命令的输出做了裁剪。具体执行时会输出更
+多内容。
+前面提到，Deployment会自动创建相对应的ReplicaSet。可使用
+如下的kubectl命令予以验证。
+$ kubectl get rs  
+NAME                   DESIRED  CURRENT  READY  AGE 
+hello-deploy-7bbd...   10       10       10     1m
+现在只有一个ReplicaSet。这是因为我们只执行了Deployment的
+初始部署。可以看到，ReplicaSet的名称其实是Deployment的名称与
+一个hash值的拼接。这里的hash值是对YAML清单文件中Pod模板部分
+（spec.template下的所有内容）的hash。
+更多关于ReplicaSet的信息可以使用kubectl describe查看。
+5.2.2 访问该应用
+为了经由一个固定的域名或IP地址来访问该应用，甚至从集群外
+部来访问它，我们需要Kubernetes Service对象。关于Service对象的
+具体内容将会在第6章探讨，不过现在只需要知道Service对象能够为
+这一组Pod提供一个固定的DNS域名或IP地址就够了。
+以下的YAML定义了一个能够与前面部署的Pod副本协同的
+Service。YAML中包含了一个deployment字段。这个YAML文件就是本书
+GitHub库中的svc.yml。
+apiVersion: v1  
+kind: Service  
+更多IT书籍请关注：www.cmsblogs.cn
+
+metadata:  
+  name: hello-svc  
+  labels:  
+    app: hello-world 
+spec:  
+  type: NodePort  
+  ports:  
+  - port: 8080  
+    nodePort: 30001  
+    protocol: TCP  
+  selector:  
+    app: hello-world
+执行如下命令来部署它（以下命令假设名为svc.yml的清单文件就
+位于当前目录下）。
+$ kubectl apply -f svc.yml  
+Service/hello-svc created
+现在Service已经部署好了，可以通过以下任一种方式来访问该应
+用。
+1.在集群内部，通过DNS名称hello-svc和端口8080访问。
+2.在集群外部，通过集群任一节点和端口号30001访问。
+由图5.5可知Service可以从集群外部通过名为node1的节点和端口
+30001来访问。当然，假设node1是可解析的，并且端口号 30001是被
+防火墙放行的。
+更多IT书籍请关注：www.cmsblogs.cn
+
+图5.5
+如果读者使用的是Minikube环境，那么应该使用Minikube的IP地
+址和端口30001。使用minikube ip命令来获取Minikube的IP地址。
+5.3 执行滚动升级
+本节我们将具体演示一下如何对刚刚部署的应用进行滚动升级。
+这里我们假设新版的应用已经被容器化为Docker镜像，其tag是edge。
+那么接下来要做的就是使用Kubernetes将新版的应用部署上线。本例
+中，我们忽略实际环境中的CI/CD流水线和版本控制工具。
+第一件事就是更新Deployment清单文件中的镜像的tag。起初版本
+的应用使用的是tag为nigelpoulton/k8sbook:latest的镜像。现在要
+将Deployment清单文件中spec.template.spec.containers的内容改为
+新的nigelpoulton/k8sbook:edge镜像。那么当下次该文件被POST到
+API Server的时候，Deployment的所有Pod都会被新的edge版镜像替
+换。
+更多IT书籍请关注：www.cmsblogs.cn
+
+以下就是更新之后的deploy.yml清单文件，唯一有改动的地方就
+是追加注释的spec.template.spec.containers.image一行。
+apiVersion: apps/v1  
+kind: Deployment  
+metadata:  
+  name: hello-deploy 
+spec:  
+  replicas: 10  
+  selector:  
+   matchLabels:  
+      app: hello-world  
+  minReadySeconds: 10  
+  strategy:  
+    type: RollingUpdate  
+    rollingUpdate:  
+      maxUnavailable: 1  
+      maxSurge: 1  
+  template:  
+    metadata:  
+      labels:  
+        app: hello-world  
+    spec:  
+      containers:  
+      - name: hello-Pod  
+        image: nigelpoulton/k8sbook:edge # 这一行修改了  
+        ports:  
+        - containerPort: 8080
+在将更新的配置文件POST到Kubernetes之前，我们先看一下关于
+更新操作如何执行的部分的设置。
+关于更新操作如何执行的设置位于spec部分。首先需要注意的是
+spec.minReady Seconds，它的值被设置为10，也就是告诉Kubernetes
+每个Pod的更新动作之间间隔10s。这有助于调节更新操作的节奏：如
+果预留更长的时间，就能让运维人员从容地进行跟踪检查，以避免若
+一次性全部更新所有Pod时由于出现失误而导致问题产生的风险。
+spec.strategy部分的内容告诉Kubernetes。
+更多IT书籍请关注：www.cmsblogs.cn
+
+●使用RollingUpdate策略来进行更新。
+●不允许出现比期望状态指定的Pod数量少超过一个的情况
+（maxUnavailable:1）。
+●不允许出现比期望状态指定的Pod数量多超过一个的情况
+（maxSure:1）。
+在本例中，期望状态是Pod数量为10个副本，那么maxSure:1的意
+思是在更新过程中，Pod数量不能超过11个，而maxUnavailable:1的意
+思是不能少于9个。导致的结果就是，在滚动更新的过程中，最多只能
+同时更新两个Pod（11减9）。
+修改好清单文件之后，就可以再次将新的YAML文件POST到API
+Server。
+$ kubectl apply -f deploy.yml --record  
+deployment.apps/hello-deploy configured
+更新操作需要一定的时间来完成。这是由于每次只能更新两个
+Pod：首先将新的镜像从相应的节点上pull下来，启动新的Pod，然后
+等待10s才能再更新之后的两个Pod。
+更新的过程可以通过执行kubectl rollout status来查看。
+$ kubectl rollout status deployment hello-deploy  
+Waiting for rollout to finish: 4 out of 10 new replicas... 
+Waiting for rollout to finish: 4 out of 10 new replicas... 
+Waiting for rollout to finish: 5 out of 10 new replicas... 
+^C
+使用组合键Ctrl+C来停止以上命令，然后在更新完成之前执行
+kubectl get deploy命令。可以看到在清单文件中设置的更新策略是
+如何起作用的。例如，从以下命令的输出中可以看到，有5个副本已经
+更多IT书籍请关注：www.cmsblogs.cn
+
+被更新，当前一共有11个Pod（这比期望状态的10个多出1个），这是
+被清单文件中的maxSurge=1控制的。
+$ kubectl get deploy  
+NAME           DESIRED  CURRENT  UP-TO-DATE  AVAILABLE  
+AGE  
+hello-deploy   10       11       5           9          
+28m
+当更新完成之后，再次执行kubectl get deploy。
+$ kubectl get deploy hello-deploy  
+NAME          DESIRED  CURRENT  UP-TO-DATE  AVAILABLE  AGE 
+hello-deploy  10       10       10          10         39m
+可见更新操作已经完成——10个Pod都是最新版本（up to
+date）。
+执行kubectl describe deploy命令可以查看关于Deployment的更
+多信息，包括在Pod Template部分显示的镜像的新版本。
+这时可以刷新一下浏览器页面，然后查看应用更新之后的样子
+（见图5.6）。旧版的应用显示的是“Kubernetes Rocks!”，而新版
+显示的是“The Kubernetes Book!!!”。
+更多IT书籍请关注：www.cmsblogs.cn
+
+图5.6
+5.4 执行回滚操作
+刚才，我们使用kubectl apply命令进行了Deployment的升级。由
+于当时使用了--record参数，因此Kubernetes会维护该Deployment的
+版本历史记录。如下，执行kubectl rollout history命令可以显示
+Deployment的两个版本。
+$ kubectl rollout history deployment hello-deploy  
+deployment.apps/hello-deploy  
+REVISION  CHANGE-CAUSE   
+1         <none>   
+2         kubectl apply --filename=deploy.yml --
+record=true
+版本1是起初使用tag为latest的镜像的Deployment。版本2是刚刚
+滚动升级之后的版本，而执行更新操作的命令被记录下来。
+这是命令中添加了--record参数的缘故，由此看来添加--record
+参数是个不错的主意。
+本章之初说过，更新一个Deployment会创建一个新的
+ReplicaSet，并且更新前的ReplicaSet并不会被删除。可以通过
+kubectl get rs查看。
+$ kubectl get rs  
+NAME                  DESIRED  CURRENT  READY  AGE   
+hello-deploy-6bc8...  10       10       10     10m   
+hello-deploy-7bbd...  0        0         0     52m
+从输出中可以看出，初始版本的ReplicaSet还在（hello-deploy-
+7bbd...），但是它已经不再管理任何Pod副本了。名为hello-deploy-
+更多IT书籍请关注：www.cmsblogs.cn
+
+6bc8...的ReplicaSet是当前活跃的最新版本，并且管理着10个Pod副
+本。不过，就是由于前一版本ReplicaSet的存在，使回滚操作变得非
+常简单。
+此时可以通过对旧的ReplicaSet执行kubectl describe rs命令来
+确定其配置依然是存在于系统中的。
+下面的示例使用kubectl rollout命令将应用回滚到版本1。这是
+一个命令式的操作，并不提倡。不过，为了快速操作这种方式显然更
+加方便，只是别忘了更新一下YAML文件，以便跟集群的现状对应起
+来。
+$ kubectl rollout undo deployment hello-deploy --to-
+revision=1 
+deployment.apps "hello-deploy" rolled back 
+虽然看上去回滚操作立马生效了，不过事实并非如此。回滚的过
+程仍然遵循与滚动升级操作相同的规则，即Deployment清单文件中的
+minReadySeconds: 10, maxUnavailable: 1和maxSurge: 1。具体可以
+通过的kubectl get deploy和kubectl rollout两个命令来验证。
+$ kubectl get deploy hello-deploy  
+NAME          DESIRED  CURRNET  UP-TO-DATE  AVAILABE  AGE  
+hello-deploy  10       11       4           9         45m  
+  
+$ kubectl rollout status deployment hello-deploy  
+Waiting for rollout to finish: 6 out of 10 new replicas 
+have been updated... 
+Waiting for rollout to finish: 7 out of 10 new replicas 
+have been updated... 
+Waiting for rollout to finish: 8 out of 10 new replicas 
+have been updated... 
+Waiting for rollout to finish: 1 old replicas are pending 
+termination...   
+Waiting for rollout to finish: 9 of 10 updated replicas 
+are available...  
+^C 
+更多IT书籍请关注：www.cmsblogs.cn
+
+恭喜！相信读者已经成功完成了一次滚动升级和回滚操作。
+使用kubectl delete -f deploy.yml和kubectl delete -f
+svc.yml命令可以删除前面例子中部署的Deployment和Service。
+最后提醒一点，刚刚执行的回滚操作是一个命令式的指令。也就
+是说集群的当前状态和YAML文件是不符的：最新版本的YAML文件使用
+的是edge镜像，而集群中的Pod已经回滚至latest镜像。这是命令式的
+方式的问题所在。在实际操作中，执行这样的回滚操作之后，应当手
+动更新YAML文件，以便正确反映回滚操作带来的变化。
+5.5 总结
+本章为读者介绍了Deployment，它是一种管理Kubernetes应用的
+很好的方式。它在Pod的基础之上增加了自愈、扩缩容、滚动升级和回
+滚的能力。而其底层则利用ReplicaSet来实现自愈和扩缩容的能力。
+同Pod一样，Deployment也是Kubernetes API中的对象，用户应当
+以一种声明式的方式来使用它。
+当使用kubectl apply来执行升级操作时，旧版本的ReplicaSet转
+为非活跃状态，但它仍存在于集群中，以便执行回滚操作。
+更多IT书籍请关注：www.cmsblogs.cn

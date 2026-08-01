@@ -1,0 +1,143 @@
+ceph health
+2.
+检查VM 是否在运行。
+sudo virsh list
+3.
+检查VM 是否在和Ceph 通信，用你的VM 域名字替换{vm-domain-name} ：
+sudo virsh qemu-monitor-command --hmp {vm-domain-
+name} 'info block'
+4.
+检查一下<target dev='hdb' bus='ide'/> 定义的设备是否出现
+在/dev 或/proc/partitions 里。
+5. ls dev
+cat proc/partitions
+如果看起来一切正常，你就可以在虚拟机内使用Ceph 块设备了。
+LIBRBD 选项
+详情见块设备。
+缓存选项
+内核缓存
+Ceph 块设备的内核驱动可利用Linux 页缓存来提升性能。
+
+Ceph 块设备的用户空间实现（即librbd ）不能利用Linux 页缓存，所以它自己实现了内存
+缓存，名为“ RBD 缓存”。RBD 缓存行为就像硬盘缓存一样端正。当OS 发送了barrier 或
+flush 请求时，所有脏数据都会写入OSDs 。这意味着只要VM 会正确地发送flush 命令（即
+内核版本大于2.6.32 ），使用回写缓存和常见物理硬盘一样安全。此缓存用最近最少使用
+（Least Recently Used, LRU ）算法，而且在回写模式下它能合并相邻请求以提高吞吐量。
+New in version 0.46.
+Ceph 支持为RBD 提供回写缓存。要启用此功能，在ceph.conf 配置文件
+的[client] 段下添加rbd cache = true 。librbd 默认不会进行任何缓存。写和
+读都直接到达存储集群，而且只有当数据的所有副本都写入磁盘后写操作才会返回。启用缓存
+后，写操作会立即返回，除非未刷写的字节数大于rbd cache max dirty 。这种情况下，
+写动作会触发回写机制并一直阻塞，直到足够多的字节数被刷写。
+New in version 0.47.
+Ceph 支持为RBD 提供透写缓存。你可以设置缓存的大小，以及从回写缓存切换到透写缓存
+的目标和临界值。要启用透写模式，把rbd cache maxdirty 置为0。这意味着只有当
+数据的所有副本都写入磁盘后写操作才会返回，但可能会直接从缓存中读取数据。缓存信息保
+存在客户端的内存中，每个RBD 映像有其自己的缓存。对客户端来说缓存位于本地，所以如
+果有其他用户访问某个映像，不会存在缓存一致性的问题。打开缓存时，在RBD 之上不能运
+行GFS 或OCFS 。
+RBD 选项应该位于ceph.conf 配置文件的[client] 段下，可用选项有：
+rbd cache
+描述:
+允许为RADOS 块设备（RBD ）提供缓存。
+类型:
+Boolean
+是否必需:
+No
+
+默认值:
+true
+rbd cache size
+描述:
+RBD 缓存大小，单位是字节。
+类型:
+64-bit Integer
+是否必需:
+No
+默认值:
+32 MiB
+rbd cache max dirty
+描述:
+使缓存触发回写的dirty 临界值，单位是字节。若为0 ，直接使用透写
+缓存。
+类型:
+64-bit Integer
+是否必
+需:
+No
+约束条
+件:
+必须小于rbd cache size 。
+
+默认值:
+24 MiB
+rbd cache target dirty
+描述:
+缓存开始向数据存储写回数据前的dirty target 。不会阻塞到缓存的
+写动作。
+类型:
+64-bit Integer
+是否必
+需:
+No
+约束条
+件:
+必须小于rbd cache max dirty.
+默认值:
+16 MiB
+rbd cache max dirty age
+描述:
+写回开始前，脏数据在缓存中的暂存时间。
+类型:
+Float
+是否必需:
+No
+
+默认值:
+1.0
+New in version 0.60.
+rbd cache writethrough until flush
+描述:
+开始进入透写模式，并且在收到首个flush 请求后切换到回写模式。启用该
+项保守但安全，以防rbd 之上的虚拟机内核太老而不能发送flush ，例如
+Linux 2.6.32 之前的virtio 驱动。
+类型:
+Boolean
+是否
+必需:
+No
+默认
+值:
+true
+预读选项
+New in version 0.86.
+RBD 支持预读或预取功能，以此优化小块的顺序读。此功能通常应该由访客操作系统（在虚
+拟机的情况下）处理，但是引导加载程序可能不会发出高效的读请求。如果停用缓存功能，预
+读也会自动被禁用。
+rbd readahead trigger requests
+描述:
+触发预读的顺序读请求数量。
+
+类型:
+Integer
+是否必需:
+No
+默认值:
+10
+rbd readahead max bytes
+描述:
+预读请求的最大尺寸。如果是零，禁用预读。
+类型:
+64-bit Integer
+是否必需:
+No
+默认值:
+512 KiB
+rbd readahead disable after bytes
+描述:
+从RBD 映像读取这么多字节后，预读功能将被禁用，直到关闭。这样访客
+操作系统一旦启动后就可以接管预读了。设为0 时仍开启预读。
+类型:
+64-bit Integer
+是否
+No

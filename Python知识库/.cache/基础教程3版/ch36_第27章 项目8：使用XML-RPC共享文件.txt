@@ -1,0 +1,749 @@
+27.1 问题描述  401 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+24 
+25 
+11 
+27 
+13 
+14 
+项目8：使用XML-RPC 
+共享文件
+本章的项目是一个简单的文件共享应用程序。通过Napster（最初形式的版本已不能下载）、
+Gnutella（有关可用客户端的讨论，请参阅http://www.gnutellaforums.com）、BitTorrent（可从
+http://www.bittorrent.com下载）等众多著名的应用程序，你可能已经熟悉文件共享的概念。本章
+将编写的应用程序在很多方面都与它们类似，只是要简单得多。 
+我们将使用的主要技术是XML-RPC。第15章说过，这是一种远程调用过程（函数）的协议，
+这种调用可能是通过网络进行的。如果你愿意，可使用普通的套接字编程轻松地实现这个项目的
+功能，为此可能需要用到第14章和第24章介绍的一些技巧。这样做还可能获得更佳的性能，因为
+XML-RPC协议确实存在一定的开销。然而，XML-RPC使用起来非常容易，还很可能极大地简化
+代码。 
+27.1 问题描述 
+我们要创建一个P2P（peer-to-peer）文件共享程序。大致而言，文件共享意味着在运行于不
+同计算机上的程序之间交换文件（从文本文件到声音或视频剪辑的各种文件）。P2P指的是计算机
+程序之间的一种交互方式，与常见的客户端服务器交互（在这种交互中，客户端可链接到服务
+器，但反过来不行）不太一样。在P2P交互中，任何对等体（peer）都可连接到其他对等体。在
+这样一个由对等体组成的网络中，不存在中央权威（在客户端/服务器架构中，这样的权威为服
+务器），这让网络更健壮，因为除非你关闭大部分对等体，否则这样的网络不可能崩溃。 
+在创建P2P系统的过程中，会遇到很多问题。在诸如Gnutella等较旧的系统中，对等体可能向
+所有的邻居（它知道的其他对等体）广播查询，而这些对等体可能进一步广播查询。这样，响应
+查询的对等体都可通过对等体链将应答发回给最初发起查询的对等体。对等体独立而并行地工
+作。在诸如BitTorrent等较新的系统中，使用了更巧妙的技术，如要求你上传文件后才有权下载文
+件。出于简化考虑，这个项目的系统将依次与每个邻居联系，等收到响应后再与下一个对等体联
+系。这种做法的效率与Gnutella采用的并行做法没法比，但就这个系统的目标而言足够了。 
+大多数P2P系统都采用巧妙的方式来组织其结构（即每个对等体与哪些对等体相邻）以及这
+第27 章
+                          
+
+402  第27 章 项目8：使用XML-RPC 共享文件 
+种结构随对等体连接和断开的变化方式。在这个项目中，我们将采用非常简单的方式，但留有改
+进的余地。 
+这个文件共享程序必须满足的需求如下。 
+每个节点都必须跟踪一组已知的节点，以便能够向这些节点寻求帮助。还必须让节点能
+够向其他节点介绍自己，从而成为其他节点跟踪的节点集中的一员。
+节点必须能够通过提供文件名向其他节点请求文件。如果对方有这样的文件，应将其返
+回，否则应转而向其邻居请求这个文件（而这些邻居可能转而请其邻居请求该文件）。被
+请求的节点如果有这样的文件，就将其返回。
+为避免循环（A向B请求，B又反过来向A请求），同时避免形成过长的请求链（A向B请求，
+B向C请求等，直到向Z请求），向节点查询时必须提供历史记录。这个历史记录其实就是
+一个列表，其中包含在此之前已查询过的所有节点。通过不向历史记录中已有的节点请
+求，可避免循环，而通过限制历史记录的长度，可避免查询链过长。
+必须能够连接到其他节点，并将自己标识为可信任方。通过这样做，节点将能够使用不
+可信任方（如P2P网络中的其他节点）无法使用的功能。这种功能可能包括请求对方通过
+查询从网络中的其他节点下载文件并存储。
+必须提供这样的用户界面：让用户能够作为可信任方连接到其他节点，并让对方下载文
+件。这种界面应该能够轻松地扩展乃至替换。
+要满足这些需求似乎有点难，但你将看到，它们实现起来并不太难。你还可能发现，实现这
+些功能后，再添加其他功能也不会太难。 
+警告 正如文档指出的，与XML-RPC相关的Python模块不能防范恶意创建的数据带来的风险。
+虽然这个项目将节点分为可信任的和不可信任的，但不应将此视为安全保障。在使用这
+个系统的过程中，千万不要连接到你不信任的节点。 
+27.2 有用的工具 
+在这个项目中，我们将使用很多标准库模块。 
+使用的主要模块为xmlrpc.client和xmlrpc.server。模块xmlrpc.client的用法非常简单，你
+只需使用服务器的URL创建一个ServerProxy对象，就能够马上访问远程过程。模块xmlrpc.server
+使用起来要复杂些，在你完成本章项目的过程中将看到这一点。 
+为实现这个文件共享程序的界面，我们将使用第24章介绍过的模块cmd。为实现一定（非常
+有限）的并行性，我们将使用模块threading。为提取URL的组成部分，我们将使用模块
+urllib.parse。这些模块将在本章后面介绍。 
+你可能还需复习一下其他模块，包括random、string、time和os.path。有关这些模块的详细
+信息，请参阅第10章以及“Python库参考手册”。 
+                          
+
+27.4 初次实现  403 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+24 
+25 
+11 
+27 
+13 
+14 
+27.3 准备工作 
+为使用本章将用到的库，无需做很多准备工作。如果你使用的Python版本较新，其中应该包
+含这里要用到的所有库。 
+要使用本章将创建的软件，计算机并非一定要连接到网络，不过连接到网络将更有趣。如果
+你有多台相连的计算机（如它们都连接到了互联网），就可分别在每台计算机上运行这个软件，
+从而让它们彼此通信（但你可能需要修改当前正在运行的防火墙规则）。就测试而言，可在同一
+台计算机上运行多个文件共享节点。 
+27.4 初次实现 
+要编写Node类（系统中的单个节点，即对等体）的第一个原型，必须对模块xmlrpc.server
+中SimpleXMLRPCServer类的工作原理有些了解。这个类是使用形如(servername, port)的元组来实
+例化的，其中servername是运行服务器的计算机的名称（可将其设置为空字符串来表示localhost，
+即执行程序的计算机），而port可以是你能够访问的任何端口，通常为1024或更大的值。 
+实例化服务器后，可使用方法register_instance注册一个实现了其“远程方法”的实例，也
+可使用方法register_function注册各个函数。为运行服务器做好准备（让它能够响应来自外部的
+请求）后，调用其方法serve_forever。你可轻松地尝试做到这一点。为此，可启动两个交互式
+Python解释器，在第一个解释器中输入如下代码： 
+>>> from xmlrpc.server import SimpleXMLRPCServer 
+>>> s = SimpleXMLRPCServer(("", 4242)) # localhost和端口4242 
+>>> def twice(x): # 示例函数 
+...     return x * 2 
+... 
+>>> s.register_function(twice) # 给服务器添加功能 
+>>> s.serve_forever()# 启动服务器 
+执行最后一条语句后，解释器看起来就像“挂起”了一样，但实际上它是在等待RPC请求。
+为发出这样的请求，切换到另一个解释器并执行如下代码： 
+>>> from xmlrpc.client import ServerProxy # 如果你愿意，也可将ServerProxy替换为Server 
+>>> s = ServerProxy('http://localhost:4242') # 也是localhost…… 
+>>> s.twice(2) 
+4 
+很厉害吧，如果考虑到使用xmlrpclib的客户端可运行在其他计算机上，就尤其如此了。在
+这种情况下，必须使用服务器计算机的名称而不是localhost。如你所见，要访问服务器实现的远
+程过程，只需使用正确的URL实例化一个ServerProxy。真的不能比这更容易了。 
+27.4.1 实现简单的节点 
+介绍XML-RPC技术后，该着手编码了。（第一个原型的完整源代码如本节末尾的代码清单
+27-1所示。） 
+                          
+
+404  第27 章 项目8：使用XML-RPC 共享文件 
+为找到切入点，回顾一下本章前面介绍的需求是个不错的主意。我们关心的主要有两点：Node
+必须存储哪些信息（属性）；Node必须能够执行哪些操作（方法）。 
+Node必须至少包含如下属性。 
+目录名：让Node知道到哪里去查找文件或将文件存储到哪里。
+密码：供其他节点用来将自己标识为可信任方。
+一组已知的对等体（URL）。
+URL：可能加入到查询历史记录中或提供给其他节点（这个项目不会以第二种方式使用
+URL）。
+Node的构造函数只是设置这4个属性。除构造函数外，还需要用于查询的方法、获取和存储
+文件的方法以及向其他节点介绍自己的方法。我们将这些方法分别命名为query、fetch和hello。
+下面是使用伪代码编写的Node类的骨架. 
+class Node:  
+   def __init__(self, url, dirname, secret): 
+ self.url = url 
+ self.dirname = dirname 
+ self.secret = secret 
+ self.known = set() 
+   def query(self, query): 
+ 查找文件（可能向邻居查询）并以字符串的方式返回它 
+   def fetch(self, query, secret): 
+ 如果密码（secret）无误，就执行常规查询并存储文件。 
+ 换而言之，让节点找到并下载文件 
+   def hello(self, other): 
+ 将节点other添加到已知对等体集合中 
+假设已知对等体集合名为known，方法hello将非常简单，它只需将other添加到self.known中
+即可，其中other是这个方法的唯一参数（一个URL）。然而，XML-RPC要求所有方法都必须返
+回一个值，而不能返回None。有鉴于此，下面来定义两个指出成功还是失败的“编码”。 
+OK = 1 
+FAIL = 2 
+然后像下面这样实现方法hello： 
+def hello(self, other): 
+   self.known.add(other) 
+   return OK 
+向SimpleXMLRPCServer注册节点后，就可从外面调用这个方法了。 
+方法query和fetch要棘手些。先来编写fetch，因为它更简单。这个方法必须接受参数query和
+secret，其中secret是必不可少的，可避免节点被其他节点随便操纵。请注意，调用fetch将导致节
+点下载一个文件。因此，相比于只是传递文件的方法query，应更严格地限制对这个方法的访问。 
+                          
+
+27.4 初次实现  405 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+24 
+25 
+11 
+27 
+13 
+14 
+如果提供的密码不同于（启动时指定的）self.secret，fetch将直接返回FAIL；否则它将调
+用query来获取指定的文件。但方法query该返回什么呢？调用query时，你希望能够知道查询是否
+成功，并在成功时返回指定文件的内容。因此，我们将query的返回值定义为元组(code, data)，
+其中code的可能取值为OK和FAIL，而data是一个字符串。如果code为OK，这个字符串将包含找到
+的文件的内容；否则为一个随意的值，如空字符串。 
+方法fetch获取code和data。如果code为FAIL，这个方法也直接返回FAIL，否则就以写入模式
+打开一个新文件［这个文件的名称由参数query指定，它包含在目录self.dirname中（使用
+os.path.join将两者合而为一）］，再将data写入这个文件，然后关闭这个文件并返回OK。有关这
+种相对简单的实现的源代码，请参阅本节后面的代码清单27-1。 
+现在来看方法query。它接受参数query，但还应将历史记录作为参数（历史记录包含一系列
+不应再向其查询的URL，因为它们正在等待该查询的响应）。鉴于刚调用query时，历史记录为空，
+因此可将这个参数的默认值设置为空列表。 
+如果查看代码清单27-1所示的代码，将发现它进一步抽象了方法query，这是通过创建两个
+名为_handle和_broadcast的工具方法实现的。请注意，这些方法的名称以下划线打头，意味着不
+能通过XML-RPC来访问它们。（这是SimpleXMLRPCServer的行为，而不是XML-RPC的组成部分。）
+这很有用，因为这些方法并非要向外部提供独立的功能，而只是用于组织代码。 
+就现在而言，假设_handle负责查询的内容处理（检查节点是否包含指定的文件，获取数据
+等），它像query一样返回一个编码和一些数据。从代码清单27-1可知，如果code为OK（找到了指
+定的文件），方法_handle将立即返回code和data。然而，如果_handle返回的code为FAIL，那么query
+该如何办呢？在这种情况下，它必须向其他所有已知的节点寻求帮助。为此，它首先将self.url
+添加到history中。 
+注意 更新history时，既没有使用运算符+=，也没有使用列表方法append，因为它们都就地修
+改列表，而你不想修改参数history的默认值。 
+如果新的history太长，query将返回FAIL（和一个空字符串）。这里随意地将最大长度设置成
+了6，并将其存储在全局常量MAX_HISTORY_LENGTH中。 
+为何将MAX_HISTORY_LENGTH设置为6 
+这样做基于的理念是，网络中的任何对等体最多通过6步就能到达其他任何对等体。当
+然，这取决于网络的结构（每个对等体都知道哪些对等体），不过也得到了有关人际关系的
+“六度分离”假设的支持。有关这种假设的描述，请参阅维基百科上讨论六度分离的文章
+（http://en.wikipedia.org/wiki/Six_degrees_of_separation）。 
+在这个程序中使用这样的数字可能不太科学，但至少是不错的估计。在包含大量节点的
+大型网络中，鉴于这个程序的非并行性质，将MAX_HISTORY_LENGTH设置为较大的值可能导致性
+能变差。因此，如果速度很慢，可能应该降低这个值。 
+                          
+
+406  第27 章 项目8：使用XML-RPC 共享文件 
+如果history不太长，就使用方法_broadcast向所有已知的对等体广播查询。方法_broadcast
+不太复杂，如代码清单27-1所示。它迭代self.known的副本，如果当前对等体包含在history中，
+就使用continue语句跳到下一个对等体，否则创建一个ServerProxy对象，并对其调用方法query。
+如果方法query成功，就将其返回值作为_broadcast的返回值。可能会因为网络问题、错误的URL
+或节点不支持方法query而引发异常，在这种情况下，将把对等体的URL从self.known中删除（这
+是在包含query调用的try语句的except子句中进行的）。最后，如果正常地到达了函数末尾（什么
+都没有返回），将返回FAIL和一个空字符串。 
+注意 不应直接迭代self.known本身，因为这个集合在迭代期间可能被修改。使用其副本更安全。 
+方法_start（使用从URL中提取端口号的小型工具函数get_port）创建一个SimpleXMLRPCServer，
+并将logRequests设置为False（不存储日志），然后使用register_instance注册self，并调用服务
+器的方法serve_forever。 
+最后，这个模块的方法main从命令行提取URL、目录和密码，再创建一个Node对象并调用其
+方法_start。 
+这个原型的完整代码如代码清单27-1所示。 
+代码清单27-1 简单的Node类实现（simple_node.py） 
+from xmlrpc.client import ServerProxy 
+from os.path import join, isfile 
+from xmlrpc.server import SimpleXMLRPCServer 
+from urllib.parse import urlparse 
+import sys 
+MAX_HISTORY_LENGTH = 6 
+OK = 1 
+FAIL = 2 
+EMPTY = '' 
+def get_port(url): 
+   '从URL中提取端口' 
+   name = urlparse(url)[1] 
+ parts = name.split(':') 
+   return int(parts[-1]) 
+class Node: 
+   """ 
+   P2P网络中的节点 
+   """ 
+   def __init__(self, url, dirname, secret): 
+ self.url = url 
+ self.dirname = dirname 
+ self.secret = secret 
+ self.known = set() 
+                          
+
+27.4 初次实现  407 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+24 
+25 
+11 
+27 
+13 
+14 
+   def query(self, query, history=[]): 
+ """ 
+ 查询文件（可能向已知节点寻求帮助），并以字符串的方式返回它 
+ """ 
+ code, data = self._handle(query) 
+ if code == OK: 
+  return code, data 
+ else: 
+  history = history + [self.url] 
+  if len(history) >= MAX_HISTORY_LENGTH: 
+   return FAIL, EMPTY 
+  return self._broadcast(query, history) 
+   def hello(self, other): 
+ """ 
+ 用于向其他节点介绍当前节点 
+ """ 
+ self.known.add(other) 
+ return OK 
+   def fetch(self, query, secret): 
+ """ 
+ 用于让节点查找并下载文件 
+ """ 
+ if secret != self.secret: return FAIL 
+ code, data = self.query(query) 
+ if code == OK: 
+  f = open(join(self.dirname, query), 'w') 
+f.write(data)
+f.close()
+  return OK 
+ else: 
+  return FAIL 
+   def _start(self): 
+ """ 
+ 供内部用来启动XML-RPC服务器 
+ """ 
+ s = SimpleXMLRPCServer(("", get_port(self.url)), logRequests=False) 
+ s.register_instance(self) 
+ s.serve_forever() 
+   def _handle(self, query): 
+ """ 
+ 供内部用来处理查询 
+ """ 
+ dir = self.dirname 
+ name = join(dir, query) 
+ if not isfile(name): return FAIL, EMPTY 
+ return OK, open(name).read() 
+   def _broadcast(self, query, history): 
+ """ 
+ 供内部用来向所有已知节点广播查询 
+                          
+
+408  第27 章 项目8：使用XML-RPC 共享文件 
+ """ 
+ for other in self.known.copy(): 
+  if other in history: continue 
+  try: 
+   s = ServerProxy(other) 
+   code, data = s.query(query, history) 
+   if code == OK: 
+ return code, data 
+ except: 
+  self.known.remove(other) 
+ return FAIL, EMPTY 
+def main(): 
+   url, directory, secret = sys.argv[1:] 
+   n = Node(url, directory, secret) 
+   n._start() 
+if __name__ == '__main__': main() 
+下面来看一个有关如何使用这个程序的简单示例。 
+27.4.2 尝试使用 
+确保打开了多个终端（Terminal.app、xterm、DOS窗口或其他终端）。假设你要（在同一台计
+算机上）运行两个对等体，需要为每个对等体分别创建一个目录（如files1和files2），在目录files2
+中放置一个文件（如test.txt），再在一个终端中运行如下命令： 
+python simple_node.py http://localhost:4242 files1 secret1 
+实际运行程序时，将使用完整的计算机名称而不是localhost，还可能使用比secret1更复杂的
+密码。 
+这就是第一个对等体。接下来，再创建一个对等体。为此，在另一个终端中运行如下命令： 
+python simple_node.py http://localhost:4243 files2 secret2 
+如你所见，这个对等体提供位于另一个目录中的文件，并使用不同的端口号（4243）和密码。
+如果你按前面说的做了，应该有两个不同的对等体在运行（它们位于不同的终端窗口中）。下面
+来启动交互式Python解释器，并尝试连接到其中的一个对等体。 
+>>> from xmlrpc.client import * 
+>>> mypeer = ServerProxy('http://localhost:4242') # 第一个对等体 
+>>> code, data = mypeer.query('test.txt') 
+>>> code 
+2 
+如你所见，向第一个对等体请求文件test.txt时失败了。（返回的编码2表示失败，还记得吗？）
+下面来尝试向第二个节点请求文件test.txt。 
+>>> otherpeer = ServerProxy('http://localhost:4243') # 第二个对等体 
+>>> code, data = otherpeer.query('test.txt') 
+>>> code 
+1 
+                          
+
+27.5 再次实现  409 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+24 
+25 
+11 
+27 
+13 
+14 
+这次查询成功了，因为文件test.txt包含在第二个对等体的文件目录中。如果文件test.text包含
+的文本不多，可显示变量data的内容，以核实正确地传输了文件test.txt的内容。 
+>>> data 
+'This is a test\n' 
+到目前为止一切顺利。向第二个对等体介绍第一个对等体后，结果将如何呢？ 
+>>> mypeer.hello('http://localhost:4243') # 向otherpeer介绍mypeer 
+现在，第一个对等体知道第二个对等体的URL，可向其寻求帮助了。再次尝试向第一个对等
+体查询，这次查询将成功。 
+>>> mypeer.query('test.txt') 
+[1, 'This is a test\n'] 
+成功了！ 
+现在就剩一项功能没有测试了：可让第一个节点从第二个节点那里下载文件并存储它吗？ 
+>>> mypeer.fetch('test.txt', 'secret1') 
+1 
+返回值（1）表明成功了。如果你查看目录files1，将发现文件test.txt奇迹般地出现在这里。
+请启动多个对等体（如果你愿意，可在不同的计算机上启动它们），并将每个对等体都介绍给其
+他所有对等体。等你玩烦了，再来看下一个实现。 
+27.5 再次实现 
+初次实现存在很多缺陷和缺点，这里不打算列出全部（27.6节将讨论一些可能的改进），而
+只列出几个重要的。 
+如果你停止并重启一个节点，可能出现错误消息，指出端口被占用。
+你可能想提供对用户更友好的界面，而不是在交互式Python解释器中使用xmlrpc.client。 
+返回的编码不方便，一种更自然、更符合Python风格的解决方案是，在找不到文件时引发
+自定义异常。
+节点没有检查它返回的文件是否包含在文件目录中。通过使用诸如'../somesecretfile.
+txt'这样的路径，图谋不轨的黑客能够非法访问节点的其他任何文件。
+第一个问题很好解决，只需将SimpleXMLRPCServer的属性allow_reuse_address设置为True
+即可。
+SimpleXMLRPCServer.allow_reuse_address = 1 
+如果你不想直接修改这个类，可创建其子类。其他几个问题解决起来要复杂些，将在接下来
+的几小节分别讨论。源代码如本章后面的代码清单27-2和代码清单27-3所示。（你可能应该快速浏
+览一下，再接着往下读。） 
+                          
+
+410  第27 章 项目8：使用XML-RPC 共享文件 
+27.5.1 创建客户端界面 
+客户端界面是使用模块cmd中的Cmd类实现的，有关其工作原理的详细信息，请参阅第24章或
+“Python库参考手册”。简单地说，你从Cmd派生出一个子类来创建一个命令行界面，同时对于要
+让它能够处理的每个命令（如foo），都创建一个方法（如do_foo）。这个方法将命令行余下的内
+容（一个字符串）作为其唯一的参数。例如，如果你在命令行界面输入如下内容： 
+say hello 
+将调用方法do_say，并将字符串'hello'作为其唯一的参数。Cmd的子类使用什么样的提示符
+取决于属性prompt。 
+这里的界面将只实现命令fetch（下载文件）和exit（退出程序）。命令fetch调用服务器的方
+法fetch，并在文件没有找到时打印一条错误消息。命令exit打印一个空行（这只是出于美观考
+虑）并调用sys.exit。（EOF命令表示已到达文件末尾。在UNIX系统中，用户按下Ctrl+D时将执行
+这个命令。） 
+然而，在构造函数中需要做什么呢？你希望将每个客户端都与其对等体关联起来。为此，可
+创建一个Node对象并调用其方法_start，但如果这样做，客户端在方法_start返回前什么都做不
+了，这导致客户端毫无用处。为解决这个问题，可在一个独立的线程中启动Node。通常，使用线
+程时需要使用锁等机制做大量的防护和同步工作。然而，由于Client只通过XML-RPC与其Node
+交互，你无需做任何防护和同步工作。要在独立的线程中运行方法_start，只需将下面的代码放
+在程序的某个合适位置： 
+from threading import Thread 
+n = Node(url, dirname, self.secret) 
+t = Thread(target=n._start) 
+t.start()
+警告 修改这个项目的代码时务必小心。Client开始与Node对象直接交互（或相反）后，很容易
+出现与线程化相关的问题。修改代码前，务必完全理解线程化。 
+为确保你使用XML-RPC连接到它时已完全启动，先启动服务器，再使用time.sleep等待一
+段时间。 
+然后，遍历一个包含URL的文件的所有行，并使用方法hello将服务器介绍给这些行表示的
+对等体。 
+你不用自己去设计密码，可使用实用函数random_string（参见本章后面的代码清单27-3），
+它生成一个由Client和Node共享的随机密码字符串。 
+27.5.2 引发异常 
+不返回表示成功还是失败的编码，而是假定肯定会成功，并在失败时引发异常。在XML-RPC
+中，异常（或故障）是使用数字标识的。在这个项目中，我随意地选择了100和200这两个数，分
+                          
+
+27.5 再次实现  411 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+24 
+25 
+11 
+27 
+13 
+14 
+别用于表示正常的失败（请求未得到处理）和请求被拒绝（拒绝访问）。 
+UNHANDLED     = 100 
+ACCESS_DENIED = 200 
+class UnhandledQuery(Fault):  
+   """ 
+   表示查询未得到处理的异常 
+   """ 
+   def __init__(self, message="Couldn't handle the query"): 
+ super().__init__(UNHANDLED, message) 
+class AccessDenied(Fault): 
+   """ 
+   用户试图访问未获得授权的资源时将引发的异常 
+   """ 
+   def __init__(self, message="Access denied"): 
+ super().__init__(ACCESS_DENIED, message) 
+异常是xmlrpc.client.Fault的子类。在服务器中引发的异常将传递到客户端，并保持
+faultCode不变。如果在服务器中引发了普通异常（如IOException），也将创建一个Fault类实例，
+因此你不能在服务器中随意地使用异常。 
+从源代码可知，逻辑基本上与原来一样，但现在程序没有使用if语句来检查返回的编码，而
+是使用了异常。（由于你只能使用Fault对象，因此需要检查faultCode。当然，如果没有使用
+XML-RPC，就可以使用其他的异常类。） 
+27.5.3 验证文件名 
+需要处理的最后一个问题是，检查指定的文件是否包含在指定的目录中。这样做的方法有很
+多，但为独立于平台（即适用于Windows、UNIX和macOS），应使用模块os.path。 
+这里采用的简单方法如下：根据目录名和文件名创建绝对路径（例如，这将把'/foo/bar/../ 
+baz'转换为'/foo/baz'），将目录名与空文件名合并以确保它以文件分隔符（如'/'）结尾，再检
+查绝对文件名是否以绝对路径名打头。如果是这样的，就说明指定的文件包含在指定的目录中。 
+再次实现的完整源代码如代码清单27-2和代码清单27-3所示。 
+代码清单27-2 新的Node实现（server.py） 
+from xmlrpc.client import ServerProxy, Fault 
+from os.path import join, abspath, isfile 
+from xmlrpc.server import SimpleXMLRPCServer 
+from urllib.parse import urlparse 
+import sys 
+SimpleXMLRPCServer.allow_reuse_address = 1 
+MAX_HISTORY_LENGTH = 6 
+UNHANDLED 
+ = 100 
+                          
+
+412  第27 章 项目8：使用XML-RPC 共享文件 
+ACCESS_DENIED = 200 
+class UnhandledQuery(Fault):  
+   """ 
+   表示查询未得到处理的异常 
+   """ 
+   def __init__(self, message="Couldn't handle the query"): 
+ super().__init__(UNHANDLED, message) 
+class AccessDenied(Fault): 
+   """ 
+   用户试图访问未获得授权的资源时将引发的异常 
+   """ 
+   def __init__(self, message="Access denied"): 
+ super().__init__(ACCESS_DENIED, message) 
+def inside(dir, name): 
+   """ 
+   检查指定的目录是否包含指定的文件 
+   """ 
+   dir = abspath(dir) 
+   name = abspath(name) 
+   return name.startswith(join(dir, '')) 
+def get_port(url): 
+   """ 
+   从URL中提取端口号 
+   """ 
+   name = urlparse(url)[1] 
+ parts = name.split(':') 
+   return int(parts[-1]) 
+class Node: 
+   """ 
+   P2P网络中的节点 
+   """ 
+   def __init__(self, url, dirname, secret): 
+ self.url = url 
+ self.dirname = dirname 
+ self.secret = secret 
+ self.known = set() 
+   def query(self, query, history=[]): 
+ """ 
+ 查询文件（可能向已知节点寻求帮助），并以字符串的方式返回它 
+ """ 
+ try: 
+  return self._handle(query) 
+ except UnhandledQuery: 
+  history = history + [self.url] 
+  if len(history) >= MAX_HISTORY_LENGTH: raise 
+  return self._broadcast(query, history) 
+def hello(self, other): 
+                          
+
+27.5 再次实现  413 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+24 
+25 
+11 
+27 
+13 
+14 
+   """ 
+   用于向其他节点介绍当前节点 
+   """ 
+   self.known.add(other) 
+   return 0 
+def fetch(self, query, secret): 
+   """ 
+   用于让节点查找并下载文件 
+   """ 
+   if secret != self.secret: raise AccessDenied 
+   result = self.query(query) 
+   f = open(join(self.dirname, query), 'w') 
+f.write(result)
+f.close()
+   return 0 
+def _start(self): 
+   """ 
+   供内部用来启动XML-RPC服务器 
+   """ 
+   s = SimpleXMLRPCServer(("", get_port(self.url)), logRequests=False) 
+s.register_instance(self)
+s.serve_forever()
+   def _handle(self, query): 
+ """ 
+ 供内部用来处理查询 
+ """ 
+ dir = self.dirname 
+ name = join(dir, query) 
+ if not isfile(name): raise UnhandledQuery 
+ if not inside(dir, name): raise AccessDenied 
+ return open(name).read() 
+   def _broadcast(self, query, history): 
+ """ 
+ 供内部用来向所有已知节点广播查询 
+ """ 
+ for other in self.known.copy(): 
+  if other in history: continue 
+  try: 
+   s = ServerProxy(other) 
+   return s.query(query, history) 
+  except Fault as f: 
+   if f.faultCode == UNHANDLED: pass 
+   else: self.known.remove(other) 
+  except: 
+   self.known.remove(other) 
+ raise UnhandledQuery 
+def main(): 
+   url, directory, secret = sys.argv[1:] 
+   n = Node(url, directory, secret) 
+                          
+
+414  第27 章 项目8：使用XML-RPC 共享文件 
+   n._start() 
+if __name__ == '__main__': main() 
+代码清单27-3 
+Node控制器界面（client.py） 
+from xmlrpc.client import ServerProxy, Fault 
+from cmd import Cmd 
+from random import choice 
+from string import ascii_lowercase 
+from server import Node, UNHANDLED 
+from threading import Thread 
+from time import sleep 
+import sys 
+HEAD_START = 0.1 # 单位为秒 
+SECRET_LENGTH = 100 
+def random_string(length): 
+   """ 
+   返回一个指定长度的由字母组成的随机字符串 
+   """ 
+ chars = [] 
+   letters = ascii_lowercase[:26] 
+ while length > 0: 
+ length -= 1 
+    chars.append(choice(letters)) 
+   return ''.join(chars) 
+class Client(Cmd): 
+   """ 
+   一个基于文本的界面，用于访问Node类 
+   """ 
+ prompt = '> ' 
+   def __init__(self, url, dirname, urlfile): 
+ """ 
+ 设置url、dirname和urlfile，并在一个独立的线程中启动Node服务器 
+ """ 
+ Cmd.__init__(self) 
+ self.secret = random_string(SECRET_LENGTH) 
+ n = Node(url, dirname, self.secret) 
+ t = Thread(target=n._start) 
+ t.setDaemon(1) 
+ t.start() 
+ # 让服务器先行一步： 
+ sleep(HEAD_START) 
+ self.server = ServerProxy(url) 
+ for line in open(urlfile): 
+  line = line.strip() 
+  self.server.hello(line) 
+   def do_fetch(self, arg): 
+                          
+
+27.6 进一步探索  415 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+24 
+25 
+11 
+27 
+13 
+14 
+ "调用服务器的方法fetch" 
+ try: 
+  self.server.fetch(arg, self.secret) 
+ except Fault as f: 
+  if f.faultCode != UNHANDLED: raise 
+  print("Couldn't find the file", arg) 
+   def do_exit(self, arg): 
+ "退出程序" 
+ print() 
+ sys.exit() 
+   do_EOF = do_exit # EOF与'exit'等价 
+def main(): 
+ urlfile, directory, url = sys.argv[1:] 
+ client = Client(url, directory, urlfile) 
+   client.cmdloop() 
+if __name__ == '__main__': main() 
+27.5.4 尝试使用 
+下面来看看如何使用这个程序。首先像下面这样启动它： 
+python client.py urls.txt directory http://servername.com:4242 
+文件urls.txt里的每行应该都包含一个URL，即包含其他所有已知对等体的URL。通过第二个
+参数指定的目录应包含要共享的文件（新文件也将下载到这个目录）。最后一个参数是对等体的
+URL。运行这个命令时，将出现类似于下面的提示符： 
+> 
+下面来尝试获取一个不存在的文件： 
+> fetch fooo 
+Couldn't find the file fooo 
+通过（在同一台计算机的不同端口或不同计算机上）启动几个相互认识的节点（为确保这些
+节点相互认识，只要将它们的URL都放在URL文件中即可），可尝试像使用第一个原型那样使用
+这个程序。玩烦了后，再接着阅读下一节。 
+27.6 进一步探索 
+对于本章介绍的系统，你可能会想出多种改进和扩展方式。下面是一些探索建议。 
+添加缓存功能。在节点通过调用query来传递文件时，为何不同时存储该文件呢？这样，
+再有人请求这个文件时，响应速度将更快。你可以设置最大缓存空间，删除最早缓存的
+文件等。
+                          
+
+416  第27 章 项目8：使用XML-RPC 共享文件 
+使用线程化（异步）服务器。（这有点难。）这样，可向多个节点寻求帮助，而无需等待
+它们应答（它们将在以后通过调用方法reply来应答）。
+支持更高级的查询，如查询文本文件的内容。
+更充分地利用方法hello。通过调用hello发现新节点时，为何不将这个新节点介绍给其他
+所有已知的对等体呢？或许你还能想到更巧妙的新对等体发现方式。
+深入研究用于分布式系统的表述性状态传递（REST）理念。REST可用于替代XML-RPC
+等Web服务技术，详情请参阅http://en.wikipedia.org/wiki/REST。
+使用xmlrpc.client.Binary来封装文件，从而更安全地传输非文本文件。
+阅读SimpleXMLRPCServer的代码。研究DocXMLRPCServer类以及libxmlrpc中的多调用
+（multicall）扩展。 
+预告
+至此，你编写了一个可行的P2P文件共享系统，如何让它对用户更友好呢？在下一章，你将
+添加一个GUI，用于取代当前基于cmd的界面。 
+                          

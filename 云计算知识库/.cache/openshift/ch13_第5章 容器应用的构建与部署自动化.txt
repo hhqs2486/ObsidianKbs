@@ -1,0 +1,1183 @@
+.. 
+.. 
+... 
+. .... 
+..... 
+.... 
+·1 
+····
+KF 
+····
+·1· 
+... 
+··
+Ru 
+m
+－
+－
+’
+「
+’
+·
+·
+·
+·
+M
+牙
+.... 
+j 
+主
+n
+h, 
+’r
+u 
+t
+- ueH 
+G
+H 
+容器应用的构建与部署自动化
+有人认为容器的世界非常美妙，一切都唾手可得。当我们需要一个MySQL 时，只需要
+运行一个MySQL 的镜像，稍等片刻，
+MySQL 的服务就可以使用了。当我们的项目需要持续
+集成服务时，只需要启动一个Jenkins 镜像便万事大吉了。但是现实是，
+MySQL 和Jenkins
+都是“别人家的应用”。企业自身开发的应用并没有现成的镜像可以直接下载。用户必须自
+行负责应用的容器化，自行构建应用的镜像。接下来将通过对一个Java 应用进行容器化，探
+究应用容器化的步骤和注意事项。
+一个Java 应用的容器化之旅
+本节把一个简单的Java Web 应用一－MyBank 进行容器化。MyBank 是一个非常简单和
+典型的Java Web 应用。
+口它包含了Java 源代码、
+JSP 文件、图片和css 等静态资源文件。
+0 MyBank 的项目结构是基于Maven 的要求布置的，通过Maven 可以编译和构建
+My Bank 的部署包一－WAR 包。
+口和其他的应用程序一样，
+MyBank 在开发过程中，它的所有源代码都被上传到了配置
+管理库进行版本控制。这里所用的配置管理服务器是GitHub 。
+下面开始容器化这个应用。
+1 ）首先安装源代码工具Git。
+5.1 
+[root@master
+～］＃
+yum
+工nstall
+- y 
+g 工t
+2 ）从GitHub 上下载示例的Java 应用源代码。
+
+第5 章窑器应用的构建与部署自动化
+令
+63
+[root@master ~]# cd /opt 
+[root@master opt]# git clone https://github.com/nichochen/mybank-demo-maven 
+3 ）准备编译和构建环境。安装应用构建所需的Java 开发工具包JDK 及构建工具Maven 。
+[root@master opt ] # yum install -y mave口
+4 ）通过构建工具编译及构建应用。
+[root@master opt]# cdmybank-demo-maven/ 
+[root@mastermybank-demo-maven]# mvn package 
+构建完毕后，将在target 目录下生成一个WAR 包ROOT.war 。
+[root@mastermybank-demo-maven]# ls target/ 
+classes 
+maven-arch 工ver
+ROOT 
+ROOT . war 
+surefire 
+5 ）选择满足应用运行要求的基础容器镜像，或者从基础的操作系统镜像开始安装和构
+建。为了方便，这里选择Tomcat 7 的官方镜像tomcat:7.0. 70 -jre7-alpine 。一般推
+荐预先把镜像下载到本地，以方便本地调试。
+[root@mastermybank-demo-maven]# docker pull tomcat:7.0.70-jre7-alpine 
+6 ）编写Dockerfile 。这个例子中我们的逻辑比较简单
+就是把构建好的应用部署包拷贝
+到发布目录。
+Dockerfile 示例如下。
+[root@mastermybank-demo-maven] # catDockerfile 
+FROM tomcat:7.0 ·. 70-jre7-alpine 
+ADD . /target/ROOT.war /usr/ local/tomcat/webapps/mybank.war 
+7 ）执行Docker Build 构建镜像。把镜像命名为mybank-tomcat。在没有指定镜像的tag
+的请求下，默认的标签为lat es t 。
+[root@mastermybank-demo-maven]# docker build -t mybank-tomcat 
+Sending build context to Docker daemon 4.194 MB 
+Step 1 : FROM tomcat : 7 . 0 . 70 jre7-alpine 
+句－－＞ffe5379d7563 
+Step 2 : ADD . /target/ROOT.war /usr/ local/tomcat /webapps/mybank.war 
+---> 113cc34fc0e4 
+Removing intermediate container f04b6e3a9989 
+Successfully built 113cc34fc0e4 
+构建完毕后，可以看见刚才Docker Build 生成的新镜像09cf49110ce2 。
+[root@mastermybank-demo-maven]# dockerimages lgrepmybank-tomcat 
+mybank-tomcat 
+latest 
+09cf49110ce2 
+2 minutes ago 
+149 . 4 MB 
+8 ）测试镜像。通过docke r
+run 命令测试新创建的镜像。这里通过参数－p
+8080: 
+8080 把容器的8080 端口映射到主机的8080 端口，以方便测试。
+[root@mastermybank-demo-maven]# docker run -it --rm -p 8080 : 8080 mybank-tomcat 
+
+64 
+•！•
+开发篇
+容器启动完毕后，可以通过curl 或浏览器测试应用是否工作正常。如果一起正常，通过
+浏览器访问MyBank 的主页就会看到一只可爱的小猪储蓄罐了。
+＠景此时单击MyB础应用主页的服务网点按钮将会出现报错页面。请别惊慌，因为这个
+页面依赖的数据库目前还没有创建。后续的章节中会解决这个问题。
+[root@mastermybank demo-maven]# curl http : //master.example .com :8080/mybank/ 
+9 ）推送镜像。测试通过后，下一步将把镜像发布到相应的镜像仓库中。先通过docker
+tag 创建指向目标镜像仓库的镜像名称，然后通过docker
+push 推送镜像至目标仓库。
+[root@master
+~ l # docker tag my bank-tomcat: latest registry . your-registry . com/ 
+mybank-tomcat:latest 
+[root@master ~]# docker push reg 工stry. your-registry
+. com/mybank-tomcat
+: latest
+通过以上的步骤完成了一个简单应用的容器化。在没有特殊需求的情况下，容器化过程
+不算复杂。但是在现实中是，每次应用更新后，总是需要构建一次镜像。在当前应用变更及
+交付节奏如此迅速的年代，如果这个过程通过人工来完成的话，这将会是一个非常大的负担。
+5.2 
+OpenShift 构建与部署自动化
+在OpenShift 上，应用的镜像构建和部署是自动化的。为了提升开发的效率，
+OpenShi负
+提供了Source to Image ( S21 ）流程，帮助用户自动构建镜像。在S21 流程中，
+OpenShift 会
+下载应用的源代码，进行自动化的编译和构建，并将输出的应用部署包部署到容器中。最终
+S21 会输出一个包含应用和基础运行环境的崭新镜像。当S21 构建结束后，
+OpenShift 会自动
+触发一次部署，将S21 生成的镜像按一定的规则部署到集群中。
+~~ S21 和应用开发语言没有直接的绑定。无论是脚本型的语言，如PHP ,
+Ruby 、
+Python
+或Perl 等，
+还是编译型的语言，如Java 、C 、
+C＋＋或Go 等，都支持通过S21 构建
+镜像。
+在应用更新的场景中，开发用户提交代码到配置管理库。通过配置管理库向OpenShift 
+发送消息触发构建，构建会下载更新的代码，并进行构建。构建完毕后，新的镜像更新到内
+部镜像仓库。随后，
+Open Shi负将会进行更新部署，更新集群内的容器应用。
+一个典型的OpenShi玩应用构建及部署的流程如图5-1 所示。
+I ）开发工程师将应用源代码提交至配置管理库进行版本管理。
+2 ）用户创建应用。输入源代码仓库的地址；选择S21 构建的基础镜像（又称Builder 镜
+像）。
+Builder 镜像中包含了操作系统、编程语言、框架等应用所需的软件及配置。
+OpenShift
+
+第5 章窑器应用的构建与部署自动化
+•！•
+65 
+默认提供了多种编程语言的Builder 镜像，如Java 、
+PHP ,
+Ruby 、
+Python 、
+Perl 等。用户也可
+以根据自身的需求定制自己的Builder 镜像，并发布到服务目录中供用户选用。
+// tJ 
+--a---
+＼
+回
+图5-1
+OpenShi位核心组件及流程
+3 ）用户或系统触发S2 1 构建。
+OpenSh的将实例化S21 构建执行器。
+S21 构建执行器将从
+用户指定的代码仓库下载源代码并实例化Builder 镜像。源代码将会被注人实例化的Builder
+容器中。
+Builder 容器将根据预定义的逻辑执行源代码的编译、构建并完成部署。
+4) S2I 构建执行器将完成操作的Builder 镜像commit 成新的Docker 镜像。新的镜像被
+推送到OpenSh出内部的镜像仓库。
+S21 构建执行器更新该次构建相关的Image Stream 信息。
+5) OpenSh的感知到Image Stream 的变化后触发一个部署。应用的镜像被分发到具体的
+Node 节点，并实例化成容器。
+5.2.1 
+快速构建部署一个应用
+前面通过于工的方式容器化了MyBank 应用。下面介绍如何通过OpenShi企快速对MyBank 
+应用进行容器化并部署。
+1 ）以dev 用户登录。阳1ShiftWeb 控制台。创建一个名为myban｝王的项目，如图5-2 所示。
+New P「oject
+.”·”’· 
+k旦1
+二二3
+’＇＂＇阐帽呻啊恼。嘘F吗“:t.
+E闹到哼刷刷、．
+出
+…
+巴
+F
+图5-2
+创建项目
+
+66 
+•！•
+开发篇
+2 ）单击页面上方的Add
+to project 按钮。在服务目录中选择Wildfly
+10 的Builder
+镜像，如图5-3 所示。
+＠景
+Wi附和Tomcat 一样是Java 应用服务器。Wi阶是胁SS 应用服务器社区版本的名称。
+Browse Ca回Jog
+O叩W Image 
+Import YI.ML !JS。”
+Choo坦份回咽－衍回－田h dat画画随军and 耐＂＂cor叩咽阳市阳部划归，制制。your
+F咱配t
+• Buildor In回··一勘olds Images 仿剧，皿ucecode 削a 剧’即由民町，
+IO TOI明白”一Creates a F甜耐惜dsetof 何拍urc毗
+I 
+fll(，肝件keyword
+应豆3
+'Q国由start F 向酬，des a sl<创etoofor d酣elopo咱阳呻曲callon”
+xPaaS 
+,.;fdfly basic-s21 
+、C
+vanion. 1.3.2 
+侄N'
+JAVAEl' 
+JAVA 
+m西S
+XPAAS 
+＠已巳：.6;..,."""'
+＠巳：：：；.~s附
+java 
+I v
+，.；＇毗10.0 -
+。t 
+a皿皿R 帆皿V
+灿，VA
+<{I) 
+￥，.；＇咐：9.0
+a血DER
+Wit.DRY )AYA 
+、r
+阳Id句：8.1
+8UM..[赔.
+V阴LO民V
+μ崎战
+才R啕
+图5-3
+选择Builder 镜像
+3 ）在参数输入界面输入应用名称及目标应用的源代码地址，如图5-4 所示。
+崎Sank • 
+＂＂＂＇°＂＇畸ect • 
+W嗣，，
+& 
+wild fly 
+－阳。10.0
+战•khndwnJ耐－昂plica自nsonWild坷，。.0
+•N刷、．
+π呐ank
+时借叫做oslheresoorcesα-.atedlO< 由他ap例阔的阳
+•G位...－.. u阻
+~~凹甲、ochen/叫恤’时…m
+如何ψ...... 路闹，y h，刷刷即：，>tt?S'flg描..b.c刷nib阳帽..，叩ensho恍如e-sarr盼凰酬τ<yh!
+挝、C嗣翻如ancedrouti吨；bul饱副对曲”呵me睛。因。用
+.~ 
+图5-4
+输入应用名称及源代码地址
+https://github.com/nichochen/mybank-demo maven 
+’ 
+’ 
+’ 
+m.壁针对Java 应用，
+S21 默认调用项目Maven 的package 动作进行编译、构建和打包。用
+一
+户也可以用自定义的S21 构建脚本，执行自定义的构建逻辑。比如许多老的项目不用
+
+第5 童窑器应用的构建与部署自动化
+。
+67
+Maven ，而使用Ant 进行构建。
+4 ）单击参数输入界面的Create 按钮后，
+OpenShift 就会创建一系列后台对象，进而触
+发S21 流程。单击部署完成页面的Continue to overview 链接，如图5-5 所示，转跳到
+项目主页。
+”同础
+，
+Addto 阶喃α
+·
+时田‘’”圃’圃，．
+Application created. 臼血监号且国盟
+Manage your app 
+Thew曲回嗡olo 跑回”’圃，11.butlfyou-m圃，＂＇＂＂由回归圃’田··鸭tolryaur
+C饵””回回勘wtoc血
+Comrr国r回”’回tools
+。阳响耐............阳oc commlf响，uool.A阳由... ，，....，....白，ti.,~回同帆
+翩翩...恒曾帽’ortf<uUrpr咱E氏“回幽部刷刷咱......四”wot 翻Lbrd国嘈
+IM……… 
+K 
+PN>J«t 町时
+oc tt.f:回
+For m耐哩阳.............凤凰曾回由mn睛，d 阳、Otoe曲，。四曲”、oCU 殉ef«O””“回II«由旺’
+。”’戴Ions.
+Making code cha咆：es
+A由曲，b翩翩翩啕.......－~ .. ＂＂＇田”瞄h刷四”’
+阳翩翩翩啤腼咄咄嗣阳国蛐啕瞄部剧咂lfyoutMn ..嗣
+’回胆’甸回阳也mn由白，－嗣¥>or也d副睛’何四””匈酣咱M田....‘刷、•＂＂＇刷刷帽‘
+回曲“四t
+1 
+＂＂＂＇＇＂＂·＇恤’72.1＆在剧叫刷刷.. 1 ~ 1 
+图5-5
+完成应用创建
+在项目主页，可以看到MyBank 应用已经成功创建，有一个构建正在执行，如图5-6
+所示。
+9c叫a刚叫m归础k in 刚回My8a
+由<NI 曲旧j也
+I D植n悔
+v MYBANK 
+o －‘＞A.-do罕.....，胃’这耐be σ........＂＂＂＇配'1/ljonce 盼瞻以刷α茹苦’固自
+><Jays 吨，。
+何协ankt回回回帽swi岱iout health checks. 咄咄1 冒出re 阳X 昂回忆副回恒runnlr唱ζ即回ly. Add health checks 
+41 πl)lbank 
+Nodepl句ments. 
+”睛’ are no 曲”叩晒菌。，阴暗如自由en明国咀
+图5-6
+MyBank 应用成功创建
+稍等片刻后，应用就会构建、部署完毕。
+
+68 
+•！•
+开发篇
+v MYBANK 
+由Jild mybank, #1 
+., c~ 2 由庐哩。
+叫国们khasζ田ltalnersw时lOUI hea挺h checks，咐帽、自四周阳Jr 呻国曰“m ls run时ngcorrea』y. Add hea挝、d旺缸
+The pod has been 筑υckln the P<莺回Ing 式疏e for m。ro 由an 侃得mlnutE!S.
+(;)' mybank 
+D叩时ment mybank - 2 d申哩。
+C白帽M’也ER:MY血NX
+街，
+p。rts: 8080/TCP 
+。：
+e Image. 町国耐叫也nk
+图5-7
+应用状态就绪
+m.景构建的过程需要连接互联网下载应用的源代码、
+Maven 构建所需的Jar 包以及Builder
+镜像，请确保实验机器能连接上互联网。
+5 ）单击界面上的View
+Log 链接，转跳到此次构建的日志页面，可见S21 在后台进行
+的一系列操作，如图5-8 所示。
+图5-8
+应用构建日志
+在S21 构建日志页面的最底部可以看到S21 构建的最后一步是将生成的镜像推送到内
+部的镜像仓库中，如图5-9 所示。
+
+第5 章窑器应用的构建与部署自动化
+令
+69
+图5-9
+S2I 构建日志
+此时如果检查实验主机本地的Docker 镜像列表，同样可以看见MyBank 应用的镜像。
+[root@master ~J# docker images lgrepmyb a n k 
+172 . 30 . 73 . 49 : 5000/mybank/mybank 
+latest 
+b4329595006c 
+10 minutes ago 
+1. 084 GB 
+容器部署完毕，检查容器的状态，可以看见MyBank 应用容器的状态为Running 。
+[root@master ~ ] # oc get pod - n mybank 
+NAME 
+READY 
+STATUS 
+RESTARTS 
+AGE 
+mybank-1-build 
+0/1 
+Completed 
+0 
+27m 
+mybank-1-qnpwj 
+1/1 
+Running 
+0 
+Sm 
+5.2.2 
+镜像构建：Build Config 与Build
+在前文的示例中，用户只需要给出应用源代码的位置以及选定Builder 镜像，即可快速
+将应用从代码变成运行的实例。这个应用部署的过程对于用户来说是非常精简的，在这背后
+OpenShi丘自动生成了相关的对象来支撑这个流程。
+通过o c 命令行客户端以dev 用户登录到Open Shi位。
+[root@master ~]# oc login -u dev 
+Logged int 。
+” https
+: //192
+. 168
+. 172
+. 167
+: 84 4 3 ”
+as
+” dev ”
+using exist i n g c r edentials . 
+Using project
+”my bank ” . 
+在上一个示例中，当用户在参数输入界面单击Create 按钮后，
+OpenShi负会创建一个
+名为Build Config （构建配置）的对象。通过oc
+get be 命令，用户可以看见OpenShift 为
+My Bank 应用创建的Build Config 。
+
+70 
+•！•
+开发篇
+[root@master ~]# oc get be 
+NAME 
+TYPE 
+FROM 
+LATEST 
+mybank 
+Source 
+Git@master 
+1 
+通过输出可见项目中存在一个名为mybank 的Build Config。通过命令oc get bcmybank 
+-o yaml ，可以进一步获取这个Build Config 的具体配置信息。
+[root@master ~]# oc get bcmybank -o yaml 
+ap 工Version : vl 
+kind: BuildConfig 
+metadata: 
+annotations : 
+openshift.io/generated-by : OpenShiftWebConsole 
+creationTimestamp: 2016-09-18T08 : 50:18Z 
+labels: 
+app: mybank 
+name : mybank 
+namespace: mybank 
+resourceVersion:” 8561 ” 
+selfLink : 
+/oapi/vl ／口amespaces/mybank/buildconfigs/mybank
+uid: ed213 f48-7d7c-lle6-a2 ff-000c29df3ecb 
+spec: 
+output: 
+to : 
+kind: ImageStreamTag 
+name: mybank : latest 
+pos tCommi t: {} 
+resources: {} 
+runPolicy: Serial 
+source : 
+git : 
+ref : master 
+ur 工：
+https://github . com/nichochen/mybank-demo-maven
+type: Git 
+strategy: 
+sourceStrategy: 
+from : 
+kind: ImageStreamTag 
+name : w工ldfly
+: lO.O
+namespace : openshift 
+type: Source 
+tr 工ggers
+:
+- generic : 
+secret: 94d8038aa6eb80c9 
+type : Generic 
+- github: 
+secret : 9e779e70235a2351 
+type: GitHub 
+-
+imageChange : 
+lastTriggeredimageID: openshift /wildfly-100-centos7@sha256 : 4e31c7 8af 492e4d3 8d30 
+
+第5 章窑器应用的构建与部署自动化
+令
+71
+lfc7df99f553b054bl8cl2b9428cl9af740ad6225408 
+type : ImageChange 
+- type: ConfigChange 
+status : 
+lastVersion : 1 
+通过输出，可见Build config 中记录了前文示例引用的源代码地址和所选择的Builder 镜
+像的信息。
+酒、代码仓库信息如下：
+source : 
+git: 
+ref: master 
+uri: https://github.com/nichochen/mybank-demo-maven 
+type : Git 
+前文选择的Builder 镜像的信息如下：
+sourceStrategy : 
+from : 
+kind: ImageStreamTag 
+name: wildfly : 10 . 0 
+namespace: openshift 
+Builder 镜像没有直接指向某个实际的镜像地址，而是指向了一个Image Stream 。在前面
+的章节曾经提及，Open Shi企定义了Image Stream 的概念来管理一组镜像的集合。在一个Image
+Stream 中可以定义多个镜像名称和Tag ，然后再指向实际的Docker 镜像。
+output 属性定义了此次构建输出的镜像名。下面的配置定义了构建结果将会输出到一
+个名为mybank:latest 的Image Stream 标签所指向的地址。
+output : 
+to: 
+kind: ImageStreamTag 
+name: mybank:latest 
+通过oc get is mybank ，可以查看到这个名为mybank 的Image Stream 。这个Image
+S衍eam 是在部署应用时，
+OpenShift 在后台自动创建的。
+[root@master ~]# oc get is mybank 
+NAME 
+DOCKER REPO 
+TAGS 
+UPDATED 
+mybank 
+172 . 30.73.49:5000 / mybank/mybank 
+latest 
+8 minutes ago 
+通过oc describe is mybank ，可以查看该Image Stream 的详细信息。通过输出可以
+看到mybank: latest 这个Image Stream 标签实际指向了镜像17 2 .30.156. 27 :5000 /mybank /
+mybank@sha256
+: 93131da2912da8 。
+[root@master ~]# oc describe is mybank 
+Name : 
+mybank 
+
+72 
+•！•
+开发篇
+Namespace: 
+Created : 
+Labels : 
+my bank 
+31 minutes ago 
+app=mybank 
+Annotations : 
+openshift.io/generated-by=OpenSh 工ftWebConsole
+Docker Pull Spec: 
+172.30 . 73.49 : 5000/mybank/mybank 
+Un 工que Images : 
+1 
+Tags : 
+1 
+latest 
+pushed
+工mage
+* 172 . 30 73. 49 : 5000 /mybank/mybank@sha25 6 : 80d3d83 f3 f7c6blc220a097 6d8a7b769a0 
+3cf94dafceeca7b306fclaccle3527 
+9 minutes ago 
+Build Config 只是静态的配置信息。
+OpenShift 根据这个静态的配置信息可以触发多次实
+际的构建实例，构建的实例称为Build 。一个Build Config 可以被多次触发，生产多个Build 。
+通过oc get build 命令，可以看到列表中已经有了一次构建记录，这是Open Shi位在我们
+单击Create 按钮后自动触发的。
+[root@master ~]# 
+oc get build 
+NAME 
+TYPE 
+FROM 
+STATUS 
+STARTED 
+DURATION 
+mybank-1 
+Source 
+Git@5f550ef 
+Complete 
+32 minutes ago 
+21m53s 
+执行oc
+logs build/mybank-1 命令，用户可以查看此次构建的详细信息。这与在
+Web 控制台看到的日志信息相同。
+如果想执行一次新的部署，可以执行oc new-build mybank 命令。
+[root@master ~]# oc start-build mybank 
+mybank-2 
+再次查看oc get build 的结果，将会发现多了一条mybank-2 的构建记录。
+[root@master ~]# oc get build 
+NAME 
+TYPE 
+FROM 
+STATUS 
+STARTED 
+DURATION 
+mybank-1 
+Source 
+Git@5f550ef 
+Complete 
+41 minutes ago 
+3m53s 
+mybank-2 
+Source 
+Git@5f550ef 
+Complete 
+7 minutes ago 
+3m55s 
+5.2.3 
+镜像部署：Deployment Config 与Deploy
+前文查看Build Config 定义时，可以看到output 部分定义了输出的镜像所指向的Image
+Stream 的名字。
+这个Build Config 指向的Image Stream 是在创建部署时，
+OpenShi负为
+My Bank 应用创建的。
+S2I 流程完成后，生成的应用镜像会被推送到内部镜像仓库。同时，更
+新相关的Image S位eam ，把mybank:latest 指向镜像所在镜像仓库的实际位置。
+执行命令o c describe is mybank 可以查看Image Stream 标签的实际指向。因为之
+前触发了两次构建，所以在latest 标签的历史记录中可以看到有两条镜像的信息。
+
+[root@master ~]# oc describe is mybank 
+Name: 
+mybank 
+Namespace: 
+Created: 
+Labels : 
+my bank 
+42 minutes ago 
+app=mybank 
+第5 章
+窑器应用的构建与部署自动化
+令
+73
+Annotations: 
+openshift.io/generated-by=OpenShiftWebConsole 
+Docker Pull Spec: 
+172 . 30.73 . 49:5000/mybank/mybank 
+Unique Images: 
+2 
+Tags: 
+1 
+latest 
+pushed image 
+* 172.30.73.49 : 5000/mybank/mybank@sha256 : 7eabe04b4b8d409b8281f75e7f58ce9adl 
+576175f6055bf43b67e63fbc55f20d 
+About a minute ago 
+172.30.73.49 : 5000/mybank/mybank@sha256 : 80d3d83f3f7c6blc220a0976d8a7b769a03c 
+f94dafceeca7b306fclaccle3527 
+20 minutes ago 
+当Image S tream 的标签更新后，
+OpenShift 就会触发一次部署。和构建一样，部署也有
+配置定义对象：
+Deployment Config 。
+Deployment Config 描述了镜像部署的参数和要求。通
+过oc get de 命令可以查看项目中的Deployment Config 列表。
+[root@master ~]# oc get dc 
+NAME 
+REV 工SION
+DESIRED 
+CURRENT 
+TRIGGERED BY 
+my bank 
+2 
+1 
+1 
+conf 工g , image(mybank : latest) 
+执行oc get de rnybank -o yarn l 命令，可以查看该Deplo归ient Config 的详细定义。
+[root@master ~]# oc get dc mybank 
+o yaml 
+apiVersion : vl 
+kind: DeploymentConfig 
+metadata: 
+annotat 工ons:
+openshift.io/generated-by: OpenShiftWebConsole 
+creationTimestamp: 2016-09-18T08 : 50:18Z 
+generation : 3 
+labels: 
+app: mybank 
+name: mybank 
+namespace: mybank 
+resourceVersion:” 9261 ” 
+selfLink : /oapi/vl/namespaces/mybank / deploymentconfigs/mybank 
+uid: edl86eff-7d7c lle6 a2ff-000c29df3ecb 
+spec: 
+repl 工cas
+:
+1 
+selector: 
+deploymentconfig: mybank 
+strategy : 
+resources : {} 
+
+74
+令
+开发篇
+r。llingParams:
+intervalSeconds: 1 
+maxSurge : 
+25 毡
+maxUnavailable: 
+25 奄
+timeoutSeconds: 600 
+updatePer 工odSeconds
+:
+1 
+type: Rolli口g
+template: 
+metadata : 
+creationTimestamp: null 
+labels: 
+app: mybank 
+deploymentconfig: mybank 
+spec: 
+containers: 
+－工mage
+:
+172.30.73.49:5000/mybank/mybank@sha256:7eabe04b4b8d409b828lf75 
+e7f58ce9ad1576175f6055bf43b67e63fbc55f20d 
+imagePullPol 工cy:
+Always 
+name: mybank 
+ports : 
+- containerPort : 8080 
+protocol: TCP 
+resources: {} 
+term工nationMessagePath:
+/dev/termination-log 
+dnsPolicy: ClusterFirst 
+restartPolicy: Always 
+securityContext : {} 
+terminationGracePeriodSeconds : 30 
+test: false 
+triggers: 
+－工mageChangeParams:
+automatic: true 
+containerNames : 
+my bank 
+from: 
+kind: ImageStreamTag 
+name: mybank:latest 
+namespace: mybank 
+lastTriggeredimage: 172. 30. 73 . 49 : 5000/mybank/mybank@sha256: 7eabe04b4b8d409b8281 
+f75e7f58ce9ad1576175f6055bf43b67e63fbc55f20d 
+type : ImageChange 
+- type: ConfigChange 
+status: 
+availableReplicas: 1 
+details: 
+causes: 
+-
+imageTr 工gger:
+from: 
+kind : ImageStreamTag 
+name: mybank : latest 
+namespace: mybank 
+
+type : ImageChange 
+message: caused by an image change 
+latestVersion: 2 
+observedGeneration : 3 
+replicas : 1 
+updatedReplicas: 1 
+第5 章窑器应用的构建与部署自动化
+命
+75
+在Deployment Config 中，除了可以看见当前部署配置引用的镜像地址外，还可以看见
+该镜像部署传递的环境变量列表、容器对外暴露的端口等信息。以下为部署引用的镜像地
+址，与Image Stream mybank 的latest 标签指向的地址值相匹配。
+工mage:
+172 . 30. 73 . 49: 5000 /mybank/mybank@sha2 56 : 7eabe04b4b8d409b82 8lf7 5e7 f58ce9ad 
+1576175f6055bf43b67e63fbc55f20d 
+在DeployConfig 中会定义Trigger （触发器），使部署在某些特定条件下自动触发，如S21
+完成时。在mybank 的Deploy Config 中可以看见其中定义了一个ImageChange 的触发器，这个
+触发器的类型为ImageStrearnTag ，指向了mybank:latest 。所以当MyBank 应用的S21
+构建完成，
+Image S位eam 中的latest 标签更新至最新的镜像地址时，该触发器就会被触发，根
+据该Deployment Conftg 的定义产生一次部署的实例。
+triggers: 
+-
+imageChangeParams : 
+automat 工c
+:
+true 
+containerNames: 
+-
+myba口k
+from : 
+kind : ImageStreamTag 
+name: mybank : latest 
+namespace : mybank 
+lastTriggeredimage : 172. 30 . 73 . 49: 5000/mybank/mybank@sha256 : 7eabe04b4b8d409b8281 
+f75e7f58ce9adl576175f6055bf43b67e63fbc55f20d 
+type : ImageChange 
+- type: ConfigChange 
+每个Deployment Config 可以被多次触发，每一次触发称为一个Deploy 。每一次Deploy
+都会生成一个Replication Controller 对象，用以监控容器的状态。
+Replication Contoller （复制
+控制器）是Kubemetes 中的一个组件，其负责监控容器的实际数量，
+5.3.1 节会详细介绍。
+执行命令oc
+get 
+re 可以看到目前项目中有两个Replication Controller 实例，因为执
+行了两次构建，部署了两次。可以注意到Replication Controller mybank-1 的DESIRED 和
+CURRENT 属性的值都是0 ，因为第一次部署的容器实例已经被第二次部署的实例替换了，
+所以当前没有实例在运行。
+[root@master ~]# oc get rc 
+NAME 
+DESIRED 
+CURRENT 
+AGE 
+mybank-1 
+0 
+0 
+22m 
+mybank-2 
+1 
+1 
+3m 
+
+76
+。
+开发篇
+在Deployment Config 中，可以定义容器运行的细节设置，如容器的启动命令、容器可
+用的CPU 和内存配置、容器的Liveness （检查容器是否在运行）及Readynes s （检查服务是否
+就绪）检查。
+5.2.4 
+服务连通：“「vice 与Route
+在介绍OpenShift 架构时曾经提及容器的E 地址在容器退出后就会释放，基于同一个
+镜像启动的新容器将会拥有一个新的四。为了避免容器的IP 变化给第三方调用产生的影
+响，
+OpenShift 中使用了Service 对象进行解锅。
+Service 将有一个相对恒定的E 地址。在部署
+My Bank 应用时，OpenSh谊会自动生成Deplo严nent Config 对应的Service 。通过oc describe 
+svc mybank 可以查看MyBank 应用的Service 信息。
+[root@master ~]# oc describe svc mybank 
+Name: 
+mybank 
+Namespace: 
+mybank 
+Labels: 
+app=mybank 
+Selector : 
+deploymentconfig=mybank 
+τγpe: 
+ClusterIP 
+IP : 
+172.30.126.99 
+Port : 
+8080 tcp 
+8080/TCP 
+Endpoints : 
+172.17.0.7:8080 
+Session Affinity : 
+None 
+No events 
+基于Service, OpenShift 同时也自动创建了对应的Route 。执行o c ge t route mybank 
+命令，可以查看MyBank 应用的Route 的详情。
+[root@master ~]# oc describe route mybank 
+Name : 
+mybank 
+Namespace: 
+mybank 
+Created: 
+45 minutes ago 
+Labels: 
+app=mybank 
+Annotations : 
+openshift.io/generated-by=OpenShiftWebConsole 
+openshift .io/host . generated=true 
+Requested Host: 
+mybank-mybank .router . default .svc . cluster.local 
+exposed on router router 45 minutes ago 
+Path: 
+<none> 
+TLS Termination: 
+<none> 
+Insecure Policy: 
+<none> 
+Endpo 工nt Port: 
+8080-tcp 
+Service: 
+mybank 
+We 工ght
+:
+100 
+(100 屯）
+Endpoints: 
+172 . 17 .0. 7 : 8080 
+OpenShift 自动生成一个域名mybank mybank.router.default . svc . cluster.local, 
+可以通过oc edit route 将其修改为用户希望使用的域名，如mybank.apps.example.com。
+
+第5 童窑器应用的构建与部署自动化
+•！•
+77 
+5.3 
+弹性伸缩
+容器的一个很大的特点就是，其能较好地保证应用运行的一致性。相对于物理机部署和
+虚拟机部署，容器应用的启动速度较快，启动的成本较低。容器云平台上实现容器的弹性伸
+缩可以有效保证应用服务质量，也提高了数据中心资源的利用率。
+5.3.1 
+Replication Controller 
+在OpenShift 中，每一个部署的应用的容器实例数量在其Deployment Config 中定义。实
+际部署时，
+OpenShift 为每次的部署实例化一个Replication Controller ，并将该数值传递给相
+关联的Replication Controller。
+Replication Controller 是Kubernetes 的一个组件，其负责维护
+容器实例的数量。
+通过oc get pod 命令，可以看到当前MyBank 应用的活动实例数为1 。
+[root@rnaster ~]# oc get pod 
+NAME 
+READY 
+STATUS 
+rnybank-1-build 
+0/1 
+Completed 
+rnybank-2-bui ld 
+0/1 
+Completed 
+rnybank-2-nlrws 
+1/1 
+Runn工口g
+＠景
+myb础－＊－build
+5.3.2 
+扩展容器实例
+RESTARTS 
+0 
+0 
+0 
+AGE 
+59rn 
+2 6rn 
+18rn 
+通过Replication Controller ，可以快速控制容器实例的数量，调整容器集群的大小。
+执行oc
+scale de mybank --replicas=2 命令可以将MyBank 应用弹性伸缩至2
+个实例。
+[root@rnaster ~]# oc scale de rnybank 
+- -repl 工cas=2
+deployrnentconfig
+”my bank ” scaled 
+片刻后再检查容器数量，会发现容器的数量已经从
+l 增加为2 了。
+[root@rnaster ~]# oc get pod 
+NAME 
+READY 
+STATUS 
+RESTARTS 
+AGE 
+rnybank-1-build 
+。／1
+c。rnpleted
+。
+lh 
+rnybank-2-build 
+。／1
+Completed 
+。
+26rn 
+rnybank-2-nlrws 
+1/1 
+Running 
+。
+19rn 
+rnybank-2-nxs 工Y
+1/1 
+Running 
+。
+7s 
+查看Replication Controller 的状态，可以看到当前的容器数量已经被更新为2 。
+[root@rnaster -]# oc get re 
+NAME 
+DESIRED 
+CURRENT 
+AGE 
+rnybank-1 
+0 
+0 
+38rn 
+rnybank-2 
+2 
+2 
+20rn 
+
+78 
+•！•
+开发篇
+5.3.3 
+状态自恢复
+前面提到，
+Replication Controller 负责监控运行中容器的状态和数量。当实际运行的容器
+数量与部署定义的容器数量不同时，
+Replication Controller 将负责还原容器集群的状态至用户
+定义的状态。如当容器集群中的某个容器意外退出时，
+Replication Controller 将会启动一个新
+的容器实例以替代异常退出的容器实例。
+删除运行中的Pod ，让其中一个容器做出意外退出的假象，
+Replication Controller 将检测
+到这个问题，并自动启动一个新的容器实例以填补缺失。
+[root@master ~]# oc delete pod mybank-2-nlrws &&oc get pod 
+pod ” mybank-2-nlrws ” deleted 
+NAME 
+READY 
+STATUS 
+RESTARTS 
+AGE 
+mybank-1-build 
+0/1 
+Completed 
+0 
+lh 
+mybank-2-bu 工ld
+0/1 
+Completed 
+0 
+27m 
+myba口k-2-nlrws
+1/1 
+Term 工nat 工口g
+0 
+mybank-2-nxsiy 
+1/1 
+Running 
+0 
+myba口k-2-v5851
+0/1 
+Con tainerCreating 
+0 
+20m 
+lm 
+4s 
+通过上面一串组合的命令，查看到了Pod mybank-2-nlrws 被删除的瞬间，一个新的
+Pod mybank-2-vS 8 51 就被创建了。
+值得指出的是，在OpenShi台上部署容器，不一定要定义Replication Controller 。可以直
+接部署一个Pod ，但是没有Replication Controller 监控的部署，在当前的Pod 退出后不会有
+新的Pod 启动来补充缺失。
+5.4 
+应用更新发布
+应用上线以后，事情还没有结束。市场的需求是永不停滞的，这意味着应用的更新也是
+无休止的。应用的更新部署和以往相比变得更加频繁。在容器时代，应用的更新也意味着镜
+像更新。通过人工方式完成应用镜像的构建和部署流程，效率低下，而且容易出错。
+因此，
+构建一个自动化的镜像和制定部署流程就变得尤为需要。
+5.4.1 
+触发更新构建
+OpenSh谊通过S2I 自动构建应用容器镜像。完成应用更新的修改，将变更提交至代码配
+置库后，便可在OpenShi位触发一次构建。构建完成后便可触发一次部署，最终将当前在运行
+的容器实例更新为新的容器实例。在Open Shi位中触发一个部署有两种方式：手动触发及Web
+Hook 触发。
+用户可以选择在OpenShi位的Web Console 中单击项目概览页面侧栏菜单中的Builds>
+Bu 工lds ，选择相应的Build Config 条目进入详情页面，单击页面右上角的Start
+Build 
+按钮触发一次部署，也可以执行命令oc start-build <BUILD CONFIG NAME ＞触发。
+
+第5 章窑器应用的构建与部署自动化
+•！•
+79 
+此外，每个Build Config 都定义了两个WebHook 触发器。一个是GitHubWebHook ，一个
+是Generic WebHook 。在MyBank 应用的Build Config 中，可以看到如下的GitHubWebHook 
+和Generic WebHook 的触发器配置。
+” spec”:{ 
+” tr iggers ”:[ 
+“ type ”:”Generi C”, 
+” generic ”:{ 
+” secret”:” 94d8038aa6eb80c9 ” 
+” type ” ：” G工tHub ”，
+” github ” :
+{ 
+” secret”:” 9e779e70235a2351 ” 
+这两个Webhook 的调用地址格式为：
+https ：／／、＜MASTER 节点地址：端口〉、／oapi/vl/namespaces ／、〈项目名〉、／buildconf igs ／、＜Build
+Con fig 名〉、／webhooks ／、〈密码〉、／、〈类型〉、
+我们的例子中，
+MyBank 应用的GitHub Webhook 的调用地址为：
+https://192.168.172.167:8443/oapi/vl/namespaces/myba口k/buildco口figs/mybank/webhooks/
+9e779e70235a2351/github 
+Generic WebHook 的调用地址为：
+https://192.168.172.167:8443/oapi/vl/namespaces/rrνbank/bu 工ldconfigs/mybank/webhooks/
+94d8038aa6eb80c9/generic 
+＠握
+登录Web 控制台，在MyB础的Build Config 的详情页面的Configuration 页签中也
+刁飞
+可以看到GitHubWebhook 和Generic Webhook 的地址。
+Generic Webhook 的使用很简单，只需要向调用地址发送POST 请求即可触发，十分适
+合与第三方系统集成。下面是通过curl 触发构建的一个例子。
+[root@rr自ster ~]# curl -k -X POST https : //192
+. 168
+. 172
+. 167:8443/oap工／vl ／口amespaces/myb缸1k/
+buildconfigs/mybank/webhooks/94d8038aa6eb80c9/genericwebhooks/264e578a06ec4c58/gener工C
+[root@master ~ J# oc get build 
+NAME 
+TYPE 
+FROM 
+STATUS 
+STARTED 
+DURAT 工ON
+mybank-1 
+Source 
+Git@5f550ef 
+Complete 
+About an hour ago 
+21m53s 
+mybank-2 
+Source 
+Git@5f550ef 
+Complete 
+35 m工口utes ago 
+6m55s 
+mybank-3 
+Source 
+Git@master 
+Running 
+13 seconds ago 
+12s 
+[root@master ~]# oc get pod 
+
+80
+令
+开发篇
+NAME 
+READY 
+STATUS 
+RESTARTS 
+AGE 
+mybank-1-build 
+。/1
+Completed 
+。
+lh 
+mybank-2-build 
+。／1
+Completed 
+。
+35m 
+mybank-2-nxsiy 
+1/ 1 
+Running 
+。
+9m 
+mybank 2 v5851 
+1/1 
+Running 
+。
+Sm 
+mybank-3-build 
+1/1 
+Running 
+。
+22s 
+从输出可以看到，curl 的请求发送到OpenShift 后，一个新的Build 就产生并开始执行了。
+GitHub Web hook 需要用户登录到GitH巾，然后将GitHubWeb hook 的地址配置到GitHub
+的仓库中。在企业的私有容器云中，由于环境安全隔离限制，企业内部使用GitHubWeb Hook 
+的做法不常见，
+Generic Webhook 更有现实的意义。
+5.4.2 
+更新部署
+构建结束后，更新部署被触发。
+OpenShift 的更新部署策略有Rolling 和Recreate 两种。
+Rolling （滚动更新）是指OpenShift 在部署时，会等一定数量的新版本容器实例启动完
+毕后，再终结一定数量的老版本容器实例，通过这种方式对容器集群中的实例进行逐一替换
+更新。滚动更新是OpenShi食的默认更新方式，这种方式可以保证应用在更新发布的过程中
+不会出现服务中断。以下是MyBank 应用的Deployment Config 中关于更新策略的定义。可
+以看到，
+MyBank 应用使用的是滚动更新的方式。用户可以通过参数控制攘动更新的行为。
+str ategy : 
+resources: { } 
+rollingParams: 
+i nterval Seconds : 1 
+maxSurge : 
+25 毡
+maxUnavailable: 
+25 革
+timeoutSeconds : 600 
+updatePeriodSeconds: 1 
+type : Rolling 
+OpenShift 提供的另一种部署方式为Recreate （重新创建）。这种方式在更新时会将所有
+的老容器应用先停止，然后再启动一批新版本的容器实例。
+5.5 
+本章小结
+本章围绕Open Shift 容器云的核心功能应用的构建和部署进行了详细的讨论。本章通过
+于工的方式容器化了一个Java 应用MyBank ，然后通过OpenShi位完成了一次部署以进行对
+比。通过介绍后台对象Build Config 、
+Build 、
+Deployment Config 、
+Deploy 、
+Service 及Route ,
+了解了Open Shift 自动化构建及部署背后的细节。在讨论应用更新的环节，了解了两种构建
+触发器GitHubWebhook 和GericeWebhook ，以及Rolling 和Recreate 两种部署策略。
+本章的内容为后续使用Open Shi位容器平台解决实际工作中遇到的问题打下了基础。

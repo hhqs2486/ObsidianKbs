@@ -1,0 +1,430 @@
+简介
+Ceph 存储集群至少需要1 个Ceph Monitor 和2 个OSD 守护进程
+运行Ceph 文件系统客户端时，则必须要有元数据服务器（Metadata Server ）。
+
+Ceph OSDs: Ceph OSD 守护进程（Ceph OSD ）的功能：存储数据，处理数据的复
+制、恢复、回填、再均衡，并通过检查其他OSD 守护进程的心跳来向Ceph Monitors
+提供一些监控信息。当Ceph 存储集群设定为有2 个副本时，至少需要2 个OSD 守护
+进程，集群才能达到active+clean 状态（Ceph 默认有3 个副本，但你可以调整
+副本数）。
+
+Monitors: Ceph Monitor 维护着展示集群状态的各种图表，包括监视器映射、OSD
+映射、归置组（PG ）映射、和CRUSH 映射。Ceph 保存着发生在Monitors 、
+OSD 和PG 上的每一次状态变更的历史信息（称为epoch ）。
+
+MDSs: Ceph 元数据服务器（MDS ）为Ceph 文件系统存储元数据（也就是说，
+Ceph 块设备和Ceph 对象存储不使用MDS ）。元数据服务器使得POSIX 文件系统
+的用户们，可以在不对Ceph 存储集群造成负担的前提下，执行诸如ls、find 等基
+本命令。
+Ceph 把客户端数据保存为存储池内的对象。通过使用CRUSH 算法，Ceph 可以计算出哪个
+归置组（PG）应该持有指定的对象(Object)，然后进一步计算出哪个OSD 守护进程持有该归
+置组。CRUSH 算法使得Ceph 存储集群能够动态地伸缩、再均衡和修复。
+硬件推荐
+Ceph 为普通硬件设计，这可使构建、维护PB 级数据集群的费用相对低廉。规划集群硬件时，
+需要均衡几方面的因素，包括区域失效和潜在的性能问题。硬件规划要包含把使用Ceph 集群
+的Ceph 守护进程和其他进程恰当分布。通常，我们推荐在一台机器上只运行一种类型的守护
+进程。我们推荐把使用数据集群的进程（如OpenStack 、CloudStack 等）安装在别的机器
+上。
+
+Tip
+关于Ceph 的高品质博客文章也值得参考，比如Ceph Write Throughput 1 、Ceph Write
+Throughput 2 、Argonaut v. Bobtail Performance Preview 、Bobtail Performance - I/O
+Scheduler Comparison 。
+CPU
+Ceph （MDS）元数据服务器对CPU 敏感，它会动态地重分布它们的负载，所以你的元数据
+服务器应该有足够的处理能力（如4 核或更强悍的CPU ）。Ceph 的OSD 运行
+着RADOS 服务、用CRUSH 计算数据存放位置、复制数据、维护它自己的集群运行图副本，
+因此OSD 需要一定的处理能力（如双核CPU ）。监视器只简单地维护着集群运行图的副本，
+因此对CPU 不敏感；但必须考虑机器以后是否还会运行Ceph 监视器以外的CPU 密集型任
+务。例如，如果服务器以后要运行用于计算的虚拟机（如OpenStack Nova ），你就要确保给
+Ceph 进程保留了足够的处理能力，所以我们推荐在其他机器上运行CPU 密集型任务。
+RAM 内存
+元数据服务器和监视器必须可以尽快地提供它们的数据，所以他们应该有足够的内存，至少每
+进程1GB 。OSD 的日常运行不需要那么多内存（如每进程500MB ）差不多了；然而在恢复
+期间它们占用内存比较大（如每进程每TB 数据需要约1GB 内存）。通常内存越多越好。
+数据存储
+要谨慎地规划数据存储配置，因为其间涉及明显的成本和性能折衷。来自操作系统的并行操作
+和到单个硬盘的多个守护进程并发读、写请求操作会极大地降低性能。文件系统局限性也要考
+虑：btrfs 尚未稳定到可以用于生产环境的程度，但它可以同时记日志并写入数据，而xfs 和
+ext4 却不能。
+Important
+因为Ceph 发送ACK 前必须把所有数据写入日志（至少对xfs 和ext4 来说是），因此均衡日
+志和OSD 性能相当重要。
+硬盘驱动器
+OSD 应该有足够的空间用于存储对象数据。考虑到大硬盘的每GB 成本，我们建议用容量大
+于1TB 的硬盘。建议用GB 数除以硬盘价格来计算每GB 成本，因为较大的硬盘通常会对每
+GB 成本有较大影响，例如，单价为$75 的1TB 硬盘其每GB 价格为$0.07
+（$75/1024=0.0732 ），又如单价为$150 的3TB 硬盘其每GB 价格为$0.05
+
+（$150/3072=0.0488 ），这样使用1TB 硬盘会增加40% 的每GB 价格，它将表现为较低的
+经济性。另外，单个驱动器容量越大，其对应的OSD 所需内存就越大，特别是在重均衡、回
+填、恢复期间。根据经验，1TB 的存储空间大约需要1GB 内存。
+Tip
+不顾分区而在单个硬盘上运行多个OSD，这样不明智！
+Tip
+不顾分区而在运行了OSD 的硬盘上同时运行监视器或元数据服务器也不明智！
+存储驱动器受限于寻道时间、访问时间、读写时间、还有总吞吐量，这些物理局限性影响着整
+体系统性能，尤其在系统恢复期间。因此我们推荐独立的驱动器用于安装操作系统和软件，另
+外每个OSD 守护进程占用一个驱动器。大多数“slow OSD”问题的起因都是在相同的硬盘上运
+行了操作系统、多个OSD 、和/或多个日志文件。鉴于解决性能问题的成本差不多会超过另外
+增加磁盘驱动器，你应该在设计时就避免增加OSD 存储驱动器的负担来提升性能。
+Ceph 允许你在每块硬盘驱动器上运行多个OSD ，但这会导致资源竞争并降低总体吞吐量；
+Ceph 也允许把日志和对象数据存储在相同驱动器上，但这会增加记录写日志并回应客户端的
+延时，因为Ceph 必须先写入日志才会回应确认了写动作。btrfs 文件系统能同时写入日志数
+据和对象数据，xfs 和ext4 却不能。
+Ceph 最佳实践指示，你应该分别在单独的硬盘运行操作系统、OSD 数据和OSD 日志。
+固态硬盘
+一种提升性能的方法是使用固态硬盘（SSD ）来降低随机访问时间和读延时，同时增加吞吐
+量。SSD 和硬盘相比每GB 成本通常要高10 倍以上，但访问时间至少比硬盘快100 倍。
+SSD 没有可移动机械部件，所以不存在和硬盘一样的局限性。但SSD 也有局限性，评估
+SSD 时，顺序读写性能很重要，在为多个OSD 存储日志时，有着400MB/s 顺序读写吞吐量
+的SSD 其性能远高于120MB/s 的。
+Important
+我们建议发掘SSD 的用法来提升性能。然而在大量投入SSD 前，我们强烈建议核实SSD 的
+性能指标，并在测试环境下衡量性能。
+
+正因为SSD 没有移动机械部件，所以它很适合Ceph 里不需要太多存储空间的地方。相对廉
+价的SSD 很诱人，慎用！可接受的IOPS 指标对选择用于Ceph 的SSD 还不够，用于日志和
+SSD 时还有几个重要考量：
+
+写密集语义：记日志涉及写密集语义，所以你要确保选用的SSD 写入性能和硬盘相
+当或好于硬盘。廉价SSD 可能在加速访问的同时引入写延时，有时候高性能硬盘的写
+入速度可以和便宜SSD 相媲美。
+
+顺序写入：在一个SSD 上为多个OSD 存储多个日志时也必须考虑SSD 的顺序写入
+极限，因为它们要同时处理多个OSD 日志的写入请求。
+
+分区对齐：采用了SSD 的一个常见问题是人们喜欢分区，却常常忽略了分区对齐，
+这会导致SSD 的数据传输速率慢很多，所以请确保分区对齐了。
+SSD 用于对象存储太昂贵了，但是把OSD 的日志存到SSD 、把对象数据存储到独立的硬盘
+可以明显提升性能。osd journal 选项的默认值是/var/lib/ceph/osd/$cluster-$id/journal ，你
+可以把它挂载到一个SSD 或SSD 分区，这样它就不再是和对象数据一样存储在同一个硬盘
+上的文件了。
+提升CephFS 文件系统性能的一种方法是从CephFS 文件内容里分离出元数据。Ceph 提供
+了默认的metadata 存储池来存储CephFS 元数据，所以你不需要给CephFS 元数据创建存储
+池，但可以给它创建一个仅指向某主机SSD 的CRUSH 运行图。详见给存储池指定OSD 。
+控制器
+硬盘控制器对写吞吐量也有显著影响，要谨慎地选择，以免产生性能瓶颈。
+Tip
+Ceph blog 通常是优秀的Ceph 性能问题来源，见Ceph Write Throughput 1 和Ceph Write
+Throughput 2 。
+其他注意事项
+你可以在同一主机上运行多个OSD ，但要确保OSD 硬盘总吞吐量不超过为客户端提供读写
+服务所需的网络带宽；还要考虑集群在每台主机上所存储的数据占总体的百分比，如果一台主
+机所占百分比太大而它挂了，就可能导致诸如超过full ratio 的问题，此问题会使Ceph 中止
+运作以防数据丢失。
+如果每台主机运行多个OSD ，也得保证内核是最新的。参阅操作系统推荐里关
+于glibc 和syncfs(2) 的部分，确保硬件性能可达期望值。
+
+OSD 数量较多（如20 个以上）的主机会派生出大量线程，尤其是在恢复和重均衡期间。很多
+Linux 内核默认的最大线程数较小（如32k 个），如果您遇到了这类问题，可以
+把kernel.pid_max 值调高些。理论最大值是4194303 。例如把下列这行加
+入/etc/sysctl.conf 文件：
+kernel.pid_max = 4194303
+网络
+建议每台机器最少两个千兆网卡，现在大多数机械硬盘都能达到大概100MB/s 的吞吐量，网
+卡应该能处理所有OSD 硬盘总吞吐量，所以推荐最少两个千兆网卡，分别用于公网（前端）
+和集群网络（后端）。集群网络（最好别连接到国际互联网）用于处理由数据复制产生的额外
+负载，而且可防止拒绝服务攻击，拒绝服务攻击会干扰数据归置组，使之在OSD 数据复制时
+不能回到active + clean 状态。请考虑部署万兆网卡。通过1Gbps 网络复制1TB 数据耗时3
+小时，而3TB （典型配置）需要9 小时，相比之下，如果使用10Gbps 复制时间可分别缩减
+到20 分钟和1 小时。在一个PB 级集群中，OSD 磁盘失败是常态，而非异常；在性价比合
+理的的前提下，系统管理员想让PG 尽快从degraded （降级）状态恢复到active + clean 状
+态。另外，一些部署工具（如Dell 的Crowbar ）部署了5 个不同的网络，但使用了VLAN 以
+提高网络和硬件可管理性。VLAN 使用802.1q 协议，还需要采用支持VLAN 功能的网卡和交
+换机，增加的硬件成本可用节省的运营（网络安装、维护）成本抵消。使用VLAN 来处理集
+群和计算栈（如OpenStack 、CloudStack 等等）之间的VM 流量时，采用10G 网卡仍然值
+得。每个网络的机架路由器到核心路由器应该有更大的带宽，如40Gbps 到100Gbps 。
+服务器应配置底板管理控制器（Baseboard Management Controller, BMC ），管理和部署工
+具也应该大规模使用BMC ，所以请考虑带外网络管理的成本/效益平衡，此程序管理着SSH
+访问、VM 映像上传、操作系统安装、端口管理、等等，会徒增网络负载。运营3 个网络有
+点过分，但是每条流量路径都指示了部署一个大型数据集群前要仔细考虑的潜能力、吞吐量、
+性能瓶颈。
+故障域
+故障域指任何导致不能访问一个或多个OSD 的故障，可以是主机上停止的进程、硬盘故障、
+操作系统崩溃、有问题的网卡、损坏的电源、断网、断电等等。规划硬件需求时，要在多个需
+求间寻求平衡点，像付出很多努力减少故障域带来的成本削减、隔离每个潜在故障域增加的成
+本。
+
+最低硬件推荐
+Ceph 可以运行在廉价的普通硬件上，小型生产集群和开发集群可以在一般的硬件上。
+进程
+条件
+最低建议
+ceph-osd
+Processor
+
+1x 64-bit AMD-64
+
+1x 32-bit ARM dual-core or better
+
+1x i386 dual-core
+RAM
+~1GB for 1TB of storage per daemon
+Volume Storage
+1x storage drive per daemon
+Journal
+1x SSD partition per daemon (optional)
+Network
+2x 1GB Ethernet NICs
+ceph-mon
+Processor
+
+1x 64-bit AMD-64/i386
+
+1x 32-bit ARM dual-core or better
+
+1x i386 dual-core
+RAM
+1 GB per daemon
+Disk Space
+10 GB per daemon
+Network
+2x 1GB Ethernet NICs
+ceph-mds
+Processor
+
+1x 64-bit AMD-64 quad-core
+
+1x 32-bit ARM quad-core
+
+1x i386 quad-core
+RAM
+1 GB minimum per daemon
+Disk Space
+1 MB per daemon
+Network
+2x 1GB Ethernet NICs
+Tip
+如果在只有一块硬盘的机器上运行OSD ，要把数据和操作系统分别放到不同分区；一般来说，
+我们推荐操作系统和数据分别使用不同的硬盘。
+
+生产集群实例
+PB 级生产集群也可以使用普通硬件，但应该配备更多内存、CPU 和数据存储空间来解决流
+量压力。
+DELL 实例¶
+一个最新（2012 ）的Ceph 集群项目使用了2 个相当强悍的OSD 硬件配置，和稍逊的监视
+器配置。
+Configuration
+Criteria
+Minimum Recommended
+Dell PE R510
+Processor
+2x 64-bit quad-core Xeon CPUs
+RAM
+16 GB
+Volume Storage
+8x 2TB drives. 1 OS, 7 Storage
+Client Network
+2x 1GB Ethernet NICs
+OSD Network
+2x 1GB Ethernet NICs
+Mgmt. Network
+2x 1GB Ethernet NICs
+Dell PE R515
+Processor
+1x hex-core Opteron CPU
+RAM
+16 GB
+
+Configuration
+Criteria
+Minimum Recommended
+Volume Storage
+12x 3TB drives. Storage
+OS Storage
+1x 500GB drive. Operating System.
+Client Network
+2x 1GB Ethernet NICs
+OSD Network
+2x 1GB Ethernet NICs
+Mgmt. Network
+2x 1GB Ethernet NICs
+推荐操作系统
+CEPH 依赖
+按常规来说，我们建议在较新的Linux 发行版上部署Ceph ；同样，要选择长期支持的版本。
+LINUX 内核
+
+Ceph 内核态客户端
+当前我们推荐：
+o
+4.1.4 or later
+o
+3.16.3 or later (rbd deadlock regression in 3.16.[0-2])
+o
+NOT v3.15.* (rbd deadlock regression)
+o
+3.14.*
+如果您坚持用很旧的，可以考虑这些：
+o
+3.10.*
+
+firefly (CRUSH_TUNABLES3) 这个版本的可调选项到3.15 版才开始支持。详情
+见CRUSH 可调值。
+
+B-tree 文件系统（Btrfs）
+如果您想在btrfs 上运行Ceph ，我们推荐使用一个最新的Linux 内核（3.14 或更
+新）。
+系统平台
+下面的表格展示了Ceph 需求和各种Linux 发行版的对应关系。一般来说，Ceph 对内核和系
+统初始化阶段的依赖很少（如sysvinit 、upstart 、systemd ）。
+INFERNALIS (9.1.0)
+Distro
+Release
+Code Name
+Kernel
+Notes
+Testing
+CentOS
+7
+N/A
+linux-3.10.0
+B, I, C
+Debian
+8.0
+Jessie
+linux-3.16.0
+1, 2
+B, I
+Fedora
+22
+N/A
+linux-3.14.0
+B, I
+RHEL
+7
+Maipo
+linux-3.10.0
+B, I
+Ubuntu
+14.04
+Trusty Tahr
+linux-3.13.0
+B, I, C
+HAMMER (0.94)
+Distro
+Release
+Code Name
+Kernel
+Notes
+Testing
+
+Distro
+Release
+Code Name
+Kernel
+Notes
+Testing
+CentOS
+6
+N/A
+linux-2.6.32
+1, 2
+CentOS
+7
+N/A
+linux-3.10.0
+B, I, C
+Debian
+7.0
+Wheezy
+linux-3.2.0
+1, 2
+Ubuntu
+12.04
+Precise Pangolin
+linux-3.2.0
+1, 2
+Ubuntu
+14.04
+Trusty Tahr
+linux-3.13.0
+B, I, C
+FIREFLY (0.80)
+Distro
+Release
+Code Name
+Kernel
+Notes
+Testing
+CentOS
+6
+N/A
+linux-2.6.32
+1, 2
+B, I
+CentOS
+7
+N/A
+linux-3.10.0
+B
+Debian
+6.0
+Squeeze
+linux-2.6.32
+1, 2, 3
+B
+Debian
+7.0
+Wheezy
+linux-3.2.0
+1, 2
+B
+
+Distro
+Release
+Code Name
+Kernel
+Notes
+Testing
+Fedora
+19
+Schrödinger’s Cat
+linux-3.10.0
+B
+Fedora
+20
+Heisenbug
+linux-3.14.0
+B
+RHEL
+6
+Santiago
+linux-2.6.32
+1, 2
+B, I, C
+RHEL
+7
+Maipo
+linux-3.10.0
+B, I, C
+Ubuntu
+12.04
+Precise Pangolin
+linux-3.2.0
+1, 2
+B, I, C
+Ubuntu
+14.04
+Trusty Tahr
+linux-3.13.0
+B, I, C
+附注
+
+1: 默认内核btrfs 版本较老，不推荐用于ceph-osd 存储节点；要升级到推荐的
+内核，或者改用xfs 、ext4 。
+
+2: 默认内核带的Ceph 客户端较老，不推荐做内核空间客户端（内核RBD 或Ceph 文
+件系统），请升级到推荐内核。
+
+3: 默认内核或已安装的glibc 版本若不支持syncfs(2) 系统调用，同一台机器上
+使用xfs 或ext4 的ceph-osd 守护进程性能不会如愿。
+测试版
+
+B: 我们会为此平台构建发布包。对其中的某些平台，可能也会持续地编译所有分支、
+做基本单元测试。
+
+I: 我们在这个平台上做基本的安装和功能测试。
+
+C: 我们在这个平台上持续地做全面的功能、退化、压力测试，包括开发分支、预发布
+版本、正式发布版本。

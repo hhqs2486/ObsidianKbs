@@ -1,0 +1,464 @@
+第4章
+构建chart
+chart是Helm的核心。除了将它们安装到Kubernetes集群中或管理
+已安装的chart实例之外，还可以构建新chart或更改现有chart。在接
+下来的三章中，我们将介绍很多关于chart的细节，包括创建chart、
+chart中的元素、模板化Kubernetes清单、测试chart、依赖项等。
+在本章中，你将学习如何创建新chart，并了解chart的许多部
+分，包括几个内置命令的用法（它们可以在chart开发过程中提供帮
+助）。
+chart是Helm使用的软件包。它们在概念上类似于APT使用的
+Debian软件包或macOS Homebrew使用的Formula。但它们的相似性仅限
+于概念上的相似性。chart的设计目标是把Kubernetes作为一个有自己
+独特风格的平台。chart的核心是模板，该模板用于生成可以在集群中
+安装和管理的Kubernetes清单。
+在深入研究第5章中的模板之前，让我们先创建一个基本的全功能
+chart。为此，我们将介绍一个名为anvil的示例chart。利用这个
+chart，你将了解如何使用Helm生成chart、chart和其中的文件的结
+构、打包chart和校验chart代码。请参阅此chart的在线源代码：
+https://github.com/Masterminds/learning-
+helm/tree/main/chapter4/anvil。
+更多IT书籍请关注：www.cmsblogs.cn
+
+4.1　chart创建命令
+Helm包含create命令，使你可以轻松地创建自己的chart，这是一
+个很好的开始方式。这个命令创建一个新的Nginx chart——使用你选
+择的名称，遵循chart布局的最佳实践。由于Kubernetes集群有不同的
+方法来公开应用程序，这个chart使Nginx公开于网络流量的方式可配
+置，因此它可以在各种集群中被公开。
+create命令为你创建一个chart，其中包含所有必需的chart结构
+和文件。这些文件具备良好的文档，这有助于你了解所需内容。chart
+提供的模板展示了多个Kubernetes清单协同工作以部署应用程序的示
+例。此外，你可以直接安装和测试此chart。
+在本章中，我们将介绍一个名为anvil的示例应用程序。这是一个
+简单的应用程序，它将向你展示chart的结构，并为你提供针对不同的
+应用程序更改此chart的机会。要创建新chart，请在命令提示符下运
+行以下命令：
+这将创建一个名为anvil的新chart作为当前目录的子目录。
+不同的起点
+Nginx是展示chart部分和基本无状态服务的良好起点。但是，如果
+你经常创建不遵循Nginx模型的chart，那么使用不同的起点会更有帮
+助。Helm有一个名为starter packs的特性，helm create可以利用这个特性
+提供一个不同的起点来生成chart。详见第6章。
+更多IT书籍请关注：www.cmsblogs.cn
+
+新chart是一个包含许多文件和文件夹的目录。这里并未包括每个
+文件和文件夹，在接下来的几章中，你会发现更多的内容。这些都是
+正常运行chart所需要的基本要素：
+❶　这个Chart.yaml文件包含元数据和chart的一些功能控件。
+❷　依赖的chart可以选择保存在charts目录中。第6章介绍了
+chart依赖项。目前这将是一个空目录
+更多IT书籍请关注：www.cmsblogs.cn
+
+❸　用于生成Kubernetes清单的模板存储在templates目录中
+❹　这个NOTES.txt文件是一个特殊的模板。安装chart时，
+NOTES.txt文件模板是被渲染和显示到（而不是被安装到）集群中。
+❺　模板可以包含未作为install或upgrade命令的一部分安装的测
+试。此chart包括由helm test命令使用的测试。测试详见第6章
+❻　当Helm渲染清单时传递给模板的默认值位于values.yaml文件
+中。实例化chart时，可以覆盖这些值。
+你可以通过运行以下命令来安装这个新创建的chart，无须任何修
+改：
+运行此命令时，Helm将创建一个在集群中运行的chart实例，名称
+为myapp。Helm将使用当前配置的连接和用于Kubernetes的上下文来安
+装此实例。Helm使用的配置与使用Kubernetes的命令行应用程序
+kubectl时使用的配置相同。在该命令中，它的最后一个参数anvil是
+chart所在的目录。
+此命令的输出包括通过渲染NOTES.txt模板生成的内容，如下所
+示：
+更多IT书籍请关注：www.cmsblogs.cn
+
+“注释”（NOTES）部分包含有关连接到应用程序的信息。根据实
+例化时传递到chart中的值，此信息可能会有很大的差别。此chart可
+以配置为使用ClusterIP、NodePort、LoadBalancer和Ingress来公开
+应用程序。默认情况下，使用ClusterIP。
+如果你按照注释中的说明操作，将看到默认的Nginx网页，显示它
+正在运行，如图4-1所示。
+更多IT书籍请关注：www.cmsblogs.cn
+
+图4-1：访问正在运行的应用程序时的默认Nginx网页
+公开应用程序的方法被绑定到内置的Kubernetes资源类型，而不
+是应用程序的特性。这使得它们可以移植到你的自定义应用程序中。
+公开应用程序的方法包括：
+ClusterIP（集群IP）
+Kubernetes Service资源类型上的配置选项，用于在集群级内部
+IP地址上公开服务。
+NodePort（节点端口）
+Kubernetes Service资源的另一种选项，它在每个节点的静态端
+口上公开服务。也将自动创建一个ClusterIP。
+LoadBalancer（负载均衡器）
+更多IT书籍请关注：www.cmsblogs.cn
+
+一个Kubernetes Service配置选项，它使用主机提供商提供的负
+载均衡器在外部公开应用程序。
+Ingress（入口）
+入口资源是Service的附加资源，它通过HTTP和HTTPS公开服务。
+它需要一个入口控制器（如ingress-nginx）才能工作。
+如果已将此chart安装到集群中进行测试，则可以通过运行以下命
+令从集群中删除该实例：
+安装chart时，默认情况下，用于Nginx的镜像是Docker官方
+镜像（https://oreil.ly/YghQP）的最新版本。如果你使用的
+Kubernetes集群没有访问hub.docker.com的权限，则你将无法安装镜
+像。你需要将镜像设置为集群可以访问。
+现在已经构建了一个可以工作的chart，让我们看看其中的内容，
+并针对Anvil应用程序修改它。
+更多IT书籍请关注：www.cmsblogs.cn
+
+4.2　Chart.yaml文件
+在anvil目录中有一个名为Chart.yaml的文件。这个Chart.yaml文
+件告诉Helm和其他工具有关此chart的信息。其他工具包括
+Kubeapps（一个内部目录和应用程序安装程序）、Artifact Hub（一
+个云本地工件的列表）和许多其他工具。
+当你打开Chart.yaml文件时，将看到示例4-1中所示的内容。
+示例4-1：生成的Chart.yaml文件
+更多IT书籍请关注：www.cmsblogs.cn
+
+❶　apiVersion告诉Helm此chart使用的是什么结构。apiVerison
+v2是为Helm v3设计的。
+❷　该名称用于标识不同位置的chart。
+更多IT书籍请关注：www.cmsblogs.cn
+
+❸　chart可以有许多版本。Helm使用版本信息来排序和识别
+chart。
+这个Chart.yaml文件包含许多键，其中只有三个键是必需的。
+apiVersion属性告诉Helm的chart版本。Helm v3可以处理apiVersion
+为v1或v2的chart。v1 chart是那些设计用来与以前版本的Helm一起工
+作的chart。如果你的chart是针对Helm v3或更新的版本设计的，则应
+该将它设置为v2。name的值通常用作Kubernetes资源名称的一部分。
+这意味着名称仅限于小写字母数字、“-”和“.”字符，并必须以字
+母或数字字符开头和结尾。名称通常是小写字母和数字字符。最后一
+个必需的键是version，它包含chart的版本。版本号应该遵循语义版
+本控制，这在第2章中有介绍。
+你可能会注意到Chart.yaml文件的样式与Kubernetes的文件相
+似，但略有不同。Chart.yaml文件与自定义资源的格式不同，但确实
+包含一些相同的属性。原版Chart.yaml文件的设计要追溯到2015年，
+早在Kubernetes自定义资源定义存在之前。虽然随着时间的推移，
+Helm的主版本递进了，但它保持了一定的向后兼容性，不会对用户造
+成太大的干扰。这导致了Chart.yaml和Kubernetes清单文件格式之间
+的差别。
+Chart.yaml文件还包含描述性信息，这些信息在用户界面中显示
+时非常有用。示例4-1中的description字段就是这样一个字段，但你
+可以添加其他字段，例如：
+·home是指向chart或项目主页的URL。
+·icon是URL形式的图像（例如PNG或SVG文件）。
+·maintainers包含维护人员列表。列表中的每个维护人员都可以有
+一个名称、电子邮件和URL。
+·keywords可以保存有关项目的关键字列表。
+·sources是指向项目或chart源代码的URL列表。
+Chart.yaml文件中属性的完整描述见附录A，供参考。
+更多IT书籍请关注：www.cmsblogs.cn
+
+生成的Chart.yaml文件可以针对Anvil应用程序做修改。以下修改
+更新了所需字段、添加了一些描述性文件并删除了注释：
+有一个属性tyep在生成的Chart.yaml文件中，但不在Anvil的那个
+文件中。Anvil是一个应用程序，它是type字段的默认值，因此type字
+段是不必要的。另一种类型的chart是库chart，这将在第7章中介绍。
+更多IT书籍请关注：www.cmsblogs.cn
+
+appVersion属性是唯一的。它既是描述性的，也是模板中经常使
+用的。appVersion属性表示主应用程序或组合应用程序的版本。例
+如，如果被打包的应用程序是WordPress，那么它就是WordPress的版
+本。
+icon属性是一个URL，可以包含数据URL。数据
+URL（https://oreil.ly/1gj45）使你能够以URL形式嵌入小文件。如
+果徽标（logo）是一个小的SVG文件，这一点尤其有用。如果chart可
+能会在内部环境中运行，或者你不希望用户界面不断地从Web服务器下
+载文件，那么数据URL是一个有用的选择。
+更多IT书籍请关注：www.cmsblogs.cn
+
+4.3　修改模板
+要为Anvil应用程序或你自己的自定义应用程序修改此chart，你
+需要了解并修改模板。helm create命令创建的模板可以作为无状态应
+用程序运行Nginx。在我们正在处理的示例中，Nginx需要用Anvil替
+换。
+Helm是用Go编程语言编写的，Go包含模板包。Helm利用文本模板
+包作为模板的基础。此模板语言与其他模板语言类似，包括循环、
+if/then逻辑、函数等。YAML文件的示例模板如下：
+在这个YAML文件中有一个键名product。该值是使用模板生成的。
+{{和}}是进入和退出模板逻辑的左括号和右括号。模板逻辑有三部
+分，用|分隔。这称为管道，其工作方式与基于Unix的系统中的管道相
+同。左侧函数的值或输出作为最后一个参数传入管道中的下一项。在
+本例中，管道从.Values.product中属性的值开始。这来自呈渲染模板
+时传入的数据对象。此数据的值作为default函数（Helm提供的函数）
+的最后一个参数通过管道传递。如果传入的值为空，则default函数使
+用默认值"rocket"，以确保存在值。然后将其发送到quote函数，该函
+数确保在将字符串写入模板之前将其用引号括起来。
+位于.Values.product开头的“.”很重要。这被认为是当前作用
+域中的根对象。.Values是根对象的属性。
+4.3.1　部署
+Helm chart可以为你可能使用的任何Kubernetes资源类型保存模
+板。这些资源类型包括StatefulSet、Job、PersistentVolumeClaim、
+更多IT书籍请关注：www.cmsblogs.cn
+
+Service（状态集、作业、持久卷目标、服务）等。使用helm create
+创建的chart是为了作为Kubernetes Deployment来运行无状态服务。
+我们在这里为Anvil使用的示例应用程序是一个无状态应用程序，这意
+味着它可以很好地作为一个部署来使用。
+为了理解Deployment模板，我们可以看看在chart的templates目
+录中的deployment.yaml文件。以下是直到spec部分之前的Deployment
+模板版本：
+这看起来非常类似于Kubernetes清单的开头包含apiVersion、
+kind、meta-data（API版本、种类和元数据）。进入metadata，你会
+注意到模板开始了。
+如果你不熟悉Kubernetes Deployment的结构，可以在
+Kubernetes文档（https://oreil.ly/aIuIE）中阅读。
+include模板函数允许将一个模板的输出包含在另一个模板中，这
+在管道中也能工作。include函数的第一个参数是要使用的模板的名
+称。作为第二个参数传入的“.”是根对象。因为根对象被传入，所以
+根对象上的属性和函数可以在被调用的模板中使用。
+anvil.fullname以及anvil.labels是通过_helpers.tpl文件引入
+的两个可重用模板（名称开头的“_”会使它上升到目录列表的顶部，
+以便你可以在模板中轻松找到它。Helm不会将它们渲染到Kubernetes
+清单中，但确实会使其中的模板可用）。anvil.fullname根据实例化
+更多IT书籍请关注：www.cmsblogs.cn
+
+chart时选择的名称提供名称，而anvil.labels提供遵循Kubernetes最
+佳实践的标签。第5章将更深入地介绍这些功能。
+模板的metadata部分之后是spec部分，其内容如下：
+更多IT书籍请关注：www.cmsblogs.cn
+
+更多IT书籍请关注：www.cmsblogs.cn
+
+❶　容器镜像的位置和版本可以通过值进行配置。
+spec部分完成部署。本节的大部分内容是用.Values上的属性填充
+数据。有一些元素是硬编码的，例如用于公开应用程序的端口。Anvil
+在端口80上通过HTTP公开，所以我们不需要更改端口。如果容器公开
+在不同的端口上，则需要在此处进行更改。
+容器的image值是使用值设置的。你在这里找不到硬编码镜像的位
+置。这对于在实例化chart时需要将镜像位置设置为其他位置的情况非
+常有用。这意味着我们需要更改默认值中的位置。
+.Values上的属性是基于许多因素计算的。默认值和起点基于在
+chart的values.yaml文件（该文件见4.4节）中的输入。这些值可以被
+实例化chart时传入的值覆盖。helm CLI具有直接传入值的标志（即--
+set、--set-file和--set-string）或传递带有值（即，-f或--
+values）的文件的标志。这些值被合并在一起，后传入的值优先采
+用。
+模板是一个很宏大的主题，通常占chart的大部分。第5章专门讨
+论模板。
+更多IT书籍请关注：www.cmsblogs.cn
+
+4.4　使用values文件
+当有人从chart实例化Kubernetes集群中的应用程序时，他们不需
+要提供模板中使用的所有值。但确实需要这样做的话将会是一个糟糕
+的用户体验。这就是values.yaml文件的用途所在。
+chart在存放Chart.yaml文件的根目录中包括一个values.yaml文
+件。这个values.yaml文件包含chart使用的默认值，它是可以传递到
+chart中的自定义值的文档形式。
+values.yaml是一个非结构化的YAML文件。稍后将介绍一些常见的
+和有用的实践，但是YAML的格式中不需要任何东西。这使得chart创建
+者能够提供适合他们的结构和信息。values.yaml文件可以包含许多内
+容，从对Kubernetes清单属性的简单替换到特定于应用程序的业务逻
+辑所需的元素。
+4.4.1　容器镜像
+helm create创建的values.yaml文件的开口部分包含镜像信息以
+及一些打开的文档和副本信息：
+更多IT书籍请关注：www.cmsblogs.cn
+
+❶　镜像的位置。它已经被更新用来反映Anvil的位置。
+❷　IfNotPresent策略意味着镜像将按所使用的版本缓存在
+Kubernetes集群中。Always是另一个绕过缓存并始终从存储库下载的
+选项。
+❸　默认情况下，此chart使用appVersion作为标记。如果指定了
+镜像标记，则使用它而不是appVersion。
+❹　当需要凭据来访问受用户名和密码保护的容器登记站位置时，
+将使用pull secret列表。
+更多IT书籍请关注：www.cmsblogs.cn
+
+此chart和值表示绑定为单个镜像的应用程序。values.yaml文件
+中使用的模式的设计考虑到了这一点。例如，只有一个镜像位置。如
+果你的应用程序有多个镜像，则每个镜像都会有一个包含此处大部分
+信息的部分。这包括replicaCount，它是Kubernetes在创建
+Deployment时将使用的副本（replicas）数。
+image部分包含有关镜像的详细信息。repository包含要使用的镜
+像的位置，而pullPolicy告诉Kubernetes获取或缓存镜像的频率。如
+果使用了移动标记（如stable），则pullPolicy应设置为Always，以
+便获取修改的镜像。由于正在使用某个版本，因此默认的pullPolicy
+设置为IfNotPresent，以便可以使用缓存的版本（如果可用）。tag属
+性提供了一个机会，可以设置一个不同于Chart.yaml文件中设置的
+appVersion的标记。
+你可能注意到在获取镜像时没有方法来设置摘要。当镜像位于不
+同的存储库中时，其摘要可能不同。例如，如果将Anvil镜像从Docker
+Hub复制到另一个镜像存储库Quay中，那么即使标签和内容保持不变，
+对于同一个镜像，摘要也会发生变化。第5章提供了一个示例，如果需
+要的话，可以添加对chart摘要的支持。
+如果需要从带有访问控制的容器登记站中拉取（pull）镜像，则
+Kubernetes需要知道如何做到这一点。这是通过使用pull secret来实
+现的。imagePullSecrets允许你列出访问私有登记站的pull secret的
+名称。请参考文档（https://oreil.ly/BL-VO）以创建pull secret。
+生成的chart内置了一些安全考虑事项，可以启用或以其他方式进
+行配置。默认情况下，会为chart实例创建一个服务账户，而其他选项
+是opt-in。以下是helm create命令生成的内容：
+更多IT书籍请关注：www.cmsblogs.cn
+
+你将注意到，配置中的大多数属性都是注释，并且处于非活动状
+态。当值作为注释渲染chart时，这些属性没有值。值为空。通过将结
+构和值作为注释，chart记录了可以使用的结构和默认值，但没有启用
+这些功能。
+更多IT书籍请关注：www.cmsblogs.cn
+
+4.4.2　公开服务
+values.yaml文件的下一部分负责将应用程序公开给其他人使用：
+在Kubernetes中，有两个内置对象可用于公开应用程序。首先是
+Service。service属性允许你选择正在使用的Service的类型。虽然默
+认情况下使用ClusterIP，但也可以使用NodePort和LoadBalancer等其
+更多IT书籍请关注：www.cmsblogs.cn
+
+他选项。service部分的几行YAML与生成的service.yaml模板配对，以
+创建完整的服务清单来上传到Kubernetes。
+第二个内置对象是Ingress清单，它可以与Service配对，并且
+chart能够生成它们。Ingress配置提供了一种显示chart中常见模式的
+方法：使用enabled属性来打开和关闭功能。在本例中，
+ingress.enabled设置为false。当Helm渲染模板并看到值为false时，
+将跳过Ingress清单。这是由于在生成的ingress.yaml文件的Ingress
+模板中使用了一个if逻辑语句。
+入口控制器
+对于功能性入口设置，你需要的不仅仅是Kubernetes中的Ingress资
+源。可以包含在chart中的Ingress资源将入口控制器连接到一个Service。
+你需要在集群中运行一个入口控制器，因为默认情况下不包括入口控
+制器（Ingress Controller）。Kubernetes社区提供Nginx Ingress
+Controller（https://oreil.ly/vc3ed），这是一个很好的默认选项。
+4.4.3　资源限制
+在生产环境中运行应用程序时，最好设置资源限制。例如，这可
+以防止一个容器中的内存泄漏中断其他容器。当chart作者创建其他人
+将要使用的chart时，他们可能不知道该chart将安装在何处以及有多
+少资源可用。开发人员或者测试chart的人可以把它安装在笔记本电脑
+上吗？它是否可以安装在大型生产服务器上？为了处理环境中的这种
+差异，我们建议设置资源限制，然后将它们转换为注释。这可以在
+values.yaml文件的下一部分中找到：
+更多IT书籍请关注：www.cmsblogs.cn
+
+安装应用程序的人在实例化chart时会参考这些数字。这些数字是
+在生成Nginx时为其设置的默认值。它们适用于Anvil应用程序。如果
+应用程序需要不同的值，则需要更新这些值。
+工作负载能够通过设置节点选择器、容错性和关联性来指定在集
+群中执行它们的具体位置。尽管这些更高级的特性通常不被使用，但
+是将它们包含在chart中对于需要它们的人来说是一个好主意。生成的
+values.yaml文件和模板会考虑到这一点。下面的示例为这些高级功能
+生成了YAML密钥。默认情况下，这些值为空，需要安装chart的人员会
+为其安装设置适当的值：
+更多IT书籍请关注：www.cmsblogs.cn
+
+更多IT书籍请关注：www.cmsblogs.cn
+
+4.5　打包chart
+你可以将chart的文件和目录打包到单个归档文件中。这很有用，
+原因很多，包括：
+·分发给他人。软件包管理器的一个强大方面是，懂得运行应用
+程序的人可以将其打包，以便其他对平台或应用程序不熟悉的人可以
+运行它。
+·当应用程序的一个版本需要通过一个多环境测试过程时。多环
+境测试过程的一个例子：有开发、质量保证（QA）和生产环境，应用
+程序在投入生产之前需要通过QA。
+·开发多服务应用程序时，开发人员需要运行由他人构建或以其
+他方式处理的服务，作为其开发设置的一部分。
+在上述几种情况下，为chart传递单个文件通常比传递目录结构更
+简单。
+chart版本给你发布和使用chart的方式带来了另一个麻烦。你或
+使用你的chart的人可能需要不同版本的chart。这就是使用chart存储
+库或开放容器倡议（OCI）登记站来存储和共享不同版本的原因（见第
+7章）。在这些环境中，在每个版本的目录结构集合中存储和共享许多
+文件绝非易事。
+Helm有能力建立一个chart归档文件。每个chart归档都是一个扩
+展名为.tgz的gzip TAR文件。任何可以创建、提取和处理gzip TAR文
+件的工具都可以使用Helm的chart归档文件。
+当Helm生成归档文件时，它们将使用chart name-version.tgz的
+模式进行命名，Helm在使用它们时也会期待有同样的模式。chart
+name是你将在Chart.yaml文件中找到的名称，而version是chart版
+更多IT书籍请关注：www.cmsblogs.cn
+
+本。这使得同一个chart的多个版本可以彼此并排存储。你可以通过运
+行以下命令将Anvil打包为归档文件：
+在本例中，anvil是指向anvil chart源所在位置的路径。默认情
+况下，helm package命令将把归档文件放在运行该命令时所在的目录
+中。
+在打包chart文件时，可以使用一些有用的标志：
+--dependency-update(-u)
+告诉Helm在创建存档文件之前更新依赖的chart。这将更新
+Chart.lock文件并将依赖的chart的副本归档并放置在chart目录中。
+第6章更详细地介绍了依赖项。
+--destination(-d)
+允许你设置用于放置chart归档文件的位置（如果它与当前工作目
+录不同）。
+--app-version
+可用于设置Chart.yaml文件的appVersion属性。如果为容器中运
+行的应用程序的每个新版本都创建chart的新版本，并且对chart没有
+其他更改，则这一点特别有用。自动化可以在构建新版本的过程中使
+用这样的标志。
+--version
+更新chart的版本。如果将命令行用作打包chart的过程的一部分
+来更新appVersion，那么这将非常有用。
+Pretty Good Privacy（PGP）签名chart标志
+更多IT书籍请关注：www.cmsblogs.cn
+
+Helm chart可以被加密签名和验证。package命令具有对过程部分
+进行签名的标志，而install和upgrade等命令具有对过程部分进行验
+证的标志。第6章介绍了这个过程。
+有时，chart目录中有一些不希望包含在chart归档文件中的文
+件。在chart目录中可以有一个可选的.helmignore文件。这类似于Git
+的.gitinore文件。前面使用的helm create命令创建了一个包含以下
+内容的命令：
+更多IT书籍请关注：www.cmsblogs.cn
+
+更多IT书籍请关注：www.cmsblogs.cn
+
+其中许多扩展和模式看起来都很熟悉，因为它们来自各种版本控
+制系统和代码编辑器。
+创建chart归档文件时，通常不希望包含版本控制系统数据之类的
+元素。
+.helmignore文件提供了一个位置来指定要跳过的内容。此文件必
+须位于chart的最上层。
+Helm被设计用于处理归档文件，就像处理目录结构一样。helm
+install和helm lint等命令可以像传递目录一样传递归档文件，很快
+就会介绍这一点。
+更多IT书籍请关注：www.cmsblogs.cn
+
+4.6　校验chart代码
+在开发chart时，尤其是使用YAML模板时，很容易出错或遗漏某些
+内容。为了帮助你捕捉错误、bug、样式问题和其他可疑元素，Helm客
+户端包括了一个代码校验器（linter）。这种代码校验器可以在chart
+开发过程中使用，也可以作为任何测试过程的一部分来使用。
+要使用代码校验器，请将chart上的lint命令用于chart目录或打
+包的归档文件：
+第一行是你运行的命令，而下面的行是Helm的输出。在这个例子
+中没有查出问题。你可以对归档文件使用此命令，就像上一节中一
+样。为此，将anvil参数（设置为chart的目录位置）更改为归档文件
+anvil-0.1.0.tgz。
+此命令可以在一个命令中校验多个chart。例如，如果你有第二个
+名为mychart的chart，并希望将其与anvil一起校验，则可以运行以下
+命令：
+更多IT书籍请关注：www.cmsblogs.cn
+
+Helm提供的有关chart的可操作反馈的三个级别是信息、警告和错
+误。信息级反馈是信息性的。chart可以与信息级反馈一起安装。信息
+级反馈使Helm的退出代码为0。错误级反馈表示chart有问题。如果
+chart为Kubernetes生成了无效的清单，例如YAML无效，则Helm将生成
+一个错误。错误导致Helm有一个非零的退出代码，这有助于在自动化
+的测试工具中捕获问题。中间级别是警告信息。这些消息涉及可能导
+致问题的发现。默认情况下，警告消息使Helm的退出代码为0，但Helm
+添加了一个--strict标志，使退出代码不为零。你可以选择如何在自
+动化工具中处理这些反馈。
+退出代码
+当应用程序退出时，它向执行它的父级提供代码或状态
+（https://oreil.ly/zHz8g）。运行Helm时，执行它的父级通常是操作系
+统、命令提示符或shell。退出状态为零意味着应用程序退出时没有任何
+问题。非零退出状态意味着有问题。自动化的测试系统通常使用退出
+代码来知道何时继续或停止。通常，当自动化的测试中使用的应用程
+序返回一个非零退出代码时，自动化的过程会结束，并向人们通知出
+现了错误。
+在本例中，没有发现anvil chart的问题。由helm create创建的
+默认chart将有一条关于Chart.yaml文件中缺少icon属性的信息级消
+息。这是一个信息级别的通知，以便人们知道它丢失了。缺少的图标
+不会影响chart的操作，但会影响它在用户界面中的显示方式。
+更多IT书籍请关注：www.cmsblogs.cn
+
+4.7　结论
+使用helm create命令为应用程序创建一个简单的chart非常简
+单。即使你的应用程序更复杂，chart的结构也可以容纳它们，helm
+create命令可以帮助你。利用本章中介绍的内容，只需做一些小的修
+改就可以使用helm install安装Anvil chart，并查看在集群中运行的
+自定义应用程序。你可以使用相同的流程来创建自己的chart。
+在下一章中，你将学习如何创建模板，重点介绍模板语言的工作
+原理以及如何将其应用于存储在chart中的Kubernetes模板。模板通常
+是chart中花费时间最多的部分。创建模板时，了解你可以使用什么将
+使开发过程更快、更容易。
+更多IT书籍请关注：www.cmsblogs.cn

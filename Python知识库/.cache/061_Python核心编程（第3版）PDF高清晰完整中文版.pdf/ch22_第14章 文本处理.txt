@@ -1,0 +1,850 @@
+ 
+ 
+ 
+第14 章  文本处理 
+作为开发者，我更愿意编辑纯文本。但XML 不算纯文本。 
+—Wesley Chun，2009 年7 月 
+（在OSCON 会议上说过的话） 
+本章内容： 
+• 逗号分隔值（CSV）； 
+• JSON； 
+• 可扩展标记语言； 
+• 相关模块。 
+14 
+本文档由Linux公社 www.linuxidc.com 收集整理
+
+554 第3 部分  补充/实验章节 
+ 
+无论创建什么类型的应用，最终都需要处理人类可读的数据，这类数据一般都是文本。
+Python 标准库含有3 个文本处理模块和包，它们可以完成这个任务：csv、json、xml。本章
+将依次介绍它们。 
+在本章末尾，我们将XML 与第2 章中介绍的其他客户端—服务器的知识结合起来，展
+示如何使用Python 创建XML-RPC 服务。由于这种编程方式不考虑文本处理，因此无需自行
+处理XML，只用进行一些数据格式转换。读者可以将最后一节作为附加材料。 
+14.1  逗号分隔值（CSV） 
+本节将介绍逗号分隔值（Comma-Separated Value，CSV）。首先简要介绍CSV，接着通
+过示例介绍如何使用Python 读写CSV 文件，最后回顾前面的一个例子。 
+14.1.1  CSV 简介 
+与专有的二进制文件格式截然不同，CSV 通常用于在电子表格软件和纯文本之间交互数
+据。实际上，CSV 都不算是一个真正的结构化数据，CSV 文件内容仅仅是一些用逗号分隔的
+原始字符串值。不同的CSV 格式有一些微妙的区别，但总体上，这些区别影响不大。大多数
+情况下，甚至都不需要用到专门针对CSV 的模块。 
+听起来好像很容易解析CSV 文件，是吗？可能不假思索地认为只须调用str.split(',')即可。
+但不能这样做，因为有些字段值可能会含有嵌套的逗号，因此需要专门用于解析和生成CSV 
+的库，如Python 的csv 模块。 
+来看一个简短的例子，该示例获取数据，以CSV 格式输出到文件中，接着将同样的数据
+读回。后面还会处理单个字段中就含有逗号的情形，来让示例稍微复杂一些。示例14-1 展示
+了csvex.py，该脚本接受三元组，将对应的记录作为CSV 文件写到磁盘上，接着读取并解析
+刚刚写入的CSV 数据。 
+示例14-1  CSV 示例，兼容Python 2 和Python 3（csvex.py） 
+这个简单的脚本演示了将数据转成CSV 格式写出，并再次读取。 
+ 
+本文档由Linux公社 www.linuxidc.com 收集整理
+
+第14 章  文本处理 555 
+ 
+ 
+ 
+接下来是另一个兼容Python 2 和Python 3 的示例脚本。无论使用Python 2 还是Python 3，
+最终输出完全相同。 
+ 
+$ python csvex.py 
+*** WRITING CSV DATA 
+*** REVIEW OF SAVED DATA 
+Chapter 9: 'Web Clients and Servers' (featuring base64, urllib) 
+Chapter 10: 'Web Programming: CGI & WSGI' (featuring cgi, time, wsgiref) 
+Chapter 13: 'Web Services' (featuring urllib, twython) 
+逐行解释 
+第1～10 行 
+首先导入csv 模块以及distutils.log.warn()，后者作为print 语句或函数的代理（print 语句
+和函数只在单个字符串作为参数的情况下相同，使用代理后可以消除这个限制）。紧接着是数
+据集的导入语句。该数据集是三元组，每个元素占用一列，包括章号、章名、该章代码示例
+中使用的模块和包。 
+第12～17 行 
+这6 行的意思很清楚。csv.writer()函数需要一个打开的文件（或类文件）对象，返回一
+个writer 对象。writer 提供了writerow()方法，可以用来在打开的文件中逐行写入逗号分隔的
+数据。写入完成后，关闭该文件。 
+第19～25 行 
+在这一部分，csv.reader()函数与csv.writer()相反，用于返回一个可迭代对象，可以读取该
+对象并解析为CSV 数据的每一行。与csv.writer()类似，csv.reader()也使用一个已打开文件的
+句柄，返回一个reader 对象。当逐行迭代数据时，CSV 数据会自动解析并返回给用户（第22
+行）。逐行显示数据，处理完后就关闭文件。 
+除了csv.reader()和csv.writer()之外，csv 模块还提供了csv.DictReader 类和csv.DictWriter
+类，用于将CSV 数据读进字典中（首先查找是否使用给定字段名，如果没有，就是用第一行
+作为键），接着将字典字段写入CSV 文件中。 
+本文档由Linux公社 www.linuxidc.com 收集整理
+
+556 第3 部分  补充/实验章节 
+ 
+14.1.2  再论股票投资组合示例 
+在介绍另一个文本处理格式之前，先来看看这个示例。回顾第13 章介绍的股票投资组合
+脚本，即stokc.py。这里不用str.split(',')，而是在应用中使用csv 模块。 
+另外，这里不会列出所有代码，大部分代码都与stock.py 相同，所以只关注其中有改动的部
+分。下面是Python 2 版本的完整的stock.py脚本（可以随时回顾第13章查看有关代码的逐行解释）。 
+ 
+#!/usr/bin/env python 
+ 
+from time import ctime 
+from urllib2 import urlopen 
+TICKs = ('yhoo', 'dell', 'cost', 'adbe', 'intc') 
+URL = 'http://quote.yahoo.com/d/quotes.csv?s=%s&f=sl1c1p2' 
+ 
+print '\nPrices quoted as of: %s PDT\n' % ctime() 
+print 'TICKER', 'PRICE', 'CHANGE', '%AGE' 
+print '------', '-----', '------', '----' 
+u = urlopen(URL % ','.join(TICKs)) 
+ 
+for row in u: 
+    tick, price, chg, per = row.split(',') 
+    print tick, '%.2f' % float(price), chg, per, 
+ 
+u.close() 
+ 
+修改版与原版的输出内容相似。作为比较，下面是其中一个输出结果。 
+ 
+Prices quoted as of: Sat Oct 29 02:06:24 2011 PDT 
+ 
+TICKER PRICE CHANGE %AGE 
+------ ----- ------ ---- 
+"YHOO" 16.56 -0.07 "-0.42%" 
+"DELL" 16.31 -0.01 "-0.06%" 
+"COST" 84.93 -0.29 "-0.34%" 
+"ADBE" 29.02 +0.68 "+2.40%" 
+"INTC" 24.98 -0.15 "-0.60%" 
+ 
+所要做的就是将stock.py 中的代码复制到名为stockcsv.py 新脚本中，接着进行相应的更
+改，使用csv 模块。现在来看看不同点，重点讨论 urlopen()调用之后的代码。打开文件之后，
+就将文件传递给csv.reader()，如下所示。 
+ 
+reader = csv.reader(u) 
+for tick, price, chg, pct in reader: 
+    print tick.ljust(7), ('%.2f' % round(float(price), 2)).rjust(6), \ 
+        chg.rjust(6), pct.rstrip().rjust(6) 
+ 
+u.close() 
+本文档由Linux公社 www.linuxidc.com 收集整理
+
+第14 章  文本处理 557 
+ 
+for 循环的大部分都相同，除了无须读取整行后用逗号分隔。现在使用csv 模块解析数据，
+让用户用循环变量来指定目标字段的名称。注意，输出结果虽然相似，但并不是精确匹配。
+读者能找到其中的不同之处吗（除了时间戳）？下面是输出结果。 
+ 
+Prices quoted as of: Sun Oct 30 23:19:04 2011 PDT 
+ 
+TICKER PRICE CHANGE %AGE 
+------ ----- ------ ---- 
+YHOO 16.56 -0.07 -0.42% 
+DELL 16.31 -0.01 -0.06% 
+COST 84.93 -0.29 -0.34% 
+ADBE 29.02 +0.68 +2.40% 
+INTC 24.98 -0.15 -0.60% 
+ 
+这里的区别很小。有些字段在str.split()版本中用引号括起来，但csv 版本中没有。为什
+么会这样？回忆第13 章的内容，有些值返回时带有引号，在那一章的末尾，还有一个练习要
+求手动去除额外的引号。 
+使用csv 模块处理CSV 数据时就不成问题了，csv 模块会查找和擦除从Yahoo!服务器中
+获取数据时带来的引号。下面这段代码确认这些数据中含有额外的引号。 
+ 
+>>> from urllib2 import urlopen 
+>>> URL = 'http://quote.yahoo.com/d/quotes.csv?s=goog&f=sl1c1p2' 
+>>> u = urlopen(URL, 'r') 
+>>> line = u.read() 
+>>> u.close() 
+>>> line 
+'"GOOG",598.67,+12.36,"+2.11%"\r\n' 
+ 
+引号是额外的麻烦，但通过csv 模块，开发者就无须处理这个问题了。由于无须额外的
+字符串处理流程，代码也变得更加易读。 
+为了改善数据管理，如果数据使用更具有层次化的方式表达就更好了。例如，如果每一
+行作为单个对象，而price、change、percentage 作为这个对象的属性。由于每一行CSV 含有
+4 个值，若不使用第一个值作为主键或其他类似的约定，此时就没有“主键”。这种情况下JSON
+就可能更适合这个应用。 
+14.2  JSON 
+从JavaScript 对象表示法（或JSON）这个名字就可以看出，它来自于JavaScript 领域，
+JSON 是JavsScript 的子集，专门用于指定结构化的数据。其基于ECMA-262 标准，与本章最
+后一节介绍的XML 相比，JSON 是轻量级的数据交换方式。JSON 是以人类更易读的方式传
+输结构化数据。关于JSON 的更多信息可以访问http://json.org。 
+本文档由Linux公社 www.linuxidc.com 收集整理
+
+558 第3 部分  补充/实验章节 
+ 
+从Python 2.6 开始，通过标准库json 模块正式支持了JSON。其基本上就是外部
+simplejson 库的集成版，其开发者还反向兼容了2.5 版本。更多信息可访问http://github.com/ 
+simplejson/simplejson。 
+另外，json（以及simplejson）提供了与pickle 和marshal 类似的接口，即dump()/load()
+和dumps()/loads()。除了基本参数外，这些函数还包括许多仅用于JSON 的选项。模块还包
+括encoder 类和decoder 类，用户既可以继承，也可以直接使用。 
+JSON 对象非常像Python 的字典，如下所示，使用字典将数据转成JSON 对象，接着再
+转换回来。 
+ 
+>>> dict(zip('abcde', range(5))) 
+{'a': 0, 'c': 2, 'b': 1, 'e': 4, 'd': 3} 
+>>> json.dumps(dict(zip('abcde', range(5)))) 
+'{"a": 0, "c": 2, "b": 1, "e": 4, "d": 3}' 
+>>> json.loads(json.dumps(dict(zip('abcde', range(5))))) 
+{u'a': 0, u'c': 2, u'b': 1, u'e': 4, u'd': 3} 
+ 
+注意，JSON 只理解Unicode 字符串，所以在转换回Python 字典时，上面的例子（Python 
+2 版本）中字典的键转成Unicode 字符串。如果在Python 3 中运行这一行代码，就没有Unicode
+字符串前导操作符（即左引号前面的“u”指示符）。 
+ 
+>>> json.loads(json.dumps(dict(zip('abcde', range(5))))) 
+{'a': 0, 'c': 2, 'b': 1, 'e': 4, 'd': 3} 
+ 
+Python 字典转化成了JSON 对象。与之类似，Python 列表或元组也可转成对应的JSON
+数组。 
+ 
+>>> list('abcde') 
+['a', 'b', 'c', 'd', 'e'] 
+>>> json.dumps(list('abcde')) 
+'["a", "b", "c", "d", "e"]' 
+>>> json.loads(json.dumps(list('abcde'))) 
+[u'a', u'b', u'c', u'd', u'e'] 
+>>> # ['a', 'b', 'c', 'd', 'e'] in Python 3 
+>>> json.loads(json.dumps(range(5))) 
+[0, 1, 2, 3, 4] 
+ 
+Python 和JSON 数据类型与值之间有什么区别呢？表14-1 列出了一些关键区别。 
+表14-1 没有列出另一个细微的区别，即JSON 不使用单引号，每个字符串都使用双引
+号分隔。另外，也没有Python 程序员偶尔为了方便，在每个序列或映射元素的最后添加的
+额外的尾随逗号。 
+为了可视化其中一些区别，示例14-2显示了dict2json.py，这个脚本兼容Python 2和Python 
+3，它用4 种方法转储字典的内容，两次作为Python 字典，两次作为JSON 对象。 
+本文档由Linux公社 www.linuxidc.com 收集整理
+
+第14 章  文本处理 559 
+ 
+表14-1  JSON 和Python 类型之间的区别 
+JSON 
+Python 2 
+Python 3 
+object 
+dict 
+dict 
+array 
+list tuple 
+list tuple 
+string 
+unicode 
+str 
+number （int） 
+int, long 
+int 
+number （real） 
+float 
+float 
+true 
+True 
+True 
+false 
+False 
+False 
+null 
+None 
+None 
+  
+示例14-2  Python 字典转JSON 示例（dict2json.py） 
+该脚本将Python 字典转成JSON，并使用多种格式显示。 
+ 
+ 
+ 
+本文档由Linux公社 www.linuxidc.com 收集整理
+
+560 第3 部分  补充/实验章节 
+ 
+逐行解释 
+第1～5 行 
+首先导入这里所需的三个函数：1）distutils.log.warn()，用来应对Python 2 中print 语句
+和Python 3 中print()函数引起的差异；2）json.dumps()，用来返回一个表示Python 对象的字
+符串；3）pprint.pprint()，用来美观地输出Python 对象。 
+第7～22 行 
+BOOKs 数据结构是一个Python 字典，表示通过ISBN 标识的书籍。每本书还含有额外
+的信息，如书名、作者、出版年份等。这里没有使用列表这样“平坦”的数据结构。而是使
+用字典，因为字典可以构建具有结构化层次的属性。注意，在等价的JSON 表示方法中，会
+移除所有额外的逗号。 
+第24～34 行 
+脚本剩下的内容用于显示输出结果。第一个示例是仅仅转储的Python 字典，没有什么特
+别内容。注意，这里同样移除了额外的逗号。这样人们在代码中使用起来就更加方便。第二
+个示例是相同的Python 字典，但使用更美观的方式输出。 
+最后两个是JSON 格式的输出。第一个是转换后普通的JSON 转储。第二个是使用
+json.dumps()内置的美观的输出方式。只须传递缩进级别就可以启用这个特性。 
+在Python 2 或3 中执行这个脚本会得到以下输出。 
+ 
+$ python dict2json.py 
+*** RAW DICT *** 
+{'0132269937': {'edition': 2, 'year': 2007, 'title': 'Core Python 
+      Programming'}, '0137143419': {'year': 2009, 'title': 'Python 
+      Fundamentals'}, '0132356139': {'authors': ['Jeff Forcier', 
+      'Paul Bissex', 'Wesley Chun'], 'year': 2009, 'title': 'Python 
+      Web Development with Django'}} 
+ 
+*** PRETTY_PRINTED DICT *** 
+{'0132269937': {'edition': 2, 
+                'title': 'Core Python Programming', 
+                'year': 2007}, 
+  '0132356139': {'authors': ['Jeff Forcier', 'Paul Bissex', 'Wesley 
+    Chun'], 
+                 'title': 'Python Web Development with Django', 
+                 'year': 2009}, 
+  '0137143419': {'title': 'Python Fundamentals', 'year': 2009}} 
+ 
+*** RAW JSON *** 
+{"0132269937": {"edition": 2, "year": 2007, "title": "Core Python 
+本文档由Linux公社 www.linuxidc.com 收集整理
+
+第14 章  文本处理 561 
+ 
+      Programming"}, "0137143419": {"year": 2009, "title": "Python 
+      Fundamentals"}, "0132356139": {"authors": ["Jeff Forcier", 
+      "Paul Bissex", "Wesley Chun"], "year": 2009, "title": "Python 
+      Web Development with Django"}} 
+ 
+*** PRETTY_PRINTED JSON *** 
+{ 
+    "0132269937": { 
+        "edition": 2, 
+        "year": 2007, 
+        "title": "Core Python Programming" 
+    }, 
+    "0137143419": { 
+        "year": 2009, 
+        "title": "Python Fundamentals" 
+    }, 
+    "0132356139": { 
+        "authors": [ 
+            "Jeff Forcier", 
+            "Paul Bissex", 
+            "Wesley Chun" 
+        ], 
+        "year": 2009, 
+        "title": "Python Web Development with Django" 
+    } 
+}  
+这个示例演示了从字典转换为JSON 的方法。也可以将数据从列表或元组转成JSON 数组。
+json 模块还可以为其他Python 数据类型提供编码和解码（decoding）类，用于与JSON 互转。
+但这里不会一一介绍这些内容，JSON 的内容非常广，本节作为入门简介无法面面俱到。 
+现在来看文本格式——XML，人们很少意识到XML仅仅是纯文本格式
+①
+14.3  可扩展标记语言 
+。 
+本章要介绍的数据处理方面的第三个主题是可扩展标记语言（Extensible Markup 
+Language，XML）。与前面介绍CSV 的方式相同，这里首先简要介绍XML，接着通过一
+个教程介绍如何使用Python 处理XML 数据。在此之后，处理来自Google News 服务的实
+际数据。 
+                                                        
+① 原文语出“看不见的大猩猩”心理学实验。——译者注 
+本文档由Linux公社 www.linuxidc.com 收集整理
+
+562 第3 部分  补充/实验章节 
+ 
+14.3.1  XML 简介 
+本章最后一节将介绍XML，这是一个较老的结构化数据格式，声称是“纯文本”格式，
+用来表示结构化的数据。尽管XML 数据是纯文本，但有充分的理由认为XML 不是人类可读
+的。如果没有解析器的帮助，XML 几乎难以辨认。但XML 诞生已久，且比JSON 应用得更
+广。当今几乎每种编程语言都有XML 解析器。 
+XML是标准通用标记语言（Standard Generalized Markup Language，SGML）的限制版，
+其本身是ISO标准（ISO 8879）。XML最初诞生于1996 年，万维网联盟（W3C）组建了一个
+团队设计XML。第1 版XML规范发布于1998 年，最近一次更新于2008 年
+①
+14.3.2  Python 和XML 
+。可以认为XML
+是SGML的子集。还可以认为HTML是SGML更小的子集。 
+Python 最初在1.5 版时通过xmllib 模块支持XML。从那时起，xmllib 最终融入到xml
+包中，xml 包提供了不同方式来解析和构建XML 文档。 
+Python 同时支持文档对象模型（DOM）树形结构和基于事件的简单XMLAPI（Simple API for 
+XML，SAX）来处理XML 文档。当前的SAX 规范是2.0.1 版，所以Python 中通常称为SAX2。
+DOM 标准比较老，几乎与XML 存在的时间一样长。从Python 2.0 开始就同时支持SAX 和DOM。 
+SAX 是流接口，意味着文档是通过连续的字节流一次处理一行。因此在XML 文档中既
+不能回溯也不能执行随机访问。从这一点可以推断，这种基于事件的处理器更快且在内存操
+作方面更有效率。而基于树形结构的解析器将整个文档放在内存中，可以多次访问。 
+这里需要提醒一下，xml 包中的内容根据版本不同有所差异，但至少有一个兼容SAX 的
+XML 解析器。此时这意味着用户需要手动查找并下载第三方模块或包，以满足这里的需要。
+幸运的是，从Python 2.3 开始，标准库中自带了Expat 流解析器，位于xml.parsers.expat 下面。 
+Expat 诞生于SAX 之前，且不兼容SAX。但可以使用Expat 创建SAX 或DOM 解析器。
+还要注意，Expat 的执行效率很快。因为Expat 不进行验证，意味着它不检查标记的兼容性。
+可以推想，进行验证的解析器由于需要额外的处理，因此速度也慢一些。 
+从2.5 版本开始，Python 通过额外的ElementTree 进一步成熟的支持XML，ElementTree
+是一款使用广泛、快速且符合Python 风格的XML 文档解析器和生成器，已经作为
+xml.etree.ElementTree 添加到标准库中。这里将使用ElementTree 处理所有原始的XML 示例（还
+会稍微用到xml.dom.minidom），并显示使用Python 的XML-RPC 支持编写客户端/服务器应用。 
+在示例14-3（dict2xml.py）中，使用Python 字典存储结构化的数据，使用ElementTree
+构建正确的XML 文档，以此来表示这个数据结构，使用xml.dom.minidom 来美观地输出。
+最后，使用多种ElementTree 迭代器解析并显示其中相关的内容。 
+                                                        
+① 已核实，依然是最新版本，这几年没有更新。——译者注 
+ 
+ 
+ 
+本文档由Linux公社 www.linuxidc.com 收集整理
+
+第14 章  文本处理 563 
+ 
+示例14-3  将Python 字典转换成XML（dict2xml.py） 
+这个Python 2 脚本将字典转换成XML，并使用多种格式显示出来。 
+ 
+ 
+运行该脚本，同时该脚本也能很容易移植到Python 3 中，结果如下所示。 
+ 
+$ dict2xml.py 
+*** RAW XML *** 
+<books><book><edition>2</edition><authors>Wesley Chun</ 
+本文档由Linux公社 www.linuxidc.com 收集整理
+
+564 第3 部分  补充/实验章节 
+ 
+authors><year>2006</year><title>Core Python Programming</title></ 
+book><book><edition>1</edition><authors>Wesley Chun</ 
+authors><year>2009</year><title>Python Fundamentals</title></ 
+book><book><edition>1</edition><authors>Jeff Forcier, Paul Bissex, 
+Wesley Chun</authors><year>2009</year><title>Python Web Development 
+with Django</title></book></books> 
+ 
+*** PRETTY-PRINTED XML *** 
+<?xml version="1.0" ?> 
+<books> 
+    <book> 
+        <edition> 
+            2 
+        </edition> 
+        <authors> 
+            Wesley Chun 
+        </authors> 
+        <year> 
+            2006 
+        </year> 
+        <title> 
+            Core Python Programming 
+        </title> 
+    </book> 
+    <book> 
+        <edition> 
+            1 
+        </edition> 
+        <authors> 
+            Wesley Chun 
+        </authors> 
+        <year> 
+            2009 
+        </year> 
+        <title> 
+            Python Fundamentals 
+        </title> 
+    </book> 
+    <book> 
+        <edition> 
+            1 
+        </edition> 
+        <authors> 
+            Jeff Forcier, Paul Bissex, Wesley Chun 
+        </authors> 
+本文档由Linux公社 www.linuxidc.com 收集整理
+
+第14 章  文本处理 565 
+ 
+        <year> 
+            2009 
+        </year> 
+        <title> 
+            Python Web Development with Django 
+        </title> 
+    </book> 
+</books> 
+ 
+*** FLAT STRUCTURE *** 
+books - None 
+book - None 
+edition - 2 
+authors - Wesley Chun 
+year - 2006 
+title - Core Python Programming 
+book - None 
+edition - 1 
+authors - Wesley Chun 
+year - 2009 
+title - Python Fundamentals 
+book - None 
+edition - 1 
+authors - Jeff Forcier, Paul Bissex, Wesley Chun 
+year - 2009 
+title - Python Web Development with Django 
+ 
+*** TITLES ONLY *** 
+Core Python Programming 
+Python Fundamentals 
+Python Web Development with Django 
+逐行解释 
+第1～21 行 
+该脚本的前几行与前一节介绍的dict2json.py 非常相似。改动包括导入ElementTree 和
+minidom。读者知道如何让代码同时在Python 2 和3 中工作，所以这里进行了简化，只针对
+Python 2 版本的解决方案。 
+最后，最微妙的区别在于“author”字段不是使用类似dict2json.py 中的列表，而是单个
+冒号分隔的字符串。这个改动并不是必需的，然而读者依然可以继续使用列表。 
+做这个改动是为了简化数据处理。关键点之一是很明显它位于第29 行。另一个区别是在
+JSON 示例中，如果没有提供，就不会设置默认作者名。这很容易通过冒号来检查，如果数
+据值是字符串或列表则无须额外的检查。 
+本文档由Linux公社 www.linuxidc.com 收集整理
+
+566 第3 部分  补充/实验章节 
+ 
+第23～29 行 
+这里是脚本正式开始工作的地方。首先创建顶层对象，即books，接着将所有其他内
+容添加到该节点下。对于每一本书，都添加一个book 子节点，如果上面的原字典没有提
+供作者和版本，则使用提供的默认值。接着遍历所有键值对，将这些内容作为其他子节点
+添加到每个book 中。 
+第31～45 行 
+最后一段代码的作用是将数据用其他几种格式转储，包括原始XML、美观输出的XML
+（用到MiniDOM），遍历所有节点作为一个大的平坦结构。最后，演示了在XML 文档中进行
+简单搜索。 
+14.3.3  XML 实战 
+前面展示了许多关于创建和解析XML 文档的示例，大多数应用会使用后面一种方法。
+所以来看另一个简短的例子，它解析数据来生成有用的信息。 
+在示例14-4 中，goognewsrss.py 从Google News 服务中获取“Top Stories”源（feed），
+并提取前５个（默认情况下）新闻故事的标题，作为实际新闻的链接。在这种方案中，
+goognewsrss.topnews()是一个生成器，因为其中含有一个很明显的yield 表达式。这意味着生
+成器用迭代的方式生成(title, link)对。查看代码，确认能否了解其中的工作方式和输出结果（这
+里没有显示出来）。在示例代码后面会解释原因。 
+示例14-4  解析实际的XML 流（goognewsrss.py） 
+这个脚本兼容Python 2 和3，显示排名靠前的新闻（默认为5 个），以及Google News 服务中对应的链接。 
+ 
+本文档由Linux公社 www.linuxidc.com 收集整理
+
+第14 章  文本处理 567 
+ 
+ 
+ 
+执行代码前，要确认阅读过Google News 的服务条款（ToS），参见 http://news.google. 
+com/intl/en_us/terms_google_news.html。其中说明了使用该Google 服务的要求。关键是这一
+段，“本服务的内容只能用于个人用途（即非商业用途），不能复制、重新生成、变更、修改、
+创建衍生作品，或公开显示任何内容。” 
+由于本书是面向公众出版的，这意味着本书不能粘贴示例程序执行后的结果，也不能遮
+挡住实际的输出结果，因为这形同修改内容。但读者可以私下执行程序并查看结果。 
+在执行结果中，会看到排名最靠前的5 条新闻标题和链接组成的二元组。注意，由于这
+是实时的服务，内容在不断更改。不同时间运行这个程序会得到不同的结果。 
+逐行解释 
+第1～22 行 
+是的，有些纯粹主义者会发现这里的代码有点丑，杂乱的导入语句让代码难以阅读，这一点
+我表示赞同。但在实际中，如果需要让生产环境中的代码支持不同版本的语言，特别是这里需要
+支持Python 3，必须要使用这些“ifdef”类型的语句。先放下这些，来看实际导入了哪些内容。 
+首先需要一个，带有文件接口的大字符串缓冲区。换句话说，这是一个位于内存中的大
+字符串，同时支持文件接口（即支持write()这样的文件方法）。这就是StringIO 类。网络传来
+的数据一般是ASCII 或纯字节，而不是Unicode。所以如果需要在Python 3 中运行，需要用
+io.BytesIO 类作为StringIO。 
+本文档由Linux公社 www.linuxidc.com 收集整理
+
+568 第3 部分  补充/实验章节 
+ 
+如果使用Python 2，就不会涉及Unicode，所以先尝试能否使用更快的C 编译的
+cStringIO.StringIO 类。如果这个类不可用，则使用原先的StringIO.StringIO 类。 
+接下来，需要这个类能够较好地利用内存。因此会使用内置函数zip()对应的迭代器       
+版——itertools.izip()。如果itertools 模块中含有izip()，则表明位于Python 2 中。此时将其导
+入为zip()。否则，在Python 3 中，因为移除了旧的zip()，并将izip()重命名为zip()，此时应
+该忽略掉ImportError。注意，修改既没有使用zip()也没有使用izip()。更多信息，参考稍后
+的黑客园地。 
+最后一个特殊的地方是Python 2 的urllib2 模块，在Python 3 中该模块合并到了
+urllib.request 子模块中。后者提供了所需的urlopen()函数。 
+最后，使用ElementTree 以及用于美化输出的pprint.pprint()函数。在这个例子中，程序
+的输出通常用来显示警告消息，所以使用disutils.log.warn()显示输出。 
+第24～28 行 
+应用程序在这里获取数据。首先打开一个链接，从Google News 服务器请求XML 格式
+的RSS 输出。读取整个源，将其直接写入内存中等价于文件的StringIO 里。 
+请求的主题是头条新闻，它用topic=h 键值对表示。其他选项包括：ir 表示焦点新闻，w
+表示全球新闻，n 表示美国新闻，b 表示商业新闻，tc 表示科技新闻，e 表示娱乐新闻，s 表
+示体育新闻，snc 表示科技新闻，m 表示健康新闻。 
+获取完成后关闭文件的Web 链接，将这个文件类型对象传递给ElementTree.parse()函数，
+该函数解析XML 文档，返回ElementTree 类的一个实例。注意，这里可以自行实例化，因为
+在这个例子中，调用ElementTree.parse(f)等价于ElementTree.ElementTree(file=f)。最后，关闭
+这个内存中的文件。 
+第30～50 行 
+topnews()函数为调用者整理输出结果。这里只想返回正确格式化的新闻项，所以先创建
+两个元素的列表（但当作元组使用）。元组的第一个元素是标题，第二个是链接。只有同时有
+这两项时才会返回迭代数据项。否则，如果请求达到新闻数目上限（默认为5 条）则退出，
+未达上限则直接重置这个二元组。 
+对于第一个标题需要特殊处理，因为这并不是真正的新闻标题，而是新闻类型的标
+题。在这里，因为请求的是头条，所以“title”字段获取的不是新闻的标题，而是“category”
+标题，以及从“TopStories”中提取出作为内容的字符串。需要忽略掉这些。 
+该脚本最后两行代码输出由topnews()生成的二元组。 
+XML 所能做的不仅是文本处理。下一节就明显与XML 有关，但实际上又没有用到
+XML。XML 是基本的砖瓦，提供在线服务的开发者可以在高层次的客户端/服务器计算上
+编码。为了简化这些任务，无须创建让客户端能够调用函数的服务，更具体一些，即远程
+过程调用（Remote Procedure Call，RPC）。 
+本文档由Linux公社 www.linuxidc.com 收集整理
+
+第14 章  文本处理 569 
+ 
+ 
+  核心提示：（黑客园地）：将topnews()缩减为一行较长的Python 代码 
+可以将topnews()的代码缩减为一行嵌套的代码． 
+ 
+topnews = lambda count=5: [(x.text, y.text) for x, y in zip 
+(tree.getiterator('title'), tree.getiterator('link')) if not 
+x.text.startswith('Top Stories')][:count] 
+ 
+希望这没有看坏读者的眼睛。其中的秘密之处在于ElementTree.getiterator()函数，以
+及假设所有新闻数据已经正确格式化了。在原来的标准版topnews()中，既没有使用zip()，
+也没有使用itertools.izip()，但这里使用zip()将标题和对应的链接组合起来。 
+14.3.4  *使用XML-RPC 的客户端-服务器服务 
+XML-RPC 创建于20 世纪90 年代末，让开发者能够通过超文本传输协议（HyperText 
+Transfer Protocal，HTTP）作为传输机制，以此来创建远程过程调用，而XML 文档作为载体。 
+XML文档同时包含，RPC的名称，以及任何用于执行的参数。XML-RPC导致了SOAP的
+出现，当然没有SOAP那么复杂。由于JSON比XML更加易读，因此也有一个JSON-RPC，包
+括SOAP版本的SOAPjr
+①。 
+Python 对XML-RPC 的支持来自于3 个包：客户端的xmlrpclib，以及服务器端的
+SimpleXMLRPCServer 和DocXMLRPCServer。很自然，在Python 3.x 中这三个包重组为
+xmlrpc.client 和xmlrpc.server。 
+示例14-5 显示的是xmlrpcsrvr.py，这是针对Python 2 的脚本，它包括简单的XML-RPC
+服务以及诸多RPC 调用。这里首先列出代码，接着介绍RPC 提供的每个服务。 
+示例14-5  XML-RPC 服务器代码（xmlrpcsrvr.py） 
+这是一个XML-RPC 服务器示例，其中含有多个RPC 函数。 
+ 
+                                                        
+① 即SOAP 和JSON-RPC 的缩写。——译者注 
+本文档由Linux公社 www.linuxidc.com 收集整理
+
+570 第3 部分  补充/实验章节 
+ 
+ 
+ 
+ 
+逐行解释 
+第1～8 行 
+这里含有多条导入语句。首先是最重要的SimpleXMLRPCServer，其后是一些辅助导入
+语句，它们提供这里所需的服务。甚至在第13 章的Yahoo! 股票报价服务器和Twitter 代码
+中也用到过这些服务。 
+首先导入所需的标准库模块/包，然后导入用户级别的模块，即用于与Twitter 服务交互
+的twapi。导入语句的顺序遵循最佳实践准则，即首先是标准库，接着是第三方库，最后是用
+本文档由Linux公社 www.linuxidc.com 收集整理
+
+第14 章  文本处理 571 
+ 
+户定义的库。 
+第10～11 行 
+导入完所需的包以后，SimpleXMLRPCServer 使用给定的主机名或IP 地址和端口号来创
+建服务。在这个例子中，仅仅使用localhost 或127.0.0.1。其后代码注册了通常会用到的
+XML-RPC 内省函数。 
+这些函数允许客户端通过查询服务器，来确定服务器的能力。它们帮助客户端了解服务器
+支持哪些方法、它如何调用特定的RPC，以及是否有某个特定RPC 的文档。system.listMethods、
+system.methodSignature、system.methodHelp 这些调用就用来解决这些问题。 
+下面这个链接中含有这些内省函数的规范。 
+http:// scripts.incutio.com/xmlrpc/introspection.html 
+而下面这个链接中有关于如何显式实现这些函数的示例。 
+http://www.doughellmann.com/PyMOTW/SimpleXMLRPCServer/#introspection-api。 
+第13～16 行 
+这4 行代码通过RPC 来提供一些标准算术函数。包括内置函数pow()和从operator 模块
+中获取的其他5 个算术函数。server.register_function()函数仅仅让这些函数可以在RPC 客户
+端请求中使用。 
+第18～26 行 
+接下来需要添加到服务中的函数与时间相关。这些函数位于SpecialServices()类中。函数
+在类的外部还是内部没有实际区别，这里仅仅演示类中的三个函数，以及前面的算术函数。
+这三个函数分别为：now_int()，该函数用秒为单位表示从1970 年1 月1 日到现在的时间；
+now_str()，该函数用UNIX 格式的时间戳表示本地时区的当前时间；timestamp()函数，该函数
+接受一个字符串，返回该字符串并在前面追加时间戳。 
+第28～40 行 
+这里直接复制第13 章的代码，首先复制与Yahoo! 报价服务器交互的代码。stock()函数
+获取公司代号，接着获取最新的报价、最新变动、涨跌幅，以及最近一次交易的日期和时间。
+forex()函数与之类似，但处理的是汇率。 
+并不是一定要使用第13 章的代码，所以如果还没有阅读第13 章，可以跳过对这些函数
+的实现，因为学习XML-RPC 概念并不一定需要这些内容。 
+第42～53 行 
+最后两个需要注册的RPC 是status()和tweet()函数，二者来自第13 章中的Twitter 代码，
+需要用到Twython 库。status()函数获取当前用户的当前状态，tweet()用来为用户更新状态。
+在这段代码的最后一行，通过register_instance()函数注册SpecialServices 类中的所有函数。 
+第55～59 行 
+最后5 行用于启动服务（通过一个无限循环），并检测用户是否想退出（按Ctrl+C 组合键）。 
+既然有了一个服务器，如果没有客户端代码使用这个服务器的功能，那又有什么用呢？
+本文档由Linux公社 www.linuxidc.com 收集整理
+
+572 第3 部分  补充/实验章节 
+ 
+在示例14-6 中，将会看到一个可能的客户端应用，xmlrpcclnt.py。很自然，这个程序可以在
+任何能通过相应的主机/端口地址对访问服务器的计算机上运行。 
+示例14-6  Python 2 版本的XML-RPC 客户端代码（xmlrpcclnt.py） 
+这是一个调用XML-RPC 服务器的可能客户端。 
+ 
+ 
+这里没有太多客户端的成分，但还是来看一下。 
+逐行解释 
+第1～6 行 
+为了连接XML-RPC 服务器，需要Python 2 中的xmlrpclib 模块。前面提到，在Python3
+中需要使用xmlrpc.client。另外还用到了math 模块中的π 常量。在实际代码的第一行，连接
+到XML-RPC 服务器，将主机/端口对作为URL 传递进去。 
+第7～16 行 
+剩下的代码用来向XMLRPC服务器发送RPC请求，最终获取所需的结果。这个客户端
+唯一没有测试的函数是tweet()，这一部分将作为练习留给读者。做这么多的调用看起来有
+些多余，的确很多余，所以在本章末尾会看到一个练习
+①
+                                                        
+① 练习14-15。——译者注 
+来解决这个问题。 
+服务器启动后，就可以运行客户端并看到一些输出（读者的输出会与下面的有所不同）。 
+ 
+$ python xmlrpcclnt.py 
+Current time in seconds after epoch: 1322167988.29 
+Current time as a string: Thu Nov 24 12:53:08 2011 
+Area of circle of radius 5: 78.5398163397 
+本文档由Linux公社 www.linuxidc.com 收集整理
+
+第14 章  文本处理 573 
+ 
+Latest Google stock price: 570.11 (-9.89 / -1.71%) as of 11/23/2011 at 
+4:00pm 
+Latest foreign exchange rate from USD to EUR: 0.7491 as of 11/24/2011 
+at 3:51pm 
+Latest foreign exchange rate from EUR to USD: 1.3349 as of 11/24/2011 
+at 3:51pm 
+Latest Twitter status: @KatEller same to you!!! :-) we need a 
+celebration meal... this coming monday or friday? have a great 
+thanksgiving!! 
+ 
+尽管本章已到末尾，但仅仅接触到XML-RPC 和JSON-RPC 编程的皮毛。若想了解更多
+相关内容，建议通过DocXMLRPCServer 类来了解自归档的XML-RPC 服务器，以及从
+XML-RPC 服务器能获取的不同类型的数据结构（参见xmlrpclib/xmlrpc.client 文档）。 
+14.4  参考文献 
+网上有许多关于本章内容的文档。下面列出部分值得推荐的资源。 
+• 
+http://docs.python.org/library/csv  
+• 
+http://json.org/  
+• 
+http://simplejson.readthedocs.org/en/latest/  
+• 
+http://pypi.python.org/pypi/simplejson  
+• 
+http://github.com/simplejson/simplejson  
+• 
+http://docs.python.org/library/json  
+• 
+http://en.wikipedia.org/wiki/JSON  
+• 
+http://en.wikipedia.org/wiki/XML  
+• 
+http://docs.python.org/library/xmlrpclib  
+• 
+http://docs.python.org/library/simplexmlrpcserver  
+• 
+http://docs.python.org/library/docxmlrpcserver  
+• 
+http://www.saxproject.org  
+• 
+http://en.wikipedia.org/wiki/Expat_(XML)  
+• 
+http://en.wikipedia.org/wiki/Xml-rpc  
+• 
+http://scripts.incutio.com/xmlrpc/introspection.html  
+• 
+http://en.wikipedia.org/wiki/JSON-RPC  
+• 
+http://json-rpc.org/  
+• 
+http://www.doughellmann.com/PyMOTW/  
+• 
+SimpleXMLRPCServer/#introspection-api  
+本文档由Linux公社 www.linuxidc.com 收集整理
+
+574 第3 部分  补充/实验章节 
+ 
+对于想进一步了解的读者，建议阅读Text Processing in Python（Addison-Wesley, 2003）
+一书，这是Python 文本处理方面的经典。还有另一本书，名为Python 2.6 Text Processing（Packt，
+2010）。不要管书名中的2.6，其中介绍的内容可用于大多数当前的Python 版本中。 
+14.5  相关模块 
+与文本处理相关的模块见表14-2。 
+表14-2  与文本处理相关的模块 
+模块/包 
+描    述 
+csv
+① 
+逗号分割值的处理 
+SimpleXMLRPCServer  
+XML-RPC 服务器（在Python 3 中合并进xmlrpc.server 中） 
+DocXMLRPCServer 
+自归档的XML-RPC 服务器（在Python 3 中合并进xmlrpc.server 中) 
+xmlrpclib 
+XML-RPC 客户端（在Python 3 中重命名为xmlrpc.client） 
+json
+② 
+JSON 编码和加码工具（在Python 2.6 之前是外部包simplejson） 
+xml.parsers.expat
+③ 
+快速无验证的XML 解析器 
+xml.dom
+② 
+基于树/DOM 的XML 解析 
+xml.sax
+② 
+基于事件/流的XML 解析 
+xml.etree.ElementTree
+③ 
+ElementTree XML 解析器和树构建器 
+① Python 2.3 中新增。 
+② Python 2.6 中新增。 
+③ Python 2.0 中新增。 
+14.6  练习 
+CSV 
+14-1  CSV。什么是CSV 格式？它适合什么类型的应用？ 
+14-2  CSV 与str.split()。找到一些示例数据，在这些数据中str.split(',')无法满足需要，只
+能使用csv 模块。 
+14-3  CSV 与str.split()。在第13 章的练习13-16 中，需要让stock.py 的输出更加灵活，
+让所有列尽量对齐。除了不同股票代号的长度差异，不同股票的价格和涨跌幅也
+在变动。更新练习13-16，用csv.reader()替换掉str.split()。 
+14-4  另一种CSV 格式。除了逗号之外，还有另一种分隔符。例如，兼容POSIX 的密
+码文件使用冒号分割，Outlook 中的电子邮件地址使用分号分隔。创建可以读取或
+写入这些使用其他分隔符的函数。 
+本文档由Linux公社 www.linuxidc.com 收集整理
+
+第14 章  文本处理 575 
+ 
+JSON 
+14-5  JSON。JSON 格式与Python 中的字典和列表在语法上有什么区别？ 
+14-6  JSON 数组。dict2json.py 示例只演示了将Python 字段转换成JSON 对象。创建一
+个相似的脚本，命名为lort2json.py，将列表或元组转换成JSON 数组。 
+14-7  后向兼容。使用Python 2.5 或更老版本运行示例14-2 中的dict2json.py 会出现下面
+的错误。 
+ 
+$ python2.5 dict2json.py 
+Traceback (most recent call last): 
+  File "dict2json.py", line 12, in <module> 
+    from json import dumps 
+ImportError: No module named json 
+ 
+a）为了让该脚本在老版本Python 中运行，需要做哪些工作？ 
+b）修改dict2json.py 的代码，导入相关老版本Python（如2.4 和2.5）中对应的
+JSON 功能，使其能在2.6 和之后的版本中正常工作。 
+14-8  JSON。向第13 章从Yahoo! Finance 服务中获取股票报价的stock.py 示例中添加新
+代码，让其返回JSON 字符串，用层次化的数据结构格式表示股票数据，而不是
+直接转储到屏幕上。 
+14-9  JSON 和类型/类。编写脚本，对任意类型的Python 对象编码和解码，如数值、类、
+实例等。 
+XML 和XML-RPC 
+14-10  Web 编程。改进goognewsrss.py 脚本，让其能输出格式化的HTML，HTML 中含
+有锚/链接，这些锚/链接直接连接到用于浏览器渲染且无外链的.html 文件。这些
+链接应当是正确的，用户单击后可以进入对应的Web 页面。 
+14-11  健壮性。在xmlrpcsrvr.py 中，添加对>、>=、<、<=、==、!=操作的支持，以及
+真除（true division）和地板除（floor division）。 
+14-12  Twitter。在xmlrpcclnt.py 中，没有测试SpecialServices.tweet()方法。在脚本中添
+加对这个方法的测试。 
+14-13  CGIXMLRPCRequestHandler 。默认情况下，SimpleXMLRPCServer
+使用
+SimpleXMLRPCRequestHandler处理类。这个处理程序与CGIXMLRPCRequestHandler
+有什么区别？创建一个使用CGIXMLRPCRequestHandler 的新服务器。 
+14-14  DocXMLRPCServer。了解自归档的XML-RPC 服务器，回答以下问题。 
+a）SimpleXMLRPCServer 与DocXMLRPCServer 对象之间有什么区别？除此之
+外，（网络）底层方面又有什么区别？ 
+本文档由Linux公社 www.linuxidc.com 收集整理
+
+576 第3 部分  补充/实验章节 
+ 
+b）将本章中标准的XML-RPC 客户端与服务器转换成自归档形式。 
+c）将上一练习中的CGI 版本转换成使用DocCGIXMLRPCRequestHandler 类。 
+14-15  XML-RPC 多调用。在xmlrpcclnt.py 中，每调用一次都会向服务器发送一个请求。
+如果客户端向服务器发送多个调用，但只向服务器发送一个服务请求，这样做能
+提高性能。研究register_multicall_functions()函数，接着将这些功能添加到服务
+器中。最后修改客户端来使用多调用。 
+14-16  XML 和XML-RPC。本章中XML-RPC 的内容在哪些方面与XML 有关？最后一
+节的内容与本章其他部分有明显差异，这是如何结合到一起来的？ 
+14-17  JSON-RPC 与XML-RPC。什么是JSON-RPC？其与XML-RPC 有什么关系？ 
+14-18  JSON-RPC。将XML-RPC 客户端和服务器代码移植到等价的jsonrpcsrvr.py 和
+jsonrpcclnt.py 中。 
+ 
+ 
+本文档由Linux公社 www.linuxidc.com 收集整理

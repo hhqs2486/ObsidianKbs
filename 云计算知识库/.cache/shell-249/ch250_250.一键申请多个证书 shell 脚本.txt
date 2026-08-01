@@ -1,0 +1,129 @@
+install_dir=/usr/local
+port=27017
+color () {
+    RES_COL=60
+    MOVE_TO_COL="echo -en \\033[${RES_COL}G"
+    SETCOLOR_SUCCESS="echo -en \\033[1;32m"
+    SETCOLOR_FAILURE="echo -en \\033[1;31m"
+    SETCOLOR_WARNING="echo -en \\033[1;33m"
+    SETCOLOR_NORMAL="echo -en \E[0m"
+    echo -n "$2" && $MOVE_TO_COL
+    echo -n "["
+    if [ $1 = "success" -o $1 = "0" ] ;then
+        ${SETCOLOR_SUCCESS}
+        echo -n $"  OK  "    
+    elif [ $1 = "failure" -o $1 = "1"  ] ;then
+        ${SETCOLOR_FAILURE}
+        echo -n $"FAILED"
+    else
+        ${SETCOLOR_WARNING}
+        echo -n $"WARNING"
+    fi
+    ${SETCOLOR_NORMAL}
+    echo -n "]"
+    echo                                                                         
+                                                     
+}
+os_type (){
+   awk -F'[ "]' '/^NAME/{print $2}' /etc/os-release
+}
+check () {
+    [ -e $db_dir -o -e $install_dir/mongodb ] && { color 1 "MongoDB 数据库已安
+装";exit; }
+    if [ `os_type` = "CentOS" ];then
+        rpm -q curl  &> /dev/null || yum install -y -q curl
+    elif [ `os_type` = "Ubuntu" ];then
+        dpkg -l curl &> /dev/null || apt -y install curl
+    else
+        color 1 不支持当前操作系统
+        exit
+    fi
+}
+file_prepare () {
+    if [ ! -e $file ];then
+        curl -O  $url || { color 1  "MongoDB 数据库文件下载失败"; exit; } 
+    fi
+}
+install_mongodb () {
+    tar xf $file -C $install_dir
+    mkdir -p $db_dir
+    ln -s $install_dir/mongodb-linux-x86_64-* $install_dir/mongodb
+    echo PATH=$install_dir/mongodb/bin/:'$PATH' > /etc/profile.d/mongodb.sh
+    . /etc/profile.d/mongodb.sh
+    mongod --dbpath $db_dir --bind_ip_all --port $port --logpath 
+$db_dir/mongod.log --fork
+
+250.一键申请多个证书 shell 脚本
+ 
+    [ $? -eq 0 ] && color 0 "MongoDB 数据库安装成功!" || color 1 "MongoDB 数据库安装
+失败!"
+}
+check 
+file_prepare
+install_mongodb
+[root@centos8 ~]#cat certs.sh
+#!/bin/bash
+#
+#********************************************************************
+#Author:        wangxiaochun
+#QQ:            29308620
+#Date:          2020-02-29
+#FileName：      test.sh
+#URL:           http://www.wangxiaochun.com
+#Description：       The test script
+#Copyright (C):     2020 All rights reserved
+#********************************************************************
+. /etc/init.d/functions
+CERT_INFO=([00]="/O=heaven/CN=ca.god.com" \
+           [01]="cakey.pem" \
+           [02]="cacert.pem" \
+           [03]=2048 \
+           [04]=3650 \
+           [05]=0    \
+           
+[10]="/C=CN/ST=hubei/L=wuhan/O=Central.Hospital/CN=master.liwenliang.org" \
+           [11]="master.key" \
+           [12]="master.crt" \
+           [13]=2048 \
+           [14]=365
+           [15]=1 \
+           [16]="master.csr" \
+           
+[20]="/C=CN/ST=hubei/L=wuhan/O=Central.Hospital/CN=slave.liwenliang.org" \
+           [21]="slave.key" \
+           [22]="slave.crt" \
+           [23]=2048 \
+           [24]=365 \
+           [25]=2 \
+           [26]="slave.csr"   )
+COLOR="echo -e \\E[1;32m"
+END="\\E[0m"
+DIR=/data
+cd $DIR 
+for i in {0..2};do
+    if [ $i -eq 0 ] ;then
+        openssl req  -x509 -newkey rsa:${CERT_INFO[${i}3]} -subj 
+${CERT_INFO[${i}0]} \
+
+249-250来自老王讲 IT (wangxiaochun.com)
+ 
+ 
+            -set_serial ${CERT_INFO[${i}5]} -keyout ${CERT_INFO[${i}1]} -nodes -
+days ${CERT_INFO[${i}4]} \
+            -out ${CERT_INFO[${i}2]} &>/dev/null
+    else 
+        openssl req -newkey rsa:${CERT_INFO[${i}3]} -nodes -subj 
+${CERT_INFO[${i}0]} \
+            -keyout ${CERT_INFO[${i}1]}   -out ${CERT_INFO[${i}6]} &>/dev/null
+        openssl x509 -req -in ${CERT_INFO[${i}6]}  -CA ${CERT_INFO[02]} -CAkey 
+${CERT_INFO[01]}  \
+            -set_serial ${CERT_INFO[${i}5]}  -days ${CERT_INFO[${i}4]} -out 
+${CERT_INFO[${i}2]} &>/dev/null
+    fi
+    $COLOR"**************************************生成证书信息
+**************************************"$END
+    openssl x509 -in ${CERT_INFO[${i}2]} -noout -subject -dates -serial
+    echo 
+done
+chmod 600 *.key
+action "证书生成完成"

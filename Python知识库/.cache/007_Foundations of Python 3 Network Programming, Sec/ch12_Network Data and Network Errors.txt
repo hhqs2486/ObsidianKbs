@@ -1,0 +1,742 @@
+C H A P T E R   5 
+ 
+■ ■ ■ 
+71
+Network Data and Network Errors 
+The first four chapters have given us a foundation: we have learned how hosts are named on an IP 
+network, and we understand how to set up and tear down both TCP streams and UDP datagram 
+connections between those hosts. 
+But what data should we then send across those lengths? How should it be encoded and formatted? 
+For what kinds of errors will our Python programs need to be prepared?  
+These questions are all relevant regardless of whether we are using streams or datagrams. We will 
+look at the basic answers in this chapter, and learn how to use sockets responsibly so that our data 
+arrives intact. 
+Text and Encodings 
+If you were watching for it as you read the first few chapters, you may have caught me using two 
+different terms for the same concept. Those terms were byte and octet, and by both words I always mean 
+an 8-bit number—an ordered sequence of eight digits, that are each either a one or a zero. They are the 
+fundamental units of data on modern computing systems, used both to represent raw binary numbers 
+and to stand for characters or symbols. The binary number 1010000, for example, usually stands for 
+either the number 80 or the letter P: 
+>>> 0b1010000 
+80 
+>>> chr(0b1010000) 
+'P' 
+The reason that the Internet RFCs are so inveterate in their use of the term “octet” instead of “byte” 
+is that the earliest of RFCs date from a very ancient era in which bytes could be one of several different 
+lengths—byte sizes from as little as 5 to as many as 16 bits were used on various systems. So the term 
+“octet,” meaning a “group of eight things,” is always used in the standards so that their meaning is 
+unambiguous. 
+Four bits offer a mere sixteen values, which does not come close to even fitting our alphabet. But 
+eight bits—the next-higher multiple of two—proved more than enough to fit both the upper and lower 
+cases of our alphabet, all the digits, lots of punctuation, and 32 control codes, and it still left a whole half 
+of the possible range of values empty. The problem is that many rival systems exist for the specific 
+mapping used to turn characters into bytes, and the differences can cause problems unless both ends of 
+your network connection use the same rules. 
+The use of ASCII for the basic English letters and numbers is nearly universal among network 
+protocols these days. But when you begin to use more interesting characters, you have to be careful. In 
+Python you should always represent a meaningful string of text with a “Unicode string” that is denoted 
+with a leading u, like this: 
+>>> elvish = u'Namárië!' 
+
+CHAPTER 5 ■ NETWORK DATA AND NETWORK ERRORS 
+72 
+But you cannot put such strings directly on a network connection without specifying which rival 
+system of encoding you want to use to mix your characters down to bytes. A very popular system is UTF-
+8, because normal characters are represented by the same codes as in ASCII, and longer sequences of 
+bytes are necessary only for international characters: 
+>>> elvish.encode('utf-8') 
+'Nam\xc3\xa1ri\xc3\xab!' 
+You can see, for example, that UTF-8 represented the letter ë by a pair of bytes with hex values C3 
+and AB. 
+Be very sure, by the way, that you understand what it means when Python prints out a normal string 
+like the one just given. The letters strung between quotation characters with no leading u do not 
+inherently represent letters; they do not inherently represent anything until your program decides to do 
+something with them. They are just bytes, and Python is willing to store them for you without having the 
+foggiest idea what they mean. 
+Other encodings are available in Python—the Standard Library documentation for the codecs 
+package lists them all. They each represent a full system for reducing symbols to bytes. Here are a few 
+examples of the byte strings produced when you try encoding the same word in different ways; because 
+each successive example has less in common with ASCII, you will see that Python's choice to use ASCII 
+to represent the bytes in strings makes less and less sense: 
+>>> elvish.encode('utf-16') 
+'\xff\xfeN\x00a\x00m\x00\xe1\x00r\x00i\x00\xeb\x00!\x00' 
+>>> elvish.encode('cp1252') 
+'Nam\xe1ri\xeb!' 
+>>> elvish.encode('idna') 
+'xn--namri!-rta6f' 
+>>> elvish.encode('cp500') 
+'\xd5\x81\x94E\x99\x89SO' 
+You might be surprised that my first example was the encoding UTF-16, since at first glance it seems 
+to have created a far greater mess than the encodings that follow. But if you look closely, you will see that 
+it is simply using two bytes—sixteen bits—for each character, so that most of the characters are simply a 
+null character \x00 followed by the plain ASCII character that belongs in the string. (Note that the string 
+also begins with a special sequence \xff\xfe that designates the byte order in use; see the next section 
+for more about this concept.) 
+On the receiving end of such a string, simply take the byte string and call its decode() method with 
+the name of the codec that was used to encode it: 
+>>> print '\xd5\x81\x94E\x99\x89SO'.decode('cp500') 
+Namárië! 
+These two steps—encoding to a byte string, and then decoding again on the receiving end—are 
+essential if you are sending real text across the network and want it to arrive intact. Some of the 
+protocols that we will learn about later in this book handle encodings for you (see, for example, the 
+description of HTTP in Chapter 9), but if you are going to write byte strings to raw sockets, then you will 
+not be able to avoid tackling the issue yourself. 
+Of course, many encodings do not support enough characters to encode all of the symbols in certain 
+pieces of text. The old-fashioned 7-bit ASCII encoding, for example, simply cannot represent the string 
+we have been working with: 
+>>> elvish.encode('ascii') 
+Traceback (most recent call last): 
+  ... 
+UnicodeEncodeError: 'ascii' codec can't encode character u'\xe1' in position 3: ordinal 
+ not in range(128) 
+
+CHAPTER 5 ■ NETWORK DATA AND NETWORK ERRORS 
+73
+Note that some encodings have the property that every character they are able to encode will be 
+represented by the same number of bytes; ASCII uses one byte for every character, for example, and 
+UTF-32 uses four. If you use one of these encodings, then you can both determine the number of 
+characters in a string by a simple examination of the number of bytes it contains, and jump to character 
+n of the string very efficiently. (Note that UTF-16 does not have this property, since it uses 16 bits for 
+some characters and 32 bits for others.) 
+Some encodings also add prefix characters that are not part of the string, but help the decoder 
+detect the byte ordering that was used (byte order is discussed in the next section)—thus the \xff\xfe 
+prefix that Python's UTF-16 encoder added to the beginning of our string. Read the codecs package 
+documentation and, if necessary, the specifications for particular encodings to learn more about the 
+actions they perform when turning your stream of symbols into bytes. 
+Note that it is dangerous to decode a partially received message if you are using an encoding that 
+encodes some characters using multiple bytes, since one of those characters might have been split 
+between the part of the message that you have already received and the packets that have not yet 
+arrived. See the section later in this chapter on “Framing” for some approaches to this issue. 
+Network Byte Order 
+If all you ever want to send across the network is text, then encoding and framing (which we tackle in the 
+next section) will be your only worries. 
+But sometimes you might want to represent your data in a more compact format than text makes 
+possible. Or you might be writing Python code to interface with a service that has already made the 
+choice to use raw binary data. In either case, you will probably have to start worrying about a new issue: 
+network byte order. 
+To understand the issue of byte order, consider the process of sending an integer over the network. 
+To be specific, think about the integer 4253. 
+Many protocols, of course, will simply transmit this integer as the string '4253'—that is, as four 
+distinct characters. The four digits will require at least four bytes to transmit, at least in any common text 
+encoding. And using decimal digits will also involve some computational expense: since numbers are 
+not stored inside computers in base 10, it will take repeated division—with inspection of the 
+remainder—to determine that this number is in fact made of 4 thousands, plus 2 hundreds, plus 5 tens, 
+plus 3 left over. And when the four-digit string '4253' is received, repeated addition and multiplication 
+by powers of ten will be necessary to put the text back together into a number. 
+Despite its verbosity, the technique of using plain text for numbers may actually be the most 
+popular on the Internet today. Every time you fetch a web page, for example, the HTTP protocol 
+expresses the Content-Length of the result using a string of decimal digits just like '4253'. Both the web 
+server and client do the decimal conversion without a second thought, despite the bit of expense. Much 
+of the story of the last 20 years in networking, in fact, has been the replacement of dense binary formats 
+with protocols that are simple, obvious, and human-readable—even if computationally expensive 
+compared to their predecessors. 
+(Of course, multiplication and division are also cheaper on modern processors than back when 
+binary formats were more common—not only because processors have experienced a vast increase in 
+speed, but because their designers have become much more clever about implementing integer math, 
+so that the same operation requires far fewer cycles today than on the processors of, say, the early 
+1980s.) 
+In any case, the string '4253' is not how your computer represents this number as an integer 
+variable in Python. Instead it will store it as a binary number, using the bits of several successive bytes to 
+represent the one's place, two's place, four's place, and so forth of a single large number. We can glimpse 
+the way that the integer is stored by using the hex() built-in function at the Python prompt: 
+>>> hex(4253) 
+'0x109d' 
+
+CHAPTER 5 ■ NETWORK DATA AND NETWORK ERRORS 
+74 
+Each hex digit corresponds to four bits, so each pair of hex digits represents a byte of data. Instead of 
+being stored as four decimal digits 4, 4, 2, and 3 with the first 4 being the “most significant” digit (since 
+tweaking its value would throw the number off by a thousand) and 3 being its least significant digit, the 
+number is stored as a most significant byte 0x10 and a least significant byte 0x9d, adjacent to one another 
+in memory. 
+But in which order should these two bytes appear? Here we reach a great difference between 
+computers. While they will all agree that the bytes in memory have an order, and they will all store a 
+string like Content-Length: 4253 in exactly that order starting with C and ending with 3, they do not share 
+a single idea about the order in which the bytes of a binary number should be stored. 
+Some computers are “big-endian” (for example, older SPARC processors) and put the most 
+significant byte first, just like we do when writing decimal digits; others (like the nearly ubiquitous x86 
+architecture) are “little-endian” and put the least significant byte first. 
+For an entertaining historical perspective on the issue, be sure to read Danny Cohen's paper IEN-
+137, “On Holy Wars and a Plea for Peace,” which introduced the words “big-endian” and “little-endian” 
+in a parody of Jonathan Swift: www.ietf.org/rfc/ien/ien137.txt. 
+Python makes it very easy to see the difference between the two endiannesses. Simply use the struct 
+module, which provides a variety of operations for converting data to and from popular binary formats. 
+Here is the number 4253 represented first in a little-endian format and then in a big-endian order: 
+>>> import struct 
+>>> struct.pack('<i', 4253) 
+'\x9d\x10\x00\x00' 
+>>> struct.pack('>i', 4253) 
+'\x00\x00\x10\x9d' 
+We here used the code i, which uses four bytes to store an integer, so the two upper bytes are zero for a 
+small number like 4253. You can think of the struct codes for these two orders as little arrows pointing toward 
+the least significant end of a string of bytes, if that helps you remember which one to use. See the struct 
+module documentation in the Standard Library for the full array of data formats that it supports. It also 
+supports an unpack() operation, which converts the binary data back to Python numbers: 
+>>> struct.unpack('>i', '\x00\x00\x10\x9d') 
+(4253,) 
+If the big-endian format makes more sense to you intuitively, then you may be pleased to learn that 
+it “won” the contest of which endianness would become the standard for network data. Therefore the 
+struct module provides another symbol, '!', which means the same thing as '>' when used in pack() 
+and unpack() but says to other programmers (and, of course, to yourself as you read the code later), “I 
+am packing this data so that I can send it over the network.” 
+In summary, here is my advice for preparing binary data for transmission across a network socket: 
+• 
+Use the struct module to produce binary data for transmission on the network, 
+and to unpack it upon arrival. 
+• 
+Select network byte order with the '!' prefix if the data format is up to you. 
+• 
+If someone else has designed the protocol and specified little-endian, then you 
+will have to use '<' instead. 
+• 
+Always test struct to see how it lays out your data compared to the specification 
+for the protocol you are speaking; note that 'x' characters in the packing format 
+string can be used to insert padding bytes. 
+You might see older Python code use a cadre of awkwardly named functions from the socket 
+module in order to turn integers into byte strings in network order. These functions have names like 
+ntohl() and htons(), and correspond to functions of the same name in the POSIX networking library—
+
+CHAPTER 5 ■ NETWORK DATA AND NETWORK ERRORS 
+75
+which also supplies calls like socket() and bind(). I suggest that you ignore these awkward functions, 
+and use the struct module instead; it is more flexible, more general, and produces more readable code. 
+Framing and Quoting 
+If you are using UDP datagrams for communication, then the protocol itself takes the trouble to deliver 
+your data in discrete and identifiable chunks—and you have to reorder and re-transmit them yourself if 
+anything goes wrong on the network, as outlined in Chapter 2. 
+But if you have made the far more common option of using a TCP stream for communication, then 
+you will face the issue of framing—of how to delimit your messages so that the receiver can tell where 
+one message ends and the next begins. Since the data you supply to sendall() might be broken up into 
+several packets, the program that receives your message might have to make several recv() calls before 
+your whole message has been read. 
+The issue of framing asks the question: when is it safe for the receiver to finally stop calling recv() 
+and respond to your message? 
+As you might imagine, there are several approaches. 
+First, there is a pattern that can be used by extremely simple network protocols that involve only the 
+delivery of data—no response is expected, so there never has to come a time when the receiver decides 
+“Enough!” and turns around to send a response. In this case, the sender can loop until all of the outgoing 
+data has been passed to sendall() and then close() the socket. The receiver need only call recv() 
+repeatedly until the call finally returns an empty string, indicating that the sender has finally closed the 
+socket. You can see this pattern in Listing 5–1. 
+Listing 5–1. Sending a Single Stream of Data 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 5 - streamer.py 
+# Client that sends data then closes the socket, not expecting a reply. 
+ 
+import socket, sys 
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM) 
+ 
+HOST = sys.argv.pop() if len(sys.argv) == 3 else '127.0.0.1' 
+PORT = 1060 
+ 
+if sys.argv[1:] == ['server']: 
+»   s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) 
+»   s.bind((HOST, PORT)) 
+»   s.listen(1) 
+»   print 'Listening at', s.getsockname() 
+»   sc, sockname = s.accept() 
+»   print 'Accepted connection from', sockname 
+»   sc.shutdown(socket.SHUT_WR) 
+»   message = '' 
+»   while True: 
+»   »   more = sc.recv(8192)  # arbitrary value of 8k 
+»   »   if not more:  # socket has closed when recv() returns '' 
+»   »   »   break 
+»   »   message += more 
+»   print 'Done receiving the message; it says:' 
+»   print message 
+»   sc.close() 
+
+CHAPTER 5 ■ NETWORK DATA AND NETWORK ERRORS 
+76 
+»   s.close() 
+ 
+elif sys.argv[1:] == ['client']: 
+»   s.connect((HOST, PORT)) 
+»   s.shutdown(socket.SHUT_RD) 
+»   s.sendall('Beautiful is better than ugly.\n') 
+»   s.sendall('Explicit is better than implicit.\n') 
+»   s.sendall('Simple is better than complex.\n') 
+»   s.close() 
+ 
+else: 
+»   print >>sys.stderr, 'usage: streamer.py server|client [host]' 
+If you run this script as a server and then, at another command prompt, run the client version, you 
+will see that all of the client's data makes it intact to the server, with the end-of-file event generated by 
+the client closing the socket serving as the only framing that is necessary: 
+$ python streamer.py server 
+Listening at ('127.0.0.1', 1060) 
+Accepted connection from ('127.0.0.1', 52039) 
+Done receiving the message; it says: 
+Beautiful is better than ugly. 
+Explicit is better than implicit. 
+Simple is better than complex. 
+Note the nicety that, since this socket is not intended to receive any data, the client and server both 
+go ahead and shut down communication in the other direction. This prevents any accidental use of the 
+socket in the other direction—use that could eventually queue up enough unread data to produce 
+deadlock, as we saw in Listing 3-2. It is really only necessary for either the client or server to call 
+shutdown() on the socket; it is redundant for both of them to do so. But since you someday might be 
+programming only one end of such a connection, I thought you might want to see how the shutdown 
+looks from both directions. 
+A second pattern is a variant on the first: streaming in both directions. The socket is initially left 
+open in both directions. First, data is streamed in one direction—exactly as shown in Listing 5–1—and 
+then that direction alone is shut down. Second, data is then streamed in the other direction, and the 
+socket is finally closed. Again, Listing 3-2 provides an important warning: always finish the data transfer 
+in one direction before turning around to stream data back in the other, or you could produce a client 
+and server that are deadlocked. 
+A third pattern, which we have already seen, is to use fixed-length messages, as illustrated in 
+Listing 3-1. You can use the Python sendall() method to keep sending parts of a string until the whole 
+thing has been transmitted, and then use a recv() loop of our own devising to make sure that you 
+receive the whole message: 
+def recvall(sock, length): 
+»   data = '' 
+»   while len(data) < length: 
+»   »   more = sock.recv(length - len(data)) 
+»   »   if not more: 
+»   »   »   raise EOFError('socket closed %d bytes into a %d-byte message' 
+»   »   »   »   »   »      % (len(data), length)) 
+»   »   data += more 
+»   return data 
+
+CHAPTER 5 ■ NETWORK DATA AND NETWORK ERRORS 
+77
+Fixed-length messages are a bit rare since so little data these days seems to fit within static 
+boundaries, but when transmitting binary data in particular, you might find it a good fit for certain 
+situations. 
+A fourth pattern is to somehow delimit your messages with special characters. The receiver would 
+wait in a recv() loop like the one just cited, but wait until the reply string it was accumulating finally 
+contained the delimiter indicating the end-of-message. If the bytes or characters in the message are 
+guaranteed to fall within some limited range, then the obvious choice is to end each message with a 
+symbol chosen from outside that range. If you were sending ASCII strings, for example, you might 
+choose the null character '\0' as the delimiter. 
+If instead the message can include arbitrary data, then using a delimiter is a problem: what if the 
+character you are trying to use as the delimiter turns up as part of the data? The answer, of course, is 
+quoting, just like having to represent a single-quote character as \' in the middle of a Python string that 
+is itself delimited by single-quote characters: 
+'All\'s well that ends well.' 
+I recommend using a delimiter scheme only where your message alphabet is constrained; it is too 
+much trouble if you have to handle arbitrary data. For one thing, your test for whether the delimiter has 
+arrived now has to make sure that you are not confusing a quoted delimiter for a real one that actually 
+ends the message. A second complexity is that you then have to make a pass over the message to remove 
+the quote characters that were protecting literal occurrences of the delimiter. Finally, it means that 
+message length cannot be measured until you have performed decoding—a message of length 400 could 
+be 400 symbols long, or it could be 200 instances of the delimiter accompanied by the quoting character, 
+or anything in between. 
+A fifth pattern is to prefix each message with its length. This is a very popular choice for high-
+performance protocols since blocks of binary data can be sent verbatim without having to be analyzed, 
+quoted, or interpolated. Of course, the length itself has to be framed using one of the techniques given 
+previously—often it is simply a fixed-width binary integer, or else a variable-length decimal string 
+followed by a delimiter. But either way, once the length has been read and decoded, the receiver can 
+enter a loop and call recv() repeatedly until the whole message has arrived. The loop can look exactly 
+like the one in Listing 3-1, but with a length variable in place of the number 16. 
+Finally, what if you want the simplicity and efficiency of this fifth pattern but you do not know 
+ahead of time how long each message will be—perhaps because the sender is himself reading data from 
+a source whose length he cannot predict? In such cases, do you have to abandon elegance and slog 
+through the data looking for delimiters? 
+Unknown lengths are no problem if you use a final, and sixth, pattern. Instead of sending just one, 
+try sending several blocks of data that are each prefixed with their length. This means that as each chunk 
+of new information becomes available to the sender, it can be labeled with its length and placed on the 
+outgoing stream. When the end finally arrives, the sender can emit an agreed-upon signal—perhaps a 
+length field giving the number zero—that tells the receiver that the series of blocks is complete. 
+A very simple example of this idea is shown in Listing 5–2. Like the previous listing, this sends data 
+in only one direction—from the client to the server—but the data structure is much more interesting. 
+Each message is prefixed with a 4-byte length; in a struct, 'I' means a 32-bit unsigned integer, meaning 
+that these messages can be up to 4GB in length. A series of three such messages is sent to the server, 
+followed by a zero-length message—which is essentially just a length field with zeros inside and then no 
+message data after it—to signal that the series of blocks is over. 
+Listing 5–2. Sending Blocks of Data 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 5 - blocks.py 
+# Sending data one block at a time. 
+ 
+import socket, struct, sys 
+
+CHAPTER 5 ■ NETWORK DATA AND NETWORK ERRORS 
+78 
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM) 
+ 
+HOST = sys.argv.pop() if len(sys.argv) == 3 else '127.0.0.1' 
+PORT = 1060 
+format = struct.Struct('!I')  # for messages up to 2**32 - 1 in length 
+ 
+def recvall(sock, length): 
+»   data = '' 
+»   while len(data) < length: 
+»   »   more = sock.recv(length - len(data)) 
+»   »   if not more: 
+»   »   »   raise EOFError('socket closed %d bytes into a %d-byte message' 
+»   »   »   »   »   »      % (len(data), length)) 
+»   »   data += more 
+»   return data 
+ 
+def get(sock): 
+»   lendata = recvall(sock, format.size) 
+»   (length,) = format.unpack(lendata) 
+»   return recvall(sock, length) 
+ 
+def put(sock, message): 
+»   sock.send(format.pack(len(message)) + message) 
+ 
+if sys.argv[1:] == ['server']: 
+»   s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) 
+»   s.bind((HOST, PORT)) 
+»   s.listen(1) 
+»   print 'Listening at', s.getsockname() 
+»   sc, sockname = s.accept() 
+»   print 'Accepted connection from', sockname 
+»   sc.shutdown(socket.SHUT_WR) 
+»   while True: 
+»   »   message = get(sc) 
+»   »   if not message: 
+»   »   »   break 
+»   »   print 'Message says:', repr(message) 
+»   sc.close() 
+»   s.close() 
+ 
+elif sys.argv[1:] == ['client']: 
+»   s.connect((HOST, PORT)) 
+»   s.shutdown(socket.SHUT_RD) 
+»   put(s, 'Beautiful is better than ugly.') 
+»   put(s, 'Explicit is better than implicit.') 
+»   put(s, 'Simple is better than complex.') 
+»   put(s, '') 
+»   s.close() 
+ 
+else: 
+»   print >>sys.stderr, 'usage: streamer.py server|client [host]' 
+Note how careful we have to be! Even though four bytes of length is such a tiny amount of data that 
+we cannot imagine recv() not returning it all at once, our code is still correct only if we carefully wrap 
+
+CHAPTER 5 ■ NETWORK DATA AND NETWORK ERRORS 
+79
+recv() in a loop that—just in case—will keep demanding more data until all four bytes have arrived. This 
+is the kind of caution that will serve you well when writing network code. It is also the kind of fiddly little 
+detail that makes most people glad that they can deal just with higher-level protocols, and not have to 
+learn to talk with sockets in the first place! 
+So those are six good options for dividing up an unending stream of data into digestible chunks so 
+that clients and servers know when a message is complete and they can turn around and respond. Note 
+that many modern protocols mix them together, and that you are free to do the same thing. 
+A good example is the HTTP protocol, which we will learn more about in Part 2 of this book. It uses a 
+delimiter—the blank line '\r\n\r\n'—to signal when its headers are complete. Because the headers are 
+text, line endings can safely be treated as special characters. But since the actual payload can be pure 
+binary data, like an image or compressed file, the Content-Length provided in the headers is used to 
+determine how much more data to read off of the socket. Thus HTTP mixes the fourth and fifth patterns 
+we have looked at here. In fact, it can also use our sixth option: if a server is streaming a response whose 
+length it cannot predict, then it can use a “chunked encoding,” which sends several blocks that are each 
+prefixed with their length. A zero length marks the end of the transmission, just as it does in Listing 5–2. 
+Pickles and Self-Delimiting Formats 
+Note that some kinds of data that you might send across the network already include some form of 
+delimiting built-in. If you are transmitting such data, then you might not have to impose your own 
+framing atop what the data is already doing. 
+Consider Python “pickles,” for example, the native form of serialization that comes with the 
+Standard Library. Using a quirky mix of text commands and data, a pickle stores the contents of a Python 
+data structure so that you can reconstruct it later or on a different machine: 
+>>> import pickle 
+>>> pickle.dumps([5, 6, 7]) 
+'(lp0\nI5\naI6\naI7\na.' 
+The interesting thing about the format is the '.' character that you see at the end of the foregoing 
+string—it is the format's way of marking the end of a pickle. Upon encountering it, the loader can stop 
+and return the value without reading any further. Thus we can take the foregoing pickle, stick some ugly 
+data on the end, and see that loads() will completely ignore it and give us our original list back: 
+>>> pickle.loads('(lp0\nI5\naI6\naI7\na.UjJGdVpHRnNaZz09') 
+[5, 6, 7] 
+Of course, using loads() this way is not useful for network data, since it does not tell us how many 
+bytes it processed in order to reload the pickle; we still do not know how much of our string is pickle 
+data. But if we switch to reading from a file and using the pickle load() function, then the file pointer will 
+be left right at the end of the pickle data, and we can start reading from there if we want to read what 
+came after the pickle: 
+>>> from StringIO import StringIO 
+>>> f = StringIO('(lp0\nI5\naI6\naI7\na.UjJGdVpHRnNaZz09') 
+>>> pickle.load(f) 
+[5, 6, 7] 
+>>> f.pos 
+18 
+>>> f.read() 
+'UjJGdVpHRnNaZz09' 
+Alternately, we could create a protocol that just consisted of sending pickles back and forth between 
+two Python programs. Note that we would not need the kind of loop that we put into the recvall() 
+
+CHAPTER 5 ■ NETWORK DATA AND NETWORK ERRORS 
+80 
+function in Listing 5–2, because the pickle library knows all about reading from files and how it might
+have to do repeated reads until an entire pickle has been read. Remember to use the makefile() socket
+method—which was discussed in Chapter 3—if you want to wrap a socket in a Python file object for
+consumption by a routine like the pickle load() function. 
+Note that there are many subtleties involved in pickling large data structures, especially if they
+contain Python objects beyond simple built-in types like integers, strings, lists, and dictionaries. See the
+pickle module documentation for more details. 
+XML, JSON, Etc. 
+If your protocol needs to be usable from other programming languages—or if you simply prefer
+universal standards to formats specific to Python—then the JSON and XML data formats are each a
+popular choice. Note that neither of these formats supports framing, so you will have to first figure out
+how to extract a complete string of text from over the network before you can then process it. 
+JSON is among the best choices available today for sending data between different computer
+languages. Since Python 2.6, it has been included in the Standard Library as a module named json; for
+earlier Python versions, simply install the popular simplejson distribution. Either way, you will have
+available a universal technique for serializing simple data structures: 
+>>> try: 
+...     import json 
+... except ImportError: 
+...     import simplejson as json 
+... 
+>>> json.dumps([ 51, u'Namárië!' ]) 
+'[51, "Nam\\u00e1ri\\u00eb!"]' 
+>>> json.loads('{"name": "Lancelot", "quest": "Grail"}')
+{u'quest': u'Grail', u'name': u'Lancelot'} 
+Note that the protocol fully supports Unicode strings—using the popular UTF-8 as its default
+encoding—and that it supports strings of actual characters, not Python-style strings of bytes, as its basic
+type. For more information about JSON, see the discussion in Chapter 18 about JSON-RPC; that chapter
+talks in greater detail about the Python data types that the JSON format supports, and also has some
+hints about getting your data ready for serialization. 
+It does, however, have a weakness: a vast omission in the JSON standard is that it provides
+absolutely no provision for cleanly passing binary data like images or arbitrary documents. There exists a
+kindred format named BSON—the “B” is for “binary”—that supports additional types including raw
+binary strings. In return it sacrifices human readability, substituting raw binary octets and length fields
+for the friendly braces and quotation marks of JSON. 
+The XML format is better for documents, since its basic structure is to take strings and mark them
+up by wrapping them in angle-bracketed elements. In Chapter 10, we will take an extensive look at the
+various options available in Python for processing documents written in XML and related formats. But
+for now, simply keep in mind that you do not have to limit your use of XML to when you are actually
+using the HTTP protocol; there might be a circumstance when you need markup in text and you find
+XML useful in conjunction with some other protocol. 
+Among many other formats that developers might want to consider are Google Protocol Buffers,
+which are a bit different than the formats just defined because both the client and server have to have a
+code definition available to them of what each message will contain. But the system contains provisions
+for different protocol versions so that new servers can be brought into production still talking to other
+machines with an older protocol version until they can all be updated to the new one. They are very
+efficient, and pass binary data with no problem. 
+Download from www.eBookTM.Com
+
+CHAPTER 5 ■ NETWORK DATA AND NETWORK ERRORS 
+81
+Compression 
+Since the time necessary to transmit data over the network is often more significant than the time your 
+CPU spends preparing the data for transmission, it is often worthwhile to compress data before sending 
+it. The popular HTTP protocol, as we will see in Chapter 9, lets a client and server figure out whether they 
+can both support compression. 
+An interesting fact about the most ubiquitous form of compression, the GNU zlib facility that is 
+available through the Python Standard Library, is that it is self-framing. If you start feeding it a 
+compressed stream of data, then it can tell you when the compressed data has ended and further, 
+uncompressed data has arrived past its end. 
+Most protocols choose to do their own framing and then, if desired, pass the resulting block to zlib 
+for decompression. But you could conceivably promise yourself that you would always tack a bit of 
+uncompressed data onto the end of each zlib compressed string—here, we will use a single '.' byte—
+and watch for your compression object to split out that “extra data” as the signal that you are done. 
+Consider this combination of two compressed data streams: 
+>>> import zlib 
+>>> data = zlib.compress('sparse') + '.' + zlib.compress('flat') + '.' 
+>>> data 
+'x\x9c+.H,*N\x05\x00\t\r\x02\x8f.x\x9cK\xcbI,\x01\x00\x04\x16\x01\xa8.' 
+>>> len(data) 
+28 
+Yes, I know, using 28 bytes to represent 10 actual characters of data is not terribly efficient; but this 
+is just an example, and zlib works well only when given several dozen or more bytes of data to 
+compress! 
+Imagine that these 28 bytes arrive at their destination in 8-byte packets. After processing the first 
+packet, we will find the decompression object's unused_data slot still empty, which tells us that there is 
+still more data coming, so we would recv() on our socket again: 
+>>> dobj = zlib.decompressobj() 
+>>> dobj.decompress(data[0:8]), dobj.unused_data 
+('spars', '') 
+But the second block of eight characters, when fed to our decompress object, both finishes out the 
+compressed data we were waiting for (since the final 'e' completes the string 'sparse') and also finally 
+has a non-empty unused_data value that shows us that we finally received our '.' byte: 
+>>> dobj.decompress(data[8:16]), dobj.unused_data 
+('e', '.x') 
+If another stream of compressed data is coming, then we have to provide everything past the '.'—
+in this case, the character 'x'—to our new decompress object, then start feeding it the remaining 
+“packets”: 
+>>> dobj2 = zlib.decompressobj() 
+>>> dobj2.decompress('x'), dobj2.unused_data 
+('', '') 
+>>> dobj2.decompress(data[16:24]), dobj2.unused_data 
+('flat', '') 
+>>> dobj2.decompress(data[24:]), dobj2.unused_data 
+('', '.') 
+At this point, unused_data is again non-empty, meaning that we have read past the end of this 
+second bout of compressed data and can examine its content. 
+
+CHAPTER 5 ■ NETWORK DATA AND NETWORK ERRORS 
+82 
+Again, most protocol designers make compression optional and simply do their own framing. But if 
+you know ahead of time that you will always want to use zlib, then a convention like this would let you 
+take advantage of the stream termination built into zlib and always detect the end of a compressed 
+stream. 
+Network Exceptions 
+The example scripts in this book are generally designed to catch only those exceptions that are integral 
+to the feature being demonstrated. So when we illustrated socket timeouts in Listing 2-2, we were careful 
+to catch the exception socket.timeout since that is how timeouts are signaled; but we ignored all of the 
+other exceptions that will occur if the hostname provided on the command line is invalid, or a remote IP 
+is used with bind(), or the port used with bind() is already busy, or the peer cannot be contacted or 
+stops responding. 
+What errors can result from working with sockets? Though the number of errors that can take place 
+while using a network connection is quite large—involving every possible misstep that can occur at 
+every stage of the complex TCP/IP protocol, for example—the number of actual exceptions with which 
+socket operations can hit your programs is fortunately quite few. The exceptions that are specific to 
+socket operations are: 
+• 
+socket.gaierror: This exception is raised when getaddrinfo() cannot find a name 
+or service that you ask about—hence the letters G, A, and I in its name! It can be 
+raised not only when you make an explicit call to getaddrinfo(), but if you supply 
+a hostname instead of an IP address to a call like bind() or connect() and the 
+hostname lookup fails: 
+>>> import socket 
+>>> s = socket.socket(socket.AF_INET, socket.SOCK_STREAM) 
+>>> s.connect(('nonexistent.hostname.foo.bar', 80)) 
+Traceback (most recent call last): 
+  ... 
+gaierror: [Errno -5] No address associated with hostname 
+• 
+socket.error: This is the workhorse of the socket module, and will be raised for 
+nearly every failure that can happen at any stage in a network transmission. 
+Starting with Python 2.6, this exception became, appropriately enough, a subclass 
+of the more general IOError. This can occur during nearly any socket call, even 
+when you least expect it—because a previous send(), for example, might have 
+elicited a reset (RST) packet from the remote host and the error will then be 
+delivered whenever you next try to manipulate the socket. 
+• 
+socket.timeout: This exception is raised only if you, or a library that you are using, 
+decides to set a timeout on a socket rather than wait forever for a send() or recv() 
+to complete. It indicates that the timeout was reached before the operation could 
+complete normally. 
+You will see that the Standard Library documentation for the socket module also describes an 
+herror exception; fortunately, it can occur only if you use certain old-fashioned address lookup calls 
+instead of following the practices we outlined in Chapter 4. 
+A big question when you are using higher-level socket-based protocols from Python is whether they 
+allow raw socket errors to hit your own code, or whether they catch them and turn them into their own 
+kind of error. 
+
+CHAPTER 5 ■ NETWORK DATA AND NETWORK ERRORS 
+83
+Examples of both approaches exist within the Python Standard Library itself! For example, the 
+httplib considers itself low-level enough that it can let you see the raw socket error that results from 
+connecting to an unknown hostname: 
+>>> import httplib 
+>>> h = httplib.HTTPConnection('nonexistent.hostname.foo.bar') 
+>>> h.request('GET', '/') 
+Traceback (most recent call last): 
+  ... 
+gaierror: [Errno -2] Name or service not known 
+But the urllib2, probably because it wants to preserve the semantics of being a clean and neutral 
+system for resolving URLs to documents, hides the very same error and returns a URLError instead: 
+>>> import urllib2 
+>>> urllib2.urlopen('http://nonexistent.hostname.foo.bar/') 
+Traceback (most recent call last): 
+  ... 
+URLError: <urlopen error [Errno -2] Name or service not known> 
+So depending on the protocol implementation that you are using, you might have to deal only with 
+exceptions specific to that protocol, or you might have to deal with both protocol-specific exceptions 
+and with raw socket errors as well. Consult documentation carefully if you are in doubt about the 
+approach taken by a particular library. For the major packages that we cover in the subsequent chapters 
+of this book, I have tried to provide insets that list the possible exceptions to which each library can 
+subject your code. 
+And, of course, you can always fire up the library in question, provide it with a non-existent 
+hostname (or simply run it when disconnected from the network!), and see what kind of exception 
+comes out. 
+Handling Exceptions 
+When writing a network program, how should you handle all of the errors that can occur? 
+Of course, this question is not really specific to networking; all sorts of Python programs have to 
+handle exceptions, and the techniques that we discuss briefly in this chapter are applicable to many 
+other kinds of programs. 
+There are four basic approaches. 
+The first is not to handle exceptions at all. If only you or only other Python programmers will be 
+using your script, then they will probably not be fazed by seeing an exception. Though they waste screen 
+space and can make the reader squint to actually find the error message buried down at the bottom of 
+the traceback, they are useful if the only recourse is likely to be editing the code to improve it! 
+If you are writing a library of calls to be used by other programmers, then this first approach is 
+usually preferable, since by letting the exception through you give the programmer using your API the 
+chance to decide how to present errors to his or her users. It is almost never appropriate for a library of 
+code to make its own decision to terminate the program and print out a human-readable error message. 
+What, for example, if the program is not running from the console and a pop-up window or system log 
+message should be used instead? 
+But if you are indeed writing a library, then there is a second approach to consider: wrapping the 
+network errors in an exception of your own. This can be very valuable if your library is complex—
+perhaps it maintains connections to several other services—and if it will be difficult for a programmer to 
+guess which of the network operations that you are attempting resulted in the raw socket.error that you 
+have allowed to be dumped in his or her lap. 
+
+CHAPTER 5 ■ NETWORK DATA AND NETWORK ERRORS 
+84 
+If you offer a netcopy() method that copies a file from one remote machine to another, for example, 
+a socket.error does not help the caller know whether the error was with the connection to the source 
+machine, or the destination machine, or was some other problem altogether! In this case, it would be 
+much better to define your own exceptions, like SourceHostError and DestHostError, which have a tight 
+semantic relationship to the purpose of the netcopy API call that raised them. You can always include the 
+original socket error as an instance variable of your own exception instances in case some users of your 
+API will want to investigate further: 
+try: 
+»   host = sock.bind(address) 
+except socket.error as e: 
+»   raise URLError(e) 
+A third approach to exceptions is to wrap a try…except clause around every single network call that 
+you ever make, and print out a pithy error message in its place. While suitable for short programs, this 
+can become very repetitive when long programs are involved, without necessarily providing that much 
+more information for the user. When you wrap the hundredth network operation in your program with 
+yet another try…except and error message, ask yourself whether you are really providing that much more 
+information than if you had just caught them all with one big exception handler. 
+And the idea of having big exception handlers that cover lots of code is the fourth and—in my 
+opinion—best approach. Step back from your code and identify big regions that do specific things, like 
+“this whole routine connects to the license server”; “all the socket operations in this function are 
+fetching a response from the database”; and “this is all cleanup and shutdown code.” Then the outer 
+parts of your program—the ones that collect input, command-line arguments, and configuration, and 
+then set big operations in motion—can wrap those big operations with handlers like the following: 
+try: 
+»   deliver_updated_keyfiles(…) 
+except (socket.error, socket.gaierror) as e: 
+»   print >>sys.stderr, 'cannot deliver remote keyfiles: %s' % (e) 
+»   exit(1) 
+Or, better yet, have pieces of code like this raise an error of your own devising: 
+except: 
+»   FatalError('cannot send replies: %s' % (e)) 
+Then, at the very top level of your program, catch all of the FatalError exceptions that you throw 
+and print the error messages out there. That way, when the day comes that you want to add a command-
+line option that sends fatal errors to the system error logs instead of to the screen, you have to adjust 
+only one piece of code! 
+There is one final reason that might dictate where you add an exception handler to your network 
+program: you might want to intelligently re-try an operation that failed. In long-running programs, this 
+is common. Imagine a utility that periodically sent out e-mails with its status; if suddenly it cannot send 
+them successfully, then it probably does not want to shut down for what might be just a transient error. 
+Instead, the e-mail thread might log the error, wait several minutes, and try again. 
+In such cases, you will add exception handlers around very specific sequences of network 
+operations that you want to treat as having succeeded or failed as a single combined operation. “If 
+anything goes wrong in here, then I will just give up, wait ten minutes, and then start all over again the 
+attempt to send that e-mail.” Here the structure and logic of the network operations that you are 
+performing—and not user or programmer convenience—will guide where you deploy try…except 
+clauses. 
+
+CHAPTER 5 ■ NETWORK DATA AND NETWORK ERRORS 
+85
+Summary 
+For machine information to be placed on the network, it has to be transformed, so that whatever private 
+and idiosyncratic storage mechanism is used inside your machine gets replaced by a public and 
+reproducible representation that can be read on other systems, by other programs, and perhaps even by 
+other programming languages. 
+For text, the big question will be choosing an encoding, so that the symbols you want to transmit 
+can be changed into bytes, since 8-bit octets are the common currency of an IP network. Binary data will 
+require your attention to make sure that bytes are ordered in a way that is compatible between different 
+machines; the Python struct module will help you with this. Finally, data structures and documents are 
+sometimes best sent using something like JSON or XML that provides a common way to share structured 
+data between machines. 
+When using TCP/IP streams, a big question you will face is about framing: how, in the long stream 
+of data, will you tell where a particular message starts and ends? There are many possible techniques for 
+accomplishing this, all of which must be handled with care since recv() might return only part of an 
+incoming transmission with each call. Special delimiter characters or patterns, fixed-length messages, 
+and chunked-encoding schemes are all possible ways to festoon blocks of data so that they can be 
+distinguished. 
+Not only will Python pickles transform data structures into strings that you can send across the 
+network, but also the pickle module can tell where a pickle ends; this lets you use pickles not only to 
+encode data but also to frame the individual messages on a stream. The zlib compression mechanism, 
+which is often used with HTTP, also can tell when a compressed segment comes to an end, which can 
+also provide you with inexpensive framing. 
+Sockets can raise several kinds of exceptions, as can network protocols that your code uses. The 
+choice of when to use try…except clauses will depend on your audience—are you writing a library for 
+other developers, or a tool for end users?—and also on semantics: you can wrap a whole section of your 
+program in a try…except if all of that code is doing one big thing from the point of view of the caller or 
+end user. 
+Finally, you will want to separately wrap operations with a try…except that can logically be re-tried 
+in case the error is transient and they might later succeed. 
+
+CHAPTER 5 ■ NETWORK DATA AND NETWORK ERRORS 
+86 
+ 

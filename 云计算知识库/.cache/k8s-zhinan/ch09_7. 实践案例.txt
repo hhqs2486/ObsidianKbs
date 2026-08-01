@@ -1,0 +1,1066 @@
+Kubernetes实践
+Kubernetes实践及常用技巧。
+7. 实践案例
+496
+
+Kubernetes监控
+[info] Kubernetes监控注意事项
+tags和labels变的非常重要，是应用分组的重要依据
+多维度的监控，包括集群内的所有节点、容器、容器内的应用以及Kubernetes
+自身
+天生的分布式，对复杂应用的监控聚合是个挑战
+cAdvisor
+cAdvisor是一个来自Google的容器监控工具，也是kubelet内置的容器资源收集工具。它
+会自动收集本机容器CPU、内存、网络和文件系统的资源占用情况，并对外提供
+cAdvisor原生的API（默认端口为 --cadvisor-port=4194 ）。
+InfluxDB和Grafana
+监控
+497
+
+InfluxDB是一个开源分布式时序、事件和指标数据库；而Grafana则是InfluxDB的
+dashboard，提供了强大的图表展示功能。它们常被组合使用展示图表化的监控数据。
+Heapster
+前面提到的cAdvisor只提供了单机的容器资源占用情况，而Heapster则提供了整个集群
+的资源监控，并支持持久化数据存储到InfluxDB、Google Cloud Monitoring或者其他的
+存储后端。
+Heapster从kubelet提供的API采集节点和容器的资源占用：
+另外，Heapster的 /metrics  API提供了Prometheus格式的数据。
+部署Heapster、InfluxDB和Grafana
+监控
+498
+
+在Kubernetes部署成功后，dashboard、DNS和监控的服务也会默认部署好，比如通
+过 cluster/kube-up.sh 部署的集群默认会开启以下服务：
+$ kubectl cluster-info
+Kubernetes master is running at https://kubernetes-master
+Heapster is running at https://kubernetes-master/api/v1/proxy/namespa
+ces/kube-system/services/heapster
+KubeDNS is running at https://kubernetes-master/api/v1/proxy/namespac
+es/kube-system/services/kube-dns
+kubernetes-dashboard is running at https://kubernetes-master/api/v1/p
+roxy/namespaces/kube-system/services/kubernetes-dashboard
+Grafana is running at https://kubernetes-master/api/v1/proxy/namespac
+es/kube-system/services/monitoring-grafana
+InfluxDB is running at https://kubernetes-master/api/v1/proxy/namespa
+ces/kube-system/services/monitoring-influxdb
+如果这些服务没有自动部署的话，可以根据cluster/addons来添加需要的服务。
+Prometheus
+Prometheus是另外一个监控和时间序列数据库，并且还提供了告警的功能。它提供了强
+大的查询语言和HTTP接口，也支持将数据导出到Grafana中展示。
+使用Prometheus监控Kubernetes需要配置好数据源，一个简单的示例
+是prometheus.yml：
+kubectl create -f http://feisky.xyz/kubernetes/monitor/prometheus.txt
+监控
+499
+
+推荐使用Prometheus Operator或Prometheus Chart来部署和管理Prometheus。
+其他容器监控系统
+Sysdig
+CoScale
+Datadog
+Sematext
+监控
+500
+
+Kubernetes日志
+ELK可谓是容器日志收集、处理和搜索的黄金搭档:
+Logstash（或者Fluentd）负责收集日志
+Elasticsearch存储日志并提供搜索
+Kibana负责日志查询和展示
+注意：Kubernetes默认使用fluentd（以DaemonSet的方式启动）来收集日志，并将收集
+的日志发送给elasticsearch。
+小提示
+在使用 cluster/kube-up.sh 部署集群的时候，可以设
+置 KUBE_LOGGING_DESTINATION 环境变量自动部署Elasticsearch和Kibana，并使用
+fluentd收集日志(配置参考addons/fluentd-elasticsearch)：
+KUBE_LOGGING_DESTINATION=elasticsearch
+KUBE_ENABLE_NODE_LOGGING=true
+cluster/kube-up.sh
+如果使用GCE或者GKE的话，还可以将日志发送给Google Cloud Logging，并可以集成
+Google Cloud Storage和BigQuery。
+如果需要集成其他的日志方案，还可以自定义docker的log driver，将日志发送到splunk
+或者awslogs等。
+应用日志收集
+在进行日志收集的过程中，我们首先想到的是使用Logstash，因为它是ELK stack中的
+重要成员，但是在测试过程中发现，Logstash是基于JDK的，在没有产生日志的情况单
+纯启动Logstash就大概要消耗500M内存，在每个Pod中都启动一个日志收集组件的情况
+下，使用logstash有点浪费系统资源，经人推荐我们选择使用Filebeat替代，经测试单独
+启动Filebeat容器大约会消耗12M内存，比起logstash相当轻量级。
+方案选择
+日志
+501
+
+Kubernetes官方提供了EFK的日志收集解决方案，但是这种方案并不适合所有的业务场
+景，它本身就有一些局限性，例如：
+所有日志都必须是out前台输出，真实业务场景中无法保证所有日志都在前台输出
+只能有一个日志输出文件，而真实业务场景中往往有多个日志输出文件
+Fluentd并不是常用的日志收集工具，我们更习惯用logstash，现使用filebeat替代
+我们已经有自己的ELK集群且有专人维护，没有必要再在kubernetes上做一个日志
+收集服务
+基于以上几个原因，我们决定使用自己的ELK集群。
+Kubernetes集群中的日志收集解决方案
+编
+号
+方案
+优点
+缺点
+1
+每个app的镜像中都集
+成日志收集组件
+部署方便，kubernetes的
+yaml文件无须特别配置，
+可以为每个app自定义日志
+收集配置
+强耦合，不方便应
+用和日志收集组件
+升级和维护且会导
+致镜像过大
+2
+单独创建一个日志收集
+组件跟app的容器一起
+运行在同一个pod中
+低耦合，扩展性强，方便
+维护和升级
+需要对kubernetes
+的yaml文件进行单
+独配置，略显繁琐
+3
+将所有的Pod的日志都
+挂载到宿主机上，每台
+主机上单独起一个日志
+收集Pod
+完全解耦，性能最高，管
+理起来最方便
+需要统一日志收集
+规则，目录和输出
+方式
+综合以上优缺点，我们选择使用方案二。
+该方案在扩展性、个性化、部署和后期维护方面都能做到均衡，因此选择该方案。
+日志
+502
+
+我们创建了自己的logstash镜像，镜像地址
+为： index.tenxcloud.com/jimmy/filebeat:5.4.0 
+测试
+我们部署一个应用filebeat来收集日志的功能测试。
+创建应用yaml文件 filebeat-test.yaml 。
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: filebeat-test
+  namespace: default
+spec:
+  replicas: 3
+  template:
+    metadata:
+      labels:
+        k8s-app: filebeat-test
+    spec:
+      containers:
+      - image: sz-pg-oam-docker-hub-001.tendcloud.com/library/filebea
+日志
+503
+
+t:5.4.0
+        name: filebeat
+        volumeMounts:
+        - name: app-logs
+          mountPath: /log
+        - name: filebeat-config
+          mountPath: /etc/filebeat/
+      - image: sz-pg-oam-docker-hub-001.tendcloud.com/library/analyti
+cs-docker-test:Build_8
+        name : app
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: app-logs
+          mountPath: /usr/local/TalkingData/logs
+      volumes:
+      - name: app-logs
+        emptyDir: {}
+      - name: filebeat-config
+        configMap:
+          name: filebeat-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: filebeat-test
+  labels:
+    app: filebeat-test
+spec:
+  ports:
+  - port: 80
+    protocol: TCP
+    name: http
+  selector:
+    run: filebeat-test
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: filebeat-config
+data:
+  filebeat.yml: |
+日志
+504
+
+    filebeat.prospectors:
+    - input_type: log
+      paths:
+        - "/log/*"
+        - "/log/usermange/common/*"
+    output.elasticsearch:
+      hosts: ["172.23.5.255:9200"]
+    username: "elastic"
+    password: "changeme"
+    index: "filebeat-test"
+说明
+该文件中包含了配置文件filebeat的配置文件的ConfigMap，因此不需要再定义环境变
+量。
+当然你也可以不同ConfigMap，通过传统的传递环境变量的方式来配置filebeat。
+例如对filebeat的容器进行如下配置：
+      containers:
+      - image: sz-pg-oam-docker-hub-001.tendcloud.com/library/filebea
+t:5.4.0
+        name: filebeat
+        volumeMounts:
+        - name: app-logs
+          mountPath: /log
+        env: 
+        - name: PATHS
+          value: "/log/*"
+        - name: ES_SERVER
+          value: 172.23.5.255:9200
+        - name: INDEX
+          value: logstash-docker
+        - name: INPUT_TYPE
+          value: log
+目前使用这种方式会有个问题，及时 PATHS 只能传递单个目录，如果想传递多个目录
+需要修改filebeat镜像的 docker-entrypoint.sh 脚本，对该环境变量进行解析增加
+filebeat.yml文件中的PATHS列表。
+日志
+505
+
+推荐使用ConfigMap，这样filebeat的配置就能够更灵活。
+注意事项
+将app的 /usr/local/TalkingData/logs 目录挂载到filebeat的 /log 目录下。
+该文件可以在 manifests/test/filebeat-test.yaml 找到。
+我使用了自己的私有镜像仓库，测试时请换成自己的应用镜像。
+Filebeat的环境变量的值配置
+ENV ES_SERVER 172.23.5.255:9200
+ENV INDEX filebeat-test
+ENV INPUT_TYPE log
+ENV ES_USERNAME elastic
+ENV ES_PASSWORD changeme
+创建应用
+部署Deployment
+kubectl create -f filebeat-test.yaml
+查看 http://172.23.5.255:9200/_cat/indices 将可以看到列表有这样的indices：
+green open filebeat-2017.05.17             1qatsSajSYqAV42_XYwLsQ 5 1
+   1189     0     1mb   588kb
+访问Kibana的web页面，查看 filebeat-2017.05.17 的索引，可以看到logstash收集
+到了app日志。
+日志
+506
+
+日志
+507
+
+Kubernetes HA
+Kubernetes从1.5开始，通过 kops 或者 kube-up.sh 部署的集群会自动部署一个高可
+用的系统，包括
+etcd集群模式
+apiserver负载均衡
+controller manager、scheduler和cluster autoscaler自动选主（有且仅有一个运行实
+例）
+如下图所示
+etcd集群
+高可用
+508
+
+从 https://discovery.etcd.io/new?size=3 获取token后，把
+https://kubernetes.io/docs/admin/high-availability/etcd.yaml放到每台机器
+的 /etc/kubernetes/manifests/etcd.yaml ，并替换掉 ${DISCOVERY_TOKEN} ,
+ ${NODE_NAME} 和 ${NODE_IP} ，既可以由kubelet来启动一个etcd集群。
+对于运行在kubelet外部的etcd，可以参考etcd clustering guide来手动配置集群模式。
+apiserver
+把https://kubernetes.io/docs/admin/high-availability/kube-apiserver.yaml放到每台
+Master节点的 /etc/kubernetes/manifests/ ，并把相关的配置放
+到 /srv/kubernetes/ ，即可由kubelet自动创建并启动apiserver:
+basic_auth.csv - basic auth user and password
+ca.crt - Certificate Authority cert
+known_tokens.csv - tokens that entities (e.g. the kubelet) can use to talk to the
+apiserver
+kubecfg.crt - Client certificate, public key
+kubecfg.key - Client certificate, private key
+server.cert - Server certificate, public key
+server.key - Server certificate, private key
+apiserver启动后，还需要为它们做负载均衡，可以使用云平台的弹性负载均衡服务或者
+使用haproxy/lvs等为master节点配置负载均衡。
+controller manager和scheduler
+controller manager和scheduler需要保证任何时刻都只有一个实例运行，需要一个选主
+的过程，所以在启动时要设置 --leader-elect=true ，比如
+kube-scheduler --master=127.0.0.1:8080 --v=2 --leader-elect=true
+kube-controller-manager --master=127.0.0.1:8080 --cluster-cidr=10.245
+.0.0/16 --allocate-node-cidrs=true --service-account-private-key-file
+=/srv/kubernetes/server.key --v=2 --leader-elect=true
+把kube-scheduler.yaml和kube-controller-manager.yaml(非GCE平台需要适当修改) 放到
+每台master节点的 /etc/kubernetes/manifests/ 即可。
+高可用
+509
+
+kube-dns
+kube-dns可以通过Deployment的方式来部署，默认kubeadm会自动创建。但在大规模
+集群的时候，需要放宽资源限制，比如
+dns_replicas: 6
+dns_cpu_limit: 100m
+dns_memory_limit: 512Mi
+dns_cpu_requests 70m
+dns_memory_requests: 70Mi
+另外，也需要给dnsmasq增加资源，比如增加缓存大小到10000，增加并发处理数量 --
+dns-forward-max=1000 等。
+kube-proxy
+默认kube-proxy使用iptables来为Service作负载均衡，这在大规模时会产生很大的
+Latency，可以考虑使用IPVS的替代方式（注意Kubernetes v1.6还不支持IPVS模式）。
+数据持久化
+除了上面提到的这些配置，持久化存储也是高可用Kubernetes集群所必须的。
+对于公有云上部署的集群，可以考虑使用云平台提供的持久化存储，比如aws ebs
+或者gce persistent disk
+对于物理机部署的集群，可以考虑使用iSCSI、NFS、Gluster或者Ceph等网络存
+储，也可以使用RAID
+参考文档
+https://kubernetes.io/docs/admin/high-availability/
+http://kubecloud.io/setup-ha-k8s-kops/
+https://github.com/coreos/etcd/blob/master/Documentation/op-guide/clustering.md
+Kubernetes Master Tier For 1000 Nodes Scale
+Scaling Kubernetes to Support 50000 Services
+高可用
+510
+
+调试运行中的容器
+对于普通的服务器进程，我们可以很方便的使用宿主机上的各种工具来调试；但容器经
+常是仅包含必要的应用程序，一般不包含常用的调试工具，那如何在线调试容器中的进
+程呢？最简单的方法是再起一个新的包含了调试工具的容器。
+来看一个最简单的web容器如何调试。
+webserver容器
+用Go编写一个最简单的webserver：
+// go-examples/basic/webserver
+package main
+import "net/http"
+import "fmt"
+import "log"
+func index(w http.ResponseWriter, r *http.Request) {
+    fmt.Fprintln(w, "Hello World")
+}
+func main() {
+    http.HandleFunc("/", index)
+    err := http.ListenAndServe(":80", nil)
+    if err != nil {
+        log.Println(err)
+    }
+}
+以linux平台方式编译
+GOOS=linux go build -o webserver
+然后用下面的Docker build一个docker镜像：
+调试
+512
+
+FROM scratch
+COPY ./webserver /
+CMD ["/webserver"]
+# docker build -t feisky/hello-world .
+Sending build context to Docker daemon 5.655 MB
+Step 1/3 : FROM scratch
+ --->
+Step 2/3 : COPY ./webserver /
+ ---> 184eb7c074b5
+Removing intermediate container abf107844295
+Step 3/3 : CMD /webserver
+ ---> Running in fe9fa4841e70
+ ---> dca5ec00b3e7
+Removing intermediate container fe9fa4841e70
+Successfully built dca5ec00b3e7
+最后启动webserver容器
+docker run -itd --name webserver -p 80:80 feisky/hello-world
+访问映射后的80端口，webserver容器正常返回"Hello World"
+# curl http://$(hostname):80
+Hello World
+新建一个容器调试webserver
+用一个包含调试工具或者方便安装调试工具的镜像（如alpine）创建一个新的
+container，为了便于获取webserver进程的状态，新的容器共享webserver容器的pid
+namespace和net namespace，并增加必要的capability：
+调试
+513
+
+docker run -it --rm --pid=container:webserver --net=container:webserv
+er --cap-add sys_admin --cap-add sys_ptrace alpine sh
+/ # ps -ef
+PID   USER     TIME   COMMAND
+    1 root       0:00 /webserver
+   13 root       0:00 sh
+   18 root       0:00 ps -ef
+这样，新的容器可以直接attach到webserver进程上来在线调试，比如strace到
+webserver进程
+# 继续在刚创建的新容器sh中执行
+/ # apk update && apk add strace
+fetch http://dl-cdn.alpinelinux.org/alpine/v3.5/main/x86_64/APKINDEX.
+tar.gz
+fetch http://dl-cdn.alpinelinux.org/alpine/v3.5/community/x86_64/APKI
+NDEX.tar.gz
+v3.5.1-34-g1d3b13bd53 [http://dl-cdn.alpinelinux.org/alpine/v3.5/main
+]
+v3.5.1-29-ga981b1f149 [http://dl-cdn.alpinelinux.org/alpine/v3.5/comm
+unity]
+OK: 7958 distinct packages available
+(1/1) Installing strace (4.14-r0)
+Executing busybox-1.25.1-r0.trigger
+OK: 5 MiB in 12 packages
+/ # strace -p 1
+strace: Process 1 attached
+epoll_wait(4,
+^Cstrace: Process 1 detached
+ <detached ...>
+也可以获取webserver容器的网络状态
+调试
+514
+
+# 继续在刚创建的新容器sh中执行
+/ # apk add lsof
+(1/1) Installing lsof (4.89-r0)
+Executing busybox-1.25.1-r0.trigger
+OK: 5 MiB in 13 packages
+/ # lsof -i TCP
+COMMAND   PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME
+webserver   1 root    3u  IPv6  14233      0t0  TCP *:http (LISTEN)
+当然，也可以访问webserver容器的文件系统
+/ # ls -l /proc/1/root/
+total 5524
+drwxr-xr-x    5 root     root           360 Feb 14 13:16 dev
+drwxr-xr-x    2 root     root          4096 Feb 14 13:16 etc
+dr-xr-xr-x  128 root     root             0 Feb 14 13:16 proc
+dr-xr-xr-x   13 root     root             0 Feb 14 13:16 sys
+-rwxr-xr-x    1 root     root       5651357 Feb 14 13:15 webserver
+Kubernetes社区也在提议增加一个 kubectl debug 命令，用类似的方式在Pod中启动
+一个新容器来调试运行中的进程，可以参见
+https://github.com/kubernetes/community/pull/649。
+调试
+515
+
+端口映射
+在创建Pod时，可以指定容器的hostPort和containerPort来创建端口映射，这样可以通过
+Pod所在Node的IP:hostPort来访问服务。比如
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+spec:
+  containers:
+  - image: nginx
+    name: nginx
+    ports:
+    - containerPort: 80
+      hostPort: 80
+  restartPolicy: Always
+注意事项
+使用了hostPort的容器只能调度到端口不冲突的Node上，除非有必要（比如运行一些系
+统级的daemon服务），不建议使用端口映射功能。如果需要对外暴露服务，建议使
+用NodePort Service。
+端口映射
+516
+
+端口转发
+端口转发是kubectl的一个子功能，通过 kubectl port-forward 可以将本地端口转发
+到指定的Pod。
+使用方法
+# Listen on ports 5000 and 6000 locally, forwarding data to/from port
+s 5000 and 6000 in the pod
+kubectl port-forward mypod 5000 6000
+# Listen on port 8888 locally, forwarding to 5000 in the pod
+kubectl port-forward mypod 8888:5000
+# Listen on a random port locally, forwarding to 5000 in the pod
+kubectl port-forward mypod :5000
+# Listen on a random port locally, forwarding to 5000 in the pod
+kubectl port-forward mypod 0:5000
+端口转发
+517
+
+GPU
+Kubernetes支持容器请求GPU资源（目前仅支持NVIDIA GPU），在深度学习等场景中
+有大量应用。
+在Kubernetes中使用GPU需要预先配置
+在所有的Node上安装Nvidia驱动，包括NVIDIA Cuda Toolkit和cuDNN等
+在apiserver和kubelet上开启 --feature-gates="Accelerators=true" 
+Kubelet配置使用docker容器引擎（默认就是docker），其他容器引擎暂不支持该特
+性
+使用方法
+使用资源名 alpha.kubernetes.io/nvidia-gpu 指定请求GPU的个数，如
+apiVersion: v1
+kind: Pod
+metadata:
+  name: tensorflow
+spec:
+  restartPolicy: Never
+  containers:
+  - image: gcr.io/tensorflow/tensorflow:latest-gpu
+    name: gpu-container-1
+    command: ["python"]
+    env:
+    - name: LD_LIBRARY_PATH
+      value: /usr/lib/nvidia
+    args:
+    - -u
+    - -c
+    - from tensorflow.python.client import device_lib; print device_l
+ib.list_local_devices()
+    resources: 
+      limits: 
+        alpha.kubernetes.io/nvidia-gpu: 1 # requests one GPU
+    volumeMounts:
+    - mountPath: /usr/local/nvidia/bin
+GPU
+518
+
+      name: bin
+    - mountPath: /usr/lib/nvidia
+      name: lib
+    - mountPath: /usr/lib/x86_64-linux-gnu/libcuda.so
+      name: libcuda-so
+    - mountPath: /usr/lib/x86_64-linux-gnu/libcuda.so.1
+      name: libcuda-so-1
+    - mountPath: /usr/lib/x86_64-linux-gnu/libcuda.so.375.66
+      name: libcuda-so-375-66
+  volumes:
+    - name: bin
+      hostPath:
+        path: /usr/lib/nvidia-375/bin
+    - name: lib
+      hostPath:
+        path: /usr/lib/nvidia-375
+    - name: libcuda-so
+      hostPath:
+        path: /usr/lib/x86_64-linux-gnu/libcuda.so
+    - name: libcuda-so-1
+      hostPath:
+        path: /usr/lib/x86_64-linux-gnu/libcuda.so.1
+    - name: libcuda-so-375-66
+      hostPath:
+        path: /usr/lib/x86_64-linux-gnu/libcuda.so.375.66
+GPU
+519
+
+$ kubectl create -f pod.yaml
+pod "tensorflow" created
+$ kubectl logs tensorflow
+...
+[name: "/cpu:0"
+device_type: "CPU"
+memory_limit: 268435456
+locality {
+}
+incarnation: 9675741273569321173
+, name: "/gpu:0"
+device_type: "GPU"
+memory_limit: 11332668621
+locality {
+  bus_id: 1
+}
+incarnation: 7807115828340118187
+physical_device_desc: "device: 0, name: Tesla K80, pci bus id: 0000:0
+0:04.0"
+]
+注意
+GPU资源必须在 resources.limits 中请求， resources.requests 中无效
+容器可以请求1个或多个GPU，不能只请求一部分
+多个容器之间不能共享GPU
+默认假设所有Node安装了相同型号的GPU
+多种型号的GPU
+如果集群Node中安装了多种型号的GPU，则可以使用Node Affinity来调度Pod到指定
+GPU型号的Node上。
+首先，在集群初始化时，需要给Node打上GPU型号的标签
+GPU
+520
+
+NVIDIA_GPU_NAME=$(nvidia-smi --query-gpu=gpu_name --format=csv,nohead
+er --id=0)
+source /etc/default/kubelet
+KUBELET_OPTS="$KUBELET_OPTS --node-labels='alpha.kubernetes.io/nvidia
+-gpu-name=$NVIDIA_GPU_NAME'"
+echo "KUBELET_OPTS=$KUBELET_OPTS" > /etc/default/kubelet
+然后，在创建Pod时设置Node Affinity
+kind: pod
+apiVersion: v1
+metadata:
+  annotations:
+    scheduler.alpha.kubernetes.io/affinity: >
+      {
+        "nodeAffinity": {
+          "requiredDuringSchedulingIgnoredDuringExecution": {
+            "nodeSelectorTerms": [
+              {
+                "matchExpressions": [
+                  {
+                    "key": "alpha.kubernetes.io/nvidia-gpu-name",
+                    "operator": "In",
+                    "values": ["Tesla K80", "Tesla P100"]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+spec:
+  containers:
+    - image: gcr.io/tensorflow/tensorflow:latest-gpu
+      name: gpu-container-1
+      command: ["python"]
+      args: ["-u", "-c", "import tensorflow"]
+      resources:
+        limits:
+          alpha.kubernetes.io/nvidia-gpu: 2
+GPU
+521
+
+使用CUDA库
+NVIDIA Cuda Toolkit和cuDNN等需要预先安装在所有Node上。为了访
+问 /usr/lib/nvidia-375 ，需要将CUDA库以hostPath volume的形式传给容器：
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nvidia-smi
+  labels:
+    name: nvidia-smi
+spec:
+  template:
+    metadata:
+      labels:
+        name: nvidia-smi
+    spec:
+      containers:
+      - name: nvidia-smi
+        image: nvidia/cuda
+        command: [ "nvidia-smi" ]
+        imagePullPolicy: IfNotPresent
+        resources:
+          limits:
+            alpha.kubernetes.io/nvidia-gpu: 1
+        volumeMounts:
+        - mountPath: /usr/local/nvidia/bin
+          name: bin
+        - mountPath: /usr/lib/nvidia
+          name: lib
+      volumes:
+        - name: bin
+          hostPath:
+            path: /usr/lib/nvidia-375/bin
+        - name: lib
+          hostPath:
+            path: /usr/lib/nvidia-375
+      restartPolicy: Never
+$ kubectl create -f job.yaml
+GPU
+522
+
+job "nvidia-smi" created
+$ kubectl get job
+NAME         DESIRED   SUCCESSFUL   AGE
+nvidia-smi   1         1            14m
+$ kubectl get pod -a
+NAME               READY     STATUS      RESTARTS   AGE
+nvidia-smi-kwd2m   0/1       Completed   0          14m
+$ kubectl logs nvidia-smi-kwd2m
+Fri Jun 16 19:49:53 2017
++--------------------------------------------------------------------
+---------+
+| NVIDIA-SMI 375.66                 Driver Version: 375.66           
+         |
+|-------------------------------+----------------------+-------------
+---------+
+| GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Unc
+orr. ECC |
+| Fan  Temp  Perf  Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Co
+mpute M. |
+|===============================+======================+=============
+=========|
+|   0  Tesla K80           Off  | 0000:00:04.0     Off |             
+       0 |
+| N/A   74C    P0    80W / 149W |      0MiB / 11439MiB |    100%     
+ Default |
++-------------------------------+----------------------+-------------
+---------+
++--------------------------------------------------------------------
+---------+
+| Processes:                                                       GP
+U Memory |
+|  GPU       PID  Type  Process name                               Us
+age      |
+|====================================================================
+=========|
+|  No running processes found                                        
+         |
++--------------------------------------------------------------------
+GPU
+523
+
+---------+
+附录：CUDA安装方法
+安装CUDA：
+# Check for CUDA and try to install.
+if ! dpkg-query -W cuda; then
+  # The 16.04 installer works with 16.10.
+  curl -O http://developer.download.nvidia.com/compute/cuda/repos/ubu
+ntu1604/x86_64/cuda-repo-ubuntu1604_8.0.61-1_amd64.deb
+  dpkg -i ./cuda-repo-ubuntu1604_8.0.61-1_amd64.deb
+  apt-get update
+  apt-get install cuda -y
+fi
+安装cuDNN：
+首先到网站https://developer.nvidia.com/cudnn注册，并下载cuDNN v5.1，然后运行命
+令安装
+tar zxvf cudnn-8.0-linux-x64-v5.1.tgz
+ln -s /usr/local/cuda-8.0 /usr/local/cuda
+sudo cp -P cuda/include/cudnn.h /usr/local/cuda/include
+sudo cp -P cuda/lib64/libcudnn* /usr/local/cuda/lib64
+sudo chmod a+r /usr/local/cuda/include/cudnn.h /usr/local/cuda/lib64/
+libcudnn*
+安装完成后，可以运行nvidia-smi查看GPU设备的状态
+GPU
+524
+
+$ nvidia-smi
+Fri Jun 16 19:33:35 2017
++--------------------------------------------------------------------
+---------+
+| NVIDIA-SMI 375.66                 Driver Version: 375.66           
+         |
+|-------------------------------+----------------------+-------------
+---------+
+| GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Unc
+orr. ECC |
+| Fan  Temp  Perf  Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Co
+mpute M. |
+|===============================+======================+=============
+=========|
+|   0  Tesla K80           Off  | 0000:00:04.0     Off |             
+       0 |
+| N/A   74C    P0    80W / 149W |      0MiB / 11439MiB |    100%     
+ Default |
++-------------------------------+----------------------+-------------
+---------+
++--------------------------------------------------------------------
+---------+
+| Processes:                                                       GP
+U Memory |
+|  GPU       PID  Type  Process name                               Us
+age      |
+|====================================================================
+=========|
+|  No running processes found                                        
+         |
++--------------------------------------------------------------------
+---------+
+GPU
+525
+
+容器安全
+Kubernetes提供了多种机制来限制容器的行为，减少容器攻击面，保证系统安全性。
+Security Context：限制容器的行为，包括Capabilities、
+ReadOnlyRootFilesystem、Privileged、RunAsNonRoot、RunAsUser以及
+SELinuxOptions等
+Pod Security Policy：集群级的Pod安全策略，自动为集群内的Pod和Volume设置
+Security Context
+Sysctls：允许容器设置内核参数，分为安全Sysctls和非安全Sysctls
+AppArmor：限制应用的访问权限
+Seccomp：Secure computing mode的缩写，限制容器应用可执行的系统调用
+Security Context和Pod Security Policy
+请参考这里。
+Sysctls
+Sysctls允许容器设置内核参数，分为安全Sysctls和非安全Sysctls
+安全Sysctls：即设置后不影响其他Pod的内核选项，只作用在容器namespace中，
+默认开启。包括以下几种
+ kernel.shm_rmid_forced 
+ net.ipv4.ip_local_port_range 
+ net.ipv4.tcp_syncookies 
+非安全Sysctls：即设置好有可能影响其他Pod和Node上其他服务的内核选项，默认
+禁止。如果使用，需要管理员在配置kubelet时开启，如 kubelet --
+experimental-allowed-unsafe-sysctls
+'kernel.msg*,net.ipv4.route.min_pmtu' 
+Sysctls还在alpha阶段，需要通过Pod annotation设置，如：
+容器安全
+526
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: sysctl-example
+  annotations:
+    security.alpha.kubernetes.io/sysctls: kernel.shm_rmid_forced=1
+    security.alpha.kubernetes.io/unsafe-sysctls: net.ipv4.route.min_p
+mtu=1000,kernel.msgmax=1 2 3
+spec:
+  ...
+AppArmor
+AppArmor(Application Armor)是Linux内核的一个安全模块，允许系统管理员将每个程序
+与一个安全配置文件关联，从而限制程序的功能。通过它你可以指定程序可以读、写或
+运行哪些文件，是否可以打开网络端口等。作为对传统Unix的自主访问控制模块的补
+充，AppArmor提供了强制访问控制机制。
+在使用AppArmor之前需要注意
+Kubernetes版本>=v1.4
+apiserver和kubelet已开启AppArmor特性， --feature-gates=AppArmor=true 
+已开启apparmor内核模块，通过 cat
+/sys/module/apparmor/parameters/enabled 查看
+仅支持docker container runtime
+AppArmor profile已经加载到内核，通过 cat
+/sys/kernel/security/apparmor/profiles 查看
+AppArmor还在alpha阶段，需要通过Pod annotation
+ container.apparmor.security.beta.kubernetes.io/<container_name> 来设置。
+可选的值包括
+ runtime/default : 使用Container Runtime的默认配置
+ localhost/<profile_name> : 使用已加载到内核的AppArmor profile
+容器安全
+527
+
+$ sudo apparmor_parser -q <<EOF
+#include <tunables/global>
+profile k8s-apparmor-example-deny-write flags=(attach_disconnected) {
+  #include <abstractions/base>
+  file,
+  # Deny all file writes.
+  deny /** w,
+}
+EOF'
+$ kubectl create -f /dev/stdin <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hello-apparmor
+  annotations:
+    container.apparmor.security.beta.kubernetes.io/hello: localhost/k
+8s-apparmor-example-deny-write
+spec:
+  containers:
+  - name: hello
+    image: busybox
+    command: [ "sh", "-c", "echo 'Hello AppArmor!' && sleep 1h" ]
+EOF
+pod "hello-apparmor" created
+$ kubectl exec hello-apparmor cat /proc/1/attr/current
+k8s-apparmor-example-deny-write (enforce)
+$ kubectl exec hello-apparmor touch /tmp/test
+touch: /tmp/test: Permission denied
+error: error executing remote command: command terminated with non-ze
+ro exit code: Error executing in Docker Container: 1
+Seccomp
+容器安全
+528
+
+Seccomp是Secure computing mode的缩写，它是Linux内核提供的一个操作，用于限制
+一个进程可以执行的系统调用．Seccomp需要有一个配置文件来指明容器进程允许和禁
+止执行的系统调用。
+在Kubernetes中，需要将seccomp配置文件放到 /var/lib/kubelet/seccomp 目录中
+（可以通过kubelet选项 --seccomp-profile-root 修改）。比如禁止chmod的格式为
+$ cat /var/lib/kubelet/seccomp/chmod.json
+{
+    "defaultAction": "SCMP_ACT_ALLOW",
+    "syscalls": [
+        {
+            "name": "chmod",
+            "action": "SCMP_ACT_ERRNO"
+        }
+    ]
+}
+Seccomp还在alpha阶段，需要通过Pod annotation设置，包括
+ security.alpha.kubernetes.io/seccomp/pod ：应用到该Pod的所有容器
+ security.alpha.kubernetes.io/seccomp/container/<container name> ：应
+用到指定容器
+而value有三个选项
+ runtime/default : 使用Container Runtime的默认配置
+ unconfined : 允许所有系统调用
+ localhost/<profile-name> : 使用Node本地安装的seccomp，需要放
+到 /var/lib/kubelet/seccomp 目录中
+比如使用刚才创建的seccomp配置：
+容器安全
+529
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: trustworthy-pod
+  annotations:
+    seccomp.security.alpha.kubernetes.io/pod: localhost/chmod
+spec:
+  containers:
+    - name: trustworthy-container
+      image: sotrustworthy:latest
+容器安全
+530
+
+Kubernetes审计
+Kubernetes审计（Audit）提供了安全相关的时序操作记录，支持日志和webhook两种格
+式，并可以通过审计策略自定义事件类型。
+审计日志
+通过配置kube-apiserver的下列参数开启审计日志
+audit-log-path：审计日志路径
+audit-log-maxage：旧日志最长保留天数
+audit-log-maxbackup：旧日志文件最多保留个数
+audit-log-maxsize：日志文件最大大小（单位MB），超过后自动做轮转（默认为
+100MB）
+每条审计记录包括两行
+请求行包括：唯一ID和请求的元数据（如源IP、用户名、请求资源等）
+响应行包括：唯一ID（与请求ID一致）和响应的元数据（如HTTP状态码）
+比如，admin用户查询默认namespace的Pod列表的审计日志格式为
+2017-03-21T03:57:09.106841886-04:00 AUDIT: id="c939d2a7-1c37-4ef1-b2f
+7-4ba9b1e43b53" ip="127.0.0.1" method="GET" user="admin" groups="\"sy
+stem:masters\",\"system:authenticated\"" as="<self>" asgroups="<looku
+p>" namespace="default" uri="/api/v1/namespaces/default/pods"
+2017-03-21T03:57:09.108403639-04:00 AUDIT: id="c939d2a7-1c37-4ef1-b2f
+7-4ba9b1e43b53" response="200"
+审计策略
+v1.7+支持实验性的高级审计特性，可以自定义审计策略（选择记录哪些事件）和审计存
+储后端（日志和webhook）等。开启方法为
+kube-apiserver ... --feature-gates=AdvancedAuditing=true
+审计
+531
+
+注意开启AdvancedAuditing后，日志的格式有一些修改，如新增了stage字段（包括
+RequestReceived，ResponseStarted ，ResponseComplete，Panic等）。
+审计策略
+审计策略选择记录哪些事件，设置方法为
+kube-apiserver ... --audit-policy-file=/etc/kubernetes/audit-policy.y
+aml
+其中，设计策略的配置格式为
+rules:
+  # Don't log watch requests by the "system:kube-proxy" on endpoints 
+or services
+  - level: None
+    users: ["system:kube-proxy"]
+    verbs: ["watch"]
+    resources:
+    - group: "" # core API group
+      resources: ["endpoints", "services"]
+  # Don't log authenticated requests to certain non-resource URL path
+s.
+  - level: None
+    userGroups: ["system:authenticated"]
+    nonResourceURLs:
+    - "/api*" # Wildcard matching.
+    - "/version"
+  # Log the request body of configmap changes in kube-system.
+  - level: Request
+    resources:
+    - group: "" # core API group
+      resources: ["configmaps"]
+    # This rule only applies to resources in the "kube-system" namesp
+ace.
+    # The empty string "" can be used to select non-namespaced resour
+ces.
+    namespaces: ["kube-system"]
+审计
+532
+
+  # Log configmap and secret changes in all other namespaces at the M
+etadata level.
+  - level: Metadata
+    resources:
+    - group: "" # core API group
+      resources: ["secrets", "configmaps"]
+  # Log all other resources in core and extensions at the Request lev
+el.
+  - level: Request
+    resources:
+    - group: "" # core API group
+    - group: "extensions" # Version of group should NOT be included.
+  # A catch-all rule to log all other requests at the Metadata level.
+  - level: Metadata
+在生产环境中，推荐参考GCE审计策略配置。
+审计存储后端
+审计存储后端支持两种方式
+日志，配置 --audit-log-path 开启，格式为
+2017-06-15T21:50:50.259470834Z AUDIT: id="591e9fde-6a98-46f6-b7bc-ec8
+ef575696d" stage="RequestReceived" ip="10.2.1.3" method="update" user
+="system:serviceaccount:kube-system:default" groups="\"system:service
+accounts\",\"system:serviceaccounts:kube-system\",\"system:authentica
+ted\"" as="<self>" asgroups="<lookup>" namespace="kube-system" uri="/
+api/v1/namespaces/kube-system/endpoints/kube-controller-manager" resp
+onse="<deferred>"
+2017-06-15T21:50:50.259470834Z AUDIT: id="591e9fde-6a98-46f6-b7bc-ec8
+ef575696d" stage="ResponseComplete" ip="10.2.1.3" method="update" use
+r="system:serviceaccount:kube-system:default" groups="\"system:servic
+eaccounts\",\"system:serviceaccounts:kube-system\",\"system:authentic
+ated\"" as="<self>" asgroups="<lookup>" namespace="kube-system" uri="
+/api/v1/namespaces/kube-system/endpoints/kube-controller-manager" res
+ponse="200"
+审计
+533
+
+webhook，配置 --audit-webhook-config-file=/etc/kubernetes/audit-
+webhook-kubeconfig --audit-webhook-mode=batch 开启，其中audit-webhook-
+mode支持batch和blocking两种格式，而webhook配置文件格式为
+# clusters refers to the remote service.
+clusters:
+  - name: name-of-remote-audit-service
+    cluster:
+      certificate-authority: /path/to/ca.pem  # CA for verifying the 
+remote service.
+      server: https://audit.example.com/audit # URL of remote service
+ to query. Must use 'https'.
+# users refers to the API server's webhook configuration.
+users:
+  - name: name-of-api-server
+    user:
+      client-certificate: /path/to/cert.pem # cert for the webhook pl
+ugin to use
+      client-key: /path/to/key.pem          # key matching the cert
+# kubeconfig files require a context. Provide one for the API server.
+current-context: webhook
+contexts:
+- context:
+    cluster: name-of-remote-audit-service
+    user: name-of-api-sever
+  name: webhook
+所有的事件以JSON格式POST给webhook server，如
+审计
+534
+
+{
+  "kind": "EventList",
+  "apiVersion": "audit.k8s.io/v1alpha1",
+  "items": [
+    {
+      "metadata": {
+        "creationTimestamp": null
+      },
+      "level": "Metadata",
+      "timestamp": "2017-06-15T23:07:40Z",
+      "auditID": "4faf711a-9094-400f-a876-d9188ceda548",
+      "stage": "ResponseComplete",
+      "requestURI": "/apis/rbac.authorization.k8s.io/v1beta1/namespac
+es/kube-public/rolebindings/system:controller:bootstrap-signer",
+      "verb": "get",
+      "user": {
+        "username": "system:apiserver",
+        "uid": "97a62906-e4d7-4048-8eda-4f0fb6ff8f1e",
+        "groups": [
+          "system:masters"
+        ]
+      },
+      "sourceIPs": [
+        "127.0.0.1"
+      ],
+      "objectRef": {
+        "resource": "rolebindings",
+        "namespace": "kube-public",
+        "name": "system:controller:bootstrap-signer",
+        "apiVersion": "rbac.authorization.k8s.io/v1beta1"
+      },
+      "responseStatus": {
+        "metadata": {},
+        "code": 200
+      }
+    }
+  ]
+}
+审计
+535

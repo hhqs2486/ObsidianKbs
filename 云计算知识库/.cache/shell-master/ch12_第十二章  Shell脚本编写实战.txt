@@ -1,0 +1,946 @@
+# 访问iptables 公网IP 端口，转发到内网服务器端口           
+iptables –t nat -A PREROUTING -d [对外IP] -p tcp --dport [对外端口] -j DNAT --to [内
+网IP:内网端口]  
+# 本地80 端口转发到本地8080 端口   
+iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-ports 8080 
+# 允许已建立及该链接相关联的数据包通过             
+iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT     
+# ASDL 拨号上网                 
+iptables -t nat -A POSTROUTING -s 192.168.1.0/24 -o pppo -j MASQUERADE  
+# 设置INPUT 链缺省操作丢弃所有数据包，只要不符合规则的数据包都丢弃。注意要在最后设置，
+以免把自己关在外面！ 
+iptables -P INPUT DROP 
+第十二章  Shell 脚本编写实战 
+写脚本注意事项： 
+1）开头加解释器：#!/bin/bash，和注释说明。 
+2）命名建议规则：变量名大写、局部变量小写，函数名小写，名字体现出实际作用。 
+2）默认变量是全局的，在函数中变量local 指定为局部变量，避免污染其他作用域。 
+3）set -e 遇到执行非0 时退出脚本，set -x 打印执行过程。   
+4）写脚本一定先测试再到生产上。 
+12.1 获取随机字符串或数字 
+获取随机8 位字符串： 
+方法1： 
+# echo $RANDOM |md5sum |cut -c 1-8 
+471b94f2 
+方法2： 
+# openssl rand -base64 4 
+vg3BEg== 
+方法3： 
+# cat /proc/sys/kernel/random/uuid |cut -c 1-8 
+ed9e032c 
+获取随机8 位数字： 
+方法1： 
+# echo $RANDOM |cksum |cut -c 1-8 
+23648321 
+方法2： 
+# openssl rand -base64 4 |cksum |cut -c 1-8 
+38571131 
+方法3： 
+# date +%N |cut -c 1-8 
+69024815 
+
+cksum：打印CRC 效验和统计字节 
+12.2 定义一个颜色输出字符串函数 
+方法1： 
+function echo_color() { 
+    if [ $1 == "green" ]; then 
+        echo -e "\033[32;40m$2\033[0m" 
+    elif [ $1 == "red" ]; then 
+        echo -e "\033[31;40m$2\033[0m" 
+    fi 
+} 
+方法2： 
+function echo_color() { 
+    case $1 in 
+        green) 
+            echo -e "\033[32;40m$2\033[0m" 
+            ;; 
+        red) 
+            echo -e "\033[31;40m$2\033[0m"  
+            ;; 
+        *)  
+            echo "Example: echo_color red string" 
+    esac 
+} 
+使用方法：echo_color green "test" 
+function 关键字定义一个函数，可加或不加。 
+12.3 批量创建用户 
+#!/bin/bash 
+DATE=$(date +%F_%T) 
+USER_FILE=user.txt 
+echo_color(){ 
+    if [ $1 == "green" ]; then 
+        echo -e "\033[32;40m$2\033[0m" 
+    elif [ $1 == "red" ]; then 
+        echo -e "\033[31;40m$2\033[0m" 
+    fi 
+} 
+# 如果用户文件存在并且大小大于0 就备份 
+if [ -s $USER_FILE ]; then 
+    mv $USER_FILE ${USER_FILE}-${DATE}.bak 
+    echo_color green "$USER_FILE exist, rename ${USER_FILE}-${DATE}.bak" 
+fi 
+echo -e "User\tPassword" >> $USER_FILE 
+
+echo "----------------" >> $USER_FILE 
+for USER in user{1..10}; do 
+    if ! id $USER &>/dev/null; then 
+        PASS=$(echo $RANDOM |md5sum |cut -c 1-8) 
+        useradd $USER 
+        echo $PASS |passwd --stdin $USER &>/dev/null 
+        echo -e "$USER\t$PASS" >> $USER_FILE 
+        echo "$USER User create successful." 
+    else 
+        echo_color red "$USER User already exists!" 
+    fi 
+done 
+12.4 检查软件包是否安装 
+#!/bin/bash 
+if rpm -q sysstat &>/dev/null; then 
+    echo "sysstat is already installed." 
+else 
+    echo "sysstat is not installed!" 
+fi 
+12.5 检查服务状态 
+#!/bin/bash 
+PORT_C=$(ss -anu |grep -c 123) 
+PS_C=$(ps -ef |grep ntpd |grep -vc grep) 
+if [ $PORT_C -eq 0 -o $PS_C -eq 0 ]; then 
+    echo "内容" | mail -s "主题" dst@example.com 
+fi 
+12.6 检查主机存活状态 
+方法1：将错误IP 放到数组里面判断是否ping 失败三次 
+#!/bin/bash   
+IP_LIST="192.168.18.1 192.168.1.1 192.168.18.2" 
+for IP in $IP_LIST; do 
+    NUM=1 
+    while [ $NUM -le 3 ]; do 
+        if ping -c 1 $IP > /dev/null; then 
+            echo "$IP Ping is successful." 
+            break 
+        else 
+            # echo "$IP Ping is failure $NUM" 
+
+            FAIL_COUNT[$NUM]=$IP 
+            let NUM++ 
+        fi 
+    done 
+    if [ ${#FAIL_COUNT[*]} -eq 3 ];then 
+        echo "${FAIL_COUNT[1]} Ping is failure!" 
+        unset FAIL_COUNT[*] 
+    fi 
+done 
+方法2：将错误次数放到FAIL_COUNT 变量里面判断是否ping 失败三次 
+#!/bin/bash   
+IP_LIST="192.168.18.1 192.168.1.1 192.168.18.2" 
+for IP in $IP_LIST; do 
+    FAIL_COUNT=0 
+    for ((i=1;i<=3;i++)); do 
+        if ping -c 1 $IP >/dev/null; then 
+            echo "$IP Ping is successful." 
+            break 
+        else 
+            # echo "$IP Ping is failure $i" 
+            let FAIL_COUNT++ 
+        fi 
+    done 
+    if [ $FAIL_COUNT -eq 3 ]; then 
+        echo "$IP Ping is failure!" 
+    fi 
+done 
+方法3：利用for 循环将ping 通就跳出循环继续，如果不跳出就会走到打印ping 失败 
+#!/bin/bash 
+ping_success_status() { 
+    if ping -c 1 $IP >/dev/null; then 
+        echo "$IP Ping is successful." 
+        continue 
+    fi 
+} 
+IP_LIST="192.168.18.1 192.168.1.1 192.168.18.2" 
+for IP in $IP_LIST; do 
+    ping_success_status 
+    ping_success_status 
+    ping_success_status 
+    echo "$IP Ping is failure!" 
+done 
+
+12.7 监控CPU、内存和硬盘利用率 
+1）CPU 
+借助vmstat 工具来分析CPU 统计信息。 
+#!/bin/bash 
+DATE=$(date +%F" "%H:%M) 
+IP=$(ifconfig eth0 |awk -F '[ :]+' '/inet addr/{print $4}')  # 只支持CentOS6 
+MAIL="example@mail.com" 
+if ! which vmstat &>/dev/null; then 
+    echo "vmstat command no found, Please install procps package."  
+    exit 1 
+fi 
+US=$(vmstat |awk 'NR==3{print $13}') 
+SY=$(vmstat |awk 'NR==3{print $14}') 
+IDLE=$(vmstat |awk 'NR==3{print $15}') 
+WAIT=$(vmstat |awk 'NR==3{print $16}') 
+USE=$(($US+$SY)) 
+if [ $USE -ge 50 ]; then 
+    echo " 
+    Date: $DATE 
+    Host: $IP 
+    Problem: CPU utilization $USE 
+    " | mail -s "CPU Monitor" $MAIL 
+fi 
+2）内存 
+ 
+#!/bin/bash 
+DATE=$(date +%F" "%H:%M) 
+IP=$(ifconfig eth0 |awk -F '[ :]+' '/inet addr/{print $4}')   
+MAIL="example@mail.com" 
+TOTAL=$(free -m |awk '/Mem/{print $2}') 
+USE=$(free -m |awk '/Mem/{print $3-$6-$7}') 
+FREE=$(($TOTAL-$USE)) 
+# 内存小于1G 发送报警邮件 
+if [ $FREE -lt 1024 ]; then 
+    echo " 
+    Date: $DATE 
+    Host: $IP 
+    Problem: Total=$TOTAL,Use=$USE,Free=$FREE 
+    " | mail -s "Memory Monitor" $MAIL 
+fi 
+3）硬盘 
+#!/bin/bash 
+DATE=$(date +%F" "%H:%M) 
+IP=$(ifconfig eth0 |awk -F '[ :]+' '/inet addr/{print $4}')   
+MAIL="example@mail.com" 
+
+TOTAL=$(fdisk -l |awk -F'[: ]+' 'BEGIN{OFS="="}/^Disk \/dev/{printf "%s=%sG,",$2,$3}') 
+PART_USE=$(df -h |awk 'BEGIN{OFS="="}/^\/dev/{print $1,int($5),$6}') 
+for i in $PART_USE; do 
+    PART=$(echo $i |cut -d"=" -f1) 
+    USE=$(echo $i |cut -d"=" -f2) 
+    MOUNT=$(echo $i |cut -d"=" -f3) 
+    if [ $USE -gt 80 ]; then 
+        echo " 
+        Date: $DATE 
+        Host: $IP 
+        Total: $TOTAL 
+        Problem: $PART=$USE($MOUNT) 
+        " | mail -s "Disk Monitor" $MAIL 
+    fi 
+done 
+12.8 批量主机磁盘利用率监控 
+前提监控端和被监控端SSH 免交互登录或者密钥登录。 
+写一个配置文件保存被监控主机SSH 连接信息，文件内容格式：IP User Port 
+#!/bin/bash 
+HOST_INFO=host.info 
+for IP in $(awk '/^[^#]/{print $1}' $HOST_INFO); do 
+    USER=$(awk -v ip=$IP 'ip==$1{print $2}' $HOST_INFO) 
+    PORT=$(awk -v ip=$IP 'ip==$1{print $3}' $HOST_INFO) 
+    TMP_FILE=/tmp/disk.tmp 
+    ssh -p $PORT $USER@$IP 'df -h' > $TMP_FILE 
+    USE_RATE_LIST=$( awk 'BEGIN{OFS="="}/^\/dev/{print $1,int($5)}' $TMP_FILE) 
+    for USE_RATE in $USE_RATE_LIST; do 
+        PART_NAME=${USE_RATE%=*} 
+        USE_RATE=${USE_RATE#*=} 
+        if [ $USE_RATE -ge 80 ]; then 
+            echo "Warning: $PART_NAME Partition usage $USE_RATE%!" 
+        fi 
+    done 
+done 
+12.9 检查网站可用性 
+1）检查URL 可用性 
+方法1： 
+check_url() { 
+    HTTP_CODE=$(curl -o /dev/null --connect-timeout 3 -s -w "%{http_code}" $1) 
+    if [ $HTTP_CODE -ne 200 ]; then 
+        echo "Warning: $1 Access failure!" 
+
+    fi 
+} 
+方法2： 
+check_url() { 
+if ! wget -T 10 --tries=1 --spider $1 >/dev/null 2>&1; then   
+#-T 超时时间，--tries 尝试1 次，--spider 爬虫模式 
+        echo "Warning: $1 Access failure!" 
+    fi 
+} 
+使用方法：check_url www.baidu.com 
+2）判断三次URL 可用性 
+思路与上面检查主机存活状态一样。 
+方法1：利用循环技巧，如果成功就跳出当前循环，否则执行到最后一行 
+#!/bin/bash   
+check_url() { 
+    HTTP_CODE=$(curl -o /dev/null --connect-timeout 3 -s -w "%{http_code}" $1) 
+    if [ $HTTP_CODE -eq 200 ]; then 
+        continue 
+    fi 
+} 
+URL_LIST="www.baidu.com www.agasgf.com" 
+for URL in $URL_LIST; do 
+    check_url $URL 
+    check_url $URL 
+    check_url $URL 
+    echo "Warning: $URL Access failure!" 
+done 
+方法2：错误次数保存到变量 
+#!/bin/bash   
+URL_LIST="www.baidu.com www.agasgf.com" 
+for URL in $URL_LIST; do 
+    FAIL_COUNT=0 
+    for ((i=1;i<=3;i++)); do 
+        HTTP_CODE=$(curl -o /dev/null --connect-timeout 3 -s -w "%{http_code}" $URL) 
+        if [ $HTTP_CODE -ne 200 ]; then 
+            let FAIL_COUNT++ 
+        else 
+            break 
+        fi 
+    done 
+    if [ $FAIL_COUNT -eq 3 ]; then 
+        echo "Warning: $URL Access failure!" 
+    fi 
+done 
+方法3：错误次数保存到数组 
+#!/bin/bash   
+URL_LIST="www.baidu.com www.agasgf.com" 
+
+for URL in $URL_LIST; do 
+    NUM=1 
+    while [ $NUM -le 3 ]; do 
+        HTTP_CODE=$(curl -o /dev/null --connect-timeout 3 -s -w "%{http_code}" $URL) 
+        if [ $HTTP_CODE -ne 200 ]; then 
+            FAIL_COUNT[$NUM]=$IP  #创建数组，以$NUM 下标，$IP 元素 
+            let NUM++ 
+        else 
+            break 
+        fi 
+    done 
+    if [ ${#FAIL_COUNT[*]} -eq 3 ]; then 
+        echo "Warning: $URL Access failure!" 
+        unset FAIL_COUNT[*]    #清空数组 
+    fi 
+done 
+12.10 检查MySQL 主从同步状态 
+#!/bin/bash   
+USER=bak 
+PASSWD=123456 
+IO_SQL_STATUS=$(mysql -u$USER -p$PASSWD -e 'show slave status\G' |awk -F: 
+'/Slave_.*_Running/{gsub(": ",":");print $0}')  #gsub 去除冒号后面的空格 
+for i in $IO_SQL_STATUS; do 
+    THREAD_STATUS_NAME=${i%:*} 
+    THREAD_STATUS=${i#*:} 
+    if [ "$THREAD_STATUS" != "Yes" ]; then 
+        echo "Error: MySQL Master-Slave $THREAD_STATUS_NAME status is 
+$THREAD_STATUS!" 
+    fi 
+done 
+12.11 屏蔽访问频繁的IP 
+1）屏蔽每分钟访问超过200 的IP 
+方法1：以Nginx 日志作为测试 
+DATE=$(date +%d/%b/%Y:%H:%M) 
+ABNORMAL_IP=$(tail -n5000 access.log |grep $DATE |awk '{a[$1]++}END{for(i in 
+a)if(a[i]>100)print i}') 
+#先tail 防止文件过大，读取慢，数字可调整每分钟最大的访问量。awk 不能直接过滤日志，因为
+包含特殊字符。 
+for IP in $ABNORMAL_IP; do 
+    if [ $(iptables -vnL |grep -c "$IP") -eq 0 ]; then 
+        iptables -I INPUT -s $IP -j DROP 
+
+    fi 
+done 
+方法2：通过建立连接数 
+ABNORMAL_IP=$(netstat -an |awk '$4~/:80$/ && $6~/ESTABLISHED/{gsub(/:[0-
+9]+/,"",$5);{a[$5]++}}END{for(i in a)if(a[i]>100)print i}') 
+#gsub 是将第五列（客户端IP）的冒号和端口去掉 
+for IP in $ABNORMAL_IP; do 
+    if [ $(iptables -vnL |grep -c "$IP") -eq 0 ]; then 
+        iptables -I INPUT -s $IP -j DROP 
+    fi 
+done 
+2）屏蔽每分钟SSH 暴力破解超过10 次的IP 
+方法1：通过lastb 获取登录状态: 
+DATE=$(date +"%a %b %e %H:%M") #星期月天时分  %e 单数字时显示7，而%d 显示07 
+ABNORMAL_IP=$(lastb |grep "$DATE" |awk '{a[$3]++}END{for(i in a)if(a[i]>10)print i}') 
+for IP in $ABNORMAL_IP; do 
+    if [ $(iptables -vnL |grep -c "$IP") -eq 0 ]; then 
+        iptables -I INPUT -s $IP -j DROP 
+    fi 
+done 
+方法2：通过日志获取登录状态 
+DATE=$(date +"%b %d %H") 
+ABNORMAL_IP="$(tail -n10000 /var/log/auth.log |grep "$DATE" |awk '/Failed/{a[$(NF-
+3)]++}END{for(i in a)if(a[i]>5)print i}')" 
+for IP in $ABNORMAL_IP; do 
+    if [ $(iptables -vnL |grep -c "$IP") -eq 0 ]; then 
+        iptables -A INPUT -s $IP -j DROP 
+        echo "$(date +"%F %T") - iptables -A INPUT -s $IP -j DROP" >>~/ssh-login-
+limit.log 
+    fi 
+done 
+12.12 判断输入是否为IP 
+方法1: 
+function check_ip(){ 
+    IP=$1 
+    VALID_CHECK=$(echo $IP|awk -F. '$1<=255&&$2<=255&&$3<=255&&$4<=255{print "yes"}') 
+    if echo $IP|grep -E "^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$">/dev/null; 
+then 
+        if [ $VALID_CHECK == "yes" ]; then 
+            echo "$IP available." 
+        else 
+            echo "$IP not available!" 
+        fi 
+    else 
+
+        echo "Format error!" 
+    fi 
+} 
+check_ip 192.168.1.1 
+check_ip 256.1.1.1 
+方法2： 
+function check_ip(){ 
+    IP=$1 
+    if [[ $IP =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then 
+        FIELD1=$(echo $IP|cut -d. -f1) 
+        FIELD2=$(echo $IP|cut -d. -f2) 
+        FIELD3=$(echo $IP|cut -d. -f3) 
+        FIELD4=$(echo $IP|cut -d. -f4) 
+        if [ $FIELD1 -le 255 -a $FIELD2 -le 255 -a $FIELD3 -le 255 -a $FIELD4 -le 
+255 ]; then 
+            echo "$IP available." 
+        else 
+            echo "$IP not available!" 
+        fi 
+    else 
+        echo "Format error!" 
+    fi 
+} 
+check_ip 192.168.1.1 
+check_ip 256.1.1.1 
+增加版：加个死循环，如果IP 可用就退出，不可用提示继续输入，并使用awk 判断 
+function check_ip(){ 
+    local IP=$1 
+    VALID_CHECK=$(echo $IP|awk -F. '$1<=255&&$2<=255&&$3<=255&&$4<=255{print "yes"}') 
+    if echo $IP|grep -E "^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$" >/dev/null; 
+then 
+        if [ $VALID_CHECK == "yes" ]; then 
+            return 0 
+        else 
+            echo "$IP not available!" 
+            return 1 
+        fi 
+    else 
+        echo "Format error! Please input again." 
+        return 1 
+    fi 
+} 
+while true; do 
+    read -p "Please enter IP: " IP 
+    check_ip $IP 
+    [ $? -eq 0 ] && break || continue 
+done 
+
+12.13 判断输入是否为数字 
+方法1： 
+if [[ $1 =~ ^[0-9]+$ ]]; then 
+    echo "Is Number." 
+else 
+    echo "No Number." 
+fi 
+方法2： 
+if [ $1 -gt 0 ] 2>/dev/null; then 
+    echo "Is Number." 
+else 
+    echo "No Number." 
+fi 
+方法3： 
+echo $1 |awk '{print $0~/^[0-9]+$/?"Is Number.":"No Number."}'  #三目运算符 
+12.14 找出包含关键字的文件 
+DIR=$1 
+KEY=$2 
+for FILE in $(find $DIR -type f); do 
+    if grep $KEY $FILE &>/dev/null; then 
+        echo "--> $FILE" 
+    fi 
+done 
+12.15 监控目录，将新创建的文件名追加到日志中 
+需安装inotify-tools 软件包。 
+#!/bin/bash 
+MON_DIR=/opt 
+inotifywait -mq --format %f -e create $MON_DIR |\ 
+while read files; do 
+  echo $files >> test.log 
+done 
+12.16 多个网卡选择 
+function local_nic() { 
+    local NUM ARRAY_LENGTH 
+    NUM=0 
+    for NIC_NAME in $(ls /sys/class/net|grep -vE "lo|docker0"); do 
+
+        NIC_IP=$(ifconfig $NIC_NAME |awk -F'[: ]+' '/inet addr/{print $4}') 
+        if [ -n "$NIC_IP" ]; then 
+            NIC_IP_ARRAY[$NUM]="$NIC_NAME:$NIC_IP"    #将网卡名和对应IP 放到数
+组 
+            let NUM++ 
+        fi 
+    done 
+    ARRAY_LENGTH=${#NIC_IP_ARRAY[*]} 
+    if [ $ARRAY_LENGTH -eq 1 ]; then     #如果数组里面只有一条记录说明就一个网卡 
+        NIC=${NIC_IP_ARRAY[0]%:*} 
+        return 0 
+    elif [ $ARRAY_LENGTH -eq 0 ]; then   #如果没有记录说明没有网卡 
+        echo "No available network card!" 
+        exit 1 
+    else 
+        #如果有多条记录则提醒输入选择 
+        for NIC in ${NIC_IP_ARRAY[*]}; do 
+            echo $NIC 
+        done 
+        while true; do 
+            read -p "Please enter local use to network card name: " 
+INPUT_NIC_NAME 
+            COUNT=0 
+            for NIC in ${NIC_IP_ARRAY[*]}; do 
+                NIC_NAME=${NIC%:*} 
+                if [ $NIC_NAME == "$INPUT_NIC_NAME" ]; then 
+                    NIC=${NIC_IP_ARRAY[$COUNT]%:*} 
+                    return 0 
+                else 
+                   COUNT+=1 
+                fi 
+            done 
+            echo "Not match! Please input again." 
+        done 
+    fi 
+} 
+local_nic 
+如果有只有一个网卡就不选择。 
+12.17 查看网卡实时流量 
+#!/bin/bash 
+# Description: Only CentOS6 
+traffic_unit_conv() { 
+    local traffic=$1 
+    if [ $traffic -gt 1024000 ]; then 
+        printf "%.1f%s" "$(($traffic/1024/1024))" "MB/s" 
+
+    elif [ $traffic -lt 1024000 ]; then 
+        printf "%.1f%s" "$(($traffic/1024))" "KB/s" 
+    fi 
+} 
+NIC=$1 
+echo -e " In ------ Out" 
+while true; do 
+    OLD_IN=$(awk -F'[: ]+' '$0~"'$NIC'"{print $3}' /proc/net/dev) 
+    OLD_OUT=$(awk -F'[: ]+' '$0~"'$NIC'"{print $11}' /proc/net/dev) 
+    sleep 1 
+    NEW_IN=$(awk -F'[: ]+' '$0~"'$NIC'"{print $3}' /proc/net/dev) 
+    NEW_OUT=$(awk -F'[: ]+' '$0~"'$NIC'"{print $11}' /proc/net/dev) 
+    IN=$(($NEW_IN-$OLD_IN)) 
+    OUT=$(($NEW_OUT-$OLD_OUT)) 
+    echo "$(traffic_unit_conv $IN) $(traffic_unit_conv $OUT)" 
+    sleep 1 
+done 
+ 
+# 也可以通过ficonfig 命令获取收发流量 
+while true; do 
+    OLD_IN=$(ifconfig $NIC |awk -F'[: ]+' '/bytes/{print $4}')   
+    OLD_OUT=$(ifconfig $NIC |awk -F'[: ]+' '/bytes/{print $9}') 
+    sleep 1 
+    NEW_IN=$(ifconfig $NIC |awk -F'[: ]+' '/bytes/{print $4}') 
+    NEW_OUT=$(ifconfig $NIC |awk -F'[: ]+' '/bytes/{print $9}') 
+    IN=$(($NEW_IN-$OLD_IN)) 
+    OUT=$(($NEW_OUT-$OLD_OUT)) 
+    echo "$(traffic_unit_conv $IN) $(traffic_unit_conv $OUT)" 
+    sleep 1 
+done 
+12.18 MySQL 数据库备份 
+#!/bin/bash 
+DATE=$(date +%F_%H-%M-%S) 
+HOST=192.168.1.120 
+DB=test 
+USER=bak 
+PASS=123456 
+MAIL="zhangsan@example.com lisi@example.com" 
+BACKUP_DIR=/data/db_backup 
+SQL_FILE=${DB}_full_$DATE.sql 
+BAK_FILE=${DB}_full_$DATE.zip 
+cd $BACKUP_DIR 
+if mysqldump -h$HOST -u$USER -p$PASS --single-transaction --routines --triggers -B 
+$DB > $SQL_FILE; then 
+    zip $BAK_FILE $SQL_FILE && rm -f $SQL_FILE 
+
+    if [ ! -s $BAK_FILE ]; then 
+            echo "$DATE 内容" | mail -s "主题" $MAIL 
+    fi 
+else 
+    echo "$DATE 内容" | mail -s "主题" $MAIL 
+fi 
+find $BACKUP_DIR -name '*.zip' -ctime +14 -exec rm {} \; 
+12.19 Nginx 启动脚本 
+#!/bin/bash 
+# Description: Only support RedHat system 
+. /etc/init.d/functions 
+ 
+WORD_DIR=/data/project/nginx1.10 
+DAEMON=$WORD_DIR/sbin/nginx 
+CONF=$WORD_DIR/conf/nginx.conf 
+NAME=nginx 
+ 
+PID=$(awk -F'[; ]+' '/^[^#]/{if($0~/pid;/)print $2}' $CONF) 
+if [ -z "$PID" ]; then 
+    PID=$WORD_DIR/logs/nginx.pid 
+else 
+    PID=$WORD_DIR/$PID 
+fi 
+ 
+stop() { 
+    $DAEMON -s stop 
+    sleep 1 
+    [ ! -f $PID ] && action "* Stopping $NAME"  /bin/true || action "* Stopping 
+$NAME" /bin/false 
+} 
+start() { 
+    $DAEMON 
+    sleep 1 
+    [ -f $PID ] && action "* Starting $NAME"  /bin/true || action "* Starting $NAME" 
+/bin/false 
+} 
+reload() { 
+    $DAEMON -s reload 
+} 
+test_config() { 
+    $DAEMON -t 
+} 
+ 
+case "$1" in 
+    start) 
+
+        if [ ! -f $PID ]; then 
+            start 
+        else 
+            echo "$NAME is running..." 
+            exit 0 
+        fi 
+        ;; 
+    stop) 
+        if [ -f $PID ]; then 
+            stop 
+        else 
+            echo "$NAME not running!" 
+            exit 0 
+        fi 
+        ;; 
+    restart) 
+        if [ ! -f $PID ]; then 
+            echo "$NAME not running!"  
+            start 
+        else 
+            stop 
+            start 
+        fi 
+        ;; 
+    reload) 
+        reload 
+        ;; 
+    testconfig) 
+        test_config 
+        ;;  
+    status) 
+        [ -f $PID ] && echo "$NAME is running..." || echo "$NAME not running!" 
+        ;; 
+    *) 
+        echo "Usage: $0 {start|stop|restart|reload|testconfig|status}" 
+        exit 3 
+        ;; 
+esac 
+12.20 选择SSH 连接主机 
+写一个配置文件保存被监控主机SSH 连接信息，文件内容格式：主机名 IP User Port 
+#!/bin/bash 
+PS3="Please input number: " 
+HOST_FILE=host 
+while true; do 
+    select NAME in $(awk '{print $1}' $HOST_FILE) quit; do 
+
+        [ ${NAME:=empty} == "quit" ] && exit 0 
+        IP=$(awk -v NAME=${NAME} '$1==NAME{print $2}' $HOST_FILE) 
+        USER=$(awk -v NAME=${NAME} '$1==NAME{print $3}' $HOST_FILE) 
+        PORT=$(awk -v NAME=${NAME} '$1==NAME{print $4}' $HOST_FILE) 
+        if [ $IP ]; then 
+            echo "Name: $NAME, IP: $IP" 
+            ssh -o StrictHostKeyChecking=no -p $PORT -i id_rsa $USER@$IP  # 密钥登录 
+            break 
+        else 
+            echo "Input error, Please enter again!" 
+            break 
+        fi 
+    done 
+done 
+12.21 FTP 下载文件 
+#!/bin/bash 
+if [ $# -ne 1 ]; then 
+    echo "Usage: $0 filename" 
+fi 
+dir=$(dirname $1) 
+file=$(basename $1) 
+ftp -n -v << EOF   # -n 自动登录 
+open 192.168.1.10 
+user admin adminpass 
+binary   # 设置ftp 传输模式为二进制，避免MD5 值不同或.tar.gz 压缩包格式错误 
+cd $dir 
+get "$file" 
+EOF 
+12.22 输入五个100 数之内的字符，统计和、最小和最大 
+COUNT=1 
+SUM=0 
+MIN=0 
+MAX=100 
+while [ $COUNT -le 5 ]; do 
+    read -p "请输入1-10 个整数：" INT 
+    if [[ ! $INT =~ ^[0-9]+$ ]]; then 
+        echo "输入必须是整数！" 
+        exit 1 
+    elif [[ $INT -gt 100 ]]; then 
+        echo "输入必须是100 以内！" 
+        exit 1 
+
+    fi 
+    SUM=$(($SUM+$INT)) 
+    [ $MIN -lt $INT ] && MIN=$INT 
+    [ $MAX -gt $INT ] && MAX=$INT 
+    let COUNT++ 
+done 
+echo "SUM: $SUM" 
+echo "MIN: $MIN" 
+echo "MAX: $MAX" 
+12.22 等待执行 
+wait(){ 
+    echo -n "wait 3s" 
+    for ((i=1;i<=3;i++)); do 
+        echo -n "." 
+        sleep 1 
+    done 
+    echo 
+} 
+wait 
+12.23 将结果分别赋值给变量 
+方法1： 
+for i in $(echo "4 5 6"); do 
+   eval a$i=$i 
+done 
+echo $a4 $a5 $a6 
+方法2：将位置参数192.168.18.1{1,2}拆分为到每个变量 
+num=0 
+for i in $(eval echo $*);do   #eval 将{1,2}分解为1 2 
+   let num+=1 
+   eval node${num}="$i" 
+done 
+echo $node1 $node2 $node3 
+# bash a.sh 192.168.18.1{1,2} 
+192.168.18.11 192.168.18.12 
+方法3： 
+arr=(4 5 6) 
+INDEX1=$(echo ${arr[0]}) 
+INDEX2=$(echo ${arr[1]}) 
+INDEX3=$(echo ${arr[2]}) 
+
+12.24 批量修改文件 
+# touch article_{1..3}.html 
+# ls 
+article_1.html  article_2.html  article_3.html 
+现在想把article 改为bbs： 
+方法1： 
+for file in $(ls *html); do 
+    mv $file bbs_${file#*_} 
+    # mv $file $(echo $file |sed -r 's/.*(_.*)/bbs\1/') 
+    # mv $file $(echo $file |echo bbs_$(cut -d_ -f2)  
+done 
+方法2： 
+for file in $(find . -maxdepth 1 -name "*html"); do 
+     mv $file bbs_${file#*_} 
+done 
+方法3： 
+# rename article bbs *.html 
+12.25 统计当前目录中以.html 结尾的文件总大小 
+方法1： 
+# find . -name "*.html" -maxdepth 1 -exec du -b {} \; |awk '{sum+=$1}END{print sum}' 
+方法2： 
+for size in $(ls -l *.html |awk '{print $5}'); do 
+    sum=$(($sum+$size)) 
+done 
+echo $sum 
+递归统计： 
+# find . -name "*.html" -exec du -k {} \; |awk '{sum+=$1}END{print sum}' 
+12.26 扫描主机端口状态 
+#!/bin/bash 
+HOST=$1 
+PORT="22 25 80 8080" 
+for PORT in $PORT; do 
+    if echo &>/dev/null > /dev/tcp/$HOST/$PORT; then 
+        echo "$PORT open" 
+    else 
+        echo "$PORT close" 
+    fi 
+done 
+
+12.27 Expect 实现SSH 免交互执行命令 
+需要先安装expect 工具。 
+expect 涉及用法说明： 
+命令 
+描述 
+set 
+可以设置超时，也可以设置变量 
+timeout 
+超时等待时间，默认10s 
+spawn 
+执行一个命令 
+ 
+expect "" 
+匹配输出的内容 
+exp_continue 
+继续执行下面匹配 
+\r 
+回车 
+$argc 
+统计位置参数数量 
+[lindex $argv 0] 
+位置参数 
+puts 
+打印字符串，类似于echo 
+expect{...} 
+输入多行记录 
+ 
+方法1：EOF 标准输出作为expect 标准输入 
+#!/bin/bash 
+USER=root 
+PASS=123.com 
+IP=192.168.1.120 
+expect << EOF 
+set timeout 30 
+spawn ssh $USER@$IP    
+expect { 
+    "(yes/no)" {send "yes\r"; exp_continue} 
+    "password:" {send "$PASS\r"} 
+} 
+expect "$USER@*"  {send "$1\r"} 
+expect "$USER@*"  {send "exit\r"} 
+expect eof  
+EOF 
+方法2： 
+#!/bin/bash 
+USER=root 
+PASS=123.com 
+IP=192.168.1.120 
+expect -c " 
+    spawn ssh $USER@$IP 
+    expect { 
+        \"(yes/no)\" {send \"yes\r\"; exp_continue} 
+
+        \"password:\" {send \"$PASS\r\"; exp_continue} 
+        \"$USER@*\" {send \"df -h\r exit\r\"; exp_continue} 
+    }" 
+方法3：将expect 脚本独立出来 
+login.exp 登录文件： 
+#!/usr/bin/expect  
+set ip [lindex $argv 0] 
+set user [lindex $argv 1] 
+set passwd [lindex $argv 2] 
+set cmd [lindex $argv 3] 
+if { $argc != 4 } { 
+puts "Usage: expect login.exp ip user passwd" 
+exit 1 
+} 
+set timeout 30 
+spawn ssh $user@$ip 
+expect { 
+    "(yes/no)" {send "yes\r"; exp_continue} 
+    "password:" {send "$passwd\r"} 
+} 
+expect "$user@*"  {send "$cmd\r"} 
+expect "$user@*"  {send "exit\r"} 
+expect eof 
+执行命令脚本： 
+#!/bin/bash 
+HOST_INFO=user_info 
+for ip in $(awk '{print $1}' $HOST_INFO) 
+do 
+    user=$(awk -v I="$ip" 'I==$1{print $2}' $HOST_INFO) 
+    pass=$(awk -v I="$ip" 'I==$1{print $3}' $HOST_INFO) 
+    expect login.exp $ip $user $pass $1 
+done 
+SSH 连接信息文件： 
+# cat user_info  
+192.168.1.120 root 123456 
+12.28 批量修改服务器用户密码 
+旧密码SSH 主机信息old_info 文件： 
+#     ip     user    passwd    port 
+#-------------------------------------- 
+192.168.18.217  root    123456     22 
+192.168.18.218  root    123456     22 
+
+修改密码脚本： 
+#!/bin/bash 
+OLD_INFO=old_info 
+NEW_INFO=new_info 
+for IP in $(awk '/^[^#]/{print $1}' $OLD_INFO); do 
+    USER=$(awk -v I=$IP 'I==$1{print $2}' $OLD_INFO) 
+    PASS=$(awk -v I=$IP 'I==$1{print $3}' $OLD_INFO) 
+    PORT=$(awk -v I=$IP 'I==$1{print $4}' $OLD_INFO) 
+    NEW_PASS=$(mkpasswd -l 8) 
+    echo "$IP   $USER   $NEW_PASS   $PORT" >> $NEW_INFO 
+    expect -c " 
+    spawn ssh -p$PORT $USER@$IP 
+    set timeout 2 
+    expect { 
+        \"(yes/no)\" {send \"yes\r\";exp_continue} 
+        \"password:\" {send \"$PASS\r\";exp_continue} 
+        \"$USER@*\" {send \"echo \'$NEW_PASS\' |passwd --stdin $USER\r 
+exit\r\";exp_continue} 
+    }" 
+done 
+生成新密码new_info 文件： 
+192.168.18.217  root    n8wX3mU%        22 
+192.168.18.218  root    c87;ZnnL        22 
+12.29 打印乘法口诀 
+方法1： 
+# awk 'BEGIN{for(n=0;n++<9;){for(i=0;i++<n;)printf i"x"n"="i*n" ";print ""}}' 
+方法2： 
+for ((i=1;i<=9;i++)); do 
+   for ((j=1;j<=i;j++)); do 
+     result=$(($i*$j)) 
+     echo -n "$j*$i=$result " 
+   done 
+   echo 
+done 
+12.30 getopts 工具完善脚本命令行参数 
+getopts 是一个解析脚本选项参数的工具。 
+命令格式：getopts optstring name [arg] 
+初次使用你要注意这几点： 
+1）脚本位置参数会与optstring 中的单个字母逐个匹配，如果匹配到就赋值给name，否则赋值name
+为问号； 
+2）optstring 中单个字母是一个选项，如果字母后面加冒号，表示该选项后面带参数，参数值并会赋
+
+值给OPTARG 变量； 
+3）optstring 中第一个是冒号，表示屏蔽系统错误（test.sh: illegal option -- h）； 
+4）允许把选项放一起，例如-ab 
+下面写一个打印文件指定行的简单例子，用于引导你思路，扩展你的脚本选项功能： 
+#!/bin/bash 
+while getopts :f:n: option; do 
+    case $option in  
+        f) 
+            FILE=$OPTARG 
+[ ! -f $FILE ] && echo "$FILE File not exist!" ; exit 
+            ;; 
+        n) 
+            sed -n "${OPTARG}p" $FILE 
+            ;; 
+        ?) 
+            echo "Usage: $0 -f <file_path> -n <line_number>" 
+            echo "-f, --file           specified file" 
+            echo "-n, --line-number    print specified line" 
+            exit 1 
+        ;; 
+    esac 
+done 
+# bash test.sh -h 
+Usage: test.sh -f <file_path> -n <line_number> 
+-f, --file           specified file 
+-n, --line-number    print specified line 
+ 
+# bash test.sh -f /etc/passwd -n 1 
+root:x:0:0:root:/root:/bin/bash 
+思路扩展：限定脚本参数，将参数保存变量，下面调用变量继续操作。 

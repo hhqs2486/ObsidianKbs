@@ -1,0 +1,308 @@
+........ 
+, .............. 
+.... 
+.... 
+.... 
+..... 
+.... 
+··mm 
+·-· 
+. 
+..... 
+.... 
+. ... 
+.. 
+.. 
+. 
+第15 章
+：α~y-4'c~ 1.:, 
+Spark on Kubernetes 
+15.1 
+Spark 系统概述
+15.1.1 
+Spark 简介
+Spark 是一个通用的并行计算框架，由加州伯克利大学（UC Berkeley ）的AMP 实验
+室开发于2009 年，并于2010 年开源。
+2013 年，
+Spark 成长为Apache 旗下大数据领域最
+活跃的开源项目之一。
+Spark 也是基于Map Reduce 算法模式实现的分布式计算框架，拥有
+Hadoop MapReduce 所具有的优点，并且解决了Hadoop MapReduce 中的诸多缺陷。
+15.1.2 
+Spark 与Hadoop 差异
+Spark 是在借鉴了MapReduce 之上发展而来的，继承了其分布式并行计算的优点并改
+进了MapReduce 的明显缺陷。
+首先，
+Spark 把中间数据放到内存中，迭代运算效率高。
+MapReduce 中计算结果需要落
+地，即保存到磁盘上，这样势必会影响整体速度，而Spark 支持DAG 图的分布式并行计算
+的编程框架，减少了迭代过程中数据的落地，提高了处理效率。
+其次，
+Spark 容错性高。
+Spark 引进了弹性分布式数据集（Resilient Distributed Dataset , 
+RDD ）的抽象，它是分布在一组节点中的只读对象集合，这些集合是弹性的，如果数据集
+一部分丢失，则可以根据“血统”（即充许基于数据衍生过程）对它们进行重建。另外，在
+RDD 计算时可以通过CheckPoint 来实现容错，而CheckPoint 有两种方式：
+CheckPoint
+Data 和Logging The Updates ，用户可以控制采用哪种方式来实现容错。
+最后，
+Spark 更加通用。不像Hadoop 只提供了Map 和Reduce 两种操作，
+Spark 提供的
+
+192 
+·〉
+基于Kubernetes 的窑器云平台实战
+数据集操作类型有很多种，大致分为Transformations 和Actions 两大类。Transformations 包
+括Map 、
+Fi lter 、
+FlatMap 、
+Sample 、
+GroupByK町、
+ReduceByK町、
+Union, Join, Co group 、
+Map Yalu剧、
+Sort 和PartionBy 等多种操作类型，同时还提供C ount, Actions 包括Collect 、
+Reduce 、
+Lookup 和Save 等操作。另外，各个处理节点之间的通信模型不像Hadoop 只
+有S huffle 一种模式，用户可以命名、物化，以及控制中间结果的存储、分区等。可以说，
+Spark 的编程模型比Hadoop 更灵活。
+15.1.3 
+功能模块
+Spark 包含的各模块及其功能见表15 -1 。
+表15-1
+Spark 中的模块及其功能
+子系统名称
+模块名称
+功能
+子系统名称
+模块名称
+功能
+维护参数配置
+Sh uffl e 读
+连接集群
+Shuffle 
+Shuff丁e 写
+Driver 
+产生RDD
+Shuffle 管理器
+文件上传、下载至服务帮
+存储架构
+线程池
+存储
+存储写
+执行作业
+Spark 核心
+存储读
+Executor 
+反馈作业执行结果
+界面
+SparkUI 界面
+Spark 核心
+度量作业
+RDD 核心要素
+节点资源管理然（Wo rker)
+RDD 依赖
+RDD 
+部署
+所有节点管理然（Master)
+Cache 
+Rest 服务接收应用
+CheckPoint 
+Job 切分Stage
+Catalyst 优化器
+Catalyst 优化器
+调度Stage
+Spark SQL 
+结构化数据处理人口
+SQL 人口
+调度
+Stage 转为Tasks
+HiveQL 人口
+DataFrame 
+DataFrame 
+调度TaskSet
+Thirft Server Thirft Server 
+Thirft Server 
+15.1.4 功能关系
+1. Spark 核心
+Spark 核心架构如图
+15-1 所示。
+• 
+Driver ：持有配置集合，能够初始化各种调度器、监昕器、清理工具、心跳、守护进
+程，提供各种接口提交作业。
+• Executor ：负责执行具体的作业，并向Driver 汇报执行状态。
+·部署：
+即Spark Standa l one 的资源框架，主从结构，
+Master 管理Worker,
+Worker 分
+配资源并创建执行器后提供给Driver 执行作业。
+·调度：有DAGScheduler 和TaskScheduler, DAG Scheduler 负责将作业拆分为多个
+
+第15 章
+Spark on Kubernetes
+令
+193
+stage ，然后对stage 进行调度；
+TaskScheduler 负责将stage 转化为任务集合，进行调
+度井分配到不同执行器上执行。
+Driver 
+~~ 
+~~ 
+~ 
+Executor ~ 
+~ 
+Master 
+图
+15-1
+Spark 核心架构
+• 
+Shuffle ：负责将父s tage 的中间执行结果存放到本地。
+~ 
+· 存储：支持内存存储、本地存储和分布式系统存储，支持将RDD 数据存储在内存中、
+将·S huffle 结果存储到本地、将RDD 数据存储到HDFS 。
+·界面：应用执行的实时界面，能反映作业的执行情况、执行器的作业状态等。
+• RDD ：能够知道RDD 之间的依赖关系，有多个分片，能够对某个分片进行计算。
+2. Spark SQL 
+图15-2 所示为Spark SQL 的架构图。
+Spark SQL 具有以下特点：
+·支持类似Hive 操作的接口（JDBC Service I 
+CLI ）。
+· 支持DataFrame API 。
+·支持SQL 语法解析和HiveSQL 语法解析器。
+· 数据定义语言（DDL ）兼容H i ve ，并支持扩展
+（如Cache Table ）。
+·数据操作语言（DML ）兼容Hive 。
+15.2 
+基于容器技术的Spark 部署
+15.2.1 
+基于容器技术部署Spark 的优势
+.. : 
+u阳Application
+图
+15 -2
+Spark SQL 架构
+1 ）更轻量：容器是进程级的资源隔离，传统虚拟机是操作系统级的资源隔离，容器比
+虚拟机节省更多的资源开销，更加接近物理机性能。
+
+194 
+·：·
+墓于Kubernetes 的容器云平台实战
+2 ）更快速：容器实例创建和启动无需启动Guest OS ，实现秒级／毫秒级的启动。
+3 ）更好的可移植性：容器技术（Docker ）将应用程序及其所依赖的运行环境打包成标
+准的容器镜像，进而发布到不同的平台上运行，实现应用在不同平台上的移植。
+15.2.2 针对大数据应用：容器的计算性能优化方向
+1. CPU 绑核
+支持容器绑定物理CPU 核，保证一些关键业务不受其他业务的干扰，提高这些业务的
+性能和实时性。
+2. NUMA 亲和性
+支持vCPU 调度时考虑内存的NUMA(Non Uniform Memory Access Architecture ）架构，
+使容器内存访问性能达到最优，提升系统性能。
+3 . 巨页
+支持Host 分配巨页，从而减少用户程序缺页次数，提高性能。
+4. OS 实时性增强
+支持线程优先级调度和抢占功能，具有灵活的任务调度策略和优先级。
+15.2.3 针对大数据应用：容器的网络性能优化方向
+1 ）多网络平面：支持multi -vETH 多网卡，每个Pod 按需连接到不同网络平面上，实
+现流量的安全隔离。
+2 ）高速转发：利用SRIOV 和DVS 提升NFV 性能。
+3 ）网络自动化：与SDN 紧密结合。
+4 ）采用DPDK 优化实现容器间数据转发，基于DPDK 优化的DVS 实现外部转发。
+5 ）采用SR-IOV 增强方案。
+15.2.4 针对大数据应用：容器的弹性＆扩窑
+1 ）支持Node 节点级弹性伸缩（in/out ）：实时监控集群资源的使用情况（CPU／内存），
+自动或手动实现Node 级的弹缩（需要资源层配合）、节点级弹性，实现基础设施资源的动
+态调整，满足应用的需求。
+2 ）支持服务级弹性伸缩（in/out ）：基于容器粒度的资源监控（CPU 、内存），根据设定
+的阔值及策略实现Service 级别的弹缩。
+以Service 为粒度将互相关联的一组微服务进行周
+期弹性伸缩，适应真实业务需求。
+3 ）分布式资源调度：根据调度策略自动实现集群内Pod 负载相对均衡，调度算法合理，
+兼顾Po d 负载变化趋势。
+
+第15 章
+Spark on Kubernetes •!• 195 
+15.3 
+Spark 集群安装
+Spark 部署前置条件：部署Docker 管理环境，在所分配容器环境中安装完成基础Linux
+系统。（对于Spark 而言，
+Linux 操作系统层以下完全透明。）
+Spark 集群安装需使用3 台测试服务器，下面是各服务器的角色：
+• nodel: Worker 
+• node2: Worker 
+• node3 : Master, Worker 
+15.3.1 
+制作Spark 镜像
+首先在虚拟机上打包，包括jdk 、
+Spark 安装目录、环境变量。
+#tar -zcvf 192.168.216.29_backup.tar.gz /usr/java 
+/home 
+/etc 
+注：虚拟机上已经解压了Spark 的安装包spark-2.0. l-bin-hadoop2.4阻止
+#tar -zxvf spark-2.0.1-bin-hadoop2.4.tgz 
+-C /home/ 
+#mv spark-2.0.1-bin-hadoop2.4 
+Spark 将安装包放到Docker 宿主机上，创建一个临时目录：
+[root（！如aas-cont roller-172-21-0-2 :/t叩／xiaohang]$ ll 
+total 4188712 
+阳－r- - r - - 1 root root 630035 708 阳y 25 03:38 192.168.216.29_back叩. tar .gz 
+-n.r-r －－仁”
+1 root root 
+140 May 25 18:29 Oockerfile 
+编辑Dockerfile ，目的是继承基础镜像，然后载入安装包生成新的镜像：
+[ root@paas -c。ntroller-172-21-0-2:/t~ ／xiaohang]$ vi Dockerfile 
+Ii.OM 172.21.0.2 :6666/admin/python-27-centos-7.3:2.7.df719c5.l 
+RUN mkdir -p /tmp/xiaohang 
+ADD 192 .168 .216.29_backup.tar.gz /tmp/xiaohang 
+执行命令，生成镜像：
+#docker build -t=” 172.21.0.2:6666/admin/python-27-centos-7.3:xiaohang”· 
+在将此镜像文件上传到镜像仓库中。
+15.3.2 
+yaml 文件准备
+·创建spark-re.yam!
+apiVersion: vl 
+kind: ReplicationController 
+metadata: 
+name: spark-pd 
+spec: 
+replicas: 3 
+selector: 
+
+196 
+•！•
+基于E王ubernetes 的容器云平台实战
+name: spark-pd 
+template: 
+metadata: 
+labels: 
+name: spark-pd 
+spec: 
+containers: 
+-
+name: spark-pd 
+image: 172.21.0.2:6666/admin/python-27-centos-7.3:xiaohang 
+ports: 
+- containerPort: 5555 
+·创建spark-svc.yaml
+apiVersion: vl 
+kind: Service 
+metadata: 
+name: spark-svr 
+labels: 
+'c. 
+n缸ne: spark-svr 
+spec: 
+selector: 
+n缸ne: spark-pd 
+clusterIP: None 
+ports: 
+- port: 5555 
+targetPort: 5555 
+n副ne:
+rmport 
+protocol: TCP 
+15.3.3 
+执行命令安装Spark
+执行如下命令，完成Spark 的安装：
+kubectl create -f 
+spark-rc.y缸nl
+kubectl create -f spark-svc.yaml 

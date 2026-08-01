@@ -1,0 +1,155 @@
+第11章　实战1：在Kubernetes集群中部
+署Spring Boot应用程序
+Spring Boot是目前最为流行的Web开发框架之一。通过Spring
+Boot，用户可以快速开发自己的应用系统。本章将以一个具体的应用
+系统为例，介绍如何在Kubernetes集群中部署Spring Boot应用系
+统。
+11.1　应用系统概况
+通常情况下，用户的应用系统都是已经开发完成的。在本书中，
+为了便于讲解，我们准备了一个非常简单的Spring Boot应用系统，
+该系统的功能比较单一，就是把MySQL数据库中的城市数据查询出
+来，以表格的形式显示在网页上面。关于该应用系统的代码，请参照
+附件。
+由于演示的应用系统涉及MySQL数据库操作，因此还需要将所使
+用的MySQL数据库导出为SQL脚本文件，以便于在MySQL容器中恢
+复数据。在本例中，SQL脚本文件为world.sql。
+11.2　部署MySQL
+首先为MySQL创建一个单独的命名空间，YAML文件的代码如
+下：
+
+其中第4行指定所创建的命名空间的名称为mysql-ns，将以上文
+件保存为mysql-ns.yaml，然后使用以下命令创建命名空间：
+ 
+   [root@master1 ~]# kubectl apply -f mysql-ns.yaml 
+   namespace/mysql-ns created 
+创建完成之后，查看命名空间状态是否正常，如下所示：
+从上面的输出结果可知，所创建的命名空间已经处于活动状态。
+接下来，为MySQL创建一个类型为StatefulSet的资源，其
+YAML文件代码如下：
+
+第9行指定解析该Pod的IP地址的服务的名称。第18行指定所使
+用的镜像为mysql/mysql-server。第19行通过env字段为MySQL指
+定一些环境变量，在本例中，设置的环境变量为
+MYSQL_ALLOW_EMPTY_PASSWORD，其值为1，表示允许空密
+码。第24行指定容器暴露的端口为3306。
+将以上代码保存为mysql-statefullset.yaml，然后使用以下命令
+创建资源：
+ 
+   [root@master1 ~]# kubectl apply -f appservice.yaml --
+namespace=mysql-ns
+
+创建完成之后，查看Pod状态，命令如下：
+从上面的输出结果可知，MySQL容器已经成功运行。
+再为MySQL容器创建一个服务，便于外部访问，其YAML代码如
+下：
+第12行指定目标端口为3306，这个端口是前面创建MySQL容器
+时所暴露的服务端口。第13行指定nodePort为30006，外部可以通
+过该端口访问到MySQL服务。第15行指定标签为mysql的Pod后端服
+务，这个标签也是前面创建MySQL服务时设置的。
+将以上代码保存为mysql-service.yaml，然后使用以下命令创建
+资源：
+ 
+   [root@master1 ~]# kubectl apply -f mysql-service.yaml --
+namespace=mysql-ns
+
+创建完成之后，用户原则上就可以通过MySQL Pod所在的节点
+的IP地址和nodePort端口访问MySQL服务器了。但是实际上用户连
+接MySQL服务器时通常会出现以下错误：
+以上错误出现的原因是当前MySQL服务器不允许root用户远程访
+问，用户需要另外创建一个用户。创建MySQL用户的方法如下。
+首先查看MySQL Pod所在的节点，如下所示：
+从上面的输出结果可知，MySQL所在的Pod位于名称为node1的
+节点上。
+然后在node1节点上面查看容器列表，如下所示：
+从上面的输出结果可知，MySQL的容器ID为391d9c11ce92，
+使用以下命令进入到该容器：
+ 
+   [root@node1 ~]# docker exec -it 391d9c11ce92 bash
+
+其中391d9c11ce92为容器ID，bash为进入容器内部之后所要
+执行的命令。执行完成之后，可以发现命令提示符已经发生变化，然
+后使用mysql命令连接到MySQL服务器，如下所示：
+为应用系统创建一个MySQL连接用户，命令如下：
+ 
+    mysql> CREATE USER web@'%' IDENTIFIED WITH 
+MYSQL_NATIVE_PASSWORD BY
+'Hawk123!';
+命令中web@'%'为用户名，其中的%表示该用户可以从任何主机
+连接MySQL服务器。后面的Hawk123!为密码。
+然后为web@'%'授予访问数据库的权限，如下所示：
+ 
+   mysql> GRANT ALL PRIVILEGES ON *.* TO web@'%';
+此时，用户就可以使用web用户名来连接MySQL服务器了。图
+11-1所示显示的是Navicat Premium 15的连接选项。
+
+图11-1　通过Navicat Premium 15连接MySQL服务器
+连接成功之后，创建一个名称为world的数据库，然后使用前面
+导出的数据库脚本world.sql创建数据表和恢复数据。
+11.3　准备应用系统
+修改application.properties文件的内容，将其中数据库地址中
+的IP地址修改为node1的IP地址，端口为nodePort的值，用户名和密
+码分别为前面所创建的值，如下所示：
+
+为了便于部署，用户需要将其打包成为一个jar文件。打包的方法
+使用Maven插件。如果用户的应用是使用IntelliJ IDEA开发的，则该
+工具已经内置了Maven插件，如图11-2所示。
+
+图11-2　IntelliJ IDEA
+在IntelliJ IDEA的右侧打开Maven面板，双击其中的package命
+令，在底部的“运行”窗口中会不断输出日志信息，如下所示：
+
+当出现BUILD SUCCESS之后，表示已经打包完成。
+打包生成的jar文件位于项目目录中的target目录中，如图11-3所
+示。
+图11-3　打包生成的jar文件
+在后面的步骤中，我们需要把生成的名称为demo-0.0.1-
+SNAPSHOT.jar的文件放到一个Docker镜像文件中。
+11.4　编写Docker文件
+为了能够生成Docker镜像文件，我们需要编写一个Docker文
+件。该文件的功能是告诉Docker如何构建镜像文件，代码如下：
+
+第1行的FROM指令表明该Docker镜像是在java:8这个镜像的基
+础上构建的。FROM指令的功能是用来指定基础镜像。第2行的
+VOLUME指令的功能是定义匿名数据卷，在本例中，VOLUME指令
+指向/tmp。第3行的ADD指令的功能是从上下文目录中复制文件或者
+目录到容器里指定路径。在本例中是将前面打包生成的demo-0.0.1-
+SNAPSHOT.jar文件，复制到容器根目录中，并且命名为app.jar。
+第4行的RUN指令用来执行后面的命令。第5行的ENV指令用来配置
+环境变量，在本例中不需要额外指定环境变量。第6 行的
+ENTRYPOINT指令用来指定容器启动时需要执行的命令。在本例
+中，其功能是将前面打包生成的jar文件在容器启动时一起启动。
+11.5　构建镜像
+接下来，需要将用户的应用系统构建在一个镜像文件中。创建一
+个新的目录，把前面生成的demo-0.0.1-SNAPSHOT.jar 文件和
+Docker 文件都放在该目录中，注意Docker 文件的文件名为
+Dockerfile。最后目录的内容如下：
+然后使用docker build命令构建镜像，如下所示：
+
+其中-t选项用来指定新的镜像的名称和标签，其格式为name:tag
+或者name，在本例中，只指定了镜像名称，没有指定标签。命令最
+后的圆点表示当前目录。
+
+构建完成之后，查看当前系统中的镜像列表，如下所示：
+可以发现，刚刚构建的镜像已经出现在列表中。
+11.6　部署应用系统
+接下来开始部署用户的Spring Boot应用系统。首先需要创建一
+个Deployment资源对象，其代码如下：
+第18行通过image字段指定容器使用的镜像为demo，这个镜像
+文件是前面构建的。第19行通过imagePullPolicy字段设置不从远程
+
+软件仓库拉取镜像。
+将以上代码保存为demo-deployment.yaml，然后使用以下命令
+进行部署：
+ 
+   [root@master1 ~]# kubectl apply -f demo-deployment.yaml
+查看Pod状态，如下所示：
+可以得知所创建的Pod已经处于运行状态了。
+为了便于访问，下面再为应用系统创建一个nodePort类型的服
+务，其YAML配置文件如下：
+将以上代码保存为demo-service.yaml，然后使用以下命令创建
+服务：
+
+ 
+   [root@master1 ~]# kubectl apply -f demo-service.yaml
+最后，用户就可以通过该服务访问应用系统了，如图11-4所示。
+图11-4　应用系统界面

@@ -1,0 +1,622 @@
+ 
+ 
+root@k8s-master:~# docker ps -a | grep etcd 
+27f478b41f3a   aebe758cef4c                                        "etcd --
+advertise-cl…" 
+ 
+ 
+7 
+hours 
+ago 
+ 
+ 
+ 
+Up 
+7 
+hours                  
+k8s_etcd_etcd-k8s-master_kube-system_219b6997077d507648e9316f5b693c07_1 
+9fa11e330991 
+ 
+ 
+registry.aliyuncs.com/google_containers/pause:3.8 
+ 
+ 
+"/pause"                 
+7 hours ago    Up 7 hours                            k8s_POD_etcd-k8s-
+master_kube-system_219b6997077d507648e9316f5b693c07_1 
+84f4ab05bf56   aebe758cef4c                                        "etcd --
+advertise-cl…"   2 months ago   Exited (0) 2 months ago               k8s_etcd_etcd-
+k8s-master_kube-system_219b6997077d507648e9316f5b693c07_0 
+4edae83d069d 
+ 
+ 
+registry.aliyuncs.com/google_containers/pause:3.8 
+ 
+ 
+"/pause"                 
+2 months ago   Exited (0) 2 months ago               k8s_POD_etcd-k8s-master_kube-
+system_219b6997077d507648e9316f5b693c07_0 
+root@k8s-master:~# docker cp 27f478b41f3a:/usr/local/bin/etcdctl /usr/bin 
+ 
+networkpolicy 
+https://kubernetes.io/zh-cn/docs/concepts/services-networking/network-policies/ 
+ 
+ 
+不同ns 
+apiVersion: networking.k8s.io/v1 
+kind: NetworkPolicy 
+metadata: 
+  name: allow-port-from-namespace 
+  namespace: fubar 
+spec: 
+  podSelector:{} 
+  policyTypes: 
+    - Ingress 
+  ingress: 
+    - from: 
+        - namespaceSelector: 
+            matchLabels: 
+              project: corp-bar  #源ns     
+      ports: 
+        - protocol: TCP 
+          port: 80    #80 指的是namespace：fubar 的80 
+ 
+相同ns 
+apiVersion: networking.k8s.io/v1 
+kind: NetworkPolicy 
+metadata: 
+
+  name: allow-port-from-namespace 
+  namespace: fubar 
+spec: 
+  podSelector:{} 
+  policyTypes: 
+    - Ingress 
+  ingress: 
+    - from: 
+        - podSelector:{}   # 
+      ports: 
+        - protocol: TCP 
+          port: 80 
+ 
+ 
+svc 
+kubectl  create deploy  front-end --image=nginx 
+kubectl  expose deploy front-end --port=80 --target-port=80 --protocol=TCP --
+type=NodePort --name=fornt-end-svc 
+curl 10.106.68.227 
+curl 127.0.0.1:32068 
+ 
+ 
+kubectl edit deploy front-end 
+template: 
+    metadata: 
+      creationTimestamp: null 
+      labels: 
+        app: front-end 
+    spec: 
+      containers: 
+      - image: nginx 
+        imagePullPolicy: Always 
+        name: nginx 
+        ports: 
+        - containerPort: 80 
+          name: http 
+        resources: {} 
+ 
+ingress 
+apiVersion: networking.k8s.io/v1 
+kind: Ingress 
+metadata: 
+  name: ping 
+  namespace:ing-internal 
+
+  annotations: 
+    nginx.ingress.kubernetes.io/rewrite-target: / 
+spec: 
+  rules: 
+  - http: 
+      paths: 
+      - path: /hello 
+        pathType: Prefix 
+        backend: 
+          service: 
+            name: hello 
+            port: 
+              number: 5678 
+ 
+ 
+第一题 rbac 
+• 
+创建一个名字为 deployment-clusterrole 且仅允许创建以下资源类型的新 
+ClusterRole：  
+o 
+Deployment 
+o 
+StatefulSet 
+o 
+DaemonSet 
+• 
+在现有的 namespace app-team1 中创建一个名为 cicd-token 的新 
+ServiceAccount。 
+• 
+限于 namespace app-team1 ，将新的 ClusterRole deployment-
+clusterrole 绑定到新的 ServiceAccount cicd-token。 
+kubectl config use-context ck8s  #q 切换集群 
+ 
+kiosk@k8s-master:~$ 
+kubectl 
+ 
+create 
+clusterrole 
+deployment-clusterrole 
+--
+verb=create --resource=deployments,statefulsets,daemonsets 
+kiosk@k8s-master:~$ kubectl create sa cicd-token -n app-team1 
+kiosk@k8s-master:~$ kubectl 
+ 
+create rolebinding cicd-token-rolebinding --
+clusterrole=deployment-clusterrole --serviceaccount=app-team1:cice-token -n app-
+team1 
+
+ 
+ 
+第二题：指定 node 设置为不可用（drain） 
+任务： 
+将名为 k8s-worker1 的 node 设置为不可用， 并重新调度该 node 上所有运行
+的 pods 
+检查环境初始情况 
+ 
+ 
+ 
+kiosk@k8s-master:~$ kubectl  drain k8s-worker1 --ignore-daemonsets --delete-
+emptydir-data 
+ 
+第三题：升级kubernetes 节点（upgrade） 
+任务： 
+
+• 
+现有的 kubernetes 集群正在运行的版本是 1.24.1。 仅将主节点上的
+所有 kubernetes 控制平面和节点组件升级到版本 1.24.2。 
+• 
+另外， 在主节点上升级 kubelet 和 kubectl 
+确保在升级前 drain 主节点， 并在升级后 uncordon 主节点。请不要升级工作节点，etcd，
+container 管理器，CNI 插件，DNS 服务或任何其他插件 
+ 
+检查初始环境 
+ 
+ 
+考试的时候需要ssh 到主节点上，将主节点设置为不可调度 
+kiosk@k8s-master:~$ ssh k8s-master 
+sudo -i 
+root@k8s-master:~$ kubectl  drain k8s-master --ignore-daemonsets 
+root@k8s-master:~# apt-mark unhold kubeadm kubelet kubectl 
+root@k8s-master:~# apt-cache show kubeadm | grep 1.24.2 
+ 
+ 
+root@k8s-master:~# apt-get update && apt-get install -y kubeadm=1.24.2-00 
+root@k8s-master:~# apt-get install -y kubectl=1.24.2-00 
+root@k8s-master:~# apt-get install -y kubelet=1.24.2-00 
+root@k8s-master:~# apt-mark hold kubeadm kubelet kubectl 
+root@k8s-master:~# kubeadm upgrade plan 
+root@k8s-master:~# kubeadm upgrade apply v1.24.2 --etcd-upgrade=false 
+y 
+root@k8s-master:~# systemctl daemon-reload 
+root@k8s-master:~# systemctl restart kubelet.service 
+root@k8s-master:~# kubectl uncordon k8s-master 
+
+ 
+第四题：etcd 备份还原 
+任务： 
+• 
+首先，为运行在 https://127.0.0.1:2379 上的现有etcd 实例创建快
+照，并将快照保存到/srv/backup/etcd-snapshot.db。 
+ 
+为给定实例创建快照预计能在几秒钟内完成。 如果该操作似乎挂起， 则命令可能有问题。 
+用 CTRL+c 来取消操作， 然后重试。 
+ 
+ 
+然后，还原位于/srv/data/etcd-snapshot-previous.db 的现有先前快照。 
+提供了以下TLS 证书和密钥，以通过 etcdctl 连接到服务器。 
+•  CA 证书：/opt/KUIN00601/ca.crt 
+•  客户端证书：/opt/KUIN00601/etcd-client.crt 
+•  客户端密钥：/opt/KUIN00601/etcd-client.key 
+ 
+ 
+ 
+#备份：要求备份到指定路径及指定文件名 
+$ 
+ETCDCTL_API=3 
+etcdctl 
+--endpoints 
+127.0.0.1:2379 
+--
+cacert=/opt/KUIN00601/ca.crt --cert=/opt/KUIN00601/etcd-client.crt --
+key=/opt/KUIN00601/etcd-client.key 
+snapshot 
+save 
+/srv/data/etcd-
+snapshot.db 
+#还原：要求使用指定文件进行还原 
+$ 
+ETCDCTL_API=3 
+etcdctl 
+--endpoints 
+127.0.0.1:2379 
+--
+cacert=/opt/KUIN00601/ca.crt --cert=/opt/KUIN00601/etcd-client.crt --
+key=/opt/KUIN00601/etcd-client.key 
+snapshot 
+restore 
+/var/lib/backup/etcd-snapshot-previous.db 
+
+第五题：创建NetworkPolicy 
+任务： 
+• 
+创建一个名为allow-port-from-namespace 的新NetworkPolicy， 以允许现
+有 namespace internal 中的 Pods 连接到同一 namespace 中其他 Pods 
+的端口 8080。  
+• 
+确保新的 NetworkPolicy：  
+o 不允许对没有在监听端口 8080 的 Pods 的访问 
+o 不允许不来自 namespace internal 的 Pods 的访问 
+https://kubernetes.io/zh-cn/docs/concepts/services-networking/network-policies/ 
+同一namespace 下的 
+ 
+root@k8s-master:~# vim 5.yaml 
+apiVersion: networking.k8s.io/v1 
+kind: NetworkPolicy 
+metadata: 
+  name: allow-port-from-namespace 
+  namespace: internal 
+spec: 
+  podSelector: {} 
+  policyTypes: 
+    - Ingress 
+  ingress: 
+    - from: 
+        - podSelector: {} 
+      ports: 
+        - protocol: TCP 
+          port: 8080 
+root@k8s-master:~# kubectl  apply -f 5.yaml 
+ 
+ 
+ 
+
+第六题：创建svc 
+ 
+任务 
+• 
+请重新配置现有的 deployment front-end：添加名为 http 的端口规范
+来公开现有容器 nginx 的端口 80/tcp。  
+• 
+创建一个名为 front-end-svc 的新服务， 以公开容器端口 http。  
+• 
+配置此服务， 以通过在排定的节点上的 NodePort 来公开各个 
+pods。 
+ 
+root@k8s-master:~# kubectl  edit deployments.apps front-end 
+ 
+root@k8s-master:~# kubectl  expose deployment front-end --port=80 --target-port=80 -
+-name=front-end-svc --type=NodePort 
+ 
+验证： 
+root@k8s-master:~# kubectl  get svc front-end-svc 
+NAME            TYPE       CLUSTER-IP      EXTERNAL-IP   PORT(S)        AGE 
+front-end-svc   NodePort   10.101.236.53   <none>        80:32300/TCP   17s 
+ 
+root@k8s-master:~# curl 10.101.236.53 
+root@k8s-master:~# curl 127.0.0.1:32300 
+ 
+
+ 
+第七题：创建ingress 资源 
+ 
+任务： 
+• 
+如下创建一个新的 nginx ingress 资源： 
+• 
+名称： ping 
+• 
+namespace： ing-internal  
+• 
+使用服务端口 5678 在路径/hi 上公开服务 hi  
+$ curl -kL <INTERNAL_IP>/hi 
+ 
+root@k8s-master:~# vim 7.yaml 
+apiVersion: networking.k8s.io/v1 
+kind: Ingress 
+metadata: 
+  name: ping 
+  namespace: ing-internal 
+  annotations: 
+    nginx.ingress.kubernetes.io/rewrite-target: / 
+spec: 
+  ingressClassName: nginx 
+  rules: 
+  - http: 
+      paths: 
+      - path: /hi 
+        pathType: Prefix 
+        backend: 
+          service: 
+            name: hi 
+            port: 
+              number: 5678 
+~ root@k8s-master:~# kubectl  apply -f 7.yaml 
+验证 
+root@k8s-master:~# kubectl  get ingress -n ing-internal -o wide 
+NAME   CLASS   HOSTS   ADDRESS   PORTS   AGE 
+ping   nginx   *                 80      11s 
+root@k8s-master:~# kubectl  get pods -A -o wide | grep ingress 
+ 
+
+ 
+第八题：扩展deployment 
+Task: 
+• 
+scale the deployment webserver to 6 pods 
+任务： 
+• 
+将 deployment webserver 扩展至 6pods  
+ 
+ 
+root@k8s-master:~# kubectl scale deploy webserver --replicas 6 
+ 
+第九题：将pod 部署到指定node 节点上 
+ 
+任务 
+• 
+按如下要求调度一个 pod： 
+• 
+名称： nginx-kusc00401  
+• 
+image: nginx  
+• 
+Node selector: disk=spinning  
+kiosk@k8s-master:~$ kubectl  run nginx-kusc00401 --image=nginx -oyaml --dry-run > 
+9.yaml 
+kiosk@k8s-master:~$ vim 9.yaml 
+apiVersion: v1 
+kind: Pod 
+metadata: 
+  labels: 
+    run: nginx-kusc00401 
+  name: nginx-kusc00401 
+spec: 
+
+  containers: 
+  - image: nginx 
+    name: nginx 
+    imagePullPolicy: IfNotPresent 
+  nodeSelector: 
+    disk: spinning 
+~ 
+kiosk@k8s-master:~$ kubectl  apply -f 9.yaml 
+验证： 
+kiosk@k8s-master:~$ kubectl  get pod nginx-kusc00401 -o wide 
+kiosk@k8s-master:~$ kubectl  get node -l disk=spinning 
+NAME          STATUS   ROLES    AGE   VERSION 
+k8s-worker2   Ready    <none>   76d   v1.24.1 
+ 
+ 
+第十题：检查有多少node 节点是健康状态 
+ 
+任务： 
+• 
+检查有多少个 nodes 已准备就绪（不包括被打上 tainted: NoSchedule 
+的节点） ， 并将数量写入/opt/KUSC00402/kusc00402.txt 
+kiosk@k8s-master:~$ kubectl  get node 
+NAME          STATUS                     ROLES           AGE   VERSION 
+k8s-master    Ready                      control-plane   76d   v1.24.2 
+k8s-worker1   Ready,SchedulingDisabled   <none>          76d   v1.24.1 
+k8s-worker2   Ready                      <none>          76d   v1.24.1 
+ 
+kiosk@k8s-master:~$ kubectl describe node | grep -i taints 
+Taints:             node-role.kubernetes.io/control-plane:NoSchedule 
+Taints:             node.kubernetes.io/unschedulable:NoSchedule 
+Taints:             <none> 
+ 
+kiosk@k8s-master:~$ echo 1 > /opt/KUSC00402/kusc00402.txt 
+ 
+
+第十一题：创建多个container 的Pod 
+ 
+ 
+任务： 
+• 
+创建一个名字为kucc1 的 pod， 在pod 里面分别为以下每个images
+单独运行一个app container（可能会有 1-4 个 images），容器名称和
+镜像如下： 
+ 
+nginx + redis + memcached + consul 
+ 
+kiosk@k8s-master:~$ kubectl  run kucc1 --image=nginx --dry-run=client  
+-o 
+yaml >11.yaml 
+apiVersion: v1 
+kind: Pod 
+metadata: 
+  labels: 
+    run: kucc1 
+  name: kucc1 
+spec: 
+  containers: 
+  - image: nginx 
+    name: nginx 
+    imagePullPolicy: IfNotPresent 
+  - image: redis 
+    name: redis 
+    imagePullPolicy: IfNotPresent 
+  - image: memcached 
+    name: memcached 
+    imagePullPolicy: IfNotPresent 
+  - image: consul 
+    name: consul 
+    imagePullPolicy: IfNotPresent 
+ 
+kiosk@k8s-master:~$ vim 11.yaml 
+kiosk@k8s-master:~$ kubectl apply -f 11.yaml 
+ 
+
+第十二题：创建Persistent Volume 
+ 
+任务： 
+• 
+创建名为 app-data 的 persistent volume， 容量为 1Gi， 访问模式
+为 ReadWriteMany。 volume 类型为 hostPath， 位于/srv/app-data  
+ 
+ 
+kiosk@k8s-master:~$ vim 12.yaml 
+apiVersion: v1 
+kind: PersistentVolume 
+metadata: 
+  name: app-data 
+spec: 
+  capacity: 
+    storage: 1Gi 
+  accessModes: 
+    - ReadWriteMany 
+  hostPath: 
+    path: /srv/app-data 
+    type: DirectoryOrCreate 
+ 
+kiosk@k8s-master:~$ kubectl  apply -f 12.yaml 
+persistentvolume/app-data created 
+kiosk@k8s-master:~$ kubectl  get pv 
+NAME       CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS      CLAIM   
+STORAGECLASS   REASON   AGE 
+app-data   1Gi        RWX            Retain           Available        
+ 
+第十三题：创建PVC 
+ 
+任务： 
+• 
+创建一个新的 PersistentVolumeClaim：  
+o 名称： pv-volume  
+
+o class： csi-hostpath-sc  
+o 容量： 10Mi  
+• 
+创建一个新的 pod， 此 pod 将作为 volume 挂载到 
+PersistentVolumeClaim：  
+o 名称：web-server  
+o image：nginx  
+o 挂载路径：/usr/share/nginx/html  
+• 
+配置新的 pod， 以对 volume 具有 ReadWriteOnce 权限。  
+• 
+最后， 使用 kubectl edit 或者 kubectl patch 将 PersistentVolumeClaim 
+的容量扩展为 70Mi， 并记录此次更改。  
+kiosk@k8s-master:~$ vim 13.yaml 
+apiVersion: v1 
+kind: PersistentVolumeClaim 
+metadata: 
+  name: pv-volume 
+spec: 
+  accessModes: 
+    - ReadWriteOnce 
+  resources: 
+    requests: 
+      storage: 10Mi 
+  storageClassName: csi-hostpath-sc 
+ 
+kiosk@k8s-master:~$ kubectl  apply -f  13.yaml 
+persistentvolumeclaim/pv-volume created 
+ 
+ 
+kiosk@k8s-master:~$ vim 13pod.yaml 
+apiVersion: v1 
+kind: Pod 
+metadata: 
+  name: web-server 
+spec: 
+  containers: 
+    - name: web-server 
+      image: nginx 
+      volumeMounts: 
+      - mountPath: "/usr/share/nginx/html" 
+        name: task-pv-storage 
+
+  volumes: 
+    - name: task-pv-storage 
+      persistentVolumeClaim: 
+        claimName: pv-volume 
+ 
+kiosk@k8s-master:~$ kubectl  edit pvc pv-volume --record 
+ 
+第十四题：监控pod 的日志 
+ 
+**任务：** 
+ 
+- [ ] 监控 pod `bar` 的日志： 
+ - 提取与错误 `unable-to-access-website` 相对应的日志行  
+  - 将这些日志行写入到`/opt/KUTR00101/bar` 
+ 
+kiosk@k8s-master:~$ 
+kubectl 
+ 
+logs 
+bar 
+| 
+grep 
+'unable-to-access-website' 
+> 
+/opt/KUTR00101/bar 
+kiosk@k8s-master:~$ cat /opt/KUTR00101/bar 
+2022-11-02 02:50:28,406: ERROR  unable-to-access-website 
+第十五题：添加sidecar container 
+在不更改其现有容器的情况下， 需要将一个现有的 pod 集成到 kubernetes 的内置日志记
+录体系结构中（例如 kubectl logs） 。 添加 streamimg sidecar 容器是实现此要求的一种好
+方法。 
+任务： 
+将一个 busybox sidecar 容器名称为sidecar 添加到现有的 big-corp-app。 新的 
+sidecar 容器必须运行以下命令：  
+/bin/sh -c tail -f /var/log/legacy-app.log 
+ 
+使用名为 logs 的 volume mount 来让文件/var/log/legacy-
+app.log 可用于 sidecar 容器 
+ 
+不要更改现有容器 
+
+不要修改日志文件的路径， 两个容器必须通过/var/log/big-corp-app.log 来访问该文件。 
+ 
+ 
+ 
+volumeMounts: 
+    - name: logs 
+      mountPath: /var/log 
+  - name: sidecar 
+    image: busybox 
+    args: [/bin/sh, -c, ' tail -f /var/log/legacy-app.log '] 
+    volumeMounts: 
+    - name: logs 
+      mountPath: /var/log 
+  volumes: 
+  - name: logs 
+    emptyDir: {} 
+kiosk@k8s-master:~$ kubectl  get pod big-corp-app -o yaml > 15.yaml 
+ 
+第十六题：查看最高CPU 使用率的Pod 
+ 
+任务： 
+
+• 
+通过 pod label name=cpu-loader， 找到运行时占用大量 CPU 的 
+pod， 并将占用 CPU 最高的 pod 名称写入到文件
+/opt/KUTR00401/KUTR00401.txt（已存在） 
+ 
+kiosk@k8s-master:~$ kubectl  top pod -A -l name=cpu-loader --sort-by='cpu' 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 

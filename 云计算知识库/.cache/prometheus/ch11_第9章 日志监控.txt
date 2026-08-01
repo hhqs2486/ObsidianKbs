@@ -1,0 +1,190 @@
+第9章　日志监控
+在前面的章节中，我们研究了应用程序、主机以及基于容器的监控。而本章我们将讨论如何使用
+日志数据作为Prometheus所抓取的时间序列数据的来源。虽然我们的主机、服务和应用程序可以生成
+关键指标和事件，但它们也会生成日志，这些日志可以告诉我们其状态的有用信息。
+特别是对于没有设置监控或者不容易进行监控的遗留应用程序，上述情况尤为明显。在这种情况
+下，有时重写、修补或重构该应用程序以暴露内部状态的成本绝对不是一项有利的工程投资，或者还
+可能存在监控上的技术限制。但是你仍然需要了解应用程序内部发生的情况，最简单的方法之一是调
+整日志输出。
+另一种方法是使用Process exporter[1]查看/proc子系统的内容。
+日志输出通常包含状态、时间和测量等有价值的信息。例如，使用来自Web或应用程序服务器的
+访问日志输出是一种跟踪事务时间或错误统计的有效方法。可以通过工具来解析这些日志条目，从匹
+配的输出中创建指标，并使它们可供Prometheus作业抓取。
+在本章中，我们将讨论如何使用日志条目来创建指标，并使用Prometheus进行抓取。
+[1] https://github.com/ncabatoff/process-exporter。
+
+9.1　日志处理
+为了从日志条目中提取数据，我们将使用日志处理工具。处理工具有很多种选择，包括Grok
+Exporter[1]和名为mtail[2]的Google实用程序。我们选择了mtail，因为它更轻巧，也更受欢迎。
+你是否安装了Logstash或者ELK？目前它们无法直接输出到Prometheus，但你可以使用
+Logstash的指标过滤器[3]来创建指标并将其直接输出到Alertmanager[4]。
+[1] https://github.com/fstab/grok_exporter。
+[2] https://github.com/google/mtail。
+[3] https://www.elastic.co/guide/en/logstash/current/plugins-filters-metrics.html。
+[4] https://github.com/wtliuNA/logstash-output-prometheus。
+
+9.2　mtail简介
+mtail日志处理器是由Google的SRE人员来编写的，其采用Apache 2.0许可证，并且使用Go语言。
+mtail日志处理器专门用于从应用程序日志中提取要导出到时间序列数据库中的指标，填补了我们上面
+描述的空缺：从无法导出自己内部状态的应用程序中解析日志数据。
+mtail日志处理器通过运行“程序”（program）来工作，它定义了日志匹配模式，并且指定了匹配后
+要创建和操作的指标。它与Prometheus配合得很好，可以暴露任何要抓取的指标，也可以配置为将指
+标发送到collectd、StatsD或Graphite等工具。
+
+9.2.1　安装mtail
+mtail日志处理器发布为一个二进制文件mtail。它适用于各种操作系统[1]，包括Linux、OS X和
+Microsoft Windows。
+首先下载二进制文件。
+代码清单9-1　下载并安装mtail二进制文件
+我们可以使用--version参数来确认mtail二进制文件是否正常工作。
+代码清单9-2　运行mtail二进制文件
+[1] https://github.com/google/mtail/releases。
+
+9.2.2　使用mtail
+mtail二进制文件通过命令行配置。指定要解析的日志文件列表，以及要在这些文件上运行的程序
+目录。
+你可以使用--help标志来查看mtails命令行参数的完整列表。
+首先创建一个目录来保存mtail程序。像往常一样，最好是通过创建配置管理模块（或Docker容
+器）而不是手动操作。这里采用手动方式，是为了展示其中的详细信息，以便了解正在发生的事情。
+代码清单9-3　创建一个mtail程序目录
+现在让我们在新目录中创建第一个mtail程序。每个mtail程序都需要以后缀.mtail结尾，所以我们创
+建一个名为line_count.mtail的新程序。这是一个最简化的mtail程序：它每次解析一行都会递增计数器。
+代码清单9-4　创建line_count.mtail程序
+然后编辑该文件。
+代码清单9-5　编辑line_count.mtail程序
+在程序的开始，我们定义了一个名为line_count的计数器。计数器名称以counter为前缀（自然地，
+测量型以gauge为前缀）。这些计数和测量通过mtail导出到你定义的任何目的地，在我们的例子中，它
+是一个可以被Prometheus抓取的端点。你必须先定义任何计数或测量，然后才能使用它们。
+接下来，我们定义mtail程序的内容：匹配的条件和采取的操作；首先指定条件，然后执行以下操
+作，内容包含在{ }中。
+你可以在程序中指定多组条件和操作，也可以使用条件逻辑以else子句[1]的形式扩展。
+mtail程序看起来很像awk程序。
+
+条件可以是正则表达式，匹配某些特定的日志条目。在示例中，我们指定了/$/，它与行尾相匹
+配。mtail处理器使用RE2正则表达式，你可以在RE2 wiki上看到完整语法介绍[2]。
+我们还可以指定一个关系表达式，就像在C语言的if子句中那样，例如：
+代码清单9-6　关系子句
+如果line_count计数器的值小于20，那么程序将只执行该操作。在我们的初始程序中，操作是：
+它使用运算符++来递增line_counter计数器，这是可以采取的最简单的行动。
+现在我们使用一些日志条目进行测试。
+你可以在GitHub[3]上找到有关mtail语法的更多文档以及编程指南。
+[1] https://github.com/google/mtail/blob/master/docs/Language.md#else-clauses。
+[2] https://github.com/google/re2/wiki/Syntax。
+[3] https://github.com/google/mtail/wiki/Language。
+
+9.2.3　运行mtail
+要运行mtail，我们需要指定要运行的程序和要解析的日志文件，如下所示：
+代码清单9-7　运行mtail
+这将使用两个参数来运行mtail。第一个参数--progs告诉mtail在哪里找到我们的程序，第二个参数-
+-logs告诉mtail在哪里找到要解析的日志文件。我们使用glob模式[1]来匹配/var/log目录中的所有日志文
+件。你可以指定以逗号分隔的文件列表，也可以多次指定--logs参数。mtail会识别到日志文件被截断，
+因此它可以处理停止、重新启动和日志轮换等操作。
+运行mtail的用户需要针对正在解析的日志文件的权限，否则mtail将无法读取文件。当无法读
+取文件时，你将在使用--logtostderr参数获得的mtail日志输出中看到读取错误。
+当我们运行mtail时，它将在端口3903上启动Web服务器（可以使用--address和--port参数来设置IP
+地址和端口）。接下来浏览一下这个Web服务器，根路径下会显示一些诊断信息，如图9-1所示。
+图9-1　mtail诊断信息
+你可以看到mtail的构建信息，以及到默认指标输出格式、诊断信息、已加载程序列表、所有错误
+和正在跟踪的日志文件的链接。你可以看到mtail输出指标的不同形式：JSON、varz（Google内部用于
+指标收集的格式）以及我们想要的格式Prometheus。点击Prometheus链接，它将带我们到/metrics路
+径。
+
+你还可以将指标发送到StatsD和Graphite等工具。
+代码清单9-8　mtail的/metrics路径
+我们可以看到一些熟悉的输出：帮助文本和带有prog标签的Prometheus指标。这些会自动添加到
+每个指标中，并使用生成指标的程序名称进行填充。可以将--emit_prog_label参数设置为false来省略此
+标签。
+在示例中，line_count指标计算了1561行的日志条目。然后我们可以添加一个作业来为line_counter
+指标抓取这个端点。
+这不是一个很实用的例子，我们来看一些更复杂的程序。
+[1] https://godoc.org/path/filepath#Match。
+
+9.3　处理Web服务器访问日志
+让我们使用mtail从Apache访问日志中提取一些指标，特别是使用combined日志格式的指标。为了
+节省时间，可以使用mtail提供的示例程序。我们在/etc/mtail目录中创建程序，并将其命名为
+apache_combined.mtail，内容如下：
+代码清单9-9　apache_combined程序
+
+可以在GitHub上找到该程序的代码[1]，还有大量其他示例程序也可以帮助到你[2]。
+可以看到我们的程序中存在很好的注释；注释使用＃符号指定。程序首先提供顶部的日志格式示
+例，然后定义了两个计数器：
+·apache_http_requests_total by request_method,http_version,request_status
+·apache_http_bytes_total by request_method,http_version,request_status
+by运算符指定要添加到指标的其他维度。在第一个计数器apache_http_requests_total中，我们添加
+了request_method、http_version和request_status的附加维度，这些维度将作为标签添加到结果计数器
+中。
+然后，我们看到一系列正则表达式，它们匹配访问日志行的每个元素，并使用+运算符链接在一
+起。
+在解析复杂的日志行时，这些正则表达式也会变得非常复杂，因此mtail还允许你通过将正则
+表达式定义为常量[3]来重用它们。
+在这些正则表达式中，你可以看到一系列捕获，如下所示：
+
+这些是命名捕获组（named capture group）[4]。在示例中，我们捕获request_status的命名值，然后
+可以在操作中使用这些捕获。
+代码清单9-10　combined访问日志操作
+该操作会递增第一个计数器apache_http_requests_total，将一些前缀为$的捕获添加到计数器中作
+为维度。每个维度都包含在[ ]方括号中。
+第二个计数器有一个加法运算，使用+=运算符将每个新的响应大小（以字节为单位）添加到计数
+器。
+mtail可以记录整型或浮点型指标。默认情况下，除非编译器可以推断浮点，否则所有指标都
+是整数。推断通过分析表达式来实现，例如识别一个正则表达式正在捕获浮点值。
+如果我们再次运行mtail，这次加载一些Apache（或其他使用combined日志格式的Web服务器），
+那么会看到这些新生成的指标。
+代码清单9-11　运行mtail
+然后浏览/metrics路径：
+代码清单9-12　Apache combined指标
+
+可以看到一组新的计数器，每个方法都有一个计数器和HTTP响应代码维度。我们还可以执行更
+复杂的操作，例如构建直方图。
+[1] https://github.com/google/mtail/blob/master/examples/apache_combined.mtail。
+[2] https://github.com/google/mtail/tree/master/examples。
+[3] https://github.com/google/mtail/blob/master/docs/Language.md#single-definition-of-constants。
+[4] https://github.com/google/mtail/blob/master/docs/Language.md#capture-groups。
+
+9.4　解析Rails日志到直方图
+让我们看一下mtail中的Rails程序示例[1]，以了解如何构建直方图。Rails请求日志对于测量性能很
+有帮助，但对解析不太友好。接下来看看mtail是如何实现的。
+代码清单9-13　mtail rails程序
+
+程序首先为已启动和已完成的请求定义计数器，然后，我们看到一个条件和操作，它增加了请求
+开始计数器、一个总数和一组计数器（其中包含根据请求状态创建的维度）。接下来，我们的程序计
+算完成的请求。这里，我们捕获状态码和请求时间（以毫秒为单位），并使用这些数据来计算按状态
+创建请求时间和请求计数的总和。
+然后我们嵌套另一组条件和操作，以创建直方图。我们有一系列条件可判断请求时长（以毫秒为
+单位）：
+如果请求时间小于或等于10毫秒，那么直方图的桶（bucket）计数器（时长和状态作为维度）就
+会递增。我们可以为想要的每个桶创建计数器。
+让我们在一些Rails日志上运行新程序，看看得到的指标是什么样的。
+代码清单9-14　Rails mtail指标输出
+
+le是“小于或等于”的常用缩写，指向特定存储桶的内容。
+可以看到，我们有针对不同请求方法（POST、PUT、GET）和总数的计数器，以及对已完成请求
+的总数和按状态码请求的总数的统计。此外，我们可以看到不同的桶，在示例中是10毫秒和50毫秒的
+桶。
+[1] https://github.com/google/mtail/blob/master/examples/rails.mtail。
+
+9.5　部署mtail
+我们现在有了两个mtail程序，可以通过多种方式部署它们。我们建议为每个应用程序运行一个
+mtail实例，并作为依赖项通过配置管理部署在应用程序周围。这种模式通常被称为边车（sidecar）模
+式，非常适合容器化应用。我们会在第13章（介绍如何监控Kubernetes上运行的应用程序时）再次提
+到它。
+我们也可以在一个mtail实例中运行多个程序，但有一点需要注意，mtail会在传递给它的每个日志
+文件上运行每个程序，这可能会对主机产生性能影响。
+
+9.6　抓取mtail端点
+现在我们已经暴露了一些指标，接下来创建一个Prometheus作业来抓取它们。
+代码清单9-15　mtail作业
+作业使用基于文件的服务发现方式来定义几个目标，一个Web服务器和一个Rails服务器，两个目
+标都在端口3903上被抓取。
+代码清单9-16　工作文件发现
+如果重启Prometheus，那么我们将收集Prometheus服务器上mtail程序生成的时间序列数据，然后可
+以使用这些指标来完成其他事情。
+
+9.7　小结
+在本章中，我们了解到如何使用日志条目为无法监控或很难监控的应用程序提供指标。我们使用
+mtail日志处理器完成了这项工作。
+请注意，我们只是简单介绍了mtail语言的功能，以进行日志解析和处理。你可以阅读GitHub上的
+wiki[1]及示例程序[2]以了解有关该语言和编写自定义mtail程序的更多信息。
+在下一章，我们将学习如何使用Prometheus进行探针监控。
+[1] https://github.com/google/mtail/wiki。
+[2] https://github.com/google/mtail/tree/master/examples。

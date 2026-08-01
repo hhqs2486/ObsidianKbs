@@ -1,0 +1,580 @@
+第7章 服务发现
+本章将深入介绍服务发现，它为什么很重要，以及它是如何在
+Kubernetes中实现的。此外，还会涉及一些排查问题的技巧。
+为了更好地理解本章的内容，读者应该首先了解Kubernetes的
+Service对象及其工作原理。这是第6章的内容。
+本章分以下内容展开。
+●快速入门。
+●服务注册。
+●服务发现。
+●服务发现和命名空间。
+●排查问题。
+7.1 快速入门
+应用运行在容器中，而容器运行在Pod中。每一个Kubernetes的
+Pod都拥有唯一的IP地址，所有的Pod都通过被称为Pod网络的平面网络
+（flat network）互相连接。不过，Pod的生命周期可能是短暂的。换
+句话说，它们可能随时被创建或删除，是不可靠的。比如，扩容、滚
+动升级、回滚和故障都可能导致Pod从网络中被添加或删除。
+鉴于Pod这种天生不稳定的特性，Kubernetes通过使用Service对
+象来为一组Pod提供固定的名称、IP地址和端口。客户端通过连接
+Service对象，来进一步以负载均衡的方式连接到目标Pod。
+注：“Service”这个词有多重含义。大写字母“S”开头的表示
+Kubernetes的Service对象，能够为一组Pod提供稳定的网络。[1]
+更多IT书籍请关注：www.cmsblogs.cn
+
+现代的云原生应用由多个独立的微服务协同合作而成。为了便于
+通力合作，这些微服务需要能够互相发现和连接。这时候就需要服务
+发现（Service discovery）功能出场了。
+关于服务发现有两个主要组件。
+●服务注册（Service registration）。
+●服务发现。
+7.2 服务注册
+所谓服务注册，即把微服务的连接信息注册到服务仓库，以便其
+他微服务能够发现它并进行连接，如图7.1所示。
+图7.1
+关于服务注册的几点重要说明如下。
+1.Kubernetes使用一个内部DNS服务作为服务注册中心。
+2.服务是基于DNS注册的（而非具体的Pod）。
+3.每个服务的名称、IP地址和网络端口都会被注册。
+为此，Kubernetes提供了一个“众所周知”的内部DNS服务，通常
+被称为“集群DNS”（cluster DNS）。之所以说是“众所周知”，是
+更多IT书籍请关注：www.cmsblogs.cn
+
+因为集群里的所有Pod和容器都知道它的地址。实际上它是运行在
+kube-system命名空间中，并被一个名为coredns的Deployment管理着
+的一组Pod。这一组Pod前面也有一个Service，称为kube-dns。具体实
+现上，它是基于CoreDNS的作为Kubernetes原生应用（Kubernetes-
+native application）运行的一种DNS技术。
+上一段文字其实包含许多细节，下面就通过几条命令来具体了解
+其是如何实现的。读者可以在自己的Kubernetes集群中运行这几条命
+令。
+$ kubectl get svc -n kube-system -l k8s-app=kube-dns 
+NAME       TYPE        CLUSTER-IP       EXTERNAL-IP  
+PORT(S)                 AGE  
+kube-dns   ClusterIP   192.168.200.10   <none>       
+53/UDP,53/TCP,9153/TCP  3h44m 
+  
+$ kubectl get deploy -n kube-system -l k8s-app=kube-dns  
+NAME      READY   UP-TO-DATE   AVAILABLE   AGE  
+coredns   2/2     2            2           3h45m  
+  
+$ kubectl get Pods -n kube-system -l k8s-app=kube-dns  
+NAME                         READY   STATUS    RESTARTS    
+AGE  
+coredns-5644d7b6d9-fk4c9     1/1     Running   0           
+3h45m  
+coredns-5644d7b6d9-s5zlr     1/1     Running   0           
+3h45m 
+每一个Kubernetes Service都会在创建之时被自动注册到集群DNS
+中。注册的过程如下（具体流程可能略有出入）。
+1.用户POST一个新的Service部署文件到API Server。
+2.该请求需通过认证、授权，并遵从准入策略。
+3.Service会被分配一个名为ClusterIP的虚拟IP地址。
+4.创建一个Endpoint对象来记录所有匹配该Service的Pod，以便
+进行流量的负载均衡。
+更多IT书籍请关注：www.cmsblogs.cn
+
+5.配置Pod网络来承载发送至ClusterIP的流量（后续有更多介
+绍）。
+6.Service的名称和IP被注册到集群DNS中。
+在整个服务注册过程中，步骤6暗藏玄机。
+前面提到，集群DNS是一个Kubernetes原生应用。这意味着它知道
+自身是运行在Kubernetes上的，而且实现了一个控制器
+（controller）来监视API Server，以了解新创建的Service对象。一
+旦发现有新创建的Service对象，就会创建一个能够将该Service的名
+称解析到其集群IP的DNS记录。因此，应用和Service无须主动执行服
+务注册——集群DNS会持续监视新Service并自动完成注册。
+需要重点强调的是，注册的Service的名称是保存在
+metadata.name属性中的值。ClusterIP是由Kubernetes动态分配的。
+apiVersion: v1  
+kind: Service  
+metadata:  
+  name: ent <<---- 集群DNS中注册的名称 
+  spec:  
+  selector:  
+    app: web  
+  ports:   
+    ...
+至此，Service前端（front-end）的配置已经被注册（名称、
+IP、端口），Service也可以被运行在其他Pod中的应用发现。
+7.2.1 服务后端
+Service前端（front-end）完成注册后，就需要构建后端（back-
+end）了。主要涉及创建和维护该Service所匹配的所有Pod的IP。
+更多IT书籍请关注：www.cmsblogs.cn
+
+前面的章节中提到，每一个Service都有一个Label筛选器，它能
+够确定Service应该把流量转发到哪些Pod，如图7.2所示。
+图7.2
+Kubernetes自动为每个Service创建一个Endpoint对象（或
+Endpoint slice）。它维护着一组能够匹配Label筛选器的Pod列表，
+这些Pod能够接收转发自Service的流量。这一点对于流量如何从
+ClusterIP被路由至Pod的IP是至关重要的（后续还会展开介绍）。
+以下命令显示的是名为ent的Service对应的Endpoint对象的信
+息。它有两个能够匹配Label筛选器的Pod的IP地址和端口。
+$ kubectl get endpoint ent  
+NAME    ENDPOINTS                                 AGE 
+ent     192.168.129.46:8080,192.168.130.127:8080  14m
+如图7.3所示，Service ent会负载均衡到两个Pod，Endpoint维护
+着可以匹配Label筛选器的两个Pod及其IP。
+更多IT书籍请关注：www.cmsblogs.cn
+
+图7.3
+每个节点上的Kubelet进程都会监视API Server上出现的新的
+Endpoint对象。一旦发现，Kubelet就会创建相应的网络规则，将
+ClusterIP的流量转发至Pod的IP。如今基于Linux的Kubernetes集群中
+要创建这些规则的技术使用的是Linux IP Virtual Server（IP虚拟服
+务器，IPVS）。较旧版本的Kubernetes使用的是iptables。
+到此为止，Service已经完全被注册并可以被发现了。
+●其前端（front-end）配置被注册到DNS中。
+●其后端（back-end）配置被存储在一个Endpoint对象中，同时
+承载流量的网络也就绪了。
+最后，借助流程图来总结一下服务注册的过程。
+7.2.2 小结
+如图7.4所示，首先，Service的配置被POST到API Server，请求
+通过认证和授权。然后，Service被分配一个ClusterIP，并且其配置
+被持久化保存在集群存储中。接着，与该Service相关联的Endpoint被
+创建，其中维护着匹配Label筛选器的所有Pod的IP。集群DNS作为
+更多IT书籍请关注：www.cmsblogs.cn
+
+Kubernetes原生应用监视并发现了API Server上新的Service对象，从
+而注册相应的DNS和SRV记录。每一个节点上都运行着一个kube-
+proxy，它能够为新的Service和Endpoint创建IPVS规则，从而到达
+Service的ClusterIP的流量会被转发至匹配Label筛选器的某一个Pod
+上。
+图7.4
+7.3 服务发现
+假设一个Kubernetes集群中有两个微服务应用：enterprise和
+voyager。enterprise应用的Pod都在名为ent的Service下，而voyager
+应用的Pod都在名为voy的Service下。
+分别注册了如下DNS（见图7.5）。
+●ent: 192.168.201.240。
+●voy: 192.168.200.217。
+更多IT书籍请关注：www.cmsblogs.cn
+
+图7.5
+服务发现之所以能起作用，是因为每个微服务都知道以下两点。
+1.需要取得连接的远程微服务的名称。
+2.如何将名称转换为IP地址。
+应用的开发人员负责第1点——编码的时候使用需要连接的微服务
+的名称。而Kubernetes则负责第2点。
+7.3.1 使用集群DNS将名称解析为IP地址
+Kubernetes自动配置所有的容器，以便它们能够找到集群DNS，并
+用来将Service名字解析为IP地址。具体来说，Kubernetes会为每一个
+容器注入/etc/resolv.conf文件，其中有集群DNS服务的IP地址和搜索
+域（search domain）——被用来追加至简单名称（unqualified
+name）作为后缀。
+注：所谓“简单名称”（unqualified name）就是类似ent这样的
+短名称。加上搜索域之后就会变成全限定域名（Fully Qualified
+Domain Name, FQDN），比如ent.default. svc.cluster.local。
+下面的代码就是注入容器里的配置文件，容器可以据此将DNS解析
+请求发送至IP为192.168.200.10的集群DNS。其中还列出了可以拼接到
+更多IT书籍请关注：www.cmsblogs.cn
+
+简单名称上的搜索域。
+$ cat /etc/resolv.conf  
+search svc.cluster.local cluster.local 
+default.svc.cluster.local 
+nameserver 192.168.200.10  
+options ndots:5
+如下可见/etc/resolv.conf中nameserver所对应的集群DNS的地
+址。
+$ kubectl get svc -n kube-system -l k8s-app=kube-dns  
+NAME       TYPE        CLUSTER-IP          PORT(S)          
+AGE   
+kube-dns   ClusterIP   192.168.200.10      
+53/UDP,53/TCP,9153/TCP   3h53m
+如果enterprise应用中的Pod需要连接voyager应用中的Pod，会首
+先向集群DNS发送一个将名称voy解析为IP地址的DNS请求。集群DNS会
+返回voy的ClusterIP（192.168.200.217）。
+现在，enterprise已经知道应该往哪个IP地址发送请求了。不
+过，这个ClusterIP只是一个虚拟IP（VIP），要想让请求到达voyager
+的Pod，还需要一些网络“黑科技”才行。
+7.3.2 网络“黑科技”
+在Pod知道对方Service的ClusterIP之后，就可以向该IP地址发送
+请求了。不过，这个地址在一个特殊的名为服务网络（Service
+network）的网络上，是没有路由可达的！也就是说，应用的容器并不
+知道应该将流量发往何处，因此只得发送至默认网关（default
+gateway）。
+更多IT书籍请关注：www.cmsblogs.cn
+
+注：当一个设备所发出的流量并没有具体的路由时，就会被发送
+至默认网关。而默认网关通常会将流量转发至另一个拥有更大的路由
+表的设备，以便能够找到正确的路由。打个比方，如果想要驾车从A城
+市到B城市。A城市的内部道路上可能没有到B城市的路标，这时候通常
+会去找高速公路的路标。一旦到达高速公路，就比较可能找到去B城市
+的方向了。如果第一个路标没有B城市的方向，那么可以继续行驶直到
+遇到有B城市方向的路标。路由与此类似，如果设备没有目标网络的路
+由，那么流量会从一个默认的网关发往下一个，直至找到具体的路
+由。
+容器的默认网关会将流量发送至其所在的主机节点。
+节点同样没有到达服务网络的路由，因此它会将流量发往自身的
+默认网关。这一过程中，流量会被节点的内核处理，此时就是网络
+“黑科技”产生的时机！
+每一个Kubernetes节点都运行着一个名为kube-proxy的系统服
+务。总体来说，kube proxy负责捕获发送至ClusterIP的流量，并转发
+至匹配Service的Label筛选器的Pod的IP地址。具体如何实现呢？
+qkube-proxy是一个基于Pod的Kubernetes原生应用，它实现了一
+个能够监视API Server上新创建的Service和Endpoint的控制器。当它
+有新发现时，就回创建一条本地的IPVS规则，该规则告诉主机节点拦
+截发往Service的ClusterIP的流量，并发送至具体的Pod。
+这意味着，每次节点的内核在处理发往服务网络上某个地址的流
+量时，就会发生一次捕获（trap），并将流量转发至匹配目标Service
+的Label筛选器的某个健康Pod的IP地址。
+Kubernetes原本使用iptables来进行捕获和负载均衡。然而在
+Kubernetes 1.11之后替换为IPVS。这是因为IPVS在进行基于内核的4
+层负载均衡时有更高的性能，它相对于iptables来说扩展性更强，负
+载均衡算法也更好。
+更多IT书籍请关注：www.cmsblogs.cn
+
+7.3.3 小结
+下面结合图7.6对服务发现的过程进行一个简要的总结。
+假设名为“enterprise”的微服务要将流量发送至名为
+“voyager”的微服务。过程之初，“enterprise”微服务需要知道
+“voyager”的Service对象的名称。我们假定名为“voy”，当然这是
+由程序开发人员负责确定的。
+“enterprise”微服务的某个实例发送了一个DNS请求到集群
+DNS（在每个容器的/etc/resolv.conf中定义），请求将
+Service“voy”的名称解析为IP地址。集群DNS返回了“voy”的
+ClusterIP（虚拟地址），然后“enterprise”的微服务实例发送请求
+到这个ClusterIP。不过，并不存在到达服务网络上的ClusterIP的路
+由。这意味着，请求会被发送至容器的默认网关，也就是容器所在的
+节点。节点也没有到达服务网络的路由，因此请求被发送至节点的默
+认网关。然后该请求会被节点的内核处理，此时会触发一次捕获
+（trap），从而将请求转发至匹配目标Service的Label筛选器的某个
+Pod的IP地址。
+更多IT书籍请关注：www.cmsblogs.cn
+
+图7.6
+节点拥有到达Pod的IP的路由，最终该请求到达Pod并得到处理。
+7.4 服务发现与命名空间
+若想要理解服务发现是如何在命名空间（namespace）内部和之间
+工作的，有两点很重要。
+1.每一个集群都有一个地址空间。
+2.命名空间为集群的地址空间的分区。
+每一个集群都有一个基于DNS域（domain）的地址空间，我们通常
+称之为集群域（cluster domain）。默认名称是cluster.local，
+Service对象都被放在这个地址空间中。例如，Service ent的全限定
+域名（FQDN）是ent.default.svc.cluster.local。
+FQDN的格式是<object-name>.<namespace>.svc.cluster.local。
+命名空间可以用来对集群域下的地址空间进行分区。比如，创建
+prod和dev两个命名空间之后，就会拥有可以安排Service和其他对象
+更多IT书籍请关注：www.cmsblogs.cn
+
+的两个地址空间了。
+●dev: <object-name>.dev.svc.cluster.local。
+●prod:<object-name>.prod.svc.cluster.local。
+同一命名空间内部的对象名称必须是唯一的，不过不同命名空间
+之间的对象可以重名。也就是说，不能在同一个命名空间内有两个名
+为“ent”的Service对象，但在不同的命名空间是可以的。这一点可
+用于有开发和生产两套并行的配置环境的情况。如图7.7所示，一个集
+群域被分成了dev和prod两个地址空间，其中各自部署有ent和voy两个
+Service。
+图7.7
+qprod命名空间中的Pod可以使用短名称（比如ent和voy）来访问
+本命名空间内部的Service。而如果需要连接其他命名空间中的对象，
+则需要使用FQDN，比如ent.dev.svc.cluster.local和
+voy.dev.svc.cluster.local。
+可见，命名空间能够对集群的地址空间进行分区。同时，它还可
+用于实现访问控制和资源限额。不过，它不能作为流量隔离的手段来
+使用，因此不能用于隔离有害负载。
+更多IT书籍请关注：www.cmsblogs.cn
+
+服务发现的例子
+一起来看一个简单的例子。
+以下名为sd-example.yml的YAML文件可以在本书的GitHub库中的
+Service discovery目录下找到。它定义了两个命名空间、两个
+Deployment、两个Service和一个单独的Pod。这两个Deployment有同
+样的名字，Service也是。不过它们分别部署在不同的命名空间下，所
+以是没问题的。单独的Pod部署在dev命名空间中，如图7.8所示。
+图7.8
+apiVersion: v1  
+kind: Namespace  
+metadata:  
+  name: dev  
+---  
+apiVersion: v1  
+kind: Namespace  
+metadata:  
+  name: prod  
+---  
+apiVersion: apps/v1 
+kind: Deployment  
+metadata:  
+  name: enterprise  
+  labels:  
+更多IT书籍请关注：www.cmsblogs.cn
+
+    app: enterprise 
+  namespace: dev  
+spec:  
+  selector:  
+    matchLabels:  
+      app: enterprise  
+  replicas: 2  
+  strategy:  
+    type: RollingUpdate  
+  template:  
+    metadata:  
+      labels:  
+        app: enterprise  
+    spec:  
+      terminationGracePeriodSeconds: 1  
+      containers:  
+      - image: nigelpoulton/k8sbook:text-dev  
+        name: enterprise-ctr  
+        ports:  
+        - containerPort: 8080  
+---  
+apiVersion: v1  
+kind: Deployment  
+metadata:  
+  name: enterprise  
+  labels:  
+    app: enterprise  
+  namespace: prod  
+spec:  
+  selector:  
+    matchLabels:  
+      app: enterprise  
+  replicas: 2  
+  strategy:  
+    type: RollingUpdate  
+  template:  
+    metadata:  
+      labels:  
+        app: enterprise 
+    spec:  
+      terminationGracePeriodSeconds: 1  
+      containers:  
+      - image: nigelpoulton/k8sbook:text-prod 
+        name: enterprise-ctr  
+        ports:  
+更多IT书籍请关注：www.cmsblogs.cn
+
+        - containerPort: 8080  
+---  
+apiVersion: v1  
+kind: Service  
+metadata:  
+  name: ent  
+  namespace: dev  
+spec:  
+  selector:  
+    app: enterprise  
+  ports:  
+    - port: 8080  
+  type: ClusterIP  
+---  
+apiVersion: v1  
+kind: Service  
+metadata:  
+  name: ent  
+  namespace: prod  
+spec:  
+  selector:  
+    app: enterprise  
+  ports:  
+    - port: 8080  
+  type: ClusterIP  
+---  
+apiVersion: v1  
+kind: Pod  
+metadata:  
+  name: jump  
+  namespace: dev  
+spec:  
+  terminationGracePeriodSeconds: 5  
+  containers:  
+  - name: jump  
+    image: ubuntu  
+    tty: true  
+    stdin: true
+把它们部署到集群中。
+$ kubectl apply -f dns-namespaces.yml 
+namespace/dev created  
+namespace/prod created  
+更多IT书籍请关注：www.cmsblogs.cn
+
+deployment.apps/enterprise created  
+deployment.apps/enterprise created  
+Service/ent created  
+Service/ent created  
+Pod/jump-Pod created 
+执行以下命令检查是否已经正确部署。以下的输出内容有裁剪，
+并未显示所有对象的信息。
+$ kubectl get all -n dev  
+NAME          TYPE       CLUSTER-IP       EXTERNAL-IP  
+PORT(S)   AGE   
+Service/ent   ClusterIP  192.168.202.57   <none>       
+8080/TCP  43s  
+  
+NAME                        READY  UP-TO-DATE  AVAILABLE  
+AGE   
+deployment.apps/enterprise  2/2    2           2          
+43s  
+<snip>  
+  
+$ kubectl get all -n prod  
+NAME          TYPE        CLUSTER-IP        EXTERNAL-IP  
+PORT(S)   AGE 
+Service/ent   ClusterIP   192.168.203.158   <none> 
+8080/TCP  82s 
+  
+NAME                         READY  UP-TO-DATE  AVAILABLE  
+AGE   
+deployment.apps/enterprise   2/2    2           2          
+52s  
+<snip> 
+下面我们将进行以下操作。
+1.登录到dev命名空间的jump Pod的容器。
+2.查看容器的/etc/resolv.conf文件。
+3.通过Service的短名称连接到dev命名空间的ent应用。
+4.通过Service的FQDN连接到prod命名空间的ent应用。
+更多IT书籍请关注：www.cmsblogs.cn
+
+为了便于测试，ent应用的版本在每一个命名空间中是不一样的。
+登录到jump Pod。
+$ kubectl exec -it jump -n dev --bash 
+root@jump:/# 
+终端中的命令提示符会发生变化，表明已经进入jump Pod。
+查看/etc/resolv.conf的内容，并注意到搜索域包含dev命名空间
+而不包含prod命名空间。
+$ cat /etc/resolv.conf  
+search dev.svc.cluster.local svc.cluster.local 
+cluster.local default.svc.cluster.local 
+nameserver 192.168.200.10  
+options ndots:5 
+其中，nameserver的值与集群中kube-dns Service的ClusterIP是
+一致的。这是一个“众所周知”的IP地址，用来处理DNS/服务发现的
+请求。
+安装curl工具。
+$ apt-get update && apt-get install curl -y 
+<snip>
+使用curl通过短名称ent连接到在dev中运行的应用。
+$ curl ent:8080  
+Hello from the DEV Namespace!   
+Hostname: enterprise-7d49557d8d-k4jjz
+响应中的“Hello from the DEV Namespace!”表明curl连接到的
+是dev中的应用实例。
+更多IT书籍请关注：www.cmsblogs.cn
+
+当curl命令执行的时候，容器会自动在ent后追加
+dev.svc.cluster.local，然后向/etc/resolv.conf中指定的集群DNS
+的IP地址发送解析请求。DNS会返回dev命名空间中ent Service的
+ClusterIP，从而使请求被发送至该地址。然后它会被路由到节点的默
+认网关，并被节点的内核捕获，然后转发到其中的一个Pod上。
+再次执行curl命令，不过这次要加上prod命名空间的域名。那么
+集群DNS会返回prod命名空间中实例的ClusterIP，从而请求最终会被
+送达运行在prod中的某个Pod。
+$ curl ent.prod.svc.cluster.local:8080 
+Hello from the PROD Namespace!  
+Hostname: enterprise-5464d8c4f9-v7xsk
+这一次响应是来自prod命名空间中的某个Pod。
+以上测试证明了短名称会被解析到自身所在的命名空间，而跨命
+名空间的连接则需要使用FQDN。
+记得输入exit来退出刚才登录的容器。
+7.5 服务发现问题排查
+服务注册和发现涉及许多环节。其中任何一个环节出现故障，都
+可能导致整个过程中断。下面快速介绍一下都涉及哪些环节，以及如
+何排查问题。
+Kubernetes将集群DNS作为服务注册中心使用。它由一组运行在
+kube-system命名空间中的Pod和一个用来提供稳定网络入口的Service
+对象构成。下面列举几个重要的组件。
+●Pod：由coredns Deployment管理。
+更多IT书籍请关注：www.cmsblogs.cn
+
+●Service：一个名为kube-dns的ClusterIP Service，其监听端
+口为TCP/UDP 53。
+●Endpoint：也叫kube-dns。
+所有与集群DNS相关的对象都有K8s-app=kube-dns的Label。这一
+点在筛选kubectl输出的时候很有用。
+确定coredns Deployment及其管理的Pod是运行状态。
+$ kubectl get deploy -n kube-system -l k8s-app=kube-dns  
+NAME      READY   UP-TO-DATE   AVAILABLE   AGE  
+coredns   2/2     2            2           2d21h   
+  
+$ kubectl get Pods -n kube-system -l k8s-app=kube-dns   
+NAME                       READY   STATUS    RESTARTS   
+AGE  
+coredns-5644d7b6d9-74pv7   1/1     Running   0          
+2d21h  
+coredns-5644d7b6d9-s759f   1/1     Running   0          
+2d21h
+检查coredns的每一个Pod的日志。这里需要将Pod的名称替换为实
+际环境中的名称。以下是一个正常工作的DNS Pod的典型输出。
+$ kubectl logs coredns-5644d7b6d9-74pv7 -n kube-system  
+2020-02-19T21:31:01.456Z [INFO] plugin/reload: Running 
+configuration...  
+2020-02-19T21:31:01.457Z [INFO] CoreDNS-1.6.2 
+2020-02-19T21:31:01.457Z [INFO] linux/amd64, go1.12.8, 
+795a3eb 
+CoreDNS-1.6.2  
+linux/amd64, go1.12.8, 795a3eb
+假设Pod和Deployment是正常的，则还需要查看Service及其
+Endpoint对象。查看命令的输出应该显示Service是运行中的，而且
+ClusterIP是有IP地址的，并且监听TCP/UDP 53端口。
+更多IT书籍请关注：www.cmsblogs.cn
+
+$ kubectl get svc kube-dns -n kube-system  
+NAME       TYPE        CLUSTER-IP       EXTERNAL-IP 
+PORT(S)                 AGE  
+kube-dns   ClusterIP   192.168.200.10   <none>      
+53/UDP,53/TCP,9153/TCP  2d21h
+与之关联的kube-dns Endpoint对象也应该是正常运行的，同时拥
+有所有coredns Pod的IP地址。
+$ kubectl get ep -n kube-system -l k8s-app=kube-dns  
+NAME       ENDPOINTS                                        
+AGE   
+kube-dns   
+192.168.128.24:53,192.168.128.3:53,192.168.128.24:53 + 3 
+more...  2d21h
+在确定基础的DNS组件都处于正常运行状态之后，就需要进行更加
+细致和深入的排查了。下面是一些基本的技巧。
+首先，启动一个用于排查问题的Pod，其中需安装读者擅长的网络
+工具（ping、traceroute、curl、dig、nslookup等）。如果读者没有
+自定义的镜像，那么标准的gcr.io/kubernetes-e2e test-
+images/dnsutils:1.3镜像是一个比较大众的选择。可惜的是，库中没
+有latest版本的镜像，读者需要指定具体的版本。至本书撰写时，最
+新版本是1.3。
+以下命令将基于刚刚提到的dnsutils镜像启动一个名为netutils
+的独立Pod。同时也会直接登录到其终端中。
+$ kubectl run -it dnsutils \   
+  --image gcr.io/kubernetes-e2e-test-images/dnsutils:1.3
+常见的测试DNS解析的方法是使用nslookup来解析用于代理API
+Server的kubenetes.default Service，测试请求将返回一个IP地址和
+更多IT书籍请关注：www.cmsblogs.cn
+
+名称kubernetes.default.svc.cluster.local。
+# nslookup kubernetes  
+Server:         192.168.200.10  
+Address:        192.168.200.10#53  
+Name:   kubernetes.default.svc.cluster.local  
+Address: 192.168.200.1
+前两行应该返回集群DNS的IP地址，后两行则会显示kubenetes
+Service的FQDN和ClusterIP。然后可以通过执行kubectl get svc
+kubenetes命令来检查kubenetes Service的ClusterIP。
+如果出现诸如“nslookup: can't resolve kubenetes”的错误，
+则表明DNS有异常。可以尝试重启coredns Pod来解决。它们被
+Deployment管理，因此会被自动创建。
+以下命令可以删除DNS Pod，这需要在安装了kubectl的终端中运
+行，如果仍然在netutils Pod中，则需要先输入exit退出。
+$ kubectl delete Pod -n kube-system -l k8s-app=kube-dns 
+Pod "coredns-5644d7b6d9-2pdmd" deleted  
+Pod "coredns-5644d7b6d9-wsjzp" deleted
+查看Pod是否重新启动，并再次测试DNS。
+7.6 总结
+本章说到Kubernetes使用一个内部的集群DNS来进行服务的注册和
+发现。
+所有的Service对象都会被自动注册到集群DNS中，而所有的容器
+都被配置好该集群DNS的解析地址。也就是说，所有的容器都通过询问
+集群DNS来进行Service名称的解析。
+更多IT书籍请关注：www.cmsblogs.cn
+
+集群DNS会将Service的名称解析为其ClusterIP。这些IP地址位于
+一个被称为服务网络（Service network）的特殊网络上，并且没有到
+达该网络的路由。所幸，每一个集群节点都能够对发往服务网络的数
+据包进行捕获，并转发至Pod网络中的某个具体Pod的IP地址。
+注释
+[1] 本书中不加翻译的Service即指Kubernetes的Service对象，否则
+翻译为“服务”。——译者注
+更多IT书籍请关注：www.cmsblogs.cn

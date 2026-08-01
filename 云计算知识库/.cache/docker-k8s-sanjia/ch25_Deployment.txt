@@ -1,0 +1,239 @@
+Deployment的使⽤
+前⾯的课程中我们学习了 Replication Controller 和 Replica Set 两种资源对象， RC 和 RS 的功能
+基本上是差不多的，唯⼀的区别就是 RS ⽀持集合的 selector 。我们也学习到了⽤ RC / RS 来控
+制 Pod 副本的数量，也实现了滚动升级 Pod 的功能。现在看上去似乎⼀切都⽐较完美的运⾏着，但是
+我们上节课最后也提到了现在我们推荐使⽤ Deployment 这种控制器了，⽽不是我们之前的 RC 或
+者 RS ，这是为什么呢？
+没有对⽐就没有伤害对吧，我们来对⽐下⼆者之间的功能吧，⾸先 RC 是 Kubernetes 的⼀个核⼼概
+念，当我们把应⽤部署到集群之后，需要保证应⽤能够持续稳定的运⾏， RC 就是这个保证的关键，
+主要功能如下：
+确保 Pod 数量：它会确保 Kubernetes 中有指定数量的 Pod 在运⾏，如果少于指定数量
+的 Pod ， RC 就会创建新的，反之这会删除多余的，保证 Pod 的副本数量不变。
+确保 Pod 健康：当 Pod 不健康，⽐如运⾏出错了，总之⽆法提供正常服务时， RC 也会杀死不健
+康的 Pod ，重新创建新的。
+弹性伸缩：在业务⾼峰或者低峰的时候，可以⽤过 RC 来动态的调整 Pod 数量来提供资源的利⽤
+率，当然我们也提到过如果使⽤ HPA 这种资源对象的话可以做到⾃动伸缩。
+滚动升级：滚动升级是⼀种平滑的升级⽅式，通过逐步替换的策略，保证整体系统的稳定性，这
+个我们上节课已经给⼤家演示过了。
+ Deployment 同样也是 Kubernetes 系统的⼀个核⼼概念，主要职责和 RC ⼀样的都是保证 Pod 的数量
+和健康，⼆者⼤部分功能都是完全⼀致的，我们可以看成是⼀个升级版的 RC 控制器，
+那 Deployment ⼜具备那些新特性呢？
+ RC 的全部功能： Deployment 具备上⾯描述的 RC 的全部功能
+事件和状态查看：可以查看 Deployment 的升级详细进度和状态
+回滚：当升级 Pod 的时候如果出现问题，可以使⽤回滚操作回滚到之前的任⼀版本
+版本记录：每⼀次对 Deployment 的操作，都能够保存下来，这也是保证可以回滚到任⼀版本的基
+础
+暂停和启动：对于每⼀次升级都能够随时暂停和启动
+作为对⽐，我们知道 Deployment 作为新⼀代的 RC ，不仅在功能上更为丰富了，同时我们也说过现在
+官⽅也都是推荐使⽤ Deployment 来管理 Pod 的，⽐如⼀些官⽅组件 kube-dns 、 kube-proxy 也都是
+使⽤的 Deployment 来管理的，所以当⼤家在使⽤的使⽤也最好使⽤ Deployment 来管理 Pod 。
+创建
+Deployment
+143
+
+ 可以看出⼀个Deployment拥有多个
+Replica Set，⽽⼀个Replica Set拥有⼀个或多个Pod。⼀个Deployment控制多个rs主要是为了⽀持回
+滚机制，每当Deployment操作时，Kubernetes会重新⽣成⼀个Replica Set并保留，以后有需要的话就
+可以回滚⾄之前的状态。 下⾯创建⼀个Deployment，它创建了⼀个Replica Set来启动3个nginx pod，
+yaml⽂件如下：
+apiVersion: apps/v1beta1
+kind: Deployment
+metadata:
+  name: nginx-deploy
+  labels:
+    k8s-app: nginx-demo
+spec:
+  replicas: 3
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.7.9
+        ports:
+        - containerPort: 80
+将上⾯内容保存为: nginx-deployment.yaml，执⾏命令:
+$ kubectl create -f nginx-deployment.yaml
+deployment "nginx-deploy" created
+然后执⾏⼀下命令查看刚刚创建的Deployment:
+$ kubectl get deployments
+NAME           DESIRED   CURRENT   UP-TO-DATE   AVAILABLE   AGE
+nginx-deploy   3         0         0            0           1s
+隔⼀会再次执⾏上⾯命令：
+Deployment
+144
+
+$ kubectl get deployments
+NAME           DESIRED   CURRENT   UP-TO-DATE   AVAILABLE   AGE
+nginx-deploy   3         3         3            3           4m
+我们可以看到Deployment已经创建了1个Replica Set了，执⾏下⾯的命令查看rs和pod:
+$ kubectl get rs
+NAME                     DESIRED   CURRENT   READY     AGE
+nginx-deploy-431080787   3         3         3         6m
+$ kubectl get pod --show-labels
+NAME                           READY     STATUS    RESTARTS   AGE       LABELS
+nginx-deploy-431080787-53z8q   1/1       Running   0          7m        app=nginx,pod-temp
+late-hash=431080787
+nginx-deploy-431080787-bhhq0   1/1       Running   0          7m        app=nginx,pod-temp
+late-hash=431080787
+nginx-deploy-431080787-sr44p   1/1       Running   0          7m        app=nginx,pod-temp
+late-hash=431080787
+上⾯的Deployment的yaml⽂件中的 replicas:3 将会保证我们始终有3个POD在运⾏。
+由于 Deployment 和 RC 的功能⼤部分都⼀样的，我们上节课已经和⼤家演示了⼤部分功能了，我们这
+⾥重点给⼤家演示下 Deployment 的滚动升级和回滚功能。
+滚动升级
+现在我们将刚刚保存的yaml⽂件中的nginx镜像修改为 nginx:1.13.3 ，然后在spec下⾯添加滚动升级
+策略：
+minReadySeconds: 5
+strategy:
+  # indicate which strategy we want for rolling update
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 1
+minReadySeconds:
+Kubernetes在等待设置的时间后才进⾏升级
+如果没有设置该值，Kubernetes会假设该容器启动起来后就提供服务了
+如果没有设置该值，在某些极端情况下可能会造成服务服务正常运⾏
+maxSurge:
+升级过程中最多可以⽐原先设置多出的POD数量
+例如：maxSurage=1，replicas=5,则表示Kubernetes会先启动1⼀个新的Pod后才删掉⼀个旧
+的POD，整个升级过程中最多会有5+1个POD。
+maxUnavaible:
+升级过程中最多有多少个POD处于⽆法提供服务的状态
+当 maxSurge 不为0时，该值也不能为0
+Deployment
+145
+
+例如：maxUnavaible=1，则表示Kubernetes整个升级过程中最多会有1个POD处于⽆法服务
+的状态。
+然后执⾏命令：
+$ kubectl apply -f nginx-deployment.yaml
+deployment "nginx-deploy" configured
+然后我们可以使⽤ rollout 命令：
+查看状态：
+$ kubectl rollout status deployment/nginx-deploy
+Waiting for rollout to finish: 1 out of 3 new replicas have been updated..
+deployment "nginx-deploy" successfully rolled out
+暂停升级
+$ kubectl rollout pause deployment <deployment>
+继续升级
+$ kubectl rollout resume deployment <deployment>
+升级结束后，继续查看rs的状态：
+$ kubectl get rs
+NAME                      DESIRED   CURRENT   READY     AGE
+nginx-deploy-2078889897   0         0         0         47m
+nginx-deploy-3297445372   3         3         3         42m
+nginx-deploy-431080787    0         0         0         1h
+根据AGE我们可以看到离我们最近的当前状态是：3，和我们的yaml⽂件是⼀致的，证明升级成功了。
+⽤ describe 命令可以查看升级的全部信息：
+Name:     nginx-deploy
+Namespace:    default
+CreationTimestamp:  Wed, 18 Oct 2017 16:58:52 +0800
+Labels:     k8s-app=nginx-demo
+Annotations:    deployment.kubernetes.io/revision=3
+      kubectl.kubernetes.io/last-applied-configuration={"apiVersion":"apps/v1beta1","kind":
+"Deployment","metadata":{"annotations":{},"labels":{"k8s-app":"nginx-demo"},"name":"nginx-
+deploy","namespace":"defa...
+Selector:   app=nginx
+Replicas:   3 desired | 3 updated | 3 total | 3 available | 0 unavailable
+StrategyType:   RollingUpdate
+MinReadySeconds:  0
+RollingUpdateStrategy:  25% max unavailable, 25% max surge
+Pod Template:
+  Labels: app=nginx
+  Containers:
+Deployment
+146
+
+   nginx:
+    Image:    nginx:1.13.3
+    Port:   80/TCP
+    Environment:  <none>
+    Mounts:   <none>
+  Volumes:    <none>
+Conditions:
+  Type    Status  Reason
+  ----    ------  ------
+  Progressing   True  NewReplicaSetAvailable
+  Available   True  MinimumReplicasAvailable
+OldReplicaSets: <none>
+NewReplicaSet:  nginx-deploy-3297445372 (3/3 replicas created)
+Events:
+  FirstSeen LastSeen  Count From      SubObjectPath Type    Reason      Message
+  --------- --------  ----- ----      ------------- --------  ------      -------
+  50m   50m   1 deployment-controller     Normal    ScalingReplicaSet Scaled up replica set
+ nginx-deploy-2078889897 to 1
+  45m   45m   1 deployment-controller     Normal    ScalingReplicaSet Scaled down replica 
+set nginx-deploy-2078889897 to 0
+  45m   45m   1 deployment-controller     Normal    ScalingReplicaSet Scaled up replica set
+ nginx-deploy-3297445372 to 1
+  39m   39m   1 deployment-controller     Normal    ScalingReplicaSet Scaled down replica 
+set nginx-deploy-431080787 to 2
+  39m   39m   1 deployment-controller     Normal    ScalingReplicaSet Scaled up replica set
+ nginx-deploy-3297445372 to 2
+  38m   38m   1 deployment-controller     Normal    ScalingReplicaSet Scaled down replica 
+set nginx-deploy-431080787 to 1
+  38m   38m   1 deployment-controller     Normal    ScalingReplicaSet Scaled up replica set
+ nginx-deploy-3297445372 to 3
+  38m   38m   1 deployment-controller     Normal    ScalingReplicaSet Scaled down replica 
+set nginx-deploy-431080787 to 0
+回滚Deployment
+我们已经能够滚动平滑的升级我们的Deployment了，但是如果升级后的POD出了问题该怎么办？我们
+能够想到的最好最快的⽅式当然是回退到上⼀次能够提供正常⼯作的版本，Deployment就为我们提供
+了回滚机制。
+⾸先，查看Deployment的升级历史：
+$ kubectl rollout history deployment nginx-deploy
+deployments "nginx-deploy"
+REVISION  CHANGE-CAUSE
+1   <none>
+2   <none>
+3   kubectl apply --filename=Desktop/nginx-deployment.yaml --record=true
+从上⾯的结果可以看出在执⾏ Deployment 升级的时候最好带上 record 参数，便于我们查看历史版本
+信息。
+Deployment
+147
+
+默认情况下，所有通过 kubectl xxxx --record 都会被 kubernetes 记录到 etcd 进⾏持久化，这⽆疑
+会占⽤资源，最重要的是，时间久了，当你 kubectl get rs 时，会有成百上千的垃圾 RS 返回给你，
+那时你可能就眼花缭乱了。
+上⽣产时，我们最好通过设置Deployment的 .spec.revisionHistoryLimit 来限制最⼤保留的 revision
+number ，⽐如15个版本，回滚的时候⼀般只会回滚到最近的⼏个版本就⾜够了。其实 rollout
+history 中记录的 revision 都和 ReplicaSets ⼀⼀对应。如果⼿动 delete 某个ReplicaSet，对应
+的 rollout history 就会被删除，也就是还说你⽆法回滚到这个 revison 了。
+ rollout history 和 ReplicaSet 的对应关系，可以在 kubectl describe rs $RSNAME 返回
+的 revision 字段中得到，这⾥的 revision 就对应着 rollout history 返回的 revison 。
+同样我们可以使⽤下⾯的命令查看单个 revison 的信息：
+$ kubectl rollout history deployment nginx-deploy --revision=3
+deployments "nginx-deploy" with revision #3
+Pod Template:
+  Labels: app=nginx
+  pod-template-hash=3297445372
+  Annotations:  kubernetes.io/change-cause=kubectl apply --filename=nginx-deployment.yaml 
+--record=true
+  Containers:
+   nginx:
+    Image:  nginx:1.13.3
+    Port: 80/TCP
+    Environment:  <none>
+    Mounts: <none>
+  Volumes:  <none>
+假如现在要直接回退到当前版本的前⼀个版本：
+$ kubectl rollout undo deployment nginx-deploy
+deployment "nginx-deploy" rolled back
+当然也可以⽤ revision 回退到指定的版本：
+$ kubectl rollout undo deployment nginx-deploy --to-revision=2
+deployment "nginx-deploy" rolled back
+现在可以⽤命令查看Deployment现在的状态了。
+点击查看本⽂视频
+扫描下⾯的⼆维码(或微信搜索 k8s技术圈 )关注我们的微信公众帐号，在微信公众帐号中回复 加群 即
+可加⼊到我们的 kubernetes 讨论群⾥⾯共同学习。
+Deployment
+148
+
+k8s技术圈⼆维码
+Copyright © qikqiak.com 2018 all right reserved，powered by GitbookUpdated: 2019-05-04 22:00:00
+Deployment
+149

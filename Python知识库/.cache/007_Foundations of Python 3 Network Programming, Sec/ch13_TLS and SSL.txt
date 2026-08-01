@@ -1,0 +1,604 @@
+C H A P T E R   6 
+ 
+■ ■ ■ 
+87
+TLS and SSL 
+The short story is this: before you send sensitive data across a network, you need proof of the identity of 
+the machine that you think is on the other end of the socket, and while sending the data, you need it 
+protected against the prying eyes of anyone controlling the gateways and network switches that see all of 
+your packets. The solution to this problem is to use Transport Layer Security (TLS). Because earlier 
+versions of TLS were called the Secure Sockets Layer (SSL), nearly all of the libraries that you will use to 
+speak TLS actually still have SSL somewhere in the name. 
+Simple enough? 
+The actual libraries introduced in this chapter, and all of the program listings that we will discuss, 
+are going be about TLS; that is really the only take-home coding lesson you will find here. But we will do 
+the actual examples last, once you have enough context to understand what they can—and cannot—do 
+for the security of your network programs. 
+Computer Security 
+The subject of computer security is vast, with its own pundits, blogs, magazines, conferences, academic 
+journals, consultancies, and product lines. And the subject is deserving of this extensive treatment: it is 
+important, it is often done badly, and we programmers are still—as a profession—a very long way from 
+even beginning to consistently get it right. 
+The field also has its share of charlatans and con men. And, of course, there are legions who work to 
+subvert security mechanisms. Script kiddies seek surreptitious control over thousands of Windows 
+desktops to power their next denial-of-service attack against their middle school. Organized criminals 
+want to steal millions of dollars (or pounds sterling, or yen, or rupees, depending on their jurisdiction) 
+through intercepted credit card numbers and identity theft. Militaries and governments seek to protect 
+their own information systems while gaining the ability to commandeer or disable those of their rivals. 
+How can we competently dare to write programs that will be on the same network as such 
+significant threats? 
+It may be foolish for me to attempt to answer this question; I should perhaps, at this point, be 
+sending you right into the vast literature on the subject of secure software, and not risking offering you a 
+few pointers when volumes of wisdom are what you really need. But since some readers may read this 
+book on a tight schedule, tasked with adding TLS to some hastily written network program just days 
+before it ships, I will go ahead and offer a few short thoughts on creating half-decent software. 
+First, always have thorough tests. Use Ned Batchelder's coverage tool to measure how much of your 
+code is being tested at all. Freely refactor your code until testing each module is not just possible, but 
+downright convenient! When a module is difficult to test, that is an excellent signal that the module has 
+too many hard-coded entanglements with other parts of the code, and that it will be difficult to predict 
+how the system as a whole will behave. The ease with which code can be tested, in other words, is often 
+directly related to how easy it is to draw a boundary around which other parts of the system the code can 
+directly affect. 
+
+CHAPTER 6 ■ TLS AND SSL 
+88 
+Second, write as little code as possible. Rely on well-written and thoroughly tested third-party code 
+whenever you can, with a special emphasis on using tools that seem to be well tested and actively 
+maintained. One reason for using common technologies over obscure tools that you think might be 
+better is that the code with the larger community is more likely to have its weaknesses and 
+vulnerabilities discovered and resolved. Keep everything upgraded and up-to-date when possible, from 
+the operating system and your Python install to the particular distributions you are using off of PyPI. 
+And, of course, isolate your projects from each other by giving each of them its own virtual environment 
+using the virtualenv command discussed in Chapter 1. 
+Third, the fact that you are reading this book indicates that you have probably already adopted one 
+of my most important recommendations: to use a high-level language like Python for application 
+development. Whole classes of security problems disappear when your code can talk directly about 
+dictionaries, Unicode strings, and iteration over complex data structures, instead of having to 
+manipulate raw integers every time it wants to visit every item in a list. Repetition and verbosity not only 
+waste your time and cut your productivity, but also directly increase your chance of making a mistake. 
+Fourth, as you strive for elegant and simple solutions, try to learn as much as possible about the 
+problem domain if many people have tackled it before you. Read about cross-scripting attacks (see 
+Chapter 9) if you are writing a web site; about SQL injection attacks if your application talks to a 
+database; about the sordid history of privilege escalation attacks if your system will support users who 
+have different permission levels; and about viruses and Trojan horses if you are writing an e-mail client. 
+Fifth and finally, since you will probably lack the time (not to mention the omniscience) to build 
+your entire application out of perfect code, try to focus on the edges of your code where it interacts with 
+data from the outside. Several minutes spent writing code to examine a web form variable, checking it 
+every which way to make sure it really and truly looks like, say, a string of digits, can be worth hours of 
+precaution further inside the program that will be necessary if the bad value can make it all the way to 
+the database and have to be dealt with there. 
+It was a great day, to take a concrete example, when C programmers stopped thinking that their 
+servers had to always run as root—which had risked the compromise of the entire machine if something 
+were to go wrong—and instead wrote network daemons that would start up, grab the low-numbered 
+port on which their service lived, and then immediately drop their privileges to those of a normal user. 
+They almost seemed to consider it a contest to see how few lines of code they could leave in the part of 
+their program that ran with root privileges. And this brought about a vast reduction in exposure. Your 
+Python code is the same way: fewer lines of code that run before you have verified the sanity of an input 
+value, or tested for a subtle error, mean that less of the surface area of your program can harbor bugs 
+that enemies could exploit. 
+But, again, the subject is a large one. Read blogs like “Schneier on Security,” watch vendor security 
+announcements like those on the Google Online Security Blog, and consult good books on the subject if 
+you are going to be writing lots of security-sensitive code. 
+You should at least read lots of war stories about how intrusions have occurred, whether from 
+security alerts or on popular blogs; then you will know ahead of time to forearm your code against the 
+same kinds of disasters. Plus, such accounts are also quite entertaining if you like to learn the details of 
+how systems work—and to learn about the unending cleverness of those who want to subvert them. 
+IP Access Rules 
+During the 1980s, the Internet grew from a small research network to a large enough community that it 
+was unwise to trust everyone who happened to have access to an IP address. Prudence began to dictate 
+that many services on each host either be turned off, or restricted so that only hosts in a pre-approved 
+list were allowed to connect. But each piece of software had its own rules for how you specified the hosts 
+that should be allowed to connect and the hosts whose connections should be rejected. 
+In 1990, Wietse Venema introduced the TCP Wrappers, and suggested that all Internet server 
+programs could use this single piece of code to make access decisions. The idea was that rather than 
+requiring every piece of software to have a separate configuration file, which made it impossible for 
+
+CHAPTER 6 ■ TLS AND SSL 
+89
+systems administrators to look any one place to discover exactly which remote services a particular 
+machine was offering, a single pair of hosts.allow and hosts.deny files could be shared by many 
+network services if each service looked for its own name (or the wildcard ALL). 
+It was soon discovered that rules were very difficult to maintain if they mixed arbitrary allow rules 
+with specific deny rules naming hosts or IP address ranges that were thought to be dangerous—it meant 
+staring at both hosts.allow and hosts.deny at the same time and trying to puzzle out the implications of 
+both files for every possible IP address. So it quickly became popular to include only a single rule in 
+hosts.deny that would disallow any connections that had not been explicitly permitted in the 
+hosts.allow file: 
+ALL: ALL 
+The systems administrator could then focus on hosts.allow, safe in the knowledge that any hosts 
+not explicitly mentioned there would be denied access. A typical hosts.allow looked something like this: 
+ALL: 127.0.0.1 
+portmap: 192.168.7 
+popd: 192.168 
+sshd: ALL 
+The ability to write rules like this was incredible. The portmap daemon in particular had long been a 
+source of trouble. It was a necessary service if you were running the Network File System (NFS) to share 
+files and directories between servers. But portmap had a long history of security problems, and it was very 
+annoying to have to expose this service to everyone on the entire Internet just because a few nearby 
+machines needed file sharing. Thanks to the TCP Wrappers, it was easy to lock down “dumb” network 
+services like portmap that could not otherwise be configured to restrict the set of hosts that could 
+connect. 
+If you remember those days, you might wonder what happened, and why a clean and uniform host 
+filtering mechanism does not come built into Python. 
+There are several small reasons that contribute to this situation—most Python programs are not 
+Internet daemons, for instance, so there has not been much pressure for such a mechanism in the 
+Standard Library; and in a high-level language like Python, it is easy enough to pattern-match on IP 
+addresses or hostnames that the burden of re-inventing this particular wheel for each project that needs 
+it is not particularly high. 
+But I think there are two much bigger reasons. 
+First, many systems administrators these days simply use firewalls to limit remote host access 
+instead of learning how to configure each and every daemon on their system (and then trusting that 
+every one of those programs is going to actually implement their rules correctly). By putting basic access 
+rules in the switches and gateways that form the fabric of an institution's network, and then 
+implementing even more specific rules in each host's firewalls, system administrators get to configure a 
+uniform and central set of controls upon network access. 
+But even more important is the fact that IP address restrictions are simply not effective as an 
+ultimate security measure. If you want to control who has access to a resource, you need a stronger 
+assurance of their identity these days than a simple check of the IP address from which their packets 
+seem to originate. 
+While it is true that denial-of-service attacks still provide a good reason to have some basic IP-level 
+access control rules enforced on your network—after all, if a service is needed only by other machines in 
+the same server closet, why let everyone else even try to connect?—the proper place for such rules is, 
+again, either the border firewall to an entire subnet, or the operating system firewall of each particular 
+host. You really do not want your Python application code having to spin up for every single incoming 
+connection from a denial-of-service attack, only to check the connection against a list of rules and then 
+summarily reject it! Performing that check in the operating system, or on a network switch, is vastly 
+more efficient. 
+
+CHAPTER 6 ■ TLS AND SSL 
+90 
+If you do ever want to exercise some application-level IP access control in a particular program,
+simply examine the IP address returned by the accept() method on the socket with which your
+application is listening: 
+sc, sockname = s.accept() 
+if not sockname[0].startswith('192.168.'): 
+»   raise RuntimeError('connectors are not allowed from another network') 
+If you are interested in imposing the very specific restriction that only machines on your local
+subnet can connect to a particular service, but not machines whose packets are brought in through
+gateways, you might consider the SO_DONTROUTE option described in Chapter 2. But this restriction, like
+all rules based only on IP address, implies a very strong trust of the network hardware surrounding your
+machine—and therefore falls far short of the kind of assurance provided by TLS. 
+Finally, I note that the Ubuntu folks—who use Python in a number of their system and desktop
+services—maintain their own package for accessing libwrap0, a shared-library version of Wietse's old
+code, based on a Python package that was released on SourceForge in 2004. It allows them to do things
+like the following: 
+>>> from pytcpwrap.tcpwrap import TCPWrap 
+>>> TCPWrap('foo', None, '130.207.244.244').Allow()
+False 
+But since this routine can be rather slow (it always does a reverse DNS lookup on the IP address),
+the Python code uses tabs and old-fashioned classes, and it has never been released on PyPI, I
+recommend against its use. 
+Cleartext on the Network 
+There are several security problems that TLS is designed to solve. They are best understood by
+considering the dangers of sending your network data as “cleartext” over a plain old socket, which copies
+your data byte-for-byte into the packets that get sent over the network. 
+Imagine that you run a typical web service consisting of front-end machines that serve HTML to
+customers and a back-end database that powers your service, and that all communication over your
+network is cleartext. What attacks are possible? 
+First, consider an adversary who can observe your packets as they travel across the network. This
+activity is called “network sniffing,” and is quite legitimate when performed by network administrators
+trying to fix problems on their own hardware. The traditional program tcpdump and the more sleek and
+modern wireshark are both good tools if you want to try observing some network packets yourself. 
+Perhaps the adversary is sitting in a coffee shop, and he has a wireless card that is collecting your
+traffic as you debug one of the servers, and he keeps it for later analysis. Or maybe he has offered a bribe
+to a machine-room operator (or has gotten himself hired as a new operator!) and has attached a passive
+monitor to one of your network cables where it passes under the floor. But through whatever means, he
+can now observe, capture, and analyze your data at his leisure. What are the consequences? 
+•
+Obviously, he can see all of the data that passes over that segment of the network.
+The fraction of your data that he can capture depends on how much of it passes
+over that particular link. If he is watching conversations between your web front
+end and the database behind it, and only 1% of your customers log in every day to
+check their balances, then it will take him weeks to reconstruct a large fraction of
+your entire database. If, on the other hand, he can see the network segment that
+carries each night's disk backup to your mass storage unit, then in just a few hours
+he will learn the entire contents of your database. 
+Download from www.eBookTM.Com
+
+CHAPTER 6 ■ TLS AND SSL 
+91
+• 
+He will see any usernames and passwords that your clients use to connect to the 
+servers behind them. Again, depending on which link he is observing, this might 
+expose the passwords of customers signing on to use your service, or it might 
+expose the passwords that your front ends use to get access to the database. 
+• 
+Log messages can also be intercepted, if they are being sent to a central location 
+and happen to travel over a compromised IP segment or device. This could be very 
+useful if the observer wants to probe for vulnerabilities in your software: he can 
+send illegal data to your server and watch for log messages indicating that he is 
+causing errors; he will be forewarned about which activities of his are getting 
+logged for your attention, and which you have neglected to log and that he can 
+repeat as often as he wants; and, if your logs include tracebacks to help 
+developers, then he will actually be able to view snippets of the code that he has 
+discovered how to break to help him turn a bug into an actual compromise. 
+• 
+If your database server is not picky about who connects, aside from caring that the 
+web front end sends a password, then the attacker can now launch a “replay 
+attack,” in which he makes his own connection to your database and downloads 
+all of the data that a front-end server is normally allowed to access. If write 
+permission is also granted, then rows can be adjusted, whole tables can be 
+rewritten, or much of the database simply deleted, depending on the attacker's 
+intentions. 
+Now we will take things to a second level: imagine an attacker who cannot yet alter traffic on your 
+network itself, but who can compromise one of the services around the edges that help your servers find 
+each other. Specifically, what if she can compromise the DNS service that lets your web front ends find 
+your db.example.com server—or what if she can masquerade as your DNS server through a compromise 
+at your upstream ISP? Then some interesting tricks might become possible: 
+• 
+When your front ends ask for the hostname db.example.com, she could answer 
+with the IP address of her own server, located anywhere in the world, instead. If 
+the attacker has programmed her fake server to answer enough like your own 
+database would, then she could collect at least the first batch of data—like a login 
+name and maybe even a password—that arrives from each customer using your 
+service. 
+• 
+Of course, the fake database server will be at a loss to answer requests with any 
+real data that the intruder has not already copied down off the network. Perhaps, if 
+usernames and passwords are all she wanted, the attacker can just have the 
+database not answer, and let your front-end service time out and then return an 
+error to the user. True, this means that you will notice the problem; but if the 
+attack lasts only about a minute or so and then your service starts working again, 
+then you will probably blame the problem on a transient glitch and not suspect 
+malfeasance. Meanwhile, the intruder may have captured dozens of user 
+credentials. 
+• 
+But if your database is not carefully locked down and so is not picky about which 
+servers connect, then the attacker can do something more interesting: as requests 
+start arriving at her fake database server, she can have it turn around and forward 
+those requests to the real database server. This is called a “man-in-the-middle” 
+attack. When the real answers come back, she can simply turn around and hand 
+them back to the front-end services. Thus, without having actually compromised 
+either your front-end web servers or the database server behind them, she will be 
+in fairly complete control of your application: able to authenticate to the database 
+because of the data coming in from the clients, and able to give convincing 
+
+CHAPTER 6 ■ TLS AND SSL 
+92 
+answers back, thanks to her ability to connect to your database. Unlike the replay 
+attack outlined earlier, this succeeds even if the clients are supplying a one-time 
+password or are using a simple (though not a sophisticated) form of challenge-
+response. 
+• 
+While proxying the client requests through to the database, the attacker will 
+probably also have the option of inserting queries of her own into the request 
+stream. This could let her download entire tables of data and delete or change 
+whatever data the front-end services are typically allowed to modify. 
+Again, the man-in-the-middle attack is important because it can sometimes succeed without the 
+need to actually compromise any of the servers involved, or even the network with which they are 
+communicating—the attacker needs only to interfere with the naming service by which the servers 
+discover each other. 
+Finally, consider an attacker who has actually compromised a router or gateway that stands 
+between the various servers that are communicating in order to run your service. He will now be able to 
+perform all of the actions that we just described—replay attacks, man-in-the-middle attacks, and all of 
+the variations that allow him to insert or alter the database requests as they pass through the attacker's 
+control—but will be able to do so without compromising the name service, or any of your services, and 
+even if your database server is locked down to accept only connections from the real IP addresses of your 
+front-end servers. 
+All of these evils are made possible by the fact that the clients and servers have no real guarantee, 
+other than the IP addresses written openly into each packet, that they are really talking to each other. 
+TLS Encrypts Your Conversations 
+The secret to TLS is public-key cryptography, one of the great computing advances of the last few 
+decades, and one of the very few areas of innovation in which academic computer science really shows 
+its worth. There are several mathematical schemes that have been proved able to support public-key 
+schemes, but they all have these three features: 
+• 
+Anyone can generate a key pair, consisting of a private key that they keep to 
+themselves and a public key that they can broadcast however they want. The 
+public key can be shown to anyone in the world, because possessing the public 
+key does not make it possible to derive or guess the private key. (Each key usually 
+takes the physical form of a few kilobytes of binary data, often dumped into a text 
+file using base64 or some other simple encoding.) 
+• 
+If the public key is used to encrypt information, then the resulting block of binary 
+data cannot be read by anyone, anywhere in the world, except by someone who 
+holds the private key. This means that you can encrypt data with a public key and 
+send it over a network with the assurance that no one but the holder of the 
+corresponding private key will be able to read it. 
+• 
+If the system that holds the private key uses it to encrypt information, then any 
+copy of the public key can be used to decrypt the data. This does not make the 
+data at all secret, of course, because we presume that anyone can get a copy of the 
+public key; but it does prove that the information comes from the unique holder of 
+the private key, since no one else could have generated data that the public key 
+unlocks. 
+Following their invention, there have been many important applications developed for public-key 
+cryptographic systems. I recommend Bruce Schneier's classic Applied Cryptography for a good 
+
+CHAPTER 6 ■ TLS AND SSL 
+93
+discussion of all of the ways that public keys can be used to help secure key-cards, protect individual 
+documents, assert the identity of an e-mail author, and encrypt hard drives. Here, we will focus on how 
+public keys are used in the TLS system. 
+Public keys are used at two different levels within TLS: first, to establish a certificate authority (CA) 
+system that lets servers prove “who they really are” to the clients that want to connect; and, second, to 
+help a particular client and server communicate securely. We will start by describing the lower level—
+how communication actually takes place—and then step back and look at how CAs work. 
+First, how can communication be protected against prying eyes in the first place? 
+It turns out that public-key encryption is pretty slow, so TLS does not actually use public keys to 
+encrypt all of the data that you send over the network. Traditional symmetric-key encryption, where 
+both sides share a big random block of data with which they encrypt outgoing traffic and decrypt 
+incoming traffic, is much faster and better at handling large payloads. So TLS uses public-key 
+cryptography only to begin each conversation: the server sends a public key to the client, the client sends 
+back a suitable symmetric key by encrypting it with the public key, and now both sides hold the same 
+symmetric key without an observer ever having been given the chance to capture it—since the observer 
+will not be able to derive (thanks to powerful mathematics!) the server's private key based on seeing the 
+public key go one way and an encrypted block of data going the other. 
+The actual TLS protocol involves a few other details, like the two partners figuring out the strongest 
+symmetric key cipher that they both support (since new ones do get invented and added to the 
+standard), but the previous paragraph gives you the gist of the operation. 
+And, by the way, the labels “server” and “client” here are rather arbitrary with respect to the actual 
+protocol that you wind up speaking inside your encrypted socket—TLS has no way to actually know how 
+you use the connection, or which side is the one that will be asking questions and which side will be 
+answering. The terms “server” and “client” in TLS just mean that one end agrees to speak first and the 
+other end will speak second when setting up the encrypted connection. There is only one important 
+asymmetry built into the idea of a client and server, which we will learn about in a moment when we 
+start discussing how the CA works. 
+So that is how your information is protected: a secret symmetric encryption key is exchanged using 
+a public-private key pair, which is then used to protect your data in both directions. That alone protects 
+your traffic against sniffing, since an attacker cannot see any of your data by watching from outside, and 
+it also means that he cannot insert, delete, or alter the packets passing across a network node since, 
+without the symmetric key, any change he makes to the data will simply produce gibberish when 
+decrypted. 
+TLS Verifies Identities 
+But what about the other class of attacks we discussed—where an attacker gets you to connect to his 
+server, and then talks to the real server to get the answers that you are expecting? That possibility is 
+protected against by having a certificate authority, which we will now discuss. 
+Do you remember that the server end of a TLS connection starts by sharing a public key with the 
+client? Well, it turns out that servers do not usually offer just any old public key—instead, they offer a 
+public key that has been signed by a CA. To start up a certificate authority (some popular ones you might 
+have heard of are Verisign, GeoTrust, and Thawte), someone simply creates a public-private key pair, 
+publishes their public key far and wide, and then starts using their private key to “sign” server public 
+keys by encrypting a hash of their data. 
+You will recall that only the holder of a private key can encrypt data that can then be decrypted with 
+the corresponding public key; anyone else in the world who tries will wind up writing data that just turns 
+into gibberish when passed through the public key. So when the client setting up a TLS connection 
+receives a public key from the server along with a block of encrypted data that, when decrypted with the 
+CA's public key, turns into a message that says “Go ahead and trust the server calling itself 
+db.example.com whose public key hashes to the value 8A:01:1F:…”, then the client can trust that it is 
+really connecting to db.example.com and not to some other server. 
+
+CHAPTER 6 ■ TLS AND SSL 
+94 
+Thus man-in-the-middle attacks are thwarted, and it does not matter what tricks an attacker might 
+use to rewrite packets or try to get you to connect to his server instead of the one that you really want to 
+talk to. If he does not return to you the server's real certificate, then it will not really have been signed by 
+the CA and your TLS library will tell you he is a fake; or, if the attacker does return the server's 
+certificate—since, after all, it is publicly transmitted on the network—then your client will indeed be 
+willing to start talking. But the first thing that your TLS library sends back will be the encrypted 
+symmetric key that will govern the rest of the conversation—a key, alas, that the attacker cannot decrypt, 
+because he does not possess the private key that goes along with the public server certificate that he is 
+fraudulently waving around. 
+And, no, the little message that forms the digital signature does not really begin with the words “Go 
+ahead” followed by the name of the server; instead, the server starts by creating a “certificate” that 
+includes things like its name, an expiration date, and its public key, and the whole thing gets signed by 
+the CA in a single step. 
+But how do clients learn about CA certificates? The answer is: configuration. Either you have to 
+manually load them one by one (they tend to live in files that end in .crt) using a call to your SSL library, 
+or perhaps the library you are using will come with some built in or that are provided by your operating 
+system. Web browsers support HTTPS by coming with several dozen CA certificates, one for each major 
+public CA in existence. These companies stake their reputations on keeping their private keys absolutely 
+safe, and signing server certificates only after making absolutely sure that the request really comes from 
+the owner of a given domain. 
+If you are setting up TLS servers that will be contacted only by clients that you configure, then you 
+can save money by bypassing the public CAs and generating your own CA public-private key pair. 
+Simply sign all of your server's certificates, and then put your new CA's public key in the configurations 
+of all of your clients. 
+Some people go one step cheaper, and give their server a “self-signed” certificate that only proves 
+that the public key being offered to the client indeed corresponds to a working private key. But a client 
+that is willing to accept a self-signed certificate is throwing away one of the most important guarantees 
+of TLS—that you are not talking to the wrong server—and so I strongly recommend that you set up your 
+own simple CA in every case where spending money on “real” certificates from a public certificate 
+authority does not make sense. 
+Guides to creating your own certificate authority can be found through your favorite search engine 
+on the Web, as can software that automates the process so that you do not have to run all of those 
+openssl command lines yourself. 
+Supporting TLS in Python 
+So how can you use TLS in your own code? 
+From the point of view of your network program, you start a TLS connection by turning control of a 
+socket over to an SSL library. By doing so, you indicate that you want to stop using the socket for 
+cleartext communication, and start using it for encrypted data under the control of the library. 
+From that point on, you no longer use the raw socket; doing so will cause an error and break the 
+connection. Instead, you will use routines provided by the library to perform all communication. Both 
+client and server should turn their sockets over to SSL at the same time, after reading all pending data off 
+of the socket in both directions. 
+There are two general approaches to using SSL. 
+The most straightforward option is probably to use the ssl package that recent versions of Python 
+ship with the Standard Library. 
+• 
+The ssl package that comes with Python 3.2 includes everything that you need to 
+communicate securely. 
+
+CHAPTER 6 ■ TLS AND SSL 
+95
+• 
+The ssl packages that came with Python 2.6 through 3.1 neglected to provide a 
+routine for actually verifying that server certificates match their hostname! For 
+these Python versions, also install the backports.ssl_match_hostname distribution 
+from the Python Package Index. 
+• 
+For Python 2.5 and earlier, you will want to download both the ssl and 
+backports.ssl_match_hostname distributions from the Python Package Index in 
+order to have a complete solution. 
+The other alternative is to use a third-party Python library. There are several of these that support 
+TLS, but many of them are decrepit and seem to have been abandoned. 
+The M2Crypto package is a happy exception. Although some people find it difficult to compile and 
+install, it usually stays ahead of the Standard Library in letting you configure and control the security of 
+your SSL connections. My own code examples that follow will use the Standard Library approach since I 
+suspect that it will work for more people, but if you want more details the M2Crypto project is here:  
+http://chandlerproject.org/bin/view/Projects/MeTooCrypto 
+The project's author also has an interesting blog; you can see his posts about SSL in Python here:  
+www.heikkitoivonen.net/blog/tag/ssl/ 
+Finally, you will want to avoid the Standard Library SSL support from Python 2.5. The socket.ssl() 
+call that it supported—which was wisely removed before Python 2.6—provided no means of validating 
+server certificates, and was therefore rather pointless. And its API was very awkward: the SSL object had 
+a read() and write() method, but their semantics were those of send() and recv() on sockets, where it 
+was possible for not all data to be sent, and you had to check the return value and possibly try again. I 
+strongly recommend against its use. 
+The Standard SSL Module 
+Again, this module comes complete with Python 3.2, but it is missing a crucial function in earlier Python 
+versions. For the Python versions covered by this book—versions 2.5 through 2.7—you will want to 
+create a virtual environment (see Chapter 1) and run the following: 
+$ pip install backports.ssl_match_hostname 
+If you are using Python 2.5, then the ssl package itself also needs to be installed since that version of 
+the Standard Library did not yet include it: 
+$ pip-2.5 install ssl 
+And, yes, in case you are curious, the “Brandon” who released that package is me—the very same 
+one who has revised this book! For all of the other material in this volume, I was satisfied to merely 
+report on the existing situation and try to point you toward the right solutions. But the SSL library 
+situation was enough of a mess—with a simple enough solution—that I felt compelled to step in with the 
+backport of the match_hostname() function before I could finish this chapter and be happy with the 
+situation that it had to report. 
+Once you have those two tools, you are ready to use TLS! The procedure is simple and is shown in 
+Listing 6–1. The first and last few lines of this file look completely normal: opening a socket to a remote 
+server, and then sending and receiving data per the protocol that the server supports. The cryptographic 
+protection is invoked by the few lines of code in the middle—two lines that load a certificate database 
+and make the TLS connection itself, and then the call to match_hostname() that performs the crucial test 
+of whether we are really talking to the intended server or perhaps to an impersonator. 
+
+CHAPTER 6 ■ TLS AND SSL 
+96 
+Listing 6–1. Wrapping a Client Socket with TLS Protection 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 6 - sslclient.py 
+# Using SSL to protect a socket in Python 2.6 or later 
+ 
+import os, socket, ssl, sys 
+from backports.ssl_match_hostname import match_hostname, CertificateError 
+ 
+try: 
+»   script_name, hostname = sys.argv 
+except ValueError: 
+»   print >>sys.stderr, 'usage: sslclient.py <hostname>' 
+»   sys.exit(2) 
+ 
+# First we connect, as usual, with a socket. 
+ 
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM) 
+sock.connect((hostname, 443)) 
+ 
+# Next, we turn the socket over to the SSL library! 
+ 
+ca_certs_path = os.path.join(os.path.dirname(script_name), 'certfiles.crt') 
+sslsock = ssl.wrap_socket(sock, ssl_version=ssl.PROTOCOL_SSLv3, 
+»   »   »   »   »   »     cert_reqs=ssl.CERT_REQUIRED, ca_certs=ca_certs_path) 
+ 
+# Does the certificate that the server proffered *really* match the 
+# hostname to which we are trying to connect?  We need to check. 
+ 
+try: 
+»   match_hostname(sslsock.getpeercert(), hostname) 
+except CertificateError, ce: 
+»   print 'Certificate error:', str(ce) 
+»   sys.exit(1) 
+ 
+# From here on, our `sslsock` works like a normal socket.  We can, for 
+# example, make an impromptu HTTP call. 
+ 
+sslsock.sendall('GET / HTTP/1.0\r\n\r\n') 
+result = sslsock.makefile().read()  # quick way to read until EOF 
+sslsock.close() 
+print 'The document https://%s/ is %d bytes long' % (hostname, len(result)) 
+Note that the certificate database needs to be provided as a file named certfiles.crt in the same 
+directory as the script; one such file is provided with the source code bundle that you can download for 
+this book. I produced it very simply, by trusting the list of worldwide CAs that are trusted by default on 
+my Ubuntu laptop, and combining these into a single file: 
+$ cat /etc/ssl/certs/* > certfiles.crt 
+Running Listing 6–1 against different web sites can demonstrate which ones provide correct 
+certificates. For example, the OpenSSL web site does (as we would expect!): 
+$ python sslclient.py www.openssl.org 
+The document https://www.openssl.org/ is 15941 bytes long 
+
+CHAPTER 6 ■ TLS AND SSL 
+97
+The Linksys router here at my house, by contrast, uses a self-signed certificate that can provide 
+encryption but fails to provide a signature that can be verified against any of the famous CAs in the 
+certfiles.crt file. So, with the conservative settings in our sslclient.py program, the connection fails: 
+$ python sslclient.py ten22.rhodesmill.org 
+Traceback (most recent call last): 
+  ... 
+ssl.SSLError: [Errno 1] _ssl.c:480: error:14090086:SSL 
+routines:SSL3_GET_SERVER_CERTIFICATE:certificate verify failed 
+Interestingly, Google (as of this writing) provides a single www.google.com certificate not only for that 
+specific domain name, but also for its google.com address since all that is hosted there is a redirect to the 
+www name: 
+$ python sslclient.py google.com 
+Certificate error: hostname 'google.com' doesn't match u'www.google.com' 
+$ python sslclient.py www.google.com 
+The document https://www.google.com/ is 9014 bytes long 
+Writing an SSL server looks much the same: code like that in Listing 3-1 is supplemented so that the 
+client socket returned by each accept() call gets immediately wrapped with wrap_socket(), but with 
+different options than are used with a client. In general, here are the three most popular ways of using 
+wrap_socket() (see the ssl Standard Library documentation to learn about all of the rest of its options): 
+The first form is the one shown in Listing 6–1, and is the most common form of the call seen in clients: 
+wrap_socket(sock, ssl_version=ssl.PROTOCOL_SSLv3, 
+»   cert_reqs=ssl.CERT_REQUIRED, ca_certs=ca_certs_path) 
+Here the client asserts no particular identity—at least, TLS provides no way for the server to know 
+who is connecting. (Since the connection is now encrypted, of course, a password or cookie can now be 
+passed safely to the server; but the TLS layer itself will not know who the client is.) 
+Servers generally do not care whether clients connect with certificates, so the wrap_socket() calls 
+that they make after an accept() use a different set of named parameters that provide the documents 
+that establish their own identity. But they can neglect to provide a database of CA certificates, since they 
+will not require the client to present a certificate: 
+wrap_socket(sock, server_side=True, ssl_version=ssl.PROTOCOL_SSLv23, 
+»   cert_reqs=ssl.CERT_NONE, 
+»   keyfile="mykeyfile", certfile="mycertfile") 
+Finally, there do exist situations where you want to run a server that checks the certificates of the 
+clients that are connecting. This can be useful if the protocol that you are wrapping provides weak or 
+even non-existent authentication, and the TLS layer will be providing the only assurance about who is 
+connecting. You will use your CA to sign client certificates for each individual or machine that will be 
+connecting, then have your server make a call like this: 
+wrap_socket(sock, server_side=True, ssl_version=ssl.PROTOCOL_SSLv23, 
+»   cert_reqs=ssl.CERT_REQUIRED, ca_certs=ca_certs_path, 
+»   keyfile="mykeyfile", certfile="mycertfile") 
+Again, consult the ssl chapter in the Standard Library if you need to delve into the options more 
+deeply; the documentation there has been getting quite a bit better, and might cover edge cases that we 
+have not had room to discuss here in this chapter. 
+If you are writing clients and servers that need to talk only to each other, try using PROTOCOL_TLSv1 as 
+your protocol. It is more modern and secure than any of the protocols that have SSL in their names. The 
+only reason to use SSL protocols—as shown in the foregoing example calls, and which are also currently 
+
+CHAPTER 6 ■ TLS AND SSL 
+98 
+the defaults for the wrap_socket() call in the Standard Library—is if you need to speak to browsers or 
+other third-party clients that might not have upgraded to full-fledged TLS yet. 
+Loose Ends 
+When adding cryptography to your application, it is always a good idea to read up-to-date documentation. 
+The advice given in this chapter would have been quite different if this revision of the book had happened 
+even just one or two years earlier, and in two or three more years it will doubtless be out of date. 
+In particular, the idea has been around for a long time in the public-key cryptography literature that 
+there should exist certificate revocation lists, where client certificates and even certificate-authority 
+certificates could be listed if they are discovered to have been compromised and must no longer be 
+trusted. That way, instead of everyone waiting for operating system updates or browser upgrades to 
+bring the news that an old CA certificate should no longer be trusted, they could instantly be protected 
+against any client certificates minted with the stolen private key. 
+Also, security vulnerabilities continue to be discovered not only in particular programs but also in 
+the design of various security protocols themselves—SSL version 2 was, in fact, the victim of just such a 
+discovery in the mid-1990s, which is why many people simply turn it off as an option when using TLS. 
+All of which is to say: use this chapter as a basic API reference and introduction to the whole topic of 
+secure sockets, but consult something more up-to-date if you are creating new software more than a 
+year after this book comes out, to make sure the protocols still operate well if used as shown here. As of 
+this writing, the Standard Library documentation, Python blogs, and Stack Overflow questions about 
+cryptography are all good places to look. 
+Summary 
+Computer security is a large and complicated subject. At its core is the fact that an intruder or 
+troublemaker will take advantage of almost any mistake you make—even an apparently very small one—
+to try to leverage control over your systems and software. 
+Networks are the locus of much security effort because the IP protocols, by default, copy all your 
+information into packets verbatim, where it can be read by anyone watching your packets go past. 
+Passive sniffing, man-in-the-middle attacks, connection hijacking, and replay attacks are all possible if 
+an adversary has control over the network between a client and server. 
+Fortunately, mathematicians have invented public-key cryptography, which has been packaged as 
+the TLS protocol for protecting IP sockets. It grew out of an older, less secure protocol named SSL, from 
+which most software libraries that speak TLS take their name. 
+The Python Standard Library now supplies an ssl package (though it has to be downloaded 
+separately for Python 2.5), which can leverage the OpenSSL library to secure your own application 
+sockets. This makes it impossible for a third party to masquerade as a properly certified server machine, 
+and also encrypts all data so that an observer cannot determine what your client and server programs 
+are saying to one another. 
+There are two keys to using the ssl package. First, you should always wrap the bare socket you 
+create with its wrap_socket() function, giving the right arguments for the kind of connection and 
+certificate assurances that you need. Second, if you expect the other side to provide a certificate, then 
+you should run match_hostname() to make sure that they are claiming the identity that you expect. 
+The security playing field shifts every few years, with old protocols obsoleted and new ones 
+developed, so keep abreast of news if you are writing security-sensitive applications. 

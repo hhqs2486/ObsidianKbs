@@ -1,0 +1,2228 @@
+仅供斗l'ilii业用途或交流学习使用
+第
+14 章部署上结
+·：·
+567 
+>> import os 
+>> os .urandom (12 ) 
+’ \ xfO?a\x9a\\\xff\xd4 ; \x0c\xcbHi ’ 
+复制返回的字符作为密钥使用就可以了。
+如果你使用Pyth on 3.6 版本，那么可以使用secrets 模块提供的token_bytes （）、
+token_hex （）、
+token_ url safe（）方法，这些方法接收字节长度作为参数。
+比如：
+》〉工mpo r t secrets 
+>> token urlsafe(16) 
+’ Drmhze6EPcv0fN 81B 〕－口且’
+另外，我们也可以使用uui d 模块来生成随机字符：
+>> import uuid 
+>> uuid .uuid4 () .hex 
+’ 3d6f45a5fc12445dbac2f59c3b6c7cbl ’ 
+在生产环境下我们仍需要执行某些flask 命令，而执行flask 命令需要正确设置FLASK
+APP 环境变量。这个变量在我们项目根目录下的.flaskenv 文件中已经定义，并且这个文件被提
+交到Gi t 仓库中，所以不需要重复写入
+. env 文件中。
+~注
+在生产环境下，我们需妥将FLASK_CONFIG 变量设直为produ ct i o n ，这可以确保在生
+胃－
+·~·产环境下执行flask 命令时加载的是生产配直（工厂函数会优先从这个环境变量里读取画己
+直名称）。另外，我们还需要将FLASK_ENV 变量设为pro duction （覆盖.flaskenv 中的
+设直），用来确保命令执行时处于正确的环境设直。我们将在远程主机上创建.env 文件
+后再手动写入这两个变量，具体会在后面介绍。
+在PythonAnywh ere 部署程序时，因为Pytho nAnywhere 使用的数据库服务会在5 分钟
+( 3 00 秒）断开连接，我们需要将F lask-SQLAlch emy 提供SQLALCHEMY_POOL_RECYCLE 配
+置变量的值设为300 以下，它用来设置数据库连接池的回收时间，比如：
+SQLALCHEMY POOL RECYCLE = 280 
+t!\洼
+.env 文件包含敏感信息，不能提交进G it 仓库。你可以考虑在远程主机上重新创建这个
+－…
+文件，将本地内容复制过去，后面会具体介绍。
+另外，你也可以使用SCP 或SFCP 将
+这个文件上传到远程主机。
+SCP 指Secure Copy Protocol , SFTP 指SSH File Transfer 
+Protocol ，两者都是基于SSH 实现的在主机之间安全传输文件的协议，同时也指代实现
+这个协议的程序。如采你使用Windows 系统，
+可以使用W in S CP
+( h ttps ://wi nscp . ne t/）末
+实现同样的效采。
+14.3.2 
+创建生产环境专用的程序实例
+生产环境下的程序自然要加载生产配置，我们需要在项目的根目录下创建一个wsgi. py 脚本
+（这里的命名只是约定，你可以使用其他名称），在这个模块中使用工厂函数create_app（）创建一
+个程序实例，传入生产环境配置名pro du c ti o n ，如下所示：
+
+仅供非商业用途或交流学习使用
+568 
+•！•
+第三部分进阶篇
+from bluelog
+工mport create app 
+app = create_app ( ’ production ’ ) 
+这个程序实例专用于部署时运行。在生产环境下，我们需要使用生产服务器运行实例，这
+时就可以从这个文件中导人这个程序实例，比如：
+from f oo server import serve 
+from wsgi
+工mport app 
+serve(app,’ 0 . 0.0.0:80 ’ ) 
+14.3.3 
+设置迁移工具
+除非是用于部署测试，否则设置迁移工具这一步必不可少，这可以让你在保留原数据的
+同时对数据库结构进行更新。在第5 章，我们介绍了如何使用集成了A lemb ic 的扩展F l ask ­
+Migrate ，首先使用Pipenv 安装：
+$ pipenv
+工nstall flask-migrate 
+在程序中，实例化Flask-Mi grate 提供的M igrate 类，进行初始化操作。因为B lu e l og 使用了
+工厂函数创建程序实例，所以我们需要在extensions.py 脚本中实例化M鸣rate 类，在工厂函数中
+对该实例调用init_app（）方法，传入app 和db 对象，具体可以到源码仓库中查看。
+我们可以提前在本地生成迁移文件夹并执行一次初始迁移：
+♀
+flask db in 工t
+$ flask db migrate -m ” Initial migrat 工on "
+＠景
+对于要部署到Heroku 的程序来说，生成迁移文件夹和创建迁移胁的操作必须在本地
+进行，后面会具体介绍。
+14.3.4 程序曰志
+在开始介绍部署之前，我们得先考虑一下日志问题。虽然我们为程序编写了相对完善的测
+试，而且顺利通过了测试，程序还是有可能在你意想不到的地方出错。
+比如，在代码之外的地
+方，各种意外情况都可能出现：服务器超载、数据库写入异常、受到恶意攻击、各种库之间出
+现不兼容等。
+在第3 章，我们通过app .e rrorhandl er 装饰器为几种常见的错误类型注册了错误处理器。在
+生产环境下，当程序出现错误时，用户会看到一个错误页面，但我们（开发者／运维人员）却
+什么也不知道。这时把错误信息记录下来会有助于调试和修复。在开发时，我们可以通过
+Werkzeug 内置的调试器来查看错误堆钱，或是在命令行输出中查看日志。但是在生产环境中，
+我们没法使用上面的方式获取日志，这时就需要记录日志。
+a自由这里不会详细介绍Python 日志系统，如果你对Python 的logging 模块不熟悉，可以阅读
+胃F 且
+Python 文档中的入门教程（https ://docs. python. org/3/howto/logging.html#logging-basic-
+tutorial ）。
+
+仅供非附业用途或交流学习使用
+第14 章部署上结
+•！•
+569 
+Flask 通过Python 标准库的Jogging 模块提供了一个日志记录器（logger ）对象，它的名称
+为flask .app ，可以通过app . lo gg巳r 属性获取。我们可以像往常那样，对这个logger 对象调用
+debu g（）、
+i nfo （）、
+warning （）、
+e rror（）
+、
+exception（）和critical （）方法来触发相应等级的日志事件。
+比如：
+app . logger .warning ( ’ A wraning message.
+’ ) 
+当日志记录器等级未设置时
+（~n logging.NOS ET ），有效等级（effective level ）为WARN­
+ING ；如果开启了调试模式，那么日志记录器
+(logger ）的等级会被设为DEBUG 。如果没有配置
+日志处理器（log handler), F l ask 会添加l一个默认的处理器，类型为StreamHandler ，它会把日志
+输出到stderr （显示在命令行窗口）。下面我们会介绍两种常用的日志处理器，分别是将日志存储
+到文件的RotatingFileHandler 处理器和通过Email 发送日志的SMTP Handler 处理器。
+m.壁其他常用的日志处理器可以访问https: //docs.python o昭3 /howto/Jo gg ing.html # u sefu l ­
+-
+-
+handlers 查看。
+1. 将曰志写入文件
+以Blue l og 为例，
+为了便于组织代码，我们在程序包的构造文件中创建一个register_
+logger（）函数为程序实例注册日志处理器，在工厂函数中调用这个函数井传人程序实例，这个函
+数的内容如代码清单
+1 4-1 所示。
+代码清单14 -1
+bluelog/_init_.py注册文件日志处理器
+import logging 
+from logging.handlers import RotatingFileHandler 
+def create app(config name=None): 
+register logger(app) 
+) 
+O 
+V
+& 
+N 
+γ
+I
+牛
+qJ 
+n 
+l 
+qd 
+qd 
+0 
+、
+t
+牛
+、
+i
+e 
+l’
+v 
+(
+e 
+rL 
+et 
+qJe 
+qs 
+o
+· 
+-
+r 
+一
+e
+rqJ 
+eq 
+tO 
+SI 
+-
+- 
+qdp
+‘ 
+ep 
+ra 
+zi 
+e 
+d 
+formatter = logging . Formatter( ' %(asctime ) s -
+%(name)s 
+－
+宅
+（l evelname) s -
+毛
+（me ssage) s ' ) 
+file handler = RotatingFileHandler ( ’ logs/bluelog . log ’ ,
+maxBytes=lO 
+* 1024 
+*1024 , backupCount=lO) 
+file handler .setFormatter(formatter) 
+file handler setLevel(logging.INFO) 
+if not app .debug : 
+app.logger . addHandler(file_handler) 
+为了让日志记录器记录INFO 等级的日志事件，我们首先将app.logger 的等级设为INFO 。
+然后我们创建一个lo gging.Formatter 对象设置日志的输出格式。为了避免日积月累产生一个巨
+大的日志文件，我们使用RotatingFileHandler 类（从
+l ogg in g. h a ndlers 模块导人）创建一个轮转
+文件类型的日志处理器，实例化这个类传入日志文件的目标路径、最大文件尺寸和备份数量。
+
+仅供才｜商业用途或交流学习使用
+570 
+•！•
+第三部分进阶篇
+当日志文件的大小超过实例化时传人的maxBytes 参数设定的值时（单位为字节byte ，我们这里
+设为lOMB ），它会循环覆盖之前的记录；将backupCount 参数设为10 会依次创建10 个日志文
+件，
+10 个文件全部存满lOMB 后会开始覆盖之前的文件。
+＠景这里我们传入
+l咿blu e l og.log 作为日，志文件路径，为了让日，志文件顺利创建，我们需妥
+在项目根目录下创建一个
+logs 文件夫。不过日志文件并不需妥添加到Git 仓库中，你可
+以在logs 目录下创建一个.gitkeep 文件，并在.gitignore 中写入一个飞log 规则，这会确
+保将logs 目录添加到G i t 仓库，但是忽略所有以
+.l og 结尾的日志文件。
+我们使用setF ormatter（）方法设置处理器输出的日志格式，使用setLeve l（）方法将文件日志
+处理器的接收日志等级设为INFO 。
+最后，我们对app.logger 调用addHandler（）方法将处理器注册到lo gger 对象中，添加if 判
+断确保在调试模式下不会添加处理器。
+＠景（
+I ) app.deb队M储用来判断程序是否开启了调试模式的布尔值。
+~ FLASK_ENV 
+环境变量的值为deve lopment 时，
+app . debug 会返回True ，否则返回Fa l se 。在程序中，
+你可以通过app.env 属性获取FLASK_ENV 的设直值。
+( 2 ）另外还有一个TimedRotatingFileHand l er 类，它会根据设定的时间间隔（通过实例化
+时传入的参数设定）未定期覆盖日志数据。
+( 3 ）当部署到生产环境时，对于使用UNIX 系统的传统部署方式来说，除了使用文件存
+储日志，也可以把日志输出到系统守护进程sys l og 中，这通过SysLogHandler 类实现；
+类似地，
+Windows 系统则可以使用NTEventLogHand ler 类将日志写入系统事件日志。
+2. 云部署平台的日志
+本节要介绍的两个云部署平台会从stdout （标准输出）和stderr （标准错误输出）收集日志，
+如果要把程序部署到这两个平台，我们需要创建一个StreamHandler 类型（从logging 模块直接
+导人）的日志处理器来替代上面的RotatingF ileH andler 处理器。因为Flask 内置的日志处理器即
+为S treamHandler 类型，所以我们可以直接使用这个处理器（flask.logging . default_handler ）。这
+个处理器只会在没有添加日志处理器时才会被添加，所以我们可以手动导人并添加到日志记录
+器对象上：
+import logging 
+from flask .logging import default_handler 
+def register logger () 
+default_handler setLevel(logging.INFO) 
+if not app.debug : 
+app .logger .addHandler(default handler) 
+3. 通过邮件发送关键日志
+在生产环境中，低等级的信息可以记录到日志文件中，而关键的信息（比如ERROR 等级以
+
+仅供才｜商业用途或交流学习使用
+第14 章部署上线
+•！•
+571 
+上）则需要通过邮件发送给管理员，以便及时修复问题。
+对于ERROR 等级及以上的关键臼志，我们通常需要更加详细的出错信息，以便更迅速地
+排查和解决问题。为了在日志信息中插入触发这个日志事件的请求信息，我们创建一个自定义
+的RequestFormatter 类，它继承自
+logging.Formatter 类，添加了几个自定义字段来插入请求信
+息，如代码清单14-2 所示。
+代码清单14-2
+bluelog/_init_.py ：在日志中插入请求信息
+import logging 
+def register logger(): 
+class RequestFormatter (logging . Formatter): 
+de f format(self, record) : 
+record.url = request . url 
+record.remote addr = request . remote addr 
+return super(RequestFormatter , self) . format(record) 
+request formatter= RequestFormatter( 
+’
+［在
+（asctime)s ）毛
+（remote_addr)s
+requested
+毛
+（url)s \ n
+’
+『毛（levelname)s
+in
+毛
+（module)s
+：
+毛
+（message)s
+'
+使用SMTPHandler 类可以创建一个SMTP 处理器，传人的参数大多从相应的Flask-Mail 配
+置变量获取。我们将这个邮件日志处理器的等级设为
+logging.ERROR ，
+当发生ERROR 等级及以
+上的日志事件时会将日志通过Ill~件发送给管理员，如代码清单14-3 所示。
+代码清单14-3
+bluelog/_init_.py ：注册邮件日志处理器
+import os 
+import logging 
+from logging . handlers import SMTPHandler 
+def reg 工ster logger() : 
+mail handler = SMTPHandler( 
+mailhost=os. getenv ( ' MAIL SERVER ’ ) , 
+fromaddr=os.getenv( ' MAIL USERNAME ’), 
+toaddrs=os.getenv (’ BLUELOG ADMIN_EMAIL ’), 
+subject=’ Application Error ’, 
+cr edentials=
+( os
+. getenv （’ MAIL_USERNAME 『）, os . getenv (’ MAIL_PASSWORD ’))) 
+mail handler . setLevel(logging.ERROR) 
+mail handler . setFormatter(request formatter) 
+工f not app . debug : 
+app.logger.addHandler(mail_handler) 
+值得一提的是，除了使用传统的日志记录，我们还可以使用第三方错误追踪工具来处理程
+序中的错误。流行的选择是Sentry ( http: //sentry. i o ），
+当在程序中集成Sentry 后，它可以在程序
+出现异常时通过我们设置的各种方式发送提醒（除了邮件，还可以集成Slack 、
+Whatsapp 、
+IRC
+等第三方工具）。更重要的是，我们可以在Sentry 的控制面板中查看关于这个异常的相关代码、
+
+仅供才｜商业用途或交流学习使用
+572 
+•！•
+第三部分进阶篇
+上下文变量的值、函数调用堆拢，以及异常触发的次数、涉及的客户端信息等一系列数据，这
+能够帮助我们及时找出问题的根师、并解决问题。另外，使用Sentry 还可以方便地为程序添加一
+个用户反馈功能。
+14.3.5 
+手动导入环境变量
+在开发时，因为安装了python - dotenv ，使用flask run 命令启动开发服务器时F lask 会自动
+导人存储在.flaskenv 或
+. env 文件中的环境变量。在生产环境下，我们需要使用性能更高的生产
+服务器，所以不能再使用这个命令启动程序，这时我们需要手动导人环境变量。
+我们应该尽可能地提前导入环境变量操作，这样才能确保程序中获取环境变量的代码正常
+工作，因此最佳的导人位置就是在wsg i.py 脚本中，其次是程序包构造文件的顶部。在wsgi.py
+脚本中，我们使用p）咄on-doten v 提供的load_dotenv（）函数手动导人.env 文件中设置的环境变
+量，如下所示：
+from dotenv import load dotenv 
+dotenv_path = os.path
+. 〕oin(os
+. path.d 工rname （一＿file＿），
+’ .env ’）
+if os
+. path.ex 工sts(dotenv path) : 
+load dotenv(dotenv path) 
+from bluelog import create app 
+app =create app (’ production ’ ) 
+14.3.6 
+HTTPS 转发
+一个可选但强烈推荐的步骤是为网站购买SSL 证书，以实现对HTTP 的加密传输。如果你
+不想购买商业SSL 证书，可以尝试使用免费的证书服务，比如Let ’ s Encrypt ( https://letsencrypt. 
+org／）、
+ZeroSSL ( https: //zerossl.com／）等，你可以访问各自的文档来查看证书的申请和安装
+流程。
+＠景对于部署在云平台的程序，如采不设直自定义域名，那么可以直接M Heroku 和
+PythonAnywhere 提供的SSL 证书。
+设置好证书后，我们需要强制所有发到程序的请求通过HTTPS ，具体的方法是拦截不安全
+的请求并重定向到HTTPS 。这个工作可以交给扩展Flask- SSLify 处理，首先使用Pipenv 安装：
+♀
+pipenv install flask-sslify 
+导人并实例化SSLify 类：
+from flask_ssl 工fy import SSLif y 
+sslify = SSL 工fy () 
+最后对ss l江y 对象调用init_app（）方法，传入程序实例app 以初始化扩展：
+sslify. init_app (app) 
+
+仅供非商业用途或交流学习使用
+第14 章部署上结
+•！•
+573 
+现在，
+Flask-S SL i fy 会自动为我们的程序处理请求。我们可以通过配置键SSL DISABLED 
+来设置关闭SSL 转发功能。因为只有当程序在生产环境下设置SSL 证书后才可用，所以我们需
+要在配置基类中将其设为True ，而在生产配置中设为Fa lse 以开启SSL 转发。
+当程序做好一切部署准备后，我们可以将代码提交进G it 仓库，并推送到远程仓库：
+$ git add 
+♀
+q 工t commit - m "Ready for deploy" 
+$ git push 
+14.4 
+部署到Linux 服务器
+传统部署就意味着我们要自己搭建一个服务器环境。在此之前，你需要做下面这些任务：
+1 ）租用一个远程主机。租用成功后你会获得主机的IP 和root 密码。
+＠景
+选择的装的时器操作系统时，建议选择Li nux Ubuntu 16阳山，因为本节的操作
+是基于该Linux 发行版的。
+2 ) 
+（可选）购买一个域名。域名作为互联网中唯一的标识，其他人可以通过这个域名诗问
+到你的程序，这样就不用通过一长串无意义的数字IP 来访问你的程序。流行的域名购买服务有
+Godaddy 、
+NameCheap 等。
+3 ) （可选）域名解析，即把域名指向服务器所在的IP 。域名提供商通常会免费提供这个功
+能，为了保证解析的稳定性，最好使用国内的第三方域名解析服务，比如DNSPod (https ://www. 
+dn spo d .cn／）。
+14.4.1 
+使用Open SSH 登录远程主机
+如果你不习惯使用命令行，那么这对你来说将是个坏消息：你只能通过命令行来操作远程
+主机。当你获取了远程主机的IP 和root 密码，就可以使用Open SSH 来连接服务器：
+$ ssh root@your_server_ip 
+比如：
+$ ssh root@l23 . 45 56 78 
+如果你已经注册了域名井解析到对应的IP ，也可以使用域名代替IP ，比如：
+$ ssh root@helloflas k.com 
+a画堕
+SSH ( h忱ps://www.灿.CO!骂
+－，且
+管理员最基本的工具之一。这里的Op巳nSSH ( http ://www.openssh.com／）是基于SSH 协‘ 
+议实现的开源程序，
+U buntu 内直了这个软件。
+如果你使用Windows 系统，那么可以使用PuTTY ( http ://www. putty.org／）替代，或是使用
+
+仅供｜｜：商业用途或交流学习使用
+574 
+•！•
+第三部分进阶篇
+Git Bash 内置的Open SSH 。
+输入密码后，你会看到类似下面的提示，因为是第一次连接，所以本地主机会请求确认远
+程主机的身份，输入yes 按下Enter 即可：
+The authenticity of host ’ 128 .1 9.128 156 (128 . 19 .1 28 156 ) ’ can ’ t be established . 
+ECDSA key f 工ngerprint is SHA256 :CwwdliOGBU17IH2wAqRrNilyZ5o4AGfLaNPo8ZvvWic . 
+Are you sure you want to continue connecting (yes/no)? 
+现在你会看到命令行提示符变为远程主机的提示符，比如root@your server name·斗，这说
+明你已经成功登录了远程主机（使用exit 命令可以登出）。
+14.4.2 
+安装基本库和工真
+连接到远程主机后，首先更新系统可安装的包列表，并对可升级的包进行升级：
+$ apt update 
+$ apt upgrade 
+使用Root 用户部署代码或运行Web 服务器容易带来安全风险，我们可以创建一个新用户，
+并赋予其root 权限（超级用户）：
+♀
+adduser greyli 
+♀
+usermod - aG sudo greyli 
+＠景（I ）默认添加用户输入密码后会才是示输入用户信息（比如地址电话之类），用来填充
+Gecos 字段，这些是可选的，你可以一路按Enter 跳过，或是在输入ad du ser 命令时添
+加一gecos 选项来关闭，即ad du se r --gecos "" greyl i 。
+( 2 ）这里的grey Ii 是示例用的用户名，你可以自由更改。在后面我们会使用grey l i @ 1 23.
+45
+. 67.89 来作为远程主机名称示例。
+现在切换到新创建的用户：
+$ su greyl 工
+接着需要安装必备的包和开发工具，在命令前添加sudo 以执行管理员操作。如果你使用
+Python 2 ，执行下面的命令：
+$ sudo apt
+工nstall python-dev python- pip 
+如果你使用Python3 ，则使用下面的命令：
+$ sudo apt install python3- dev python3- pip 
+上面命令中的pytho n (3) -d ev 包含Python2/3 和一些基础的包，
+python(3) -pip 用来安装p lp 。
+安装过程中会请求输入y 进行确认，你也可以在apt install 命令后添加
+－y 选项来省略这个确认。
+＠景
+（1 ) Ub川1
+16 . 04LTS 默认包含Python3.5 和Git ，所以我们不必再安装这两个程序。如
+采你需要使用Pyth on2 . 7 版本，可以通过包python-minima l 来安装。
+( 2 ）访问Ubun tu 包存档（https://packages. ubun tu .com／）可以搜索具体的包信息。
+
+第14 章部署上线
+•！•
+575 
+下面使用pip3
+（如果你使用Python 2 ，这里则使用pip ）安装Pipenv:
+$ sudo - H pip3 install pipenv 
+a自由
+如采你不想全局安装，可以添加一user i! 
+19i 执行用户安装
+（l!p pip install --user pipenv ) , 
+_
+,:r;_
+并手动将用户基础二进制目录添加到PATH 环境变量中，具体可参考https : //docs.pipenv.
+org/ install/#installing”pipenv 。
+作为现实中的程序，我们还需要安装额外的程序。最基础的，我们要安装数据库服务器，
+比如MySQL 、
+Postgr町、
+Red is 或是MongoDB 等。
+除了数据库服务器，
+如果程序需要发送邮
+件，那么还要安装MTA (Mail Transport Agent ，邮件传输代理），比如S巳ndmail (http://sendmail. 
+org ）、
+Postfix ( http ://www.postfix . org／）等。
+如果程序使用了Celery ，还要安装RabbitMQ 、
+Red is 等。关于如何安装这些程序对应的包，并运行相应的服务器，你可以访问各自的文档进
+行了解。
+”‘注
+自己搭建一个邮件服务器比较麻烦，
+因为有很多棘手的问题需妥考虑（垃圾邮件、病毒
+？叩
+等）。
+简单的解决办法是使用第二方服务，比如SendGrid 、
+Mailgun 等。
+14.4.3 
+安全防护措施
+我们要对服务器进行一些安全设置，让我们从最基本的方面入手
+使用SSH 密钥（SSH
+key ）来代替密码作为认证方式。
+1. 使用SSH 密钥登录
+通过输入密码来登录远程主机比较麻烦，而且不安全，更安全和方便的做法是通过SSH 密
+钥进行认证，
+为此你需要在你自己的电脑上先生成一个SSH 密钥对。你可以新创建一个命令行
+会话，通过Open SSH 内置的ssh-keygen 来生成SSH 密钥对：
+$ ssh- keygen 
+Generat 工ng public/private rsa key pair . 
+E口ter file in whi ch to save the key (/path/ to / . ssh/id rsa) : 
+Enter passphrase (empty for no passphrase ) : 
+Enter same passphrase aga 工n
+:
+Your identification has been saved in /path/to/
+. ssh ／工d rsa . 
+Your public key has been saved
+工n /pat h/to/ . ssh/id rsa . pub . 
+The key fingerprint is : 
+SHA256 :m+tknrZlamdmKG+7RZm6c9TZRUQplM5St mS9P/qO+RO 
+The key ’ s randomart image is : 
++ 
+[RSA 2048 )----+ 
+I 
+. .. o=I 
+I 
+. Bo l 
+0 . 01 
+o . = . I 
+s +. o . .. I 
+=. o ... I 
+*o+ 
+. E . I 
+
+576 
+.》
+第三部分进阶篇
+||+ 
+0
+·- 
++
+- 
+O
+＋
+一
+。
+－
+] 
+*
+ro 
+OB5 
+食
+也
+可
+《
+，
+ι
++
+BA 
+日
+u
+qu 
++ 
+按下这个命令后会弹出提示柯：请求你输入密钥保存的路径和口令设置，你可以全部使用默
+认值，直接投下Enter 即可。
+n i主
+如采上面的命令输出
+／path /to/ .ss h/id_rs a already exists.O verw rite (y/n）？，那么说明你已经
+叫创建密钥对，这时你可以使用已经生成的密钥，或是指定一个新的路径。如采你输入y,
+这将会覆盖房、有的密钥，请谨慎操作。
+如果你使用Wind ows 系统，可以使用Git Bash 来执行上面的操作，或是随P uTTY 一起安
+装的P uTTY gen.exe 程序来通过图形界面来生成（具体可以参考h ttp s://www . ss h .com /ss h /p u tty/
+w indows /puttygen ）。生成完成后，你会得到两个保存密钥的文件：
+口
+i d_rsa. pu b ：保存你的公钥（publ ic key ），可以用来提供给第三方作为你的认证凭据。
+口
+id_rsa ：保存你的私钥（pr i vate key ），用来在认证时·进行配对，不要公开这个文件。
+＠景密钥默认保存到home 目录（～）下的础文件夫中，
+l!p -/.ss h 。在Linux A macOS 中类似
+home/ grey Ii/ .ssh ，在Win dows 中类似C /Users/Adm i n i strator/.ss h 。
+现在你需要把公钥保存到远程主机上，具体来说，就是将公钥（id_rs a.pub ）的内容添加到
+远程主机的～／.ss h/authori ze d_keys 文件中。这可以通过好几种方式实现。最简单的方式是通过
+ssh-copy-id 程序，输入你的远程主机地址作为参数：
+$ 
+ssh - copy －工d greyli@l23 45.67.89 
+/usr/bin/ssh-copy-id: INFO : attempting to 
+log
+工n with the new key(s) , to filter 
+out any that are already installed 
+/ usr/bin/ssh- copy- id : INFO : 1 key(s) remain to be installed -- if you are prompted 
+now it is to install the new keys 
+greyli@l23 . 45 . 67 . 89 ’ s password : 
+Number of key(s) added : 1 
+Now try logg 工ng into the machine, 
+wit h ：
+” ssh
+『greyli@l23 45 67.89 ’ ” 
+and check to make sure that only the key(s) you wanted were added . 
+输入密码后，就会看到添加成功的提示。然后在远程主机中使用下面的命令给相应目录设
+置合适的权限：
+$ chmod go w ~/ 
+丰
+chmod 700 ~/ .ssh 
+$ chmod 600 ~/ .ssh/authorized keys 
+如果你的系统中没有ssh - copy - i d ，那么可以于动复制。首先使用cat 命令输出公钥的内容：
+♀
+cat
+～／
+. ssh/id_rsa
+. pub 
+ssh rsa AAAAB3NzaClyc2EAAAADAQABAAABDdHr JRTBgvqG2lvy3cZI9Nj ... 省略
+复制输出的公钥值备用，重新返回与远程主机建立连接的命令行窗口，输入下面几个命令：
+♀
+mkdir -p ~/ . ssh 
+♀
+echo 你的公钥值》～／.ssh/a uth orized keys 
+
+第14 章
+部署上线
+•！•
+577 
+$ chmod go- w ~/ 
+$ chmod 700
+~I ssh 
+$ chmod 600 ~/ . ssh/authorized_keys 
+第一条命令用来确保远程主机上的～／.ssh 目录存在，如果不存在则创建；第二条命令将你
+的公钥值写入到对应的文件中，使用你刚刚复制的内容替换掉命令里的中文；后面的命令用来
+给相应的目录设置合适的权限。
+现在我们不输入密码即可建立SSH 连接，你可以创建一个新的命令行窗口进行测i式。
+2 . 关闭密码登录
+既然我们可以不用输入密码就能登录远程主机，那么有必要关闭密码登录功能，这样可以
+大幅度提高安全系数。这通过编辑SSH 配置文件（/etc/ssh/sshd con fig ）实现，我们使用内置的
+nan o 或v i 文本编辑器打开对应的文件进行编辑：
+♀
+sudo
+口ano /etc/ssh/sshd config 
+打开配置文件后，你需要将下面这一行中的yes 改为no 来关闭密码登录：
+# Change to no to disable tunnelled clear text passwords 
+PasswordAuthentication no 
+可选的是，你还可以通过将这行的yes 改为no 来关闭root 用户登录，这样可以进一步增强
+服务器安全性：
+PermitRootLog 工n no 
+完成编辑后，可以按下C rtl+O 写人，然后按下Enter 确认文件路径，最后按下C rtl +X 退出
+文本编辑器。现在重启SSH 服务即可让配置生效：
+$ sudo service ssh restart 
+3 . 设置防火墙
+Ubuntu 默认安装了ufw ，
+即Uncomplicated Firewall ( https://wiki.ubuntu.com/Uncomplicated-
+Firewall ），我们需要使用它来设置开放的端口：
+$ sudo ufw allow 22 
+♀
+sudo ufw al l ow 80 
+$ sudo ufw allow 443 
+＠量
+如采你使用SMTP 发送邮件，
+那么还需要允许SMTP 使用的端口，比如25 、
+465
+刁τ
+587 。
+通过上面的命令，我们将仅开放远程主机的22 端口
+（SSH ）、
+80 端口（HTTP ）、
+443 端口
+( HTTPS ）。更新规则后可以使用下面的命令来开启防火墙：
+$ sudo ufw enable 
+Command may disrupt existing ssh connections . Proceed with operation (yin)? y 
+Firewall is active and enabled on system startup 
+现在你可以通过下面的命令查看防火墙的状态：
+
+578
+令
+第三部分进阶篇
+$ sudo ufw status 
+Status : active 
+To 
+Action 
+From 
+Anywhere 
+Anywhere 
+Anywhere 
+Anywhere (v6) 
+Anywhere (v6) 
+Anywhere (v6) 
+22 
+80 
+443 
+ALLOW 
+ALLOW 
+ALLOW 
+ALLOW 
+ALLOW 
+ALLOW 
+22 (v6) 
+80 (v6) 
+443 (v6) 
+14.4.4 推送代码并初始化程序环境
+下一步是把我们的程序上传到服务器，这可以有很多种方式实现。因为我们将示例程序
+代码托管在GitHub 上，所以最简单的方式还是直接从GitHub 的Git 服务器上复制仓库到远程
+主机：
+$ cd ~ 
+$ git clone https : //github .com/greyli/bluelog .git 
+＠景
+如果你在GitHub 上Fork 了训l 程序，并在本地改造了你自己版本的程序，可以提交
+(git add & git commit ）并推送代码（git push ）到GitH帅，然后在这里复制你自己版本的
+程序仓库（将上面的grey Ii 替换成你的用户名）。
+＠里
+GitHub 的免费账户只能创建公开仓库，为此你可以考虑使用BitB时et ( h机／／bitb毗et.
+org ），它提供不限数量的免费私有仓库。另外，你也可以自己创建一个Git 服务器，只
+需要创建一个git 用户，设直SSH 密钥认证，创建对应的空白仓库，并在本地与远程
+仓库建立连接即可，具体可以访问https://git-scm.com/book/en/v2/Git-on-th e-S erver­
+Setting-Up -the-S erver 了解。
+切换进仓库目录，使用Pipenv 创建虚拟环境并安装依赖，最后激活虚拟环境：
+$ cd bluelog 
+$ pipenv install 
+$ pipenv shell 
+在程序的配置文件中，包含敏感信息的配置都从环境变量中读取。在开发时，我们将这些
+环境变量定义在.env 文件夹中。在部署时，为了让程序正常运行，我们需要在远程主机的项目
+目录中也创建一个.env 文件，并将本地的.env 文件内容复制到这个文件中：
+$ nano .env 
+为了确保执行命令时配置和环境正确设置，我们还需要在
+. env 文件中为FLASK ENV 变量
+和自定义的FLASK CONFIG 变量设置正确的值：
+n 
+o 
+l 
+n
++
+lw 
+oc 
+lu 
+td 
+co 
+ur 
+dp 
+o
+= 
+r
+<U
+P
+＆
+工
+--
+P
+L 
+V
+N 
+Mun
+>
+n
+b
+户
+」
+-- 
+UUUA 
+nbqu 
+AA 
+?LU
+’L 
+FF 
+
+第14 章部署上结
+•！•
+579 
+最后我们需要执行程序的初始化操作，如果你使用在第5 章介绍的F lask -M i grate 扩展来设
+置迁移环境，那么使用下面的命令还可以更新数据库：
+♀
+flask db upgrade 
+如果没有使用Flask-Migrate ，那么就使用下面的命令创建数据库表：
+丰
+flask initdb 
+初始化程序，创建博客管理员账户：
+$ flask init 
+＠景你需妥在程序中导入并实仿•Hι
+参见第5 章相关内容。
+现在，我们的程序已经准备好运行了。
+14.4.5 使用Gunicorn 运行程序
+在开发时，我们使用flask run 命令启动的开发服务器是由Werkzeug 提供的。细分的话，
+Werkzeug 提供的这个开发服务器应该被称为WSGI 服务器，而不是单纯意义上的Web 服务器。
+在生产环境中，我们需要一个更强健、性能更高的WSGI 服务器。这些WSGI 服务器也被称为
+独立WSGI 容器（Standalone WSGI Container ），因为它们可以承载我们编写的WSGI 程序，然
+后处理HTTP 请求和响应。这通常有很多选择，比如G unicorn ( http: //gunicorn.org／）、
+uWSGI
+( http: //uwsgi-docs.readthedocs.io/en/ l atest／）、
+Geven t ( http: //www . gevent.org／）、
+Wa itress ( bttps:// 
+docs.p y l onsproject.org/proj ects /wa i tress /en / l atest/ ）等。通常我们会根据程序的特点来选择，比
+如，对于一个小型的个人博客，使用Gevent 就足够了。主流的选择是使用Gunicorn 和uWSGI 。
+在这里我们将使用Gunicorn （意为Green Unicorn ），它使用起来相对简单，容易配置，而且性能
+优秀。我们先在远程主机中使用P ip env 安装它：
+$ pipenv install gunicorn 
+为了方便进行测试，我们可以临时设置防火墙以允许对8000 端口的访问：
+♀
+sudo ufw allow 8000 
+Gunicorn 使用下面的命令模式来运行－个WGSI 程序：
+$ gunicorn [OPTIONS ］模块名：变量名
+这里的变量名即要运行的WSGI 可调用对象，也就是我们使用F l ask 创建的程序实例，而模
+块名即包含程序实例的模块。在准备环节，我们已经在项目根目录下创建了一个包含生产环境
+下的程序实例的wsg i . py 模块（如果你还没有创建，可以使用nan o wsg i .py 命令在这里创建），所
+以使用下面的命令即可运行程序：
+$ gunicorn --workers=4 wsgi :app 
+在上面的命令中，我们使用…workers 选项来定义worker （即工作线程）的数量。这里的数
+
+580
+令
+第三部分进阶篇
+量并不是越多越好，事实上，
+Guni corn 只需要4～1 2 个worker 进程就可以每秒处理成百上千个
+请求。通常来说，
+worker 的数量建议为（2 × CPU 核心数）+ I 。
+＠景
+默认的work以型为同步worker ，作为替代，你也可以使用异步worker 。要使用材
+worker ，你首先要安装其他异步处理库（比如gevent 、
+eventi et 、
+tornado ），
+然后在命令
+中通过－k 选项设直对应的worker 类，比如gunicorn -k gevent 。通常情况下，有两种情
+况需妥使用异步worker ：第一，单独使用Gunicorn 运行程序时，你的程序需要处理大
+量并发请求。
+第二，当使用Web 服务器作为代理运行在Gunicorn 前面时，这时的并发
+数量并不是关键，使用同步worker 即可，
+除非你有大量的耗时计算需要处理。
+Gun ic orn 默认监昕本地机的8000 端口，这里的本地机指的是远程主机。为了能够在外部访
+问，我们可以使用一bind 选项来设置程序运行的主机地址和端口，比如：
+$ gum.corn --workers=4 --bind=O 0 0 . 0 : 8000 wsg 工
+：app
+上面的命令等同于：
+♀
+gunicorn - w 4 - b 0 . 0 . 0.0 : 8000 wsgi :app 
+四I ~柑如果你设直了SSL 证书，那么可以通过下面的方式运行这个启动命令：$ gunicorn 
+/...L --certfi le＝＜证书文件＞--keyfile＝＜证书密钥文件＞--bind 0.0.0.0:443 test:app 
+现在打开浏览器访问服务器域名的8000 端口（比如http : //helloflask.com:8000 ）应该
+可以看到你的程序主页。如果你没有设置域名，那么可以通过服务器公网IP 访问，比如
+http ://123 .45 .67 .89: 8000 。确保一切正常后，接下Crtl+C 停止Gunicom ，然后使用下面的命令删
+除创建的临时规则：
+$ sudo ufw delete al low 8000 
+通过HTTP 访问程序时，
+80 端口是服务器的默认端口，
+http :!/he! lofl ask.com 和http: //hello­
+flask . corn:80 是相同的。这里测试时我们没有指定为80 端口，因为1024 以下的端口需要超级用
+户权限，我们将使用Web 服务器来监昕80 端口，具体后面会介绍。
+14.4.6 使用Nginx 提供反向代理
+像Gunicorn 这类WSGI 服务器内置了Web 服务器，所以我们不需要Web 服务器也可以与
+客户端交换数据，处理请求和响应。但内置的Web 服务器不够强健，虽然程序已经可以运行，
+但是更流行的部署方式是使用一个常规的Web 服务器运行在前端，
+为WSGI 服务器提供反向代
+理，如图14 -2 所示。
+流行的开源Web 服务器有Ng inx ( http: //nginx.org／）、
+Apac he ( https: //www.apache.org／）等，
+因为我们上面使用了G uni corn ，所以这里选择使用和Gun i corn 集成良好的Nginx 。首先使用下
+面的命令安装Nginx:
+$ sudo apt install nginx 
+
+第14 章部署上结
+•！•
+581 
+localhost:8000 
+图
+14-2
+设置反向代理
+在这种模式下，
+Nginx 作为代理服务器，监听来自外部的80 端口的请求；而Gunicorn 负责
+监昕本地机8 000 端口的请求。
+Nginx 会把来自外部的请求转发给Gunicorn 处理，接收到响应后
+再返回给客户端。这样做有下面这些好处：
+口提高处理静态文件的效率。
+Nginx 处理静态、文件的速度非常快，而且可以对静态文｛tj二设
+置缓存。
+D
+提高安全系数。使用它可以避免直接暴露WSGI 服务器，而且可以作为防火墙来防御网
+络攻击。
+口提高程序处理能力。设置反向代理可以缓冲请求，对请求进行预处理，交给WSGI 服务
+器一个完整的HTTP 请求。还可以设置负载均衡，优化请求处理效率。
+当使用反向代理服务器后，
+G unicorn 不需要再监听外部请求，而是直接监听本地机的某个
+端口。我们可以使用默认值，即本地机的8000 端口。不过现在还不用着急运行，我们需要先来
+配置Nginx 。
+当我们安装了Nginx 后，它会自动运行，现在本地访问远程主机的IP 地址，会看到Nginx
+提供的测试页面，如图
+14-3 所示。
+口
+Wf'lcom!!
+I O 咱响川
+• 
+令。
+口
+123.45.67.89
+Welcome to nginx! 
+If you see this page, the nginx web server 1s successfully Inst副怆d and 
+wor北i ng
+Fu代her configuration is required 
+For online documentati旧n and support please refer to ng恒K.Qrg
+Commercial sup阳rt is available at 回国L皿皿
+Thank 阳u for us1呼nginx.
+图
+14 - 3
+Nginx 测试页面
+
+582 
+•！•
+第三部分进阶篇
+我们可以在Ng inx 的默认配置文件（/etc/nginx/nginx.conf）中写入程序配置，但通常情况
+下，为了便于组织，我们可以在／etc/nginx/sites - enabled／或是／etc/ngin x/conf.d／目录下为我们的
+F l ask 程序创建单独的Nginx 配置文件。这个目录下的default 文件存储了上面提到的测试页面的
+配置，也是作为一个配置文件示例，你可以修改它来作为程序配置，但为了更直现这里我们将
+直接删除它，然后使用nano 为我们的程序创建一个新的配置文件（编写巳tel 下的配置文件需要
+超级用户权限，因此要添加sudo):
+$ sudo rm /etc/nginx/sites-enabled/default 
+♀
+sudo na口。／etc/nginx/s 工tes - enabled/bluelog
+Nginx 使用指令来组织配置。直接写在配置文件中的是全局指令，定义了Nginx 的一些通
+用设置。其他的指令通常写在使用块指令定义的块中，块使用花括号包围。可用的块指令及其
+说明如表
+1 4-1 所示。
+表14-1
+Nginx 配置的常用指令
+块指令
+说明
+events 
+事件设置，定义连接
+http 
+HTTP 设置，包含serve r 和up s tream 两种块
+server 
+location 
+主机设置，每一个server 块表示一个主机（域名），包含
+l ocat i on 块
+URL 设置，每一个loc a tion 块定义一个URL 模式
+upstream 
+负载均衡设置
+＠景其他的语法规则包括：块通过花括号γ 指定；每一行指令以γ 结尾；以
+“＃” 开
+头的是注释。
+在／etc/nginx/sites -en ab l ed 目录下的配置文件可以直接定义server 块，而不必添加http 父
+块，因为这个文件的内容会被自动插入到全局配置文件（/etc/nginx /nginx.conf）的http 块中。代
+码清单14-4 是我们创建的配置定义。
+代码：青单14-4
+/etc/nginx/sites-enabled/bluelog: Nginx配置
+server ( 
+listen 80 default server · 
+server
+口ame
+; 
+＃如果你映射了域名，那么可以写在这里
+access log 
+/var/log/nginx/access . log; 
+error log 
+/var/log/nginx/error .log; 
+location I { 
+proxy pass http : //127 . 0.0 . 1:8000 ; 
+＃转发的地址，即Gunicorn 运行的地址
+proxy redirect 
+off ; 
+proxy set header 
+Host
+♀host ; 
+proxy set header 
+X-Real-IP 
+$remote addr ; 
+proxy set header 
+X-Forwarded- For 
+♀proxy add x forwarded for; 
+proxy_set_header 
+X-Forwarded- Proto 
+$scheme; 
+仅供非商业用途或交流学习使用
+
+location /stati c { 
+＃处理静态文件夹中的静态文件
+alias /home/greyli/bluelog/bl uelog/static/ ; 
+expires 30d; 
+＃设置缓存过期时间
+第14 章部署上线
+•！•
+583 
+在这个s erver 块中，
+li sten 指令设置监听80 端口，然后使用server
+name 设置被转发请求的
+IP 或域名，这里使用
+作为通配柯：（catch-all ）。如果你注册了域名并设置了域名解析，可以这
+样写前两行：
+server { 
+l 工sten 80; 
+serverηame example.com; 
+在server 块中我们创建两个location 块。第一个location 块为HTTP 规则“／”设置转发，
+proxy_pass 指定设置转发的目标位置，
+即本地机的8000 端口，我们待会将要让Gunicorn 服务
+器监昕这个地址；
+proxy_set_ header 指令用来重写一些请求首部，以便让程序正常工作；第二个
+loc ation 块用来将发往／static 路径下的请求发给Ng inx 处理，并使用alias 指令设置这个URL 对
+应文件系统中的具体路径。
+exp ires 30d 设置缓存时间为30 天。当客户端发来静态文件的请求时
+会由Nginx 直接从静态文件目录获取，这要比使用Flask 获取快得多。
+。主这时需要考虑到扩展提供的静态文件问题，因为扩展内直的时文件目录在虚拟环境的
+扩展包目录下，
+我们需妥匹配到正确的路径，这也是为什么我不推荐使用扩展内直资源
+的原因之一。
+Nginx 还有很多可用的配置选项。
+比如，你还可以使用它来设置Gzip 压缩，这里的配置只
+是一个简单的示例，更多设置请访问文档
+（http://ngi nx. org/en/ docs／）了解。
+＠里对于HTTPS 悦，除了使用时c - S叫扩展，也可以通过Ngir
+创建的配直文件中新建一个s巳rver 块监听443 端口，并为80 端口设直转发。
+更新配置文件后，我们可以通过下面的命令来测试语法正确性：
+♀
+sudo nginx - t 
+nginx : the conf 工guration
+f 工le /etc/nginx/nginx .conf syntax is ok 
+ng 工nx
+: configuration file /etc/nginx/ ng 工nx. conf test is successful 
+如果一切正常，那么现在可以重启Nginx 让配置生效：
+$ sudo service nginx restart 
+当使用反向代理服务器后，
+Gunicorn 不需要再监听外部请求，而是直接监昕本地机的某个
+端口。我们可以使用默认值，即本地机的8000 端口。不过现在还不用着急运行，我们需要先来
+配置Nginx 。
+最后，我们使用下面的命令运行Gunicorn ，这会默认监昕本地机的8000 端口，即我们在
+仅供非商业用途或交流学习使用
+
+584
+令
+第三部分进
+阶篇
+Ng in x 设置的转发目标地址：
+$ gunicorn -w 4 wsgi :app 
+现在打开浏览器直接访问服务器域名（比如http: //hel l ofl a sk.com ）应该可以看到你的程序主
+页。如果你没有设置域名，那么可以通过服务器公网IP 访问，
+比如http:/1123.45.67 .89 。
+14.4.7 使用Supervisor 管理进程
+在前面，我们直接通过命令来运行Gunicorn ，这并不十分可靠。我们需要一个工具来自动
+在后台运行它，
+同时监控它的运行状况，并在系统出错或是重启时自动重启程序，最终的部署
+架构如图14-4 所示。
+localhost:8000 
+图
+14-4
+最终的部署架构
+虽然可以通过创建sy s temd 服务文件来让Ubuntu 的引导系统自动启动相关服务，但更方便
+的是使用类似Supervisor 的进程管理工具。
+Supervisor ( http: //supervisord . org／）是一个使用Pyth o n
+编写的UNIX-like 系统进程管理工具，它可以管理和某个项目相关的所有服务。按下C rtl+C 停止
+上面运行的Gunicorn ，然后使用下面的命令安装Supervi s or:
+$ sudo apt
+工nstall supervisor 
+安装Superv isor 后，
+它会自动在／etc /s叩ervisor 目录下生成一个包含全局配置的配置文件，
+名为superv isord . conf 的配置文件CINI 风格语法）来定义进程相关的命令等信息。和Nginx 类
+似，我们也可以将程序相关的配置写在这里，但是为了便于管理，我们可以为程序配置创建单
+独的配置文件。这个全局配置默认会将／etc/supervisor/conf.d 目录下的配置文件也包含在全局配
+置文件中，所以我们创建一个blu e log.conf存储程序配置：
+这个文件可以放在／e tc/supervisord .
+c on f 路径下。我们使用nano 来创建这个文件：
+丰
+sudo nano / etc/ supervisor/conf .d/bluelog.conf 
+它的用法和Tox 很相似，通过预定义每个进程的启动命令、目录和用户等信息。我们可以
+简化启动的步骤。我们把上面的多个启动相关服务的命令定义在一起，如下所示：
+[program:bluelog] 
+command=pipenv run gun 工corn -w 4 wsgi :app 
+directory=/home/greyli/bluelog 
+仅供非商业用途或交流于斗使用
+
+user=greyl 工
+autostart=true 
+autorestart=true 
+stopasgroup=true 
+killasgroup=true 
+第14 章部署上结
+令
+585
+通过［program ］定义一个bluelog 程序，
+其中用command 定义命令，我们在命令前添加
+pipenv run 以便在虚拟环境中执行命令；
+directory 和user 则分别用来设置执行命令的工作目录
+和用户；通过将autostart 和autorestart 设为true 开启自动启动和自动重启；将stop a sgroup 和
+killasgroup 设为true 则会确保在关闭程序时停止所有相关的子进程。
+＠景通过这种方式，你可以自己添加更多的节，比如为rabbitmq 和ce lery worker Jt. 义相应的
+程序。
+我们在command 参数定义的命令中调用了pipenv run 命令，而Pipenv 内部使用C lick 调用
+命令，为了让C lick 在Unix 以及Python3 环境下能够正确处理编码问题，我们需要将环境变量
+LC_ALL 和LANG 设为C . UTF心或en_US.UTF息，这可以在superv i sord.conf 配置文件中写入：
+$ sudo nano /etc/supervisor/supervisord . conf 
+我们需要在
+［supervisord］节下添加下面这行定义：
+environment=LC ALL ＝’ e 口
+US
+. UTF - 8 ’，LANG ＝’ en US . UTF- 8 ’ 
+现在，我们可以通过下面的命令重新启动superv i sor 服务以便让配置生效：
+$ sudo service supervisor restart 
+现在配置中的bluelog 程序会在后台被自动执行，防问域名或IP 即可打开程序，我们的部
+署流程基本上到这里就结束了。下面会简单介绍一下Supervisor 管理程序的方法。
+你可以通过supervisor 提供的命令行工具supervisorctl 来查看和操作相关程序：
+$ sudo supervisorctl 
+bluelog 
+RUNNING 
+pid 6853 , uptime 0 : 22 : 30 
+supervisor > stop bluelog 
+＃停止b l ue log 
+supervisor > start bluelog 
+＃启动b l ue log 
+superv 工sor > tail bluelog stderr 
+＃查看错误日志
+supervisor > help 
+＃查看所有可用的命令
+default commands (type help <topic> ): 
+add 
+exit 
+open 
+reload 
+resta r t 
+start 
+ta 工l
+avail 
+fg 
+pid 
+remove 
+shutdown 
+status 
+update 
+clear 
+mainta 工l
+quit 
+reread 
+signal 
+stop 
+version 
+除了在s upervi sorc tl 提供的s hell 中输入命令，我们也可以直接为s upervisorctl 命令添加参
+数执行相关命令，
+比如：
+$ sudo supervisorctl reread 
+＃重新读取配置
+$ sudo supervisorctl update 
+＃更新以便让配置生效
+$ sudo supervisorctl bluelog stop 
+＃停止bluelog
+$ sudo supervisorctl bluelog start 
+＃启动blue log 
+仅供非商业用途或交流学习使用
+
+586 
+•！•
+第三部分进阶篇
+后面我们会使用这些命令来对程序进行更新操作。
+除了命令行工具supervisorctl,
+Supervisor 还提供了Web 客户端，你可以通过在／etc/super­
+visor/supervisord.conf 中写入下面的配置来开启
+：
+[inet http server] 
+port=*: 9001 
+username=your username 
+＃设置一个用户名
+password=your password 
+＃设置一个密码
+为了允许访问9001 端口，我们需要设置防火墙：
+♀
+sud o ufw allow 9001 
+现在打开浏览器访问服务器所在域名或IP 的9001 端口
+（比如http: /1123.45.67.89:9001
+），然
+后输入在配置文件中设置的用户名和密码即可打开Superv isor 管理页面。你可以在Web 客户端
+中查看服务器上定义的所有Supervisor 程序的运行状态，并执行相应的操作，如图14 - 5 所示。
+~－ 
+令
+4
+σ
+i 口出.45.67 .89:9001
+p;d 10261. upbme 2:1"53 
+国且国
+E且组且
+也皿♀坠旦午四
+岛iLJ
+趾也旦旦320
+。四刻62018 岛四Jl!且豆豆盟且皿血~斟且主
+图
+14-5
+Supervisor 程序管理
+＠旦完整的阳选项请访问Superv isor 的文档
+（http: /
+14.4.8 
+更新部署后的程序
+更新一次程序的大致流程如下：
+I ）在本地更新代码。
+2 ）通过生成虚拟数据在浏览器中手动调试。
+3 ）调试满意后执行一系列测试。
+l 。
+4 ）测试通过后将代码推送到代码托管平台，触发持续集成服务器进行测试（可选）。
+5 ）登录远程主机，使用git pull 命令拉取更新。
+仅供非商业用途或交流学习使用
+
+第14 章部署上结
+•！•
+587 
+6 ）执行必要的操作，比如更新数据库结构，安装新的依赖等。
+7 ）重新启动Gunicorn 。
+我们在本地更新了程序后，首先需要将改动提交进本地Git 仓库（git add & git commit ），然
+后将改动推送（g it push ）到代码托管平台。在远程主机上，第5～7 步对应的命令如下所示：
+♀
+q工t pull 
+＃拉取更新
+♀
+sudo supervisorctl stop bluelog 
+＃关闭blue log 程序
+$ flask db upgrade 
+＃更新数据库，更新依赖等可选的操作
+$ sudo supervisorctl start bluelog 
+＃启动blue l og 程序
+因为程序比较简单，我们手动完成了整个部署和更新流程，如果你需要将程序部署到多个
+服务器中，可以考虑使用Fabric (http://www.fabfile.org／）来实现部署的自动化。
+Fabric 的作用类
+似能够实现测试自动化的Tox ，通过将部署时需要执行的一系列命令预定义在命令函数中，并预
+先写入单个或多个服务器的主机地址和密码，直接执行本地命令就可以在多个主机上进行部署
+操作。如果你有非常多的服务器需要管理，那么可以考虑使用SaltStack ( https://saltstack.com/) 
+或Ansible
+( https: //www.ansible.com／）。
+当使用自动化部署工具时，我们可以在项目仓库内预先创建好所有的配置文件，
+比如Nginx
+和Supervisor 的配置文件。在部署时直接执行复制操作（cp ）将这些文件复制到对应的目录下。
+另一方面，将配置文件放到项目文件夹中可以添加到G it 仓库，更便于管理和控制。
+14.5 
+部署到PythonAnywhere
+从名字可以看出来，
+PythonAnywhere 只提供对Python 程序的支持，因此对我们的Flask 程
+序来说，使用起来会更加方便。它支持在线编辑脚本，执行Shell 命令，提供固定的硬盘存储空
+间（免费账户的限额为512MB ），你可以把它看成一个在线的集成开发环境。因为程序可以快速
+部署，非常适合用来做实验。首先，你需要访问https://www.pythonanywhere.com/registration/ 
+re gist巳r/beginner／注册一个免费账户。
+＠景你在注册时输入的用户名（username ）将作为为你分配的Linux 用户名称，同时也会作
+为为你分自己的域名，即https ：／／＜你的用户名＞. pythonanywhere.com ，后面我们将会以
+he lt oflask 作为示例用户名。
+14.5.1 
+反向代理设置
+在传统部署中，我们可以在Nginx 的配置文件中重写请求首部。在云部署平台中，我们没
+有权限修改反向代理服务器的配置文件，因此可以使用Werkzeug 提供的中间件ProxyFix 来（第
+16 章会介绍关于中间件的具体内容）对反向代理转发的请求进行必要的修正。在工厂函数中的
+程序实例创建后将程序的wsg i_app 属性更新为ProxyFix 类实例，传入原属性：
+from werkzeug
+. contr 工b .fixers import ProxyFix 
+app .wsgi app = ProxyFix(app.wsgi app) 
+仅供非商业用迷或交流学习使用
+
+588 
+•！•
+第三部分进阶篇
+14.5.2 
+创建PythonAnywhere 程序
+完成注册进入PythonAnywhere 的仪表盘（Dashboard ）后，可以单击We b 标签中的“ Crea te
+a New web application ”来创建新的Web 程序，如图14-6 所示。
+。Web a伸四up
+. ""'O' X 
+' G"y 
+＇田、口＇
+x • 
+~－ 
+←
+σ
+i Secure 
+https://www.pythonanywhere.c。m/user/helloflask/webapps州’ab id new webapp lab 
+旦旦J
+:
+L 
+.. .,., ... ，拙
+Forums ，锢，
+8问问团＇＇＂
+t吨剧
+团
+6W pythonon ywh ere 
+E温噩噩噩噩噩~
+\ 
+Dashb。ard
+Cons。les
+Files Web Tasks Databases 
+You have no web apps 
+T。cre ate a 町阳nAn阳阔叶怕st回
+web •P＜儿d ickυ，. •Add• new web epp• 
+bunon to the leh 
+\ 
+Copyrrghl it> 2011-2018 PythonAnywhere LLP 
+Terms - Prrvacy & C。okies
+图
+14 - 6
+创建PythonAnywhere 程序
+免费账户只能创建一个程序，程序的名称即创建时填写的用户名（username ）。相应地，你
+的程序的域名将是https://<your_ username>. pythonanywhere.com 的形式。另外，
+PythonAnywhere
+为你分配的文件目录为home/<your_ username＞。
+PythonAnywhere 默认提供0.1 l 和0.12 版本的Flask ，因为我们需要使用最新版，同时为了
+更灵活地定义其他设置，这里选择了手动配置，如图
+14-7 所示。
+14.5.3 
+推送代码并初始化程序环境
+在PythonAnywher巳上部署程序的过程和我们在前面介绍的传统部署非常相似，不过它已经
+帮我们完成了包括创建L inux 用户、安装WS GI 服务器和Web 服务器等一系列基础操作。
+在Co nsoles 标签下，我们可以创建各种类型的命令行会话：各个版本的Python 和！Python 、
+Bash 、MySQL 等。我们需要创建一个Bash 会话（bash 即Linux 系统中默认的s he ll ）来执行系
+统命令，如图14-8 所示。
+在打开的命令行窗口中，我们使用G it 从GitHub 上复制程序仓库：
+仅供非商业用途或交流于斗使用
+
+第14 章部署上线
+令
+589
+Crvate new web app 
+Select a Python Web framework 
+or se陆口＂Manual configu咱lion"i f y。u want detailed control 
+” 口1ang。
+• web2py 
+• Flask 
+J ’ 
+• B。ttle
+,/ 
+• Manual c。nfigurati。n (including virtualenvs) 
+Whal o\her frameworks should we have he『H Send us 回me feedback using the link al lhe 
+t。p of \he page• 
+’‘ 
+~ 
+~钮’
+图
+14-7
+选择手动配置Web 框架
+。（OM幽h创lof!Hk r x ri---…幽··圈圈
+令令。厅卒，e
+h tt川叫司画画阳州lofl.>妹／consol<si• 一→一一一
+二三二二二丑
+：
+………………………－…~回去~ .·
+影P日thon onywhere
+Dashboard 
+Consol四
+Files
+Web Tasks Databases 
+CPU Usage 0＂回国－O.Ql s of 1 OOs. Resets in 23 h。u吨1 5 minut臼cr::mD
+Start a new console 
+P叭hon ·
+36/35134/33/27 IPy仙。n
+3613.5/34 门盯2 7 PyPy. 27 
+Othoc 
+a.,h I MySQL 
+山帆。＼
+Your consoles 
+也且豆皿且监~丘盛
+’‘
+Consoles shared with you 
+No-one h自由＂＇＂＇＂＇α＂＂＂＇＂w，价you 1 
+Running process e s 
+~ 
+c。pynght C> 2011·2018 PythonAnywhere LLP - Terms 
+Pnvacy & C。。kies
+图
+14- 8
+创建Bash 会话
+$ git clone ht t p s : //github . com/greyli/bluelog . git 
+接着我们可以使用同样的方式在项目根目录内创建一个.env 文件，写入必要的环境变量值，
+比如SECRET KEY （直接复制本地的.env 文件内容即可）：
+$ cd bluelog 
+$ nano . env 
+为了确保执行命令时配置和环境正确设置，我们还需要在
+. env 文件中为FLASK ENV 变量
+仅供非商业用途或交流气’去j使用
+
+590 
+•！•
+第三部分进阶篇
+和自定义的FLASK
+CONFIG 变量设置正确的值：
+FLASK ENV~production 
+FLASK CONFIG ~production 
+＠票
+对于付费账户，你可以使用
+ssh 连接你的账户（ssh <username>@ssh.pythonanywhere. 
+com ），同时也可以使用
+scp 或Win SCP 来操作文件。并且可以创建远程仓库，进行一些
+设置后可以在本地push 代码后自动触发程序更新并重载。
+14.5.4 创建数据库
+如果部署的程序不使用数据库，或是使用SQL白，你可以直接跳过本节。
+P）咄onAnywhere
+提供MySQL 和PostgreSQL 两种选项，免费账户可以使用MySQL 。在仪表盘的Database 标签
+下为MySQL 设置一个密码，然后MySQL 服务器会自动运行，如图
+1 4 - 9 所示。
+｜三＇叶公二J叫与刊主M 放心：：.
+；＇.~c:t.‘丁飞；以忡忡沟。飞归（系：：仪s~，呻f呵国院印刷豆”啕问如曲制问时
+用
+＂~＆ P日thon an 日whe re
+Dashboard Consoles Files Web Tasks Databases 
+--…· 
+Postg'°' 
+Initialize MySQL 
+Let's get staned' The first thing to do is to inttiaiize a MY'到L server: 
+Enter a new p幽sword in the form below, and note it down: you'll 
+need It to ac但ssthe 由抽回国son坦凹的eαeat时them You will 
+oniyneedtod。this once 
+New pa岱SW。rd·
+七二
+二二二3
+C创币，m passwo耐
+! ··| / 
+¥ 
+G圆圈’
+This sh。uid be different to ycur main P叭honAnywhe『e passw。国，
+b四use it Is likely to ap阳ar in plain text in aoy web 叩pllcalions you 
+write. 
+c。pynghl 由2011 ·2018 PythonAnywhere LLP - Terms - Privacy & C。。kies
+图
+14-9
+初始化MySQL
+创建完成后，你会看到MySQL 服务器的各类信息，如图
+14-10 所示。
+/ 
+在重定向后的页面，你可以看到数据库的主机地址、用户名、数据库名称，通过这些信息
+可以构建数据库URI 。在程序中，我们需要更新配置变量SQLALCHEMY_DATABASE_ URI 的
+值，以便让SQLAlchemy 可以连接数据库服务器，因为生产配置中的这个值首先从环境变量
+DATABASE URL 读取，所以你可以在巳nv 中定义这个值。
+仅供非商业用途或交流学习佼用
+
+第14 章部署上结
+•！•
+591 
+("j Database SetHngs：町V x 
+| 气
+' 
+. 
+•• 
+•• 
+'< .· . 
+豆子
+.. · 
+.•. ···•· 
+·~·与；y弘仙心二三三仁川
+，.. , 
+斗. Sen<l feedbacl<' Forums H•IP Bl吨阳。恻坷M
+1!11 
+i5~tJ python an 日w here
+Dashb。ard
+Consoles Files Web Tasks Databases 
+Your MySQL service Is n。w reody Details below. 
+噩噩圈圈圈圈回国
+Postgres 
+14.5.5 设置虚拟环境
+MySQL settings 
+Connecting 
+Use these se!Hngs in your web applications 
+Database host address: 
+helloflask •ysql . pythocanyw旧时’白内ices . com
+Usernaπle 
+helloflask 
+Your databases 
+口.ck a database's name to start a Mys口L console logged in to rt 
+Start a c。nsole 。n
+holJofloskSdefault 
+Create a database 
+Your datobose names always sta问with your usemame •咕· There's no 
+need to type that prefix in below, though: Pyth。”Anywhere wrll 
+automatrcally add it 
+Database name 
+臼：er 用w database name 
+钮，
+图
+1 4-10
+查看MySQL 连接信息
+继续回到前面打开的Bash 页面，我们首先要安装Pipenv:
+$ pip3 install - - user pip env 
+’‘ 
+因为我们没有sudo 权限，除了在虚拟环境中执行安装外，在使用pip 安装Py thon 包时，需
+要添加一user 选项。下面执行一些常规的命令，具体作用不再赘述：
+$ cd bluelog 
+♀
+pipenv install 
+$ pipenv shell 
+$ flask db upgrade 
+♀
+flask in i t 
+＠嚣
+如采没有使盯lask-M i gr毗那么就使用n础
+i r
+刁τa
+db upgrade 命令。
+在创建虚拟环境后，我们需要在Web 标签下设置虚拟环境的路径，如图
+1 4” l l 所示。
+仅供非商业用迷或交流学习使用
+
+592
+令
+第三部台进阶篇
++ 
+WSGI con(1gurati。n file: 
+/var／附唰／helloOask_pythonanywhere_com_wsgl . py
+Python version: 
+2.7 / 
+~ 
+~rtua lenv 
+Use a vi同ualenνtog回dif阳陪nl ，.，.；由1s of Oa<k, django etc from our default system ones. M。re Info here. You need 
+t。R• l oad y。ur web app to activa 田，t; NB· will do nothing if the virtualenv do-snot e<ist 
+L旦旦业制之J O ①
+已Start a console in this virtualenv 
+Log files 
+The first place to look of somethmg goes wrong 
+Access log 
+helloflask.p州。nanywhere .com . access . log
+Error log 
+hell。flask . pythonanywhera . com error.log 
+Server log 
+helloflask.pythonanywhere.com se阿er log 
+Log files are 阳riodically rotated. You can find old logs here: /var/fog 
+Static files 
+Files thot aren~ dynamically generated by your code, like CSS. JavaScript or uploaded files, can be served mυch 
+faster straight off the disk if you specify them here. y。u need to Rel国d y凶r web app to activate any changes you 
+make to the mappings bel。w
+URL 
+Directory 
+Delete 
+Eme< URL 
+~nter path 
+Password protection 
+图
+14 -11
+编辑虚拟环境位置
+你可以使用下面的命令获取项目对应的虚拟环境路径：
+$ pipe 口v --venv 
+14.5.6 静态文件
+与我们在14.4.6 节中使用Nginx 来加载静态文件一样，这里也需要告诉PythonAnywhere 我
+们的静态文件目录，以便直接使用反向代理服务器加载。和我们在Nginx 中为静态文件创建的
+l ocation 块类似，
+我们需要在Web 标签下的Static
+files 部分添加URL 和对应的文件路径，如
+图
+14-12 所示。
+14.5.7 运行和更新程序
+在运行程序之前，我们要修改PythonAnywhere 提供的WSGI 配置文件，导入我们的程序实
+例，类似我们在准备环节创建的wsgi . py 。这个文件在创建PythonAnywhere 程序时－，就已经创建
+好了。事实上，你也必须在PythonAnywhere 为你创建的WSGI 文件中创建或导入程序实例，并
+将程序实例命名为application 。
+WSGI 服务器会读取这个文件，获取这个变量对应的WSGI 可调
+用对象。
+
+第14 章部署上线
+·：·
+593 
+←
+σ 
+The''"' ploce 10 I 。。k ;f s。methlng goes w•ong 
+Ac国SS log: 
+hell。flask附honanywhe<e com access log 
+En。，i句：
+helloflosk pythonanywhere com error log 
+Se向er
+I。9
+helloflaskpythonanywhere com 且同er.log
+Log f•les a『e per，。d•cally 『01a 1 ed You CM fmd old logs here /var/I。9
+Static files 
+F;les !hot ore的dynam;co lly generated by yoor c。由，Hke css, JovoSc叩1 o• uploodcd 的l es con be served much 
+foste< stra;ght off the d;sk •I you spec•ly them here. You need 10 R创曲d y饥，web app 10 octov3te any changes you 
+mokc to the mopplngs below 
+＼帆
+\… 
+／~·－叮叮＿hen叫.＿sk何u吧？”•lu_clc。只·－＇＂山
+Delete 
+自
+Enter υ现L
+En<ec_ 庐ath
+Password pr。tecti。n :
+Ideal for siles that ere under development when y＜＞＜』do的want anyone 10 see them yet You need 10 Reio四”“r
+web app 10 oclovote any changes made here 
+Password protect;。n
+msabled 
+U sernarr、e
+Enter a usemame 
+PaSSWO<d 
+~nter_•_eas与＂＇＇？＇~
+Delete: 
+。创et;ng th;s web app w•ll <emove your web app from the Internet, but wm not rem。ve y。ur c。de TheWSGI 
+图
+1 4- 12
+设置静态文件
+在Web 标签下的Code 部分，单击“ WSGI configuration file ”对应的链接打开这个文件进
+行编辑。这个文件中原有的内容是一个默认的WSGI 程序和一些示例说明，你可以全部删掉，
+然后创建下面的内容：
+import sys 
+path =
+’ / home/helloflask/bluelog ’ 
+if path not in sys.path: 
+sys.path
+. appe 口d (path) 
+from wsgi import app as application 
+因为这个WSGI 文件并不在我们项目的根目录中，而是在var/www／目录下，我们需要先将
+项目所在的路径添加到系统路径（sys.path ）中，这样我们可以直接从项目根目录下的wsgi.py 模
+块中导人app 实例并重命名为application 。
+＠景如果你的项目中没有提前创建叫i以件，作为替代，你也可以直接在这里从b lu e log 
+包导入工厂函数create_app（），然后调用工厂函数创建程序实例并传入production 自己直名
+称，注意要将程序实1ftj 命名为app lic ation 。
+单击右上角的Save 按钮~ll 可保存更改，如图14-13 所示。
+
+594 
+•！•
+第三部分进阶篇
+(J hellonask._即thonanyv.
+x 
+电V 三
+向ar……阳nanywhere…川
+GD~① 
+1 
+import sys 
+2 
+3 path • 
+'/h。me/helloflask/ blue ！。g'
+4 • if path not in sys. path 
+s 
+sys.path. append(path) 
+6 
+品7
+from wsgi import app as application 
+a I 
+图
+14-13
+编辑WSGI 配置文件
+因为在上面设置了虚拟环境和静态文件映射规则，我们需要先重载程序，单击Web 标签下
+的“ Reload <your application url＞”按钮，这时访问https://<username>. pythonanywhere.com 应
+该就能看到程序的主页了。如果出现错误，你可以访问Web 标签下的Log 部分查看对应的错误
+日志（Error log ）。
+而自免费账户需要每三个月单击一次Web 标签下的
+“ Run until 3 months from tod町”按钮来
+－，，再激活程序。
+当需要更新程序时，与在Linux 部署部分介绍的内容相同。我们在本地更新了程序后，首
+先需要将改动提交进本地Git 仓库（git add & git commit ），然后将改动推送到代码托管平台。在
+远程主机上，我们使用git pull 命令拉取代码，然后执行数据库更新等必要的操作，最后单击
+Reload 按钮重启程序即可完成更新。
+＠里
+14.6 
+免费账户不能建立SMTP 连接（发往Gm ail 服务器除外），也就是说，除了使用Gma il 的
+外部SMTP 服务器，我们只能使用事务邮件服务（SendGrid 、
+Mailgun 等）的Web API 
+来发送邮件（通过HTTP /HTTPS ），具体可以参考第6 章的相关内容。
+部署到Heroku
+Heroku 是比较老牌的PaaS ，建立于2007 年，也是目前最成熟、完善的PaaS 之一。它支持
+多种编程语言，而且提供了丰富的第三方服务（Add-ons ），这会让你的程序具有很高的灵活度。
+它提供的文档非常完善，可以让你很快上手。在此之前，你需要防问https: //heroku.com／注册一
+个Heroku 的免费账户。
+Heroku 提供了多种方式来部署程序，
+比如使用Git 部署、容器部署、通
+过连接到GitHub 仓库或Dropbox 部署，本节将会介绍其中的两种主要方式：使用Heroku Git 部
+
+第14 宣部署上结
+令
+595
+署本地程序和从GitHub 部署。
+首先，我们需要在项目的根目录中添加一个Procfile 文件。这个文件用来指定运行程序的命
+令，使用＜process type>: <command＞的形式来定义一个进程，每个进程一行。最基本的是web
+进程类型，它用来指定执行启动We b 服务器的命令，我们在这里指定Gunicorn 的运行命令，
+文
+件内容如下所示：
+web : gunicorn wsgi:app -- log-file -
+~壁因为Heroku M... stdout :fo std err 收集时，
+所以这时－－lo g-file 选项设为
+－
+ι 
+Gunicorn 的日志输出到stdout a
+14.6.1 
+通过Heroku Git 部署
+以便让
+Heroku CLI ( Heroku Command Line Interface ）是Heroku 提供的用于执行部署等操作的命
+令行工具，使用它可以完成几乎所有的操作。
+macOS 系统可使用Horne brew 安装：
+$ brew install heroku/brew/heroku 
+Linux Ubuntu 可以使用下面的命令安装：
+$ sudo snap install heroku 
+Windows 和其他系统可以通过下载安装包进行安装，具体可以访问https ://cli.heroku . com/
+了解。
+为了验证安装是否成功，我们可以使用下面的命令查看Heroku C LI 版本：
+$ heroku --version 
+heroku cli/6 . 0 . 0 010a227 (darwin x64 ）口ode - v8
+. 0
+. 0
+现在使用heroku login 命令登录Heroku ，输入你在注册账户时设置的邮箱地址和密码：
+♀
+heroku log 工n
+Enter your Heroku credentials . 
+Email: 
+greyl 工＠example
+. com
+Password : ******* 
+Log 工ned as greyli@example . com 
+＠盟执行heroku h e lp 可以查看所有可用的命令。
+1. 创建He 「oku 程序
+登录成功后，
+Tif!J保当前工作目录在要部署的项目的根目录下并且包含一个Git 仓库，然后使
+用heroku create 命令可以创建一个Heroku 程序：
+♀
+heroku create 
+Creating app . .. done , ? sleepy meadow- 81798 
+https : //sleepy - meadow-81798 . herokuapp . com/ 
+I https : //g 工t
+. heroku com/sleepy-
+meadow- 81798 .git 
+Heroku 会为你随机分配一个程序名，然后返回为程序分配的域名和在Heroku 提供的Git 服
+
+596 
+•！•
+第三部分进阶篇
+务器中为程序创建的Git 远程仓库地址。分配的程序域名将被用来访问程序，通过程序名称构
+建，形式为https ：／／＜程序名＞.herokuapp . com ，
+比如https ://hello flask. herokuapp. com 。
+你可以在heroku create 命令后附加参数来自定义创建的程序名称，
+比如我们将用来作为示
+例的he ll oflask:
+♀
+heroku create helloflask 
+Creating helloflask ... done 
+https ://helloflask .herokuapp .corn/ I https //git .heroku.corn/hellofl ask .gi t 
+＠景因为程序名称会作为峭的子域名部分，所以可能会出现重名不可用的情况，这时会显
+示
+“ Name is already taken ”，你可以多试几个名字。免费账户最多可以创建5 个程序，
+你可以执行heroku apps 命令查看所有己创建的程序。
+create 命令会为当前目录下的Git 仓库设置一个名为heroku 的远程仓库，对应你的程序在
+Heroku 的G it 服务器上的远程仓库。
+除了通过命令行创建程序，你也可以通过Heroku 的Web 界面（https: //heroku.com ）完成这
+些工作。如果你已经通过Web 界面创建了程序，那么可以使用下面的命令手动为本地仓库添加
+Heroku 远程仓库，使用－a 选项指定程序名称：
+♀
+heroku q 工t
+: rernote - a helloflask 
+夜，i,!
+因为我们当前目录的Git 仓库已经和heroku 程序所在的远程仓库建立关联，所以在运行
+，国、
+heroku 命令时不必指定操作的目标程序，否则需要使用心或一app 选项来给出程序的名
+称作为命令执行的目标程序，后面不再提示。
+2.11苗时文件系统
+在Heroku 中，程序运行在被称为Dyno 的容器中，每个Dy no 都会建立一份程序文件的拷
+贝
+（免费账户只有
+1 个Dyno 可用），因此无法保证文件数据的一致性，所以每个Dyno 停止运行
+后会直接清除掉相关文件。也就是说，除了我们使用Git 提交的文件除外，所有在Heorku 上运
+行程序过程中创建的文件将不会永久保存，而且会在一天内被重置。对于这种情况，我们需要
+采取下面的措施来避免出错：
+Q
+因为SQLite 使用文件作为数据库，无法持久化写入文件的数据，我们需要使用Heroku
+提供的数据库服务来替代SQ Lite 。
+口生成迁移环境和迁移脚本的操作始终在本地执行，也就是在本地执行flask db init （只
+需要执行一次）和flask db migrate 命令，
+当代码提交到Heroku 上后，再执行flask db 
+upgrade 。
+口用户上传文件使用Heroku 提供的存储服务或是其他第三方文件存储服务。
+口日志输出到stderr 和s tdout ，以便写入到Heroku 的日志系统。
+口将.env 提交到Git 仓库，以便推送到Heroku 上，仅适用于私有仓库。
+对于第2 条和第4 条，我们已经在14 .3 节完成了，第3 条暂不需要。我们将在下一节介绍
+如何使用Heroku 提供的免费的PostgreSQL 服务。
+
+第14 章部署上线
+•！•
+597 
+3 . 设置数据库
+Heroku 支持通过Add-on （扩展）来为程序接入其他服务，免费账户可以使用Heroku 提供
+的PostgreSQL 数据存储，最多可用10 000 行数据。使用下面的命令添加免费的hobb）叫ev 类型
+的PostgreSQL Addon: 
+$ heroku addons : create heroku-postgresql:hobby- dev 
+Creating heroku-postgresql:hobby-dev on ? helloflask . .. free 
+hobb）叫ev 类型的数据库存在诸多限制，比如最高可以使用10 000 行数据（当数据超过
+7000 行后会收到提示邮件），最大连接数为20 。使用heroku pg 命令可以查看数据库的详情：
+$ heroku pg 
+=== DATABASE URL 
+Plan : 
+Status: 
+Connections : 
+PG Version: 
+Created : 
+Data Size : 
+Tables: 
+Rows: 
+Fork/Follow : 
+Rollback : 
+Hobby- dev 
+Available 
+0/20 
+10 . 3 
+2018-05-08 03 :1 2 UTC 
+7 . 6 MB 
+0 
+。／10000
+(In compl 工ance)
+Unsupported 
+Unsupported 
+Continuous Protection : Off 
+Add- on: 
+postgresql-transparent-20461 
+添加成功后，我们可以通过heroku config 命令查看程序的环境变量，其中有包含数据库
+URL 的DATABASE URL 变量：
+♀
+heroku conf ig 
+=== helloflask Config Vars 
+DATABASE_ URL : postgres : / / oiauki vyycqqhg: 035dc67 37 93lbb939643628f907a301l90ba0ld 
+62387043b500lcl835a00dbcc@ec2 - 54 - 235- 204-221 . compute-l . amazonaws . com : 5432/ 
+d8tr8lgcsk0j 
+不过我们并不需要直接把数据库URL 写入配置，因为Heroku 会把这个URL 保存在Heroku
+的系统环境变量DATABASE_URL 中，所以我们可以在程序中直接读取这个值。在B lue log 以及
+其他几个示例程序中，生产配置均会优先从DATABASE URL 环境变量读取数据库URL ，所以
+程序不需要做出改动：
+based 工r = os . path.abspath(os . path . dirname ( 
+file 
+)) 
+dev db ＝
+’ sql 工te
+：／／／
+’
+＋
+OS.path. 〕0 工n(basedir ，
+’ data.db
+'
+)
+SQLALCHEMY DATABASE URI = os . getenv ( ’ DATABASE URL ’,
+dev db) 
+另外，使用c onfig:set 命令也可以为Heroku 程序所在的远程运行环境设置环境变量，比如：
+$ heroku config : set MAIL_USERNAME=greyli@example.com 
+如果你没有把.env 提交到G it 仓库，那么就需要使用这种方式来设置相应的环境变量。
+
+598 
+•！•
+第三部分进阶篇
+而自你也可以使用A ddon ~ }Jo 其他时，比如用于发送电子邮件的Send Grid 和Mail gun 等
+－，，主
+（Heroku 也支持使用外部SMTP 服务器，比如Gmail 等）。另外，如采你要使用Ce lery ,
+可以使用作为Ad don 的RabbitMQ 。
+使用beroku addons 命令可以查看程序添加的所有addon:
+$ heroku addons 
+4 . 本地测试
+Heroku 提供了本地运行功能，我们可以模拟一个真实的Heroku 线上运行环境。虽然这一
+步不是必须的，但是建议你先进行本地测试，这样可以避免不必要的Bug ，本地运行会让调试错
+误更加方便。尤其是对于已经部署过的程序，在更新之前进行实际的运行测试非常重要。
+本地测试的第一步是安装在Heroku 上运行程序所需要的依赖：
+$ pipenv install gu 口icorn psycopg2 
+＠景在Heroku 的服务器上运行程序时同样需要这些依赖，所以确保使用仰盯安装，它会
+自动把这两个包加入Pipfile 中。
+上面的命令分别安装Gun icorn 和PostgreSQL 的Python 接口库一－Psycopg2 a 为了在本地
+测试，我们还需要安装并运行PostgreSQL 服务器，访问PostgreSQL 网站的下载页面（https:// 
+www. postgresq I. org/ down l oad/ ）了解更多信息。安装并运行PostgreSQL 服务器后，我们需要把
+PostgreSQL 服务器运行的URL 设为环境变量DATABASE_URL 的值。
+＠景如采你使用L inux 系统，需妥安和ib川v 系统包。
+接着，使用pipenv shell 命令激活虚拟环境，并执行创建数据库等初始化操作：
+♀
+pipe 口v shell 
+$ flask db upgrade 
+＃如果没有使用Flask-Migrate 则使用flask initdb 
+♀
+flask init 
+在Linux 或macOS 系统中，使用下面的命令运行程序：
+♀
+heroku local web 
+因为Gunicorn 不支持Windows 系统，我们需要使用F lask 内置的开发服务器来运行程序。
+为此你需要编写一个Procfile . windows 文件，它和Procfile 类似，不过包含Windows 系统特定的
+启动命令，如下所示：
+web : flask run 
+然后使用下面的命令运行程序：
+$ heroku local web - f Procfile.windows 
+现在，你可以防问http: //localhost:5000 查看程序是否正常运行，如果一切正常，就可以准备
+
+第14 章部署上线
+令
+599
+推送代码到Heroku 上了。
+5. 推送代码
+使用g i t remote 命令可以查看当前本地仓库的远端，添加－v 显示详细地址：
+♀
+git remote - v 
+heroku 
+https : //git . heroku.com/helloflask.git (fetch) 
+heroku 
+https : //git . heroku . com/helloflask .git (push) 
+＠景
+如采你的程序同时畔的1tH叫BitB ucket 上，你还可以在上面命令的输出中看到这
+些平台建立的远程仓库，一般会命名为o ri gin 。
+因为He roku 为我们的程序创建了远程G it 仓库，所以我们在推送代码时不必在使用其他代
+码托管平台中转，而是直接推送到Heroku 上的G it 远程仓库：
+♀
+git push heroku master 
+remote : -----> Python app detected 
+remote: -----> I 口stalling pip 
+remote: -----> Installing dependenc 工es w工th Pipenv 11 . 8 2 · 
+remote : 
+Install 工ng dependencies from Pipf 工le. lock (b3ae4 8) ··· 
+remote · -----> Discoveri 口q process types 
+remote: 
+Pro cf 工le declares types -> web 
+remote: -----> Launching ... 
+remote: 
+Released v5 
+remote: 
+https : //helloflask.herokuapp . com/ deployed to Heroku 
+remote : Verifying deploy ... done. 
+代码推送后，
+Heroku 会自动尝试构建程序，首先会识别项目中的P ipfile 或requi rements.txt
+文件，并尝试从这两个文件中寻找依赖并安装。最后使用Procfile 文件中使用web 指定定义的
+命令来启动Web 服务器。
+r!\主因为Heroku 会自动处理环境隔离、依赖安装等工作，我们必须在Pipfile 或require”
+唱F思
+ments.txt 中列出所有的依赖。如采你没有进行本地测试，那么需妥手动将运行程序所需
+的gunicorn 和psycopg2 依赖包添加到Pipfile 中的［packages］节下，同时还要使用pip­
+env lock 命令更新Pipfile.lock 文件。
+Heroku 默认使用的Python 解释器版本为Python-3 .6.4 ，如果你需要使用P；咄on2 ，可以在
+Pipfile 中使用
+［requires］节指定被支持的Python2 版本：
+A- 
+1
+－
+中
+寸
+，
+n
+J
+ι
+ 
+一
+－
+n 
+O 
+L 
+s 
+r 
+e 
+v 
+－
+－
+在
+‘tJ14 
+5u 
+e
+俨
+h
+E
+- 
+ln 
+uo 
+qA
+-n 
+et 
+ry 
+r
+L
+口
+‘
+在使用Pipenv 时，我们可以通过pipenv run <command＞命令在虚拟环境下执行命令，类
+似的是，我们可以使用heroku run <command＞命令来执行Heroku 远程命令。我们现在已经把
+程序推送到了Heroku 上的Git 远程仓库，这里使用heroku run 执行命令的当前目录就是我们的
+Heroku 程序的项目根目录。
+现在使用下面的命令创建并更新数据库表：
+
+600
+令
+第三部分进阶
+篇
+$ heroku run flask db upgrade 
+Running flask db upgrade on helloflask 
+\ starting , run 4654 (Free) 
+$ heroku r un flask init 
+除了使用h eroku run 命令，我们也可以执行bas h 命令打开一个完整的远程命令行会话，
+与
+建立SSH 连接类似
+（使用ex it 命令退出）：
+♀
+heroku run bash 
+Running ba sh on helloflask . .. - starting, run.6426 (Free ) 
+最后使用下面的命令重启程序：
+$ heroku restart 
+现在访问程序的域名（即h ttp s ：／／程序名
+. h eroku app .com ）应该可以看到程序已经在运行了，
+你也可以使用下面的命令快速使用默认的浏览器打开：
+♀
+heroku open 
+H eroku 使用dyno hour 来作为计算程序资源用量的单位，
+每月有550 小时的免费额度。
+因
+为免费账户只可以使用
+1 个Dyn o ，也就意味着程序可以持续运行550 个小时。使用h ero ku p s 
+命令可以查看当前剩余的dyno ho ur 额度：
+$ heroku ps 
+Free dyno hours quota remaining this mont h : 550h Om 
+( 100 毛）
+===web (Free ): gum.corn wsgi : app - -log- file -
+(1) 
+web . l : up 2017/12/02 18 : 19 : 21 +0800 (~ 6m ago ) 
+a自由
+Hero ku 上免费账户创建的程序的时使用的Dyno ~ ~:Ji Web D yno ，
+这种类型的D yno
+－’ 比
+如采3 0 分钟内没有沉量产生，会进入休眠状态（唤醒操作会造成一些延迟），休眠状态
+不会消耗资源额度。
+6. 查看日志
+如果程序没有正常运行，你可以通过h ero ku
+logs 命令查看日志：
+♀
+heroku l ogs 
+默认显示100 条日志，使用一num 选项可以指定数量，最高为1500 条。我们也可以使用下
+面的命令查看实时的日志输出（使用C rtl+C 退出）：
+♀
+heroku logs --tail 
+7. 部署更新
+当我们在本地更新了程序后，我们首先需要将改动提交到本地Git 仓库（git add & git com-
+mit ），然后就可以使用g i t p ush 命令将改动推送到Heroku 上对应的远程仓库：
+丰
+he roku
+ma 工ntenance
+: on
+＃开启维护，这时访问程序会显示维护页面
+$ git push heroku master 
+＃推送代码
+$ heroku r e sta r t 
+＃
+重启程序
+♀
+h er oku rna intenance :off 
+＃关闭维护
+
+第14 章部署上结
+令
+601
+＠景确保将改动添加圭1] Git 仓库（git add ）并提交（git commit ），这样改动才会推送（git
+push ）圭1] Heroku 上。
+其中的heroku maintenanc巳命令用来设置显示／关闭默认的维护页面。
+14.6.2 
+使用GitHub 部署
+除了使用Heroku CLI 和Git 在本地部署，我们还可以直接使用GitHub 部署。确保你的
+程序仓库内包含Procfile 文件，并且Pipfile 中包含Gu nicorn 和Psycopg2,
+Pipfil e. lock 也保持
+同步（手动更改Pipfile 后需要使用pipenv
+lock 命令更新），而且数据库连接优先从环境变量
+DATABASE URL 读取。
+当我们的程序推送到Gi tHub 后，我们可以访问Heroku 的We b 页面，登录账号后依次单击
+“ New ”和“ Create new app ”打开创建程序页面，输入程序名称后即可创建一个Heroku 程序，
+创建后在仪表盘的deploy 标签中选择“ GitHub ”选项，然后单击Connect to GitHub 按钮，如
+图
+14-14 所示。
+Ill blue!呵GotHub J Heoι
+X 
+唱「
+因HERO KU 
+•Ch。ose a popenne 
+Deployment method 
+令Heroku Git o ~·~~~时l’”山
+等D＂＇.－＇：.＇：~：.
+冉、臼ntaone' Regist叩
+飞、
+．．
+‘捆，＂＂＇＂＂cu
+"-
+Connect t。GitHub 
+View y。山ζ。de d，仔son 口，tHub
+c。nneαth" app to GltHub t。enable
+Connect 归＂＇app to a GitHub re posit。，y m 四e commil diffs in the activny log 
+code dlRs and deploys 
+Depl。y changes with GitHub 
+Connec1o咱toa ••P饵’阻，y wollallow v。u 10 depl句a b恼nch to you• app 
+Automatic deploys from GitHub 
+Select a b<dnch to deploy automatically whene睛，ot is pu抽回阳
+C吨ate F‘!View apps in pipelin目
+＼阳……i川… w 隅a叫陀a怡
+F呵ues范崎u且且＝盒
+E雪’理堕暨堕胃’
+图
+14-14
+连接到GitHub
+在弹出的页面同意授权后，我们可以在页面中的“ Deployment method ”部分输入仓库名称
+
+602 
+•！•
+第三部分进阶篇
+进行搜索，并在相应的仓库右侧单击“ Connect ，，按钮建立连接，如图
+14 ” 15 所示。
+Dep loyment method 
+Connect to GitHub 
+Co n nect 制s app 10 G;1Hub lo e旧ble code 
+do阳a nd deploys. 
+he呻＞u com 
+Biogs 
+ea,...., 
+Documonlat，。n
+回嚣’
+·
+-
+promo恒code be1ween lhem 
+• 一
+＇
+createap阳fornewpull
+L皇且旦旦旦旦
+requ自IS J&旦旦旦旦旦
+• 
+C ho。且a p;peline 
+。
+Heroku Got o G;tHub 
+-
+Dropbox 
+.. 
+t 
+.U 
+Conn«llo G<tHub
+唱V
+~＇＂＂＂＇＇ ＇＇＂＂＇件。提
+.. 
+~』
+Co nio ;ner Reg i S1叩
+•• 
+U<俨V
+＇＇』＇
+L 
+Search for a repository 1o 四” n ect t。
+/ 
+g r＇町＂
+~ 
+blue 
+I咱
+.. 
+M i日，nga GOIHUbO唱anizoii。n’ l=nc;;ur,,. HPmku 0:1<h~rri h;:i<; ’ P.:1m.:1rress 
+囚g r町Ii / blue ／咱
+~ 
+/ 
+Te.ms nl S.M四阳回q
+Cao"'" _ 2018 S..losfo『刊com
+图14-15
+选择程序仓库
+建立连接后，我们可以在“ Autom a tic deplo ys ”部分设置开启自动部署。开启后，每当
+仓库有变动时，
+Heroku 会自动把变动集成到运行的程序中。你还可以勾选Wait for CI to pass 
+before dep l oy 选项，这样只有通过仓库设置的C I 测试的推送才会被部署到程序中。最后单
+击“ Manu a l
+d ep l oy ”部分的“ Dep l o y Branch ” 按钮即可部署对应分支的程序，如图
+14-1 6
+所示。
+单击部署后，
+Heroku 会自动读取仓库中的Proc fil e 文件，井直接从requireme n ts.txt 或
+Pipfi l e 文件中安装依赖，页面下方会显示部署过程的日志输出。部署成功后会显示“ Your app 
+was successfully dep l oyed. ”，你可以单击“ View ”按钮或直接输入URL 来访问程序。
+当使用GitHub 部署时，设置程序名称、设置数据库、添加add-on s 、查看日志等操作可以
+在Web 端完成。如果你愿意，也可以使用Heroku CLI ，这时需要使用一app 或－a 选项在执行命
+令时通过H eroku 程序名指定程序：
+♀
+h er o ku logs - a <app name> 
+
+GI ＂阳叫臼
+GitHub l 和
+X
+园”ERO KU 
+App connected to G;tHub 
+C国e d;ffs, manual and auto d酬。p... 
+g田•able"'' tho app 
+Autoπlatic deploys 
+Enabl回a ＂＂据en bra町h to be 
+automati臼I~ d即loyrototM•app.
+第14 章
+部署上结
+•！•
+603 
+Connected 田
+C') gll>)'lill>!国埋by .g!国i
+。
+Rel喃自g on the皿血面岛国lln<toGI制ubto 叫阳N<omm ltdlfls
+由、abl e auto01at ；巳deploys ，，.，四nG;tHub
+E睛’Y P国h to the brand> yo创§阳cifyhe陪will de例呵a new ve.,;on of th~ ap弘h回呵，
+ha ppon •叫om耐比• l ly. be'""' that thl• brand> t军副W可信，n • d叩l呻曲除state and a呵to由
+M四＂＂＂＂＂befo尼you P世h Loam mo<e. 
+~
+［v 叩er
+:-1 
+• 
+Waltf°＇口ta 萨国bef0<ede例呵
+＼、。叫enablcthl• 晒Ion ＂阳＇－•C.ont… In叩阳＂＇°＂＇＂＂叫f!'J<edonyou<
+陪阳一
+Manual deploy 
+Depl呵the ament state of a 阳晒to this 
+app. 
+14.7 
+下一步做什么？
+－·百言，＂＂”n’“吉、O"J::.llI• I四百且在型·
+民pl呵a GitHub bra n由
+Tho w们l 曲ρloythe 阳同时＂ate of the braneh 阴阳军pee咐below.Leam 阿盼晤
+,/ 
+[ Vma眶，：I 1111111 .¥"' 
+图14 - 16
+设置并部署程序
+恭喜你，不管使用哪种方式，现在你的程序已经部署上线了。尽管如此，我们的工作还没
+有结束，比如，首先你还需要考虑SEO ( Search Engine Optimi zation ，搜索引擎优化）问题。如
+何让搜索引擎更快更全面地收录你的网站，以便让你的网站在相关关键字的搜索结果中靠前显
+示。下面是一些最基础的工作：
+1 ）在HTML 页面中添加必要的m e ta 标签，
+比如keyw ord 、
+d e scription 等。
+2 ）在Goog l e 和Ba idu 等搜索引擎主动提交网站，申请收录（这通常会涉及验证网站所有权
+等步骤）。
+3 ）添加一个sitern a p.xml 文件Ul /1站点地图），在文件中列出程序中所有可以访问的URL 列
+表。你可以参考这个sn i ppet
+( http ://tla s k . p oco o . org/s nipp ets/1 0 8／）创建，或是使用Flask- S iteMap
+扩展（h ttps: //gith u b.com /i nveni osoftware/fl as k- s i tern ap ）。搜索’引擎的爬虫（爬取网络上内容的程
+序）会解析这个文件，你也可以手动提交。
+4 ）添加一个robots. txt ( http://www.rob o ts txt. org／）文件，和s itemap. x ml 的作用相反，这个
+文件用来告诉搜索引擎的内容爬虫不要收录哪些资源。比如，你肯定不想让用户在搜索引擎上
+的相关结果中看到后台管理的登录页面。下面是一个示例：
+User-agent : * 
+
+604 
+•！•
+第三部分进阶篇
+Disallow : /admin 
+Disallow: /upload 
+f;\~
+和robots.txt 相关联的还有一个human s. tx t
+( http灿umanstx t.org／），它的动机是为了注
+－，，王明制作网站／程序的作者，算作是网站的Credits 部分。你可以访问
+http s: //www.goog l e .
+com/humans. txt 查看Goog l e 的hunm ans.txt 文件。
+我们可以把robots.txt 、
+human s.txt 以及sitemap . xml 等文件放到程序static 文件夹的根目录。
+不过，这些文件都需要直接通过网站域名根目录访问到，比如http: //exampl e.com/robot.txt ，而
+我们程序默认的静态文件URL 为／static ，所以我们需要单独创建一个视图来提供（serve ）这些
+文件，比如：
+@app . route ( ’ / robots . txt') 
+@app . route ( ’ / sitemap .xml ' ) 
+def static from root() : 
+return send from directory (app . static folder , request .path[l:]) 
+除了搜索引擎优化，你还可以考虑进行UEO ( User Experience Optimization ，用户体验优
+化）。
+UEO 的方式有很多，随着移动设备越来越多，最基本也要对程序进行移动端优化。你可以
+使用Goog le 提供的LightHouse
+( http s://deve lop ers .google.com/web/tools /li ghthouse／）对页面性能
+进行分析。
+另外，一般的IaaS 和PaaS 服务提供商都会提供Web 监控数据，用来查看CPU 、硬盘、网
+络、系统负载等数据。如果你想自己搭建监控系统，可以考虑使用开源的Ic inga2 ( https://www. 
+icinga.com/products /icinga-2 ／）、
+Nagios ( https: //www.nagios.org／），或是在线监控服务DataDog
+( www.datadoghq.com ）等。
+最后，你还需要收集用户数据（流量统计与分析），这通常会使用第三方服务，比如Google
+Analytics ( https: //analytics .goog le . com/ ）、百度统计（https: //ton自i .baidu.com ）等。通过以用户
+的视角分析使用程序的方式，可以有针对性地调整程序的功能。
+日志包含用户访问的数据，也
+是研究用户行为以改进网站和程序的重要资料，你可以使用日志分析服务来进行分析，比如
+Splunk ( http s://www.sp lunk. com／）。
+网站优化通常不是一步到位的，正确的做法是在网站上线后根据需要来逐渐进行有针对性
+的优化。事实上，把程序部署上线只是一个开始。关于服务器的架构设计和维护包含大量知识
+和技巧，你需要阅读其他书籍来进一步学习。我们在13 章介绍的缓存、静态资源以及数据库等
+方面也可以在部署后通过各种方式进行优化。
+14.8 
+本章小结
+从写下第一行代码到把一个程序部署上线，整个过程就像是历经艰辛终于把孩子抚养成人。
+是的，
+You are Online 。不管你是否感到激动，你都为互联网添加了一个新成员。
+扩展虽然不是F lask 的核心内容，但在F lask 开发中却是不可或缺的一部分，下一章我们会
+通过一个真实的扩展实例来学习F lask 扩展的编写。

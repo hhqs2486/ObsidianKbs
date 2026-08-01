@@ -1,0 +1,298 @@
+C H A P T E R   14 
+ 
+■ ■ ■ 
+235
+POP 
+POP, the Post Office Protocol, is a simple protocol that is used to download e-mail from a mail server, 
+and is typically used through an e-mail client like Thunderbird or Outlook. You can read the first few 
+sections of Chapter 13 if you want the big picture of where e-mail clients, and protocols like POP, fit into 
+the history of Internet mail. 
+The most common implementation of POP is version 3, and is commonly referred to as POP3. 
+Because version 3 is so dominant, the terms POP and POP3 are practically interchangeable today. 
+POP’s chief benefit—and also its biggest weakness—is its simplicity. If you simply need to access a 
+remote mailbox, download any new mail that has appeared, and maybe delete the mail after the 
+download, then POP will be perfect for you. You will be able to accomplish this task quickly, and without 
+complex code. 
+However, this whole scheme has important limitations. POP does not support multiple mailboxes 
+on the remote side, nor does it provide any reliable, persistent message identification. This means that 
+you cannot use POP as a protocol for mail synchronization, where you leave the original of each e-mail 
+message on the server while making a copy to read locally, because when you return to the server later 
+you cannot easily tell which messages you have already downloaded. If you need this feature, you should 
+check out IMAP, which is covered in Chapter 15. 
+The Python Standard Library provides the poplib module, which provides a convenient interface for 
+using POP. In this chapter, you will learn how to use poplib to connect to a POP server, gather summary 
+information about a mailbox, download messages, and delete the originals from the server. Once you 
+know how to complete these four tasks, you will have covered all of the standard POP features! 
+Compatibility Between POP Servers 
+POP servers are often notoriously bad at correctly following standards. Standards also simply do not 
+exist for some POP behaviors, so these details are left up to the authors of server software. So basic 
+operations will generally work fine, but certain behaviors can vary from server to server. 
+For instance, some servers will mark all of your messages as read whenever you connect to the 
+server—whether you download any of them or not!—while other servers will mark a given message as 
+read only when it is downloaded. Some servers, on the other hand, never mark any messages as read at 
+all. The standard itself seems to assume the latter behavior, but is not clear either way. Keep these 
+differences in mind as you read this chapter. 
+Connecting and Authenticating 
+POP supports several authentication methods. The two most common are basic username-password 
+authentication, and APOP, which is an optional extension to POP that helps protect passwords from 
+being sent in plain-text if you are using an ancient POP server that does not support SSL. 
+
+CHAPTER 14 ■ POP 
+236 
+The process of connecting and authenticating to a remote server looks like this in Python: 
+1. 
+Create a POP3_SSL or just a plain POP3 object, and pass the remote hostname and 
+port to it. 
+2. 
+Call user() and pass_() to send the username and password. Note the 
+underscore in pass_()! It is present because pass is a keyword in Python and 
+cannot be used for a method name. 
+3. 
+If the exception poplib.error_proto is raised, it means that the login has failed 
+and the string value of the exception contains the error explanation sent by the 
+server. 
+The choice between POP3 and POP3_SSL is governed by whether your e-mail provider offers—or, in 
+this day and age, even requires—that you connect over an encrypted connection. Consult Chapter 6 for 
+more information about SSL, but the general guideline should be to use it whenever it is at all feasible for 
+you to do so. 
+Listing 14–1 uses the foregoing steps to log in to a remote POP server. Once connected, it calls 
+stat(), which returns a simple tuple giving the number of messages in the mailbox and the messages’ 
+total size. Finally, the program calls quit(), which closes the POP connection. 
+Listing 14–1. A Very Simple POP Session 
+#!/usr/bin/env python 
+# POP connection and authentication - Chapter 14 - popconn.py 
+ 
+import getpass, poplib, sys 
+ 
+if len(sys.argv) != 3: 
+»   print 'usage: %s hostname user' % sys.argv[0] 
+»   exit(2) 
+ 
+hostname, user = sys.argv[1:] 
+passwd = getpass.getpass() 
+ 
+p = poplib.POP3_SSL(hostname)  # or "POP3" if SSL is not supported 
+try: 
+»   p.user(user) 
+»   p.pass_(passwd) 
+except poplib.error_proto, e: 
+»   print "Login failed:", e 
+else: 
+»   status = p.stat() 
+»   print "You have %d messages totaling %d bytes" % status 
+finally: 
+»   p.quit() 
+You can test this program if you have a POP account somewhere. Most people do—even large 
+webmail services like GMail provide POP as an alternate means of checking your mailbox. 
+Run the preceding program, giving it two command-line arguments: the hostname of your POP 
+server, and your username. If you do not know this information, contact your Internet provider or 
+network administrator; note that on some services your username will be a plain string (like guido), 
+whereas on others it will be your full e-mail address (guido@example.com). 
+The program will then prompt you for your password. Finally, it will display the mailbox status, 
+without touching or altering any of your mail. 
+
+CHAPTER 14 ■ POP 
+237
+■ Caution! While this program does not alter any messages, some POP servers will nonetheless alter mailbox 
+flags simply because you connected. Running the examples in this chapter against a live mailbox could cause you 
+to lose information about which messages are read, unread, new, or old. Unfortunately, that behavior is server-
+dependent, and beyond the control of POP clients. I strongly recommend running these examples against a test 
+mailbox rather than your live mailbox! 
+Here is how you might run the program: 
+$ ./popconn.py pop.example.com guido 
+Password: (type your password) 
+You have 3 messages totaling 5675 bytes 
+If you see output like this, then your first POP conversation has taken place successfully! 
+When POP servers do not support SSL to protect your connection from snooping, they sometimes at 
+least support an alternate authentication protocol called APOP, which uses a challenge-response 
+scheme to assure that your password is not sent in the clear. (But all of your e-mail will still be visible to 
+any third party watching the packets go by!) The Python Standard Library makes this very easy to 
+attempt: just call the apop() method, then fall back to basic authentication if the POP server you are 
+talking to does not understand. 
+To use APOP but fall back to plain authentication, you could use a stanza like the one shown in 
+Listing 14–2 inside your POP program (like Listing 14–1). 
+Listing 14–2. Attempting APOP and Falling Back 
+print "Attempting APOP authentication..." 
+try: 
+»   p.apop(user, passwd) 
+except poplib.error_proto: 
+»   print "Attempting standard authentication..." 
+»   try: 
+»   »   p.user(user) 
+»   »   p.pass_(passwd) 
+»   except poplib.error_proto, e: 
+»   »   print "Login failed:", e 
+»   »   sys.exit(1) 
+
+CHAPTER 14 ■ POP 
+238 
+■ Caution! As soon as a login succeeds by whatever method, some older POP servers will lock the mailbox. 
+Locking might mean that no alterations to the mailbox may be made, or even that no more mail may be delivered 
+until the lock is gone. The problem is that some POP servers do not properly detect errors, and will keep a box 
+locked indefinitely if your connection gets hung up without your calling quit(). At one time, the world’s most 
+popular POP server fell into this category! 
+So it is vital to always call quit() in your Python programs when finishing up a POP session. You will note that all 
+of the program listings shown here are careful to always quit() down in a finally block that Python is 
+guaranteed to execute last. 
+Obtaining Mailbox Information 
+The preceding example showed you stat(), which returns the number of messages in the mailbox and 
+their total size. Another useful POP command is list(), which returns more detailed information about 
+each message. 
+The most interesting part is the message number, which is required to retrieve messages later. Note 
+that there may be gaps in message numbers: a mailbox may, for example, contain message numbers 1, 2, 
+5, 6, and 9. Also, the number assigned to a particular message may be different on each connection you 
+make to the POP server. 
+Listing 14–3 shows how to use the list() command to display information about each message. 
+Listing 14–3. Using the POP list() Command 
+#!/usr/bin/env python 
+# POP mailbox scanning - Chapter 14 - mailbox.py 
+ 
+import getpass, poplib, sys 
+ 
+if len(sys.argv) != 3: 
+»   print 'usage: %s hostname user' % sys.argv[0] 
+»   exit(2) 
+ 
+hostname, user = sys.argv[1:] 
+passwd = getpass.getpass() 
+ 
+p = poplib.POP3_SSL(hostname) 
+try: 
+»   p.user(user) 
+»   p.pass_(passwd) 
+except poplib.error_proto, e: 
+»   print "Login failed:", e 
+else: 
+»   response, listings, octet_count = p.list() 
+»   for listing in listings: 
+»   »   number, size = listing.split() 
+»   »   print "Message %s has %s bytes" % (number, size) 
+
+CHAPTER 14 ■ POP 
+239
+finally: 
+»   p.quit() 
+The list() function returns a tuple containing three items; you should generally pay attention to 
+the second item. Here is its raw output for one of my POP mailboxes at the moment, which has three 
+messages in it: 
+('+OK 3 messages (5675 bytes)', ['1 2395', '2 1626', 
+ '3 1654'], 24) 
+The three strings inside the second item give the message number and size for each of the three 
+messages in my in-box. The simple parsing performed by Listing 14–3 lets it present the output in a 
+prettier format: 
+$ ./mailbox.py popserver.example.com testuser 
+Password: 
+Message 1 has 2395 bytes 
+Message 2 has 1626 bytes 
+Message 3 has 1654 bytes 
+Downloading and Deleting Messages 
+You should now be getting the hang of POP: when using poplib you get to issue small atomic commands 
+that always return a tuple inside which are various strings and lists of strings showing you the result. We 
+are now ready to actually manipulate messages! The three relevant methods, which all identify messages 
+using the same integer identifiers that are returned by list(), are these: 
+• 
+retr(num): This method downloads a single message and returns a tuple containing a 
+result code and the message itself, delivered as a list of lines. This will cause most POP 
+servers to set the “seen” flag for the message to “true,” barring you from ever seeing it from 
+POP again (unless you have another way into your mailbox that lets you set messages back 
+to “Unread”). 
+• 
+top(num, body_lines):This method returns its result in the same format as retr() without 
+marking the message as “seen.” But instead of returning the whole message, it just returns 
+the headers plus however many lines of the body you ask for in body_lines. This is useful 
+for previewing messages if you want to let the user decide which ones to download. 
+• 
+dele(num): This method marks the message for deletion from the POP server, to take place 
+when you quit this POP session. Typically you would do this only if the user directly 
+requests irrevocable destruction of the message, or if you have stored the message to disk 
+and used something like fsync() to assure the data’s safety. 
+To put everything together, take a look at Listing 14–4, which is a fairly functional e-mail client that 
+speaks POP! It checks your in-box to determine how many messages there are and to learn what their 
+numbers are; then it uses top() to offer a preview of each one; and, at the user’s option, it can retrieve 
+the whole message, and can also delete it from the mailbox. 
+Listing 14–4. A Simple POP E-mail Reader 
+#!/usr/bin/env python 
+# POP mailbox downloader with deletion - Chapter 14 
+# download-and-delete.py 
+ 
+import email, getpass, poplib, sys 
+
+CHAPTER 14 ■ POP 
+240 
+if len(sys.argv) != 3: 
+»   print 'usage: %s hostname user' % sys.argv[0]
+»   exit(2) 
+hostname, user = sys.argv[1:] 
+passwd = getpass.getpass() 
+p = poplib.POP3_SSL(hostname) 
+try: 
+»   p.user(user) 
+»   p.pass_(passwd) 
+except poplib.error_proto, e: 
+»   print "Login failed:", e 
+else: 
+»   response, listings, octets = p.list() 
+»   for listing in listings: 
+»   »   number, size = listing.split() 
+»   »   print 'Message', number, '(size is', size, 'bytes):' 
+»   »   print 
+»   »   response, lines, octets = p.top(number, 0) 
+»   »   message = email.message_from_string('\n'.join(lines)) 
+»   »   for header in 'From', 'To', 'Subject', 'Date': 
+»   »   »   if header in message: 
+»   »   »   »   print header + ':', message[header] 
+»   »   print 
+»   »   print 'Read this message [ny]?' 
+»   »   answer = raw_input() 
+»   »   if answer.lower().startswith('y'): 
+»   »   »   response, lines, octets = p.retr(number) 
+»   »   »   message = email.message_from_string('\n'.join(lines))
+»   »   »   print '-' * 72 
+»   »   »   for part in message.walk(): 
+»   »   »   »   if part.get_content_type() == 'text/plain': 
+»   »   »   »   »   print part.get_payload() 
+»   »   »   »   »   print '-' * 72 
+»   »   print 
+»   »   print 'Delete this message [ny]?' 
+»   »   answer = raw_input() 
+»   »   if answer.lower().startswith('y'): 
+»   »   »   p.dele(number) 
+»   »   »   print 'Deleted.' 
+finally: 
+»   p.quit() 
+You will note that the listing uses the email module, introduced in Chapter 12, to great advantage,
+since even fancy modern MIME e-mails with HTML and images usually have a text/plain section that a
+simple program like this can print to the screen. 
+If you run this program, you’ll see output similar to this: 
+$ ./download-and-delete.py pop.gmail.com my_gmail_acct
+Message 1 (size is 1847 bytes): 
+From: root@server.example.com 
+To: Brandon Rhodes <brandon.craig.rhodes@gmail.com> 
+Download from www.eBookTM.Com
+
+CHAPTER 14 ■ POP 
+241
+Subject: Backup complete 
+Date: Tue, 13 Apr 2010 16:56:43 -0700 (PDT) 
+Read this message [ny]? 
+n 
+Delete this message [ny]? 
+y 
+Deleted. 
+Summary 
+POP, the Post Office Protocol, provides a simple way to download e-mail messages stored on a remote 
+server. With Python’s poplib interface, you can obtain information about the number of messages in a 
+mailbox and the size of each message. You can also retrieve or delete individual messages by number. 
+Connecting to a POP server may lock a mailbox. Therefore, it’s important to try to keep POP sessions 
+as brief as possible and always call quit() when done. 
+POP should be used with SSL when possible to protect your passwords and e-mail message 
+contents. In the absence of SSL, try to at least use APOP, and send your password in the clear only in dire 
+circumstances where you desperately need to POP and none of the fancier options work. 
+Although POP is a simple and widely deployed protocol, it has a number of drawbacks that make it 
+unsuitable for some applications. For instance, it can access only one folder, and does not provide 
+persistent tracking of individual messages. The next chapter discusses IMAP, a protocol that provides 
+the features of POP with a number of new features as well. 
+
+CHAPTER 14 ■ POP 
+242 
+ 

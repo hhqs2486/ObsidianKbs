@@ -1,0 +1,624 @@
+26.2 有用的工具  387 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+24 
+25 
+26 
+12 
+13 
+14 
+项目7：自建公告板 
+很多软件都让你能够通过互联网与他人交流，你已经见过其中的一些，如第23章介绍的
+Usenet讨论组以及第24章介绍的聊天服务器。本章将实现另一种这样的系统——基于Web的论坛。
+虽然其功能与复杂的社交媒体平台相距甚远，但提供了评论系统的基本功能。 
+26.1 问题描述 
+在这个项目中，你将创建一个通过Web发布和回复消息的简单系统，它可作为论坛使用。这
+个系统非常简单，但提供了基本的功能，并能够处理大量的帖子。 
+本章介绍的技术不仅可用于开发独立论坛，还可用于实现更通用的协作系统、问题跟踪系统、
+带评论功能的博客等。通过将CGI（或类似的技术）和可靠的数据库（这里是SQL数据库）结合
+起来使用，可实现非常强大的功能，而且用途非常广泛。 
+提示 虽然自己编写代码很好玩，也能学到不少东西，但在很多情况下，购买既有的解决方案
+更划算。就论坛之类的软件而言，很可能能够找到很多优秀的免费系统。另外，大多数
+Web应用框架都可帮助你实现这样的功能，这在第15章讨论过。 
+具体地说，最终的系统必须满足如下需求。 
+显示当前所有消息的主题。
+支持在消息下方以缩放的方式显示回复。
+让用户能够查看既有的消息。
+让用户能够回复既有的消息。
+除这些功能需求外，如果系统具有如下特征就更好了：非常稳定，能够处理大量的消息，避
+免两个用户同时写入一个文件等问题。为实现这样的健壮性，可使用数据库服务器，而不自己编
+写文件处理代码。 
+26.2 有用的工具 
+除第15章讨论的CGI工具外，还需要一个SQL数据库，这在第13章讨论过。你可使用第13章
+第26 章
+                          
+
+388  第26 章 项目7：自建公告板 
+中的单机数据库SQLite，也可使用其他系统，如下面这两种优秀的免费数据库： 
+PostgreSQL（http://www.postgresql.org）
+MySQL（http://www.mysql.org）
+本章的示例使用的是PostgreSQL，但只需对这些代码稍作修改，就可使用其他SQL数据库，
+如MySQL或SQLite。 
+首先，需要确保你能够访问SQL数据库服务器（或单机SQL数据库，如SQLite），并查看相关
+的文档以了解如何管理它。 
+除数据库服务器外，还需要能够与服务器交互（并对你隐藏细节）的Python模块。这种模块
+大都支持第13章详细讨论过的Python DB API。本章将使用Python模块psycopg（http://initd.org），
+这是一个健壮的PostgreSQL前端。 
+如果你使用的是MySQL数据库，模块MySQLdb（http://sourceforge.net/projects/mysql-python）
+是不错的选择。 
+安装数据库模块后，就可将其导入（如使用import psycopg或import MySQLdb）而不引发
+异常。 
+26.3 准备工作 
+要使用数据库，得先创建它，为此可使用SQL。（有关这方面的指南，请参阅第13章。） 
+数据库的结构取决于要解决的问题。创建数据库并使用数据（消息）填充后，要修改数据库
+的结构有点麻烦，因此我们让这个数据库尽可能简单。 
+这个数据库只有一个表，其中每行都对应一条消息。每条消息都有独一无二的ID（一个整数）、
+主题、发送者（发布者）以及一些文本（正文）。 
+另外，鉴于你希望能够以层次方式显示消息，每条消息都应存储一个引用，它指出了当前消
+息回复的是哪条消息。为创建这个表，要使用的SQL命令CREATE TABLE如代码清单26-1所示。 
+代码清单26-1 创建PostgreSQL数据库 
+CREATE TABLE messages ( 
+   id    
+   SERIAL PRIMARY KEY, 
+   subject     TEXT NOT NULL, 
+   sender      TEXT NOT NULL, 
+   reply_to    INTEGER REFERENCES messages, 
+   text  
+   TEXT NOT NULL 
+); 
+请注意，这个命令使用了一些PostgreSQL特有的功能：确保每条消息都自动获得独一无二ID
+的SERIAL，数据类型TEXT，以及确保reply_to包含有效消息ID的REFERENCES。代码清单26-2显示
+了这个命令的MySQL版本。 
+代码清单26-2 创建MySQL数据库 
+CREATE TABLE messages ( 
+                          
+
+26.4 初次实现  389 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+24 
+25 
+26 
+12 
+13 
+14 
+   id 
+   INT NOT NULL AUTO_INCREMENT, 
+   subject     VARCHAR(100) NOT NULL, 
+   sender      VARCHAR(15) NOT NULL, 
+   reply_to    INT, 
+   text  
+   MEDIUMTEXT NOT NULL, PRIMARY KEY(id) 
+); 
+最后，代码清单26-3显示了创建SQLite数据库的命令。 
+代码清单26-3 创建SQLite数据库 
+create table messages ( 
+   id    
+   integer primary key autoincrement, 
+   subject     text not null, 
+   sender      text not null, 
+   reply_to    int, 
+   text text   not null 
+); 
+我已让这些代码片段尽可能简单（SQL高手肯定能找到改进空间），毕竟本章的重点是Python
+代码。前述SQL语句创建的数据库表包含如下5个字段（列）。 
+id：用于标识消息。每条消息都会自动获得由数据库管理器提供的独一无二的ID，因此
+无需在Python代码中指定这些ID。
+subject：包含消息主题的字符串。
+sender：包含发送者姓名、电子邮箱地址或其他类似信息的字符串。
+reply_to：如果消息是另一条消息的回复，这个字段将包含那条消息的id，否则为空。
+text：包含消息正文的字符串。
+创建这个数据库，并设置其权限让Web服务器能够读取其内容以及插入新行后，就可开始编
+写CGI代码了。 
+26.4 初次实现 
+在这个项目中，第一个原型的功能很有限。它只包含一个使用数据库功能的脚本，让你能够
+了解其中的工作原理。掌握工作原理后，再编写其他必要的脚本就不会太难了。从很大程度上说，
+这个原型只是简单地回顾了第13章介绍的内容。 
+代码的CGI部分与第25章很像。如果你还没有阅读那章，请现在浏览一下。另外，你还应复
+习一下15.2.4节。 
+警告 在本章的CGI脚本中，导入并启用了模块cgitb，这对发现代码的缺陷大有裨益，但部署
+这个软件前，应删除调用cgitb.enable的代码，因为你不希望普通用户看到cgitb跟踪。 
+首先要知道的是Python DB API的工作原理。如果你还没有阅读第13章，现在应该大致浏览
+一下。对于只想接着往下读的读者，这里再次介绍一下数据库模块的核心功能。（请将其中的db
+                          
+
+390  第26 章 项目7：自建公告板 
+替换为你使用的数据库模块的名称，如psycopg或MySQLdb。） 
+conn = db.connect('user=foo password=bar dbname=baz')：以用户foo的身份（密码为bar）
+连接到数据库baz，并将返回的连接对象赋给变量conn。（请注意，给connect指定的参数
+是一个字符串。）
+警告 在这个项目中，假定数据库和Web服务器运行在专用的计算机上。指定的用户（foo）应
+只能从那台计算机连接到数据库，以避免不希望的访问。因此并非必须使用密码，但数
+据库可能要求你必须设置密码。如果想要让任何人都可以访问这个论坛，应更深入地了
+解相关的安全措施，因为这个示例项目是不安全的！ 
+curs = conn.cursor()：从连接对象获取游标对象。游标用于执行SQL语句和获取结果。
+conn.commit()：提交上次提交后执行SQL语句导致的修改。
+conn.close()：关闭连接。
+curs.execute(sql_string)：执行SQL语句。
+curs.fetchone()：以序列（如元组）的方式获取一个结果行。
+curs.dictfetchone()：以字典的方式获取一个结果行。（这并非标准的一部分，因此并非
+所有的模块都提供了这样的功能。）
+curs.fetchall()：以包含序列的序列（如元组列表）的方式获取所有结果行。
+curs.dictfetchall()：以字典序列（如字典列表）的方式获取所有结果行。（这并非标准
+的一部分，因此并非所有的模块都提供了这样的功能。）
+下面是一个简单的测试（这里假设使用的是模块psycopg），它获取数据库中所有的消息（当
+前这个数据库是空的，因此结果为空）： 
+>>> import psycopg2 
+>>> conn = psycopg2.connect('user=foo password=bar dbname=baz') 
+>>> curs = conn.cursor() 
+>>> curs.execute('SELECT * FROM messages') 
+>>> curs.fetchall() 
+[] 
+由于还没有实现Web接口，因此要测试这个数据库，必须手工输入消息。为此，可使用管理
+工具（如MySQL管理工具mysql或PostgreSQL管理工具psql），也可在Python解释器中使用数据库
+模块。 
+下面是一个代码片段，你可使用它来添加消息，以方便测试： 
+#!/usr/bin/env python 
+# addmessage.py 
+import psycopg2 
+conn = psycopg2.connect('user=foo password=bar dbname=baz) 
+curs = conn.cursor() 
+reply_to = input('Reply to: ') 
+subject = input('Subject: ') 
+                          
+
+26.4 初次实现  391 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+24 
+25 
+26 
+12 
+13 
+14 
+sender = input('Sender: ') 
+text = input('Text: ') 
+if reply_to:  
+ query = """ 
+ INSERT INTO messages(reply_to, sender, subject, text) 
+   VALUES({}, '{}', '{}', '{}')""".format(reply_to, sender, subject, text) 
+else: 
+ query = """ 
+ INSERT INTO messages(sender, subject, text) 
+ VALUES('{}', '{}', '{}')""".format(sender, subject, text) 
+curs.execute(query) 
+conn.commit() 
+请注意，这些代码有点粗糙。它没有替你跟踪ID（因此你必须确保指定的reply_to值为有效
+的ID），也不能妥善地处理包含单引号的文本（这样做会带来问题，因为SQL使用单引号来界定
+字符串）。当然，最终的系统将解决这些问题。 
+请尝试在交互式Python提示符下添加几条消息并查看数据库。如果万事大吉，就该编写访问
+数据库的CGI脚本了。 
+至此，你知道了如何编写处理数据库的代码，还可使用第25章现成的CGI代码，因此编写查
+看消息主题的脚本（论坛主页的简化版）应该不会太难。你必须执行标准的CGI设置（就这里而
+言，主要是打印Content-type字符串），执行标准的数据库设置（获取连接和游标），执行简单的
+SQL select命令来获取所有的消息，再使用curs.fetchall或curs.dictfetchall获取所有结果行。 
+代码清单26-4是一个完成这些任务的脚本，其中只有设置格式的代码是你以前没有见过的，
+它们用于在消息下方以缩放的方式显示回复。 
+这个代码清单的工作原理大致如下。 
+(1) 对于每条消息，获取其reply_to字段。如果这个字段为None（不是回复），就将当前消息
+加入顶级消息列表中，否则就将其附加到子消息列表children[parent_id]末尾。 
+(2) 对于每条顶级消息，调用format。函数format打印消息的主题。如果它有子消息，就打印
+起始标签<blockquote>，对每条子消息递归地调用format，再打印结束标签</blockquote>。 
+如果你在Web浏览器中运行这个脚本（有关如何运行CGI脚本的详细信息，请参阅第15章），
+将看到以层次结构显示的所有消息（的主题）。 
+图26-1显示了这个公告板是这样的。 
+注意 如果你使用的是SQlite，就不能像代码清单26-4那样使用dictfetchall，而需要将代码行
+rows = curs.dictfetchall()替换为如下代码片段： 
+names = [d[0] for d in curs.description] 
+rows = [dict(zip(names, row)) for row in curs.fetchall()]
+                          
+
+392  第26 章 项目7：自建公告板 
+图26-1 主页面 
+代码清单26-4 公告板主页（simple_main.cgi） 
+#!/usr/bin/python 
+print('Content-type: text/html\n') 
+import cgitb; cgitb.enable() 
+import psycopg2 
+conn = psycopg2.connect('user=foo password=bar dbname=baz') 
+curs = conn.cursor() 
+print(""" 
+<html>  
+  <head> 
+    <title>The FooBar Bulletin Board</title> 
+  </head> 
+  <body> 
+ <h1>The FooBar Bulletin Board</h1> 
+   """) 
+curs.execute('SELECT * FROM messages') 
+rows = curs.dictfetchall() 
+toplevel = [] 
+children = {} 
+for row in rows: 
+   parent_id = row['reply_to'] 
+   if parent_id is None: 
+    toplevel.append(row) 
+   else: 
+ children.setdefault(parent_id, []).append(row) 
+                          
+
+26.5 再次实现  393 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+24 
+25 
+26 
+12 
+13 
+14 
+   def format(row): 
+ print(row['subject']) 
+ try: kids = children[row['id']] 
+ except KeyError: pass 
+ else: 
+  print('<blockquote>') 
+  for kid in kids: 
+   format(kid) 
+  print('</blockquote>') 
+   print('<p>') 
+   for row in toplevel: 
+    format(row) 
+   print(""" 
+ </p> 
+   </body> 
+   </html> 
+   """) 
+注意 如果这个程序由于某种原因无法正常运行，可能是因为你没有正确地设置数据库。请参
+阅你使用的数据库的文档，了解需要如何做才能让指定用户连接到数据库并对其进行修
+改。例如，可能需要显式地指定可连接到数据库的计算机的IP地址。 
+26.5 再次实现 
+初次实现的功能很有限，用户甚至不能发布消息。本节将对这个简单的系统进行扩展，但最
+终版本的基本结构将与这个版本相同。你将采取一些措施对提供的参数进行检查，例如检查
+reply_to是否是数字以及是否提供了必要的参数，但你必须意识到，要让系统如此健壮且对用户
+如此友好是一项艰巨的任务。如果要使用这个系统（或自己改进后的版本），就应妥善地处理这
+些问题。 
+然而，要改善稳定性，首先得确保系统管用，不是吗？那么从哪里着手呢？如何组织系统呢？ 
+对于使用CGI等技术的Web程序，一种简单的组织方式是，对于要让用户能够执行的每项操
+作，都使用一个脚本来实现。就这个系统而言，这意味着需要编写如下脚本。 
+main.cgi：以层次方式显示所有消息的主题，并将这些主题作为到消息本身的链接。
+view.cgi：显示一条消息，并提供让用户能够回复的链接。
+edit.cgi：以可编辑的方式显示一条消息（就像第25章那样使用文本框和文本区域），其中
+的Submit按钮链接到脚本save.cgi。
+save.cgi：从edit.cgi那里接收有关消息的信息，并通过在数据库表中插入一个新行来保存
+这条消息。
+下面来分别编写这些脚本。 
+                          
+
+394  第26 章 项目7：自建公告板 
+26.5.1 编写脚本main.cgi 
+脚本main.cgi很像第一个原型中的脚本simple_main.cgi，主要差别在于加入了链接：每个主题
+都链接到相应消息（到view.cgi的链接）；同时在页面底部添加让用户能够发布新消息的链接（到
+edit.cgi的链接）。 
+请看代码清单26-5所示的代码。包含到每条消息的链接的代码行（包含在函数format中）类
+似于下面这样： 
+print('<p><a href="view.cgi?id={id}i">{subject}</a></p>'.format(row)) 
+大致而言，这行代码创建到view.cgi?id=someid的链接，其中someid是给定行的id。这种语
+法（问号和key=val）是一种向CGI脚本传递参数的方式，这意味着用户单击链接时，将正确地设
+置参数id并运行脚本view.cgi。Post message是到脚本edit.cgi的链接。 
+代码清单26-5 公告板主页（main.cgi） 
+#!/usr/bin/python 
+print('Content-type: text/html\n') 
+import cgitb; cgitb.enable() 
+import psycopg2 
+conn = psycopg2.connect('user=foo password=bar dbname=baz') 
+curs = conn.cursor() 
+print("""  
+  <html> 
+   <head> 
+   <title>The FooBar Bulletin Board</title> 
+   </head> 
+   <body> 
+  <h1>The FooBar Bulletin Board</h1> 
+  """) 
+curs.execute('SELECT * FROM messages') 
+rows = curs.dictfetchall() 
+toplevel = [] 
+children = {} 
+for row in rows: 
+   parent_id = row['reply_to'] 
+   if parent_id is None: 
+    toplevel.append(row) 
+   else: 
+ children.setdefault(parent_id, []).append(row) 
+def format(row): 
+                          
+
+26.5 再次实现  395 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+24 
+25 
+26 
+12 
+13 
+14 
+   print('<p><a href="view.cgi?id={id}i">{subject}</a></p>'.format(row)) 
+   try: kids = children[row['id']] 
+   except KeyError: pass 
+   else: 
+ print('<blockquote>') 
+ for kid in kids: 
+  format(kid) 
+    print('</blockquote>') 
+   print('<p>') 
+for row in toplevel: 
+   format(row) 
+print(""" 
+ </p> 
+ <hr /> 
+ <p><a href="edit.cgi">Post message</a></p> 
+   </body> 
+</html> 
+""") 
+下面来看看脚本view.cgi是如何处理参数id的。 
+26.5.2 编写脚本view.cgi 
+脚本view.cgi根据提供给它的CGI参数id从数据库获取一条消息，再使用得到的值来生成一个
+简单的HTML页面。这个页面包含一个返回到主页面（main.cgi）的链接，更有趣的是，它还包
+含一个到edit.cgi的链接，但这里将参数reply_to设置为id的值，以确保新消息是对当前消息的回
+复。脚本view.cgi的代码如代码清单26-6所示。 
+代码清单26-6 消息查看器（view.cgi） 
+#!/usr/bin/python 
+print('Content-type: text/html\n') 
+import cgitb; cgitb.enable() 
+import psycopg2 
+conn = psycopg2.connect('user=foo password=bar dbname=baz') 
+curs = conn.cursor() 
+import cgi, sys 
+form = cgi.FieldStorage() 
+id = form.getvalue('id') 
+print(""" 
+<html>  
+  <head> 
+ <title>View Message</title> 
+                          
+
+396  第26 章 项目7：自建公告板 
+  </head> 
+  <body> 
+ <h1>View Message</h1> 
+   """) 
+try: id = int(id) 
+except: 
+ print('Invalid message ID') 
+ sys.exit() 
+curs.execute('SELECT * FROM messages WHERE id = s', (format(id),))
+%
+ 
+rows = curs.dictfetchall() 
+if not rows: 
+ print('Unknown message ID') 
+ sys.exit() 
+row = rows[0] 
+print(""" 
+ <p><b>Subject:</b> {subject}<br /> 
+ <b>Sender:</b> {sender}<br /> 
+ <pre>{text}</pre> 
+ </p> 
+ <hr /> 
+ <a href='main.cgi'>Back to the main page</a> 
+  | <a href="edit.cgi?reply_to={id}">Reply</a> 
+  </body> 
+</html> 
+""".format(row)) 
+通过使用SQL包本身的拆分机制，避免了前面所说的单引号问题，让代码更安全。 
+警告 不应将不信任的文本直接插入用作SQL查询的字符串中，因为这样的代码很容易遭受
+SQL注入攻击。相反，应使用Python DB API占位符机制，并向curs.execute提供一个额
+外的参数元组。有关这方面的详细信息，可参阅http://bobby-tables.com。 
+26.5.3 编写脚本edit.cgi 
+脚本edit.cgi实际上承担了双重职责：既用于编辑新消息，也用于编辑回复。这两项功能的差
+别并不大：如果在CGI请求中提供了reply_to，就将其存储在编辑表单中一个隐藏的input元素中。
+在Web表单中，隐藏的input元素用于临时存储信息。它们不像文本区域等元素那样是用户能够
+看到的，但它们的值也将传递给表单的属性action指定的CGI脚本，这让生成表单的脚本能够向
+处理该表单的脚本传递信息。 
+另外，默认将主题设置为"Re: parentsubject"（除非主题已经以Re:打头，在这种情况下，
+不用继续添加Re:）。处理这些细节的代码片段如下： 
+                          
+
+26.5 再次实现  397 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+24 
+25 
+26 
+12 
+13 
+14 
+subject = '' 
+if reply_to is not None:  
+   print('<input type="hidden" name="reply_to" value="{}"/>'.format(reply_to)) 
+   curs.execute('SELECT subject FROM messages WHERE id = s', (reply_to,))
+%
+ 
+   subject = curs.fetchone()[0] 
+   if not subject.startswith('Re: '): 
+ subject = 'Re: ' + subject 
+代码清单26-7显示了脚本edit.cgi的源代码。 
+代码清单26-7 消息编辑器（edit.cgi） 
+#!/usr/bin/python 
+print('Content-type: text/html\n') 
+import cgitb; cgitb.enable() 
+import psycopg2 
+conn = psycopg2.connect('user=foo password=bar dbname=baz') 
+curs = conn.cursor() 
+import cgi, sys 
+form = cgi.FieldStorage() 
+reply_to = form.getvalue('reply_to') 
+print("""  
+<html> 
+  <head> 
+    <title>Compose Message</title> 
+  </head> 
+  <body> 
+ <h1>Compose Message</h1> 
+ <form action='save.cgi' method='POST'> 
+   """) 
+subject = '' 
+if reply_to is not None: 
+   print('<input type="hidden" name="reply_to" value="{}"/>'.format(reply_to)) 
+   curs.execute('SELECT subject FROM messages WHERE id = s', (format(reply_to),))
+%
+ 
+   subject = curs.fetchone()[0] 
+   if not subject.startswith('Re: '): 
+ subject = 'Re: ' + subject 
+print(""" 
+ <b>Subject:</b><br /> 
+ <input type='text' size='40' name='subject' value='{}' /><br /> 
+ <b>Sender:</b><br /> 
+ <input type='text' size='40' name='sender' /><br /> 
+ <b>Message:</b><br /> 
+ <textarea name='text' cols='40' rows='20'></textarea><br /> 
+ <input type='submit' value='Save'/> 
+ </form> 
+                          
+
+398  第26 章 项目7：自建公告板 
+ <hr /> 
+ <a href='main.cgi'>Back to the main page</a>' 
+  </body> 
+</html> 
+""".format(subject)) 
+26.5.4 编写脚本save.cgi 
+下面来编写最后一个脚本。脚本save.cgi从edit.cgi生成的表单那里接收有关一条消息的信息，
+并将其存储到数据库中。这意味着需要使用SQL INSERT命令，同时由于对数据库做了修改，必须
+调用conn.commit，这样脚本终止时所做的修改才不会丢失。 
+代码清单26-8显示了脚本save.cgi的源代码。 
+代码清单26-8 保存脚本（save.cgi） 
+#!/usr/bin/python 
+print('Content-type: text/html\n') 
+import cgitb; cgitb.enable() 
+import psycopg2 
+conn = psycopg2.connect('user=foo password=bar dbname=baz') 
+curs = conn.cursor() 
+import cgi, sys 
+form = cgi.FieldStorage() 
+sender = form.getvalue('sender') 
+subject = form.getvalue('subject') 
+text = form.getvalue('text') 
+reply_to = form.getvalue('reply_to') 
+if not (sender and subject and text):  
+   print('Please supply sender, subject, and text') 
+   sys.exit() 
+if reply_to is not None: 
+ query = (""" 
+ INSERT INTO messages(reply_to, sender, subject, text) 
+   VALUES( s, ' s', ' s', ' s')""", (int(reply_to), sender, subject, text))
+%
+%
+%
+%
+ 
+else: 
+ query = (""" 
+   INSERT INTO messages(sender, subject, text) 
+   VALUES(' s', ' s', ' s')""", (sender, subject, text))
+%
+%
+%
+ 
+curs.execute(*query) 
+conn.commit() 
+print(""" 
+<html> 
+                          
+
+26.5 再次实现  399 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+24 
+25 
+26 
+12 
+13 
+14 
+<head> 
+  <title>Message Saved</title> 
+</head> 
+<body> 
+ <h1>Message Saved</h1> 
+ <hr /> 
+ <a href='main.cgi'>Back to the main page</a> 
+</body> 
+</html>s 
+""") 
+26.5.5 尝试使用 
+要测试这个系统，可首先运行脚本main.cgi，再单击其中的链接Post message，这将运行脚本
+edit.cgi。在所有的字段中都输入一些值，再单击链接Save。 
+这将运行脚本save.cgi，它显示消息Message Saved。单击链接Back to the main page返回到
+main.cgi，列表中应包含你刚才发布的消息。 
+要查看这条消息，只需单击其主题。这将使用正确的ID来运行脚本view.cgi。在这个脚本
+生成的页面中，单击链接Reply。这将再次运行脚本edit.cgi，但这次设置的是reply_to（这个
+值存储在一个隐藏的input元素中），并使用默认主题。同样，输入一些文本，并单击链接Save，
+再返回到主页。在主页中，你的回复应显示在原来的主题下方。（如果没有显示，可尝试重新
+加载该页面。） 
+主页如本章前面的图26-1所示，消息查看器如图26-2所示，而消息编辑器如图26-3所示。 
+图26-2 消息查看器 
+                          
+
+400  第26 章 项目7：自建公告板 
+图26-3 消息编辑器 
+26.6 进一步探索 
+至此，你能够使用可靠而高效的存储技术开发功能强大的大型Web应用了，但值得深入探究
+的方面还有很多。 
+编写一个Web前端，用于处理你喜欢的巨蟒剧团剧目数据库如何？
+如果你想改进本章开发的系统，应考虑如何实现抽象。创建一个实用模块，在其中包含
+用于打印网页首部和尾部的函数如何？这样，你就无需在每个脚本中都编写打印这些
+HTML内容的代码了。另外，添加一个能够处理密码的用户数据库或将创建连接的代码提
+取出来也很有帮助。
+如果你希望解决方案不需要专用的服务器，可使用第13章使用的SQLite，也可使用一些非
+SQL解决方案［如MongoDB（https://mongodb.com）］，还可使用专用的文件格式［如HDF5
+（http://h5py.org）］。 
+预告
+如果你认为自己动手编写论坛软件很酷，再接着编写一个类似于BitTorrent的P2P文件共享程
+序如何？这正是你在下一章要做的。好消息是，这个任务比之前完成的大部分网络编程任务都要
+简单，这都要归功于神奇的远程过程调用。 
+                          

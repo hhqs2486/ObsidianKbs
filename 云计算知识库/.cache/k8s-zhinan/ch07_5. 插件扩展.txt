@@ -1,0 +1,3193 @@
+Kubernetes插件
+Kubernetes在设计之初就充分考虑了可扩展性，很多资源或操作都可以通过插件来自由
+扩展，比如认证授权、网络、Volume、容器执行引擎、调度等。
+5. 插件扩展
+317
+
+访问控制
+Kubernetes 对 API 访问提供了三种安全访问控制措施：认证、授权和 Admission
+Control。认证解决用户是谁的问题，授权解决用户能做什么的问题，Admission Control
+则是资源管理方面的作用。通过合理的权限管理，能够保证系统的安全可靠。
+Kubernetes集群的所有操作基本上都是通过kube-apiserver这个组件进行的，它提供
+HTTP RESTful形式的API供集群内外客户端调用。需要注意的是：认证授权过程只存在
+HTTPS形式的API中。也就是说，如果客户端使用HTTP连接到kube-apiserver，那么是
+不会进行认证授权的。所以说，可以这么设置，在集群内部组件间通信使用HTTP，集
+群外部就使用HTTPS，这样既增加了安全性，也不至于太复杂。
+下图是 API 访问要经过的三个步骤，前面两个是认证和授权，第三个是 Admission
+Control。
+认证
+开启TLS时，所有的请求都需要首先认证。Kubernetes支持多种认证机制，并支持同时
+开启多个认证插件（只要有一个认证通过即可）。如果认证成功，则用户
+的 username 会传入授权模块做进一步授权验证；而对于认证失败的请求则返回HTTP
+401。
+5.1 访问控制
+318
+
+[warning] Kubernetes不管理用户
+虽然Kubernetes认证和授权用到了username，但Kubernetes并不直接管理用户，
+不能创建 user 对象， 也不存储username。但是Kubernetes提供了Service
+Account，用来与API交互。
+目前，Kubernetes支持以下认证插件：
+X509证书
+静态Token文件
+引导Token
+静态密码文件
+Service Account
+OpenID
+Webhook
+认证代理
+OpenStack Keystone密码
+X509证书
+使用X509客户端证书只需要API Server启动时配置 --client-ca-file=SOMEFILE 。在
+证书认证时，其CN域用作用户名，而组织机构域则用作group名。
+创建一个客户端证书的方法为：
+openssl req -new -key jbeda.pem -out jbeda-csr.pem -subj "/CN=jbeda/O
+=app1/O=app2"
+静态Token文件
+使用静态Token文件认证只需要API Server启动时配置 --token-auth-
+file=SOMEFILE 。该文件为csv格式，每行至少包括三列 token,username,user
+id ，后面是可选的group名，比如
+token,user,uid,"group1,group2,group3"
+客户端在使用token认证时，需要在请求头中加入Bearer Authrization头，比如
+5.1 访问控制
+319
+
+Authorization: Bearer 31ada4fd-adec-460c-809a-9e56ceb75269
+引导Token
+引导Token是动态生成的，存储在kube-system namespace的Secret中，用来部署新的
+Kubernetes集群。
+使用引导Token需要API Server启动时配置 --experimental-bootstrap-token-
+auth ，并且Controller Manager开启TokenCleaner  --
+controllers=*,tokencleaner,bootstrapsigner 。
+在使用kubeadm部署Kubernetes时，kubeadm会自动创建默认token，可通过 kubeadm
+token list 命令查询。
+静态密码文件
+需要API Server启动时配置 --basic-auth-file=SOMEFILE ，文件格式为csv，每行至
+少三列 password, user, uid ，后面是可选的group名，如
+password,user,uid,"group1,group2,group3"
+客户端在使用密码认证时，需要在请求头重加入Basic Autorization头，如
+Basic BASE64ENCODED(USER:PASSWORD)
+Service Account
+ServiceAccount是Kubernetes自动生成的，并会自动挂载到容器
+的 /run/secrets/kubernetes.io/serviceaccount 目录中。
+在认证时，ServiceAccount的用户名格式为 system:serviceaccount:(NAMESPACE):
+(SERVICEACCOUNT) ，并从属于两个
+group： system:serviceaccounts 和 system:serviceaccounts:(NAMESPACE) 。
+OpenID
+5.1 访问控制
+320
+
+OpenID提供了OAuth2的认证机制，是很多云服务商（如GCE、Azure等）的首选认证
+方法。
+使用OpenID认证，API Server需要配置
+ --oidc-issuer-url ，如 https://accounts.google.com 
+ --oidc-client-id ，如 kubernetes 
+ --oidc-username-claim ，如 sub 
+ --oidc-groups-claim ，如 groups 
+ --oidc-ca-file ，如 /etc/kubernetes/ssl/kc-ca.pem 
+Webhook
+API Server需要配置
+# 配置如何访问webhook server
+--authentication-token-webhook-config-file
+# 默认2分钟
+--authentication-token-webhook-cache-ttl
+配置文件格式为
+5.1 访问控制
+321
+
+# clusters refers to the remote service.
+clusters:
+  - name: name-of-remote-authn-service
+    cluster:
+      certificate-authority: /path/to/ca.pem         # CA for verifyi
+ng the remote service.
+      server: https://authn.example.com/authenticate # URL of remote 
+service to query. Must use 'https'.
+# users refers to the API server's webhook configuration.
+users:
+  - name: name-of-api-server
+    user:
+      client-certificate: /path/to/cert.pem # cert for the webhook pl
+ugin to use
+      client-key: /path/to/key.pem          # key matching the cert
+# kubeconfig files require a context. Provide one for the API server.
+current-context: webhook
+contexts:
+- context:
+    cluster: name-of-remote-authn-service
+    user: name-of-api-sever
+  name: webhook
+Kubernetes发给webhook server的请求格式为
+{
+  "apiVersion": "authentication.k8s.io/v1beta1",
+  "kind": "TokenReview",
+  "spec": {
+    "token": "(BEARERTOKEN)"
+  }
+}
+示例：kubernetes-github-authn实现了一个基于WebHook的github认证。
+认证代理
+5.1 访问控制
+322
+
+API Server需要配置
+--requestheader-username-headers=X-Remote-User
+--requestheader-group-headers=X-Remote-Group
+--requestheader-extra-headers-prefix=X-Remote-Extra-
+# 为了防止头部欺骗，证书是必选项
+--requestheader-client-ca-file
+# 设置允许的CN列表。可选。
+--requestheader-allowed-names
+OpenStack Keystone密码
+需要API Server在启动时指定 --experimental-keystone-url=<AuthURL> ，而https
+时还需要设置 --experimental-keystone-ca-file=SOMEFILE 。
+[warning] 不支持Keystone v3
+目前只支持keystone v2.0，不支持v3（无法传入domain）。
+匿名请求
+如果使用AlwaysAllow以外的认证模式，则匿名请求默认开启，但可用 --anonymous-
+auth=false 禁止匿名请求。
+匿名请求的用户名格式为 system:anonymous ，而group则
+为 system:unauthenticated 。
+授权
+认证之后的请求就到了授权模块。跟认证类似，Kubernetes也支持多种授权机制，并支
+持同时开启多个授权插件（只要有一个验证通过即可）。如果授权成功，则用户的请求
+会发送到准入控制模块做进一步的请求验证；而对于授权失败的请求则返回HTTP 403.
+Kubernetes授权仅处理以下的请求属性：
+user, group, extra
+API、请求方法（如get、post、update、patch和delete）和请求路径（如 /api ）
+请求资源和子资源
+Namespace
+API Group
+5.1 访问控制
+323
+
+目前，Kubernetes支持以下授权插件：
+ABAC
+RBAC
+Webhook
+Node
+[info] AlwaysDeny和AlwaysAllow
+Kubernetes还支持AlwaysDeny和AlwaysAllow模式，其中AlwaysDeny仅用来测
+试，而AlwaysAllow则 允许所有请求（会覆盖其他模式）。
+ABAC授权
+使用ABAC授权需要API Server配置 --authorization-policy-
+file=SOME_FILENAME ，文件格式为每行一个json对象，比如
+{"apiVersion": "abac.authorization.kubernetes.io/v1beta1", "kind": "P
+olicy", "spec": {"group":"system:authenticated",  "nonResourcePath": 
+"*", "readonly": true}}
+{"apiVersion": "abac.authorization.kubernetes.io/v1beta1", "kind": "P
+olicy", "spec": {"group":"system:unauthenticated", "nonResourcePath": 
+"*", "readonly": true}}
+{"apiVersion": "abac.authorization.kubernetes.io/v1beta1", "kind": "P
+olicy", "spec": {"user":"admin",     "namespace": "*",              "
+resource": "*",         "apiGroup": "*"                   }}
+RBAC授权
+见RBAC授权。
+WebHook授权
+使用WebHook授权需要API Server配置 --authorization-webhook-config-
+file=SOME_FILENAME 和 --runtime-
+config=authorization.k8s.io/v1beta1=true ，配置文件格式同kubeconfig，如
+5.1 访问控制
+324
+
+# clusters refers to the remote service.
+clusters:
+  - name: name-of-remote-authz-service
+    cluster:
+      certificate-authority: /path/to/ca.pem      # CA for verifying 
+the remote service.
+      server: https://authz.example.com/authorize # URL of remote ser
+vice to query. Must use 'https'.
+# users refers to the API Server's webhook configuration.
+users:
+  - name: name-of-api-server
+    user:
+      client-certificate: /path/to/cert.pem # cert for the webhook pl
+ugin to use
+      client-key: /path/to/key.pem          # key matching the cert
+# kubeconfig files require a context. Provide one for the API Server.
+current-context: webhook
+contexts:
+- context:
+    cluster: name-of-remote-authz-service
+    user: name-of-api-server
+  name: webhook
+API Server请求Webhook server的格式为
+5.1 访问控制
+325
+
+{
+  "apiVersion": "authorization.k8s.io/v1beta1",
+  "kind": "SubjectAccessReview",
+  "spec": {
+    "resourceAttributes": {
+      "namespace": "kittensandponies",
+      "verb": "get",
+      "group": "unicorn.example.org",
+      "resource": "pods"
+    },
+    "user": "jane",
+    "group": [
+      "group1",
+      "group2"
+    ]
+  }
+}
+而Webhook server需要返回授权的结果，允许(allowed=true)或拒绝(allowed=false)：
+{
+  "apiVersion": "authorization.k8s.io/v1beta1",
+  "kind": "SubjectAccessReview",
+  "status": {
+    "allowed": true
+  }
+}
+Node授权
+v1.7+支持Node授权，配合 NodeRestriction 准入控制来限制kubelet仅可访问node、
+endpoint、pod、service以及secret、configmap、PV和PVC等相关的资源，配置方法为
+ --authorization-mode=Node,RBAC --admission-
+control=...,NodeRestriction,... 
+注意，kubelet认证需要使用 system:nodes 组，并使用用户名 system:node:
+<nodeName> 。
+5.1 访问控制
+326
+
+参考文档
+Authenticating
+Authorization
+Bootstrap Tokens
+Managing Service Accounts
+5.1 访问控制
+327
+
+RBAC
+在Kubernetes1.6版本中新增角色访问控制机制（Role-Based Access，RBAC）让
+集群管理员可以针对特定使用者或服务账号的角色，进行更精确的资源访问控制。
+在RBAC中，权限与角色相关联，用户通过成为适当角色的成员而得到这些角色的
+权限。这就极大地简化了权限的管理。在一个组织中，角色是为了完成各种工作而
+创造，用户则依据它的责任和资格来被指派相应的角色，用户可以很容易地从一个
+角色被指派到另一个角色。
+前言
+Kubernetes 1.6中的一个亮点时RBAC访问控制机制升级到了beta版本。RBAC，基于角
+色的访问控制机制，是用来管理kubernetes集群中资源访问权限的机制。使用RBAC可
+以很方便的更新访问授权策略而不用重启集群。
+本文主要关注新特性和最佳实践。
+RBAC vs ABAC
+目前kubernetes中已经有一系列l 鉴权机制。鉴权的作用是，决定一个用户是否有权使用
+Kubernetes API 做某些事情。它除了会影响 kubectl 等组件之外，还会对一些运行在集
+群内部并对集群进行操作的软件产生作用，例如使用了 Kubernetes 插件的 Jenkins，或
+者是利用 Kubernetes API 进行软件部署的 Helm。ABAC 和 RBAC 都能够对访问策略进
+行配置。
+ABAC（Attribute Based Access Control）本来是不错的概念，但是在 Kubernetes 中的
+实现比较难于管理和理解，而且需要对 Master 所在节点的 SSH 和文件系统权限，而且
+要使得对授权的变更成功生效，还需要重新启动 API Server。
+而 RBAC 的授权策略可以利用 kubectl 或者 Kubernetes API 直接进行配置。RBAC 可
+以授权给用户，让用户有权进行授权管理，这样就可以无需接触节点，直接进行授权管
+理。RBAC 在 Kubernetes 中被映射为 API 资源和操作。
+因为 Kubernetes 社区的投入和偏好，相对于 ABAC 而言，RBAC 是更好的选择。
+基础概念
+RBAC授权
+328
+
+需要理解 RBAC 一些基础的概念和思路，RBAC 是让用户能够访问 Kubernetes API 资
+源的授权方式。
+在 RBAC 中定义了两个对象，用于描述在用户和资源之间的连接权限。
+role
+角色是一系列权限的集合，例如一个角色可以包含读取 Pod 的权限和列出 Pod 的权
+限， ClusterRole 跟 Role 类似，但是可以在集群中到处使用（ Role 是 namespace 一
+级的）。
+role binding
+RoleBinding 把角色映射到用户，从而让这些用户继承角色在 namespace 中的权限。
+ClusterRoleBinding 让用户继承 ClusterRole 在整个集群中的权限。
+另外还要考虑cluster roles和cluster role binding。cluster role和cluster role binding方法
+跟role和role binding一样，出了它们有更广的scope。详细差别请访问 role binding与
+clsuter role binding.
+Kubernetes中的RBAC
+RBAC授权
+329
+
+RBAC 现在被 Kubernetes 深度集成，并使用他给系统组件进行授权。System Roles 一
+般具有前缀 system: ，很容易识别：
+RBAC授权
+330
+
+$ kubectl get clusterroles --namespace=kube-system
+NAME                                           AGE
+admin                                          10d
+cluster-admin                                  10d
+edit                                           10d
+system:auth-delegator                          10d
+system:basic-user                              10d
+system:controller:attachdetach-controller      10d
+system:controller:certificate-controller       10d
+system:controller:cronjob-controller           10d
+system:controller:daemon-set-controller        10d
+system:controller:deployment-controller        10d
+system:controller:disruption-controller        10d
+system:controller:endpoint-controller          10d
+system:controller:generic-garbage-collector    10d
+system:controller:horizontal-pod-autoscaler    10d
+system:controller:job-controller               10d
+system:controller:namespace-controller         10d
+system:controller:node-controller              10d
+system:controller:persistent-volume-binder     10d
+system:controller:pod-garbage-collector        10d
+system:controller:replicaset-controller        10d
+system:controller:replication-controller       10d
+system:controller:resourcequota-controller     10d
+system:controller:route-controller             10d
+system:controller:service-account-controller   10d
+system:controller:service-controller           10d
+system:controller:statefulset-controller       10d
+system:controller:ttl-controller               10d
+system:discovery                               10d
+system:heapster                                10d
+system:kube-aggregator                         10d
+system:kube-controller-manager                 10d
+system:kube-dns                                10d
+system:kube-scheduler                          10d
+system:node                                    10d
+system:node-bootstrapper                       10d
+system:node-problem-detector                   10d
+system:node-proxier                            10d
+system:persistent-volume-provisioner           10d
+view                                           10d
+RBAC授权
+331
+
+RBAC 系统角色已经完成足够的覆盖，让集群可以完全在 RBAC 的管理下运行。
+在 ABAC 到 RBAC 进行迁移的过程中，有些在 ABAC 集群中缺省开放的权限，在
+RBAC 中会被视为不必要的授权，会对其进行降级。这种情况会影响到使用 Service
+Account 的负载。ABAC 配置中，从 Pod 中发出的请求会使用 Pod Token，API Server
+会为其授予较高权限。例如下面的命令在 ABAC 集群中会返回 JSON 结果，而在
+RBAC 的情况下则会返回错误。
+$ kubectl run nginx --image=nginx:latest
+$ kubectl exec -it $(kubectl get pods -o jsonpath='{.items[0].metadat
+a.name}') bash
+$ apt-get update && apt-get install -y curl
+$ curl -ik \
+  -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serv
+iceaccount/token)" \
+  https://kubernetes/api/v1/namespaces/default/pods
+所有在 Kubernetes 集群中运行的应用，一旦和 API Server 进行通信，都会有可能受到
+迁移的影响。
+要平滑的从 ABAC 升级到 RBAC，在创建 1.6 集群的时候，可以同时启用ABAC 和
+RBAC。当他们同时启用的时候，对一个资源的权限请求，在任何一方获得放行都会获
+得批准。然而在这种配置下的权限太过粗放，很可能无法在单纯的 RBAC 环境下工作。
+目前RBAC已经足够了，ABAC可能会被弃用。在可见的未来ABAC依然会保留在
+kubernetes中，不过开发的重心已经转移到了RBAC。
+参考文档
+说明：本文翻译自RBAC Support in Kubernetes，转载自kubernetes中文社区，译
+者催总，Jimmy Song做了稍许修改。该文章是5天内了解Kubernetes1.6新特性的
+系列文章之一。
+RBAC documentation
+Google Cloud Next talks 1
+Google Cloud Next talks 2
+在Kubernetes Pod中使用Service Account访问API Server
+RBAC授权
+332
+
+RBAC授权
+333
+
+准入控制
+准入控制（Admission Control）在授权后对请求做进一步的验证或添加默认参数。不同
+于授权和认证只关心请求的用户和操作，准入控制还处理请求的内容，并且仅对创建、
+更新、删除或连接（如代理）等有效，而对读操作无效。
+准入控制支持同时开启多个插件，它们依次调用，只有全部插件都通过的请求才可以放
+过进入系统。
+Kubernetes目前提供了以下几种准入控制插件
+AlwaysAdmit: 接受所有请求。
+AlwaysPullImages: 总是拉取最新镜像。在多租户场景下非常有用。
+DenyEscalatingExec: 禁止特权容器的exec和attach操作。
+ImagePolicyWebhook: 通过webhook决定image策略，需要同时配置 --
+admission-control-config-file ，配置文件格式见这里。
+ServiceAccount：自动创建默认ServiceAccount，并确保Pod引用的
+ServiceAccount已经存在
+SecurityContextDeny：拒绝包含非法SecurityContext配置的容器
+ResourceQuota：限制Pod的请求不会超过配额，需要在namespace中创建一个
+ResourceQuota对象
+LimitRanger：为Pod设置默认资源请求和限制，需要在namespace中创建一个
+LimitRange对象
+InitialResources：根据镜像的历史使用记录，为容器设置默认资源请求和限制
+NamespaceLifecycle：确保处于termination状态的namespace不再接收新的对象创
+建请求，并拒绝请求不存在的namespace
+DefaultStorageClass：为PVC设置默认StorageClass（见这里
+DefaultTolerationSeconds：设置Pod的默认forgiveness toleration为5分钟
+PodSecurityPolicy：使用Pod Security Policies时必须开启
+NodeRestriction：限制kubelet仅可访问node、endpoint、pod、service以及
+secret、configmap、PV和PVC等相关的资源（仅适用于v1.7+）
+Kubernetes v1.7+还支持Initializers和GenericAdmissionWebhook，可以用来方便地扩
+展准入控制。
+Initializers
+准入控制
+334
+
+Initializers可以用来给资源执行策略或者配置默认选项，包括Initializers控制器和用户定
+义的Initializer任务，控制器负责执行用户提交的任务，并完成后将任务
+从 metadata.initializers 列表中删除。
+Initializers的开启方法为
+kube-apiserver配置 --admission-control=...,Initializer 
+kube-apiserver开启 admissionregistration.k8s.io/v1alpha1  API，即配置 -
+-runtime-config=admissionregistration.k8s.io/v1alpha1 
+部署Initializers控制器
+另外，可以使用 initializerconfigurations 来自定义哪些资源开启Initializer功能
+apiVersion: admissionregistration.k8s.io/v1alpha1
+kind: InitializerConfiguration
+metadata:
+  name: example-config
+spec:
+  initializers:
+    # the name needs to be fully qualified, i.e., containing at least
+ two "."
+    - name: podimage.example.com
+      rules:
+        # apiGroups, apiVersion, resources all support wildcard "*".
+        # "*" cannot be mixed with non-wildcard.
+        - apiGroups:
+            - ""
+          apiVersions:
+            - v1
+          resources:
+            - pods
+注意，如果不需要修改对象的话，建议使用性能更好的
+GenericAdmissionWebhook。
+GenericAdmissionWebhook
+GenericAdmissionWebhook提供了一种Webhook方式的准入控制机制，它不会改变请求
+对象，但可以用来验证用户的请求。
+GenericAdmissionWebhook的开启方法
+准入控制
+335
+
+kube-apiserver配置 --admission-control=...,GenericAdmissionWebhook 
+kube-apiserver开启 admissionregistration.k8s.io/v1alpha1  API，即配置 -
+-runtime-config=admissionregistration.k8s.io/v1alpha1 
+实现并部署webhook准入控制器，参考这里的示例
+注意，webhook准入控制器必须使用TLS，并需要通
+过 externaladmissionhookconfigurations.clientConfig.caBundle 向kube-
+apiserver注册：
+apiVersion: admissionregistration.k8s.io/v1alpha1
+kind: ExternalAdmissionHookConfiguration
+metadata:
+  name: example-config
+externalAdmissionHooks:
+- name: pod-image.k8s.io
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    resources:
+    - pods
+  # fail upon a communication error with the webhook admission contro
+ller
+  # Other options: Ignore
+  failurePolicy: Fail
+  clientConfig:
+    caBundle: <pem encoded ca cert that signs the server cert used by
+ the webhook>
+    service:
+      name: <name of the front-end service>
+      namespace: <namespace of the front-end service>
+推荐配置
+对于Kubernetes >= 1.6.0，推荐kube-apiserver开启以下插件
+准入控制
+336
+
+--admission-control=NamespaceLifecycle,LimitRanger,ServiceAccount,Per
+sistentVolumeLabel,DefaultStorageClass,ResourceQuota,DefaultToleratio
+nSeconds
+准入控制
+337
+
+Kubernetes网络
+介绍Kubernetes网络模型以及常见插件。
+5.2 网络
+338
+
+Kubernetes网络
+Kubernetes网络模型
+IP-per-Pod，每个Pod都拥有一个独立IP地址，Pod内所有容器共享一个网络命名空
+间
+集群内所有Pod都在一个直接连通的扁平网络中，可通过IP直接访问
+所有容器之间无需NAT就可以直接互相访问
+所有Node和所有容器之间无需NAT就可以直接互相访问
+容器自己看到的IP跟其他容器看到的一样
+Service cluster IP尽可在集群内部访问，外部请求需要通过NodePort、
+LoadBalance或者Ingress来访问
+官方插件
+kubenet：这是一个基于CNI bridge的网络插件（在bridge插件的基础上扩展了port
+mapping和traffic shaping），是目前推荐的默认插件
+CNI：CNI网络插件，需要用户将网络配置放到 /etc/cni/net.d 目录中，并将
+CNI插件的二进制文件放入 /opt/cni/bin 
+exec：通过第三方的可执行文件来为容器配置网络，已在v1.6中移除，见
+kubernetes#39254
+Host network
+最简单的网络模型就是让容器共享Host的network namespace，使用宿主机的网络协议
+栈。这样，不需要额外的配置，容器就可以共享宿主的各种网络资源。
+优点
+简单，不需要任何额外配置
+高效，没有NAT等额外的开销
+缺点
+没有任何的网络隔离
+容器和Host的端口号容易冲突
+容器内任何网络配置都会影响整个宿主机
+网络模型和插件
+339
+
+CNI plugin
+安装CNI：
+cat <<EOF > /etc/yum.repos.d/kubernetes.repo
+[kubernetes]
+name=Kubernetes
+baseurl=http://yum.kubernetes.io/repos/kubernetes-el7-x86_64
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg
+       https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+EOF
+yum install -y kubernetes-cni
+配置CNI brige插件：
+网络模型和插件
+340
+
+    mkdir -p /etc/cni/net.d
+cat >/etc/cni/net.d/10-mynet.conf <<-EOF
+{
+    "cniVersion": "0.3.0",
+    "name": "mynet",
+    "type": "bridge",
+    "bridge": "cni0",
+    "isGateway": true,
+    "ipMasq": true,
+    "ipam": {
+        "type": "host-local",
+        "subnet": "10.244.0.0/16",
+        "routes": [
+            { "dst": "0.0.0.0/0"  }
+        ]
+    }
+}
+EOF
+cat >/etc/cni/net.d/99-loopback.conf <<-EOF
+{
+    "cniVersion": "0.3.0",
+    "type": "loopback"
+}
+EOF
+更多CNI网络插件的说明请参考CNI 网络插件。
+Flannel
+Flannel是一个为Kubernetes提供overlay network的网络插件，它基于Linux TUN/TAP，
+使用UDP封装IP包来创建overlay网络，并借助etcd维护网络的分配情况。
+网络模型和插件
+341
+
+kubectl create -f https://github.com/coreos/flannel/raw/master/Docume
+ntation/kube-flannel-rbac.yml
+kubectl create -f https://github.com/coreos/flannel/raw/master/Docume
+ntation/kube-flannel.yml
+## [Weave Net](weave/index.md)
+Weave Net是一个多主机容器网络方案，支持去中心化的控制平面，各个host上的wRouter
+间通过建立Full Mesh的TCP链接，并通过Gossip来同步控制信息。这种方式省去了集中式
+的K/V Store，能够在一定程度上减低部署的复杂性，Weave将其称为“data centric”，
+而非RAFT或者Paxos的“algorithm centric”。
+数据平面上，Weave通过UDP封装实现L2 Overlay，封装支持两种模式，一种是运行在user
+ space的sleeve mode，另一种是运行在kernal space的 fastpath mode。Sleeve 
+mode通过pcap设备在Linux bridge上截获数据包并由wRouter完成UDP封装，支持对L2 t
+raffic进行加密，还支持Partial Connection，但是性能损失明显。Fastpath mode即
+通过OVS的odp封装VxLAN并完成转发，wRouter不直接参与转发，而是通过下发odp 流表的
+方式控制转发，这种方式可以明显地提升吞吐量，但是不支持加密等高级功能。
+```sh
+kubectl apply -f https://git.io/weave-kube
+Calico
+Calico 是一个基于BGP的纯三层的数据中心网络方案（不需要Overlay），并且与
+OpenStack、Kubernetes、AWS、GCE等IaaS和容器平台都有良好的集成。
+Calico在每一个计算节点利用Linux Kernel实现了一个高效的vRouter来负责数据转发，
+而每个vRouter通过BGP协议负责把自己上运行的workload的路由信息像整个Calico网络
+内传播——小规模部署可以直接互联，大规模下可通过指定的BGP route reflector来完
+成。 这样保证最终所有的workload之间的数据流量都是通过IP路由的方式完成互联的。
+Calico节点组网可以直接利用数据中心的网络结构（无论是L2或者L3），不需要额外的
+NAT，隧道或者Overlay Network。
+此外，Calico基于iptables还提供了丰富而灵活的网络Policy，保证通过各个节点上的
+ACLs来提供Workload的多租户隔离、安全组以及其他可达性限制等功能。
+网络模型和插件
+342
+
+kubectl apply -f http://docs.projectcalico.org/v2.1/getting-started/k
+ubernetes/installation/hosted/kubeadm/1.6/calico.yaml
+OVS
+https://kubernetes.io/docs/admin/ovs-networking/提供了一种简单的基于OVS的网络配
+置方法：
+每台机器创建一个Linux网桥kbr0，并配置docker使用该网桥（而不是默认的
+docker0），其子网为10.244.x.0/24
+每台机器创建一个OVS网桥obr0，通过veth pair连接kbr0并通过GRE将所有机器互
+联
+开启STP
+路由10.244.0.0/16到OVS隧道
+OVN
+网络模型和插件
+343
+
+OVN (Open Virtual Network) 是OVS提供的原生虚拟化网络方案，旨在解决传统SDN架
+构（比如Neutron DVR）的性能问题。
+OVN为Kubernetes提供了两种网络方案：
+Overaly: 通过ovs overlay连接容器
+Underlay: 将VM内的容器连到VM所在的相同网络（开发中）
+其中，容器网络的配置是通过OVN的CNI插件来实现。
+Contiv
+Contiv是思科开源的容器网络方案，主要提供基于Policy的网络管理，并与主流容器编排
+系统集成。Contiv最主要的优势是直接提供了多租户网络，并支持L2(VLAN), L3(BGP),
+Overlay (VXLAN)以及思科自家的ACI。
+Romana
+Romana是Panic Networks在2016年提出的开源项目，旨在借鉴 route aggregation的思
+路来解决Overlay方案给网络带来的开销。
+OpenContrail
+OpenContrail是Juniper推出的开源网络虚拟化平台，其商业版本为Contrail。其主要由
+控制器和vRouter组成：
+控制器提供虚拟网络的配置、控制和分析功能
+vRouter提供分布式路由，负责虚拟路由器、虚拟网络的建立以及数据转发
+其中，vRouter支持三种模式
+Kernel vRouter：类似于ovs内核模块
+DPDK vRouter：类似于ovs-dpdk
+Netronome Agilio Solution (商业产品)：支持DPDK, SR-IOV and Express Virtio
+(XVIO)
+Juniper/contrail-kubernetes 提供了Kubernetes的集成，包括两部分：
+kubelet network plugin基于kubernetes v1.6已经删除的exec network plugin
+kube-network-manager监听kubernetes API，并根据label信息来配置网络策略
+网络模型和插件
+344
+
+Midonet
+Midonet是Midokura公司开源的OpenStack网络虚拟化方案。
+从组件来看，Midonet以Zookeeper+Cassandra构建分布式数据库存储VPC资源的
+状态——Network State DB Cluster，并将controller分布在转发设备（包括vswitch
+和L3 Gateway）本地——Midolman（L3 Gateway上还有quagga bgpd），设备的
+转发则保留了ovs kernel作为fast datapath。可以看到，Midonet和DragonFlow、
+OVN一样，在架构的设计上都是沿着OVS-Neutron-Agent的思路，将controller分布
+到设备本地，并在neutron plugin和设备agent间嵌入自己的资源数据库作为super
+controller。
+从接口来看，NSDB与Neutron间是REST API，Midolman与NSDB间是RPC，这俩
+没什么好说的。Controller的南向方面，Midolman并没有用OpenFlow和OVSDB，
+它干掉了user space中的vswitchd和ovsdb-server，直接通过linux netlink机制操作
+kernel space中的ovs datapath。
+其他
+ipvs
+目前社区还在推进https://github.com/kubernetes/kubernetes/issues/17470，预计v1.7可
+以有alpha版进来。
+Canal
+Canal是Flannel和Calico联合发布的一个统一网络插件，提供CNI网络插件，并支持
+network policy。
+kuryr-kubernetes
+kuryr-kubernetes是OpenStack推出的集成Neutron网络插件，主要包括Controller和CNI
+插件两部分，并且也提供基于Neutron LBaaS的Service集成。
+Cilium
+Cilium是一个基于eBPF和XDP的高性能容器网络方案，提供了CNI和CNM插件。
+项目主页为https://github.com/cilium/cilium。
+网络模型和插件
+345
+
+kope
+kope是一个旨在简化Kubernetes网络配置的项目，支持三种模式：
+Layer2：自动为每个Node配置路由
+Vxlan：为主机配置vxlan连接，并建立主机和Pod的连接（通过vxlan interface和
+ARP entry）
+ipsec：加密链接
+项目主页为https://github.com/kopeio/kope-routing。
+网络模型和插件
+346
+
+CNI (Container Network Interface)
+Container Network Interface (CNI) 最早是由CoreOS发起的容器网络规范，是
+Kubernetes网络插件的基础。其基本思想为：Container Runtime在创建容器时，先创建
+好network namespace，然后调用CNI插件为这个netns配置网络，其后再启动容器内的
+进程。现已加入CNCF，成为CNCF主推的网络模型。
+CNI插件包括两部分：
+CNI Plugin负责给容器配置网络，它包括两个基本的接口
+配置网络: AddNetwork(net NetworkConfig, rt RuntimeConf) (types.Result,
+error)
+清理网络: DelNetwork(net NetworkConfig, rt RuntimeConf) error
+IPAM Plugin负责给容器分配IP地址，主要实现包括host-local和dhcp。
+所有CNI插件均支持通过环境变量和标准输入传入参数：
+CNI
+347
+
+$ echo '{"cniVersion": "0.3.1","name": "mynet","type": "macvlan","bri
+dge": "cni0","isGateway": true,"ipMasq": true,"ipam": {"type": "host-
+local","subnet": "10.244.1.0/24","routes": [{ "dst": "0.0.0.0/0" }]}}'
+ | sudo CNI_COMMAND=ADD CNI_NETNS=/var/run/netns/a CNI_PATH=./bin CNI
+_IFNAME=eth0 CNI_CONTAINERID=a CNI_VERSION=0.3.1 ./bin/bridge
+$ echo '{"cniVersion": "0.3.1","type":"IGNORED", "name": "a","ipam": 
+{"type": "host-local", "subnet":"10.1.2.3/24"}}' | sudo CNI_COMMAND=A
+DD CNI_NETNS=/var/run/netns/a CNI_PATH=./bin CNI_IFNAME=a CNI_CONTAIN
+ERID=a CNI_VERSION=0.3.1 ./bin/host-local
+Bridge
+Bridge是最简单的CNI网络插件，它首先在Host创建一个网桥，然后再通过veth pair连接
+该网桥到container netns。
+注意，Bridge模式下，多主机网络通信需要额外配置主机路由。可以借助Flannel或者
+Quagga动态路由等来自动配置。
+配置示例
+{
+    "cniVersion": "0.3.0",
+    "name": "mynet",
+    "type": "bridge",
+    "bridge": "mynet0",
+    "isDefaultGateway": true,
+    "forceAddress": false,
+    "ipMasq": true,
+    "hairpinMode": true,
+    "ipam": {
+        "type": "host-local",
+        "subnet": "10.10.0.0/16"
+    }
+}
+# export CNI_PATH=/opt/cni/bin
+# ip netns add ns
+CNI
+348
+
+# /opt/cni/bin/cnitool add mynet /var/run/netns/ns
+{
+    "interfaces": [
+        {
+            "name": "mynet0",
+            "mac": "0a:58:0a:0a:00:01"
+        },
+        {
+            "name": "vethc763e31a",
+            "mac": "66:ad:63:b4:c6:de"
+        },
+        {
+            "name": "eth0",
+            "mac": "0a:58:0a:0a:00:04",
+            "sandbox": "/var/run/netns/ns"
+        }
+    ],
+    "ips": [
+        {
+            "version": "4",
+            "interface": 2,
+            "address": "10.10.0.4/16",
+            "gateway": "10.10.0.1"
+        }
+    ],
+    "routes": [
+        {
+            "dst": "0.0.0.0/0",
+            "gw": "10.10.0.1"
+        }
+    ],
+    "dns": {}
+}
+# ip netns exec ns ip addr
+1: lo: <LOOPBACK> mtu 65536 qdisc noop state DOWN group default qlen 
+1
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+9: eth0@if8: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue
+ state UP group default
+    link/ether 0a:58:0a:0a:00:04 brd ff:ff:ff:ff:ff:ff link-netnsid 0
+    inet 10.10.0.4/16 scope global eth0
+       valid_lft forever preferred_lft forever
+CNI
+349
+
+    inet6 fe80::8c78:6dff:fe19:f6bf/64 scope link tentative dadfailed
+       valid_lft forever preferred_lft forever
+# ip netns exec ns ip route
+default via 10.10.0.1 dev eth0
+10.10.0.0/16 dev eth0  proto kernel  scope link  src 10.10.0.4
+IPAM
+DHCP
+DHCP插件是最主要的IPAM插件之一，用来通过DHCP方式给容器分配IP地址，在
+macvlan插件中也会用到DHCP插件。
+在使用DHCP插件之前，需要先启动dhcp daemon:
+/opt/cni/bin/dhcp daemon &
+然后配置网络使用dhcp作为IPAM插件
+{
+    ...
+    "ipam": {
+        "type": "dhcp",
+    }
+}
+host-local
+host-local是最常用的CNI IPAM插件，用来给container分配IP地址。
+IPv4:
+CNI
+350
+
+{
+    "ipam": {
+        "type": "host-local",
+        "subnet": "10.10.0.0/16",
+        "rangeStart": "10.10.1.20",
+        "rangeEnd": "10.10.3.50",
+        "gateway": "10.10.0.254",
+        "routes": [
+            { "dst": "0.0.0.0/0" },
+            { "dst": "192.168.0.0/16", "gw": "10.10.5.1" }
+        ],
+        "dataDir": "/var/my-orchestrator/container-ipam-state"
+    }
+}
+IPv6:
+{
+  "ipam": {
+        "type": "host-local",
+        "subnet": "3ffe:ffff:0:01ff::/64",
+        "rangeStart": "3ffe:ffff:0:01ff::0010",
+        "rangeEnd": "3ffe:ffff:0:01ff::0020",
+        "routes": [
+            { "dst": "3ffe:ffff:0:01ff::1/64" }
+        ],
+        "resolvConf": "/etc/resolv.conf"
+    }
+}
+ptp
+ptp插件通过veth pair给容器和host创建点对点连接：veth pair一端在container netns
+内，另一端在host上。可以通过配置host端的IP和路由来让ptp连接的容器之前通信。
+CNI
+351
+
+{
+    "name": "mynet",
+    "type": "ptp",
+    "ipam": {
+        "type": "host-local",
+        "subnet": "10.1.1.0/24"
+    },
+    "dns": {
+        "nameservers": [ "10.1.1.1", "8.8.8.8" ]
+    }
+}
+IPVLAN
+IPVLAN 和 MACVLAN 类似，都是从一个主机接口虚拟出多个虚拟网络接口。一个重要
+的区别就是所有的虚拟接口都有相同的 mac 地址，而拥有不同的 ip 地址。因为所有的
+虚拟接口要共享 mac 地址，所有有些需要注意的地方：
+DHCP 协议分配 ip 的时候一般会用 mac 地址作为机器的标识。这个情况下，客户
+端动态获取 ip 的时候需要配置唯一的 ClientID 字段，并且 DHCP server 也要正确
+配置使用该字段作为机器标识，而不是使用 mac 地址
+IPVLAN支持两种模式：
+L2 模式：此时跟macvlan bridge 模式工作原理很相似，父接口作为交换机来转发子
+接口的数据。同一个网络的子接口可以通过父接口来转发数据，而如果想发送到其
+他网络，报文则会通过父接口的路由转发出去。
+L3 模式：此时ipvlan 有点像路由器的功能，它在各个虚拟网络和主机网络之间进行
+不同网络报文的路由转发工作。只要父接口相同，即使虚拟机/容器不在同一个网
+络，也可以互相 ping 通对方，因为 ipvlan 会在中间做报文的转发工作。注意 L3 模
+式下的虚拟接口 不会接收到多播或者广播的报文（这个模式下，所有的网络都会发
+送给父接口，所有的 ARP 过程或者其他多播报文都是在底层的父接口完成的）。
+另外外部网络默认情况下是不知道 ipvlan 虚拟出来的网络的，如果不在外部路由器
+上配置好对应的路由规则，ipvlan 的网络是不能被外部直接访问的。
+创建ipvlan的简单方法为
+ip link add link <master-dev> <slave-dev> type ipvlan mode { l2 | L3 
+}
+CNI
+352
+
+cni配置格式为
+{
+    "name": "mynet",
+    "type": "ipvlan",
+    "master": "eth0",
+    "ipam": {
+        "type": "host-local",
+        "subnet": "10.1.2.0/24"
+    }
+}
+需要注意的是
+ipvlan插件下，容器不能跟Host网络通信
+主机接口（也就是master interface）不能同时作为ipvlan和macvlan的master接口
+MACVLAN
+MACVLAN可以从一个主机接口虚拟出多个macvtap，且每个macvtap设备都拥有不同的
+mac地址（对应不同的linux字符设备）。MACVLAN支持四种模式
+bridge模式：数据可以在同一master设备的子设备之间转发
+vepa模式：VEPA 模式是对 802.1Qbg 标准中的 VEPA 机制的软件实现，
+MACVTAP 设备简单的将数据转发到master设备中，完成数据汇聚功能，通常需要
+外部交换机支持 Hairpin 模式才能正常工作
+private模式：Private 模式和 VEPA 模式类似，区别是子 MACVTAP 之间相互隔离
+passthrough模式：内核的 MACVLAN 数据处理逻辑被跳过，硬件决定数据如何处
+理，从而释放了 Host CPU 资源
+创建macvlan的简单方法为
+ip link add link <master-dev> name macvtap0 type macvtap
+cni配置格式为
+CNI
+353
+
+{
+    "name": "mynet",
+    "type": "macvlan",
+    "master": "eth0",
+    "ipam": {
+        "type": "dhcp"
+    }
+}
+需要注意的是
+macvlan需要大量 mac 地址，每个虚拟接口都有自己的 mac 地址
+无法和 802.11(wireless) 网络一起工作
+主机接口（也就是master interface）不能同时作为ipvlan和macvlan的master接口
+Flannel
+Flannel通过给每台宿主机分配一个子网的方式为容器提供虚拟网络，它基于Linux
+TUN/TAP，使用UDP封装IP包来创建overlay网络，并借助etcd维护网络的分配情况。
+Weave Net
+Weave Net是一个多主机容器网络方案，支持去中心化的控制平面，各个host上的
+wRouter间通过建立Full Mesh的TCP链接，并通过Gossip来同步控制信息。这种方式省
+去了集中式的K/V Store，能够在一定程度上减低部署的复杂性，Weave将其称为“data
+centric”，而非RAFT或者Paxos的“algorithm centric”。
+数据平面上，Weave通过UDP封装实现L2 Overlay，封装支持两种模式，一种是运行在
+user space的sleeve mode，另一种是运行在kernal space的 fastpath mode。Sleeve
+mode通过pcap设备在Linux bridge上截获数据包并由wRouter完成UDP封装，支持对L2
+traffic进行加密，还支持Partial Connection，但是性能损失明显。Fastpath mode即通过
+OVS的odp封装VxLAN并完成转发，wRouter不直接参与转发，而是通过下发odp 流表
+的方式控制转发，这种方式可以明显地提升吞吐量，但是不支持加密等高级功能。
+Contiv
+CNI
+354
+
+Contiv是思科开源的容器网络方案，主要提供基于Policy的网络管理，并与主流容器编排
+系统集成。Contiv最主要的优势是直接提供了多租户网络，并支持L2(VLAN), L3(BGP),
+Overlay (VXLAN)以及思科自家的ACI。
+Calico
+Calico 是一个基于BGP的纯三层的数据中心网络方案（不需要Overlay），并且与
+OpenStack、Kubernetes、AWS、GCE等IaaS和容器平台都有良好的集成。
+Calico在每一个计算节点利用Linux Kernel实现了一个高效的vRouter来负责数据转发，
+而每个vRouter通过BGP协议负责把自己上运行的workload的路由信息像整个Calico网络
+内传播——小规模部署可以直接互联，大规模下可通过指定的BGP route reflector来完
+成。 这样保证最终所有的workload之间的数据流量都是通过IP路由的方式完成互联的。
+Calico节点组网可以直接利用数据中心的网络结构（无论是L2或者L3），不需要额外的
+NAT，隧道或者Overlay Network。
+此外，Calico基于iptables还提供了丰富而灵活的网络Policy，保证通过各个节点上的
+ACLs来提供Workload的多租户隔离、安全组以及其他可达性限制等功能。
+OVN
+OVN (Open Virtual Network) 是OVS提供的原生虚拟化网络方案，旨在解决传统SDN架
+构（比如Neutron DVR）的性能问题。
+OVN为Kubernetes提供了两种网络方案：
+Overaly: 通过ovs overlay连接容器
+Underlay: 将VM内的容器连到VM所在的相同网络（开发中）
+其中，容器网络的配置是通过OVN的CNI插件来实现。
+SR-IOV
+Intel维护了一个SR-IOV的CNI插件，fork自hustcat/sriov-cni，并扩展了DPDK的支持。
+项目主页见https://github.com/Intel-Corp/sriov-cni。
+Romana
+CNI
+355
+
+Romana是Panic Networks在2016年提出的开源项目，旨在借鉴 route aggregation的思
+路来解决Overlay方案给网络带来的开销。
+OpenContrail
+OpenContrail是Juniper推出的开源网络虚拟化平台，其商业版本为Contrail。其主要由
+控制器和vRouter组成：
+控制器提供虚拟网络的配置、控制和分析功能
+vRouter提供分布式路由，负责虚拟路由器、虚拟网络的建立以及数据转发
+其中，vRouter支持三种模式
+Kernel vRouter：类似于ovs内核模块
+DPDK vRouter：类似于ovs-dpdk
+Netronome Agilio Solution (商业产品)：支持DPDK, SR-IOV and Express Virtio
+(XVIO)
+michaelhenkel/opencontrail-cni-plugin提供了一个OpenContrail的CNI插件。
+CNI Plugin Chains
+CNI还支持Plugin Chains，即指定一个插件列表，由Runtime依次执行每个插件。这对
+支持portmapping、vm等非常有帮助。
+其他
+Canal
+Canal是Flannel和Calico联合发布的一个统一网络插件，提供CNI网络插件，并支持
+network policy。
+kuryr-kubernetes
+kuryr-kubernetes是OpenStack推出的集成Neutron网络插件，主要包括Controller和CNI
+插件两部分，并且也提供基于Neutron LBaaS的Service集成。
+Cilium
+CNI
+356
+
+Cilium是一个基于eBPF和XDP的高性能容器网络方案，提供了CNI和CNM插件。
+项目主页为https://github.com/cilium/cilium。
+CNI-Genie
+CNI-Genie是华为PaaS团队推出的同时支持多种网络插件（支持calico, canal, romana,
+weave等）的CNI插件。
+项目主页为https://github.com/Huawei-PaaS/CNI-Genie。
+CNI
+357
+
+Flannel
+Flannel通过给每台宿主机分配一个子网的方式为容器提供虚拟网络，它基于Linux
+TUN/TAP，使用UDP封装IP包来创建overlay网络，并借助etcd维护网络的分配情况。
+Flannel原理
+控制平面上host本地的flanneld负责从远端的ETCD集群同步本地和其它host上的subnet
+信息，并为POD分配IP地址。数据平面flannel通过Backend（比如UDP封装）来实现L3
+Overlay，既可以选择一般的TUN设备又可以选择VxLAN设备。
+{
+    "Network": "10.0.0.0/8",
+    "SubnetLen": 20,
+    "SubnetMin": "10.10.0.0",
+    "SubnetMax": "10.99.0.0",
+    "Backend": {
+        "Type": "udp",
+        "Port": 7890
+    }
+}
+CNI
+358
+
+除了UDP，Flannel还支持很多其他的Backend：
+udp：使用udp封装，默认使用8285端口
+vxlan：vxlan封装，需要配置VNI，Port（默认8472）和GBP
+host-gw：直接路由的方式
+aws-vpc：使用 Amazon VPC route table 创建路由，适用于AWS上运行的容器
+gce：使用Google Compute Engine Network创建路由，所有instance需要开启IP
+forwarding，适用于GCE上运行的容器
+ali-vpc：使用阿里云VPC route table 创建路由，适用于阿里云上运行的容器
+Docker集成
+source /run/flannel/subnet.env
+docker daemon --bip=${FLANNEL_SUBNET} --mtu=${FLANNEL_MTU} &
+CNI集成
+CNI flannel插件会将flannel网络配置转换为bridge插件配置，并调用bridge插件给容器
+netns配置网络。比如下面的flannel配置
+CNI
+359
+
+{
+    "name": "mynet",
+    "type": "flannel",
+    "delegate": {
+        "bridge": "mynet0",
+        "mtu": 1400
+    }
+}
+会被cni flannel插件转换为
+{
+    "name": "mynet",
+    "type": "bridge",
+    "mtu": 1472,
+    "ipMasq": false,
+    "isGateway": true,
+    "ipam": {
+        "type": "host-local",
+        "subnet": "10.1.17.0/24"
+    }
+}
+Kubernetes集成
+使用flannel前需要配置 kube-controller-manager --allocate-node-cidrs=true -
+-cluster-cidr=10.244.0.0/16 。
+kubectl create -f https://github.com/coreos/flannel/raw/master/Docume
+ntation/kube-flannel-rbac.yml
+kubectl create -f https://github.com/coreos/flannel/raw/master/Docume
+ntation/kube-flannel.yml
+这会启动flanneld容器，并配置CNI网络插件：
+CNI
+360
+
+$ ps -ef | grep flannel | grep -v grep
+root      3625  3610  0 13:57 ?        00:00:00 /opt/bin/flanneld --i
+p-masq --kube-subnet-mgr
+root      9640  9619  0 13:51 ?        00:00:00 /bin/sh -c set -e -x;
+ cp -f /etc/kube-flannel/cni-conf.json /etc/cni/net.d/10-flannel.conf
+; while true; do sleep 3600; done
+$ cat /etc/cni/net.d/10-flannel.conf
+{
+  "name": "cbr0",
+  "type": "flannel",
+  "delegate": {
+    "isDefaultGateway": true
+  }
+}
+flanneld自动连接kubernetes API，根据 node.Spec.PodCIDR 配置本地的flannel网络子
+网，并为容器创建vxlan和相关的子网路由。
+$ cat /run/flannel/subnet.env
+FLANNEL_NETWORK=10.244.0.0/16
+FLANNEL_SUBNET=10.244.0.1/24
+FLANNEL_MTU=1410
+FLANNEL_IPMASQ=true
+$ ip -d link show flannel.1
+12: flannel.1: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1410 qdisc noque
+ue state UNKNOWN mode DEFAULT group default
+    link/ether 8e:5a:0d:07:0f:0d brd ff:ff:ff:ff:ff:ff promiscuity 0
+    vxlan id 1 local 10.146.0.2 dev ens4 srcport 0 0 dstport 8472 nol
+earning ageing 300 udpcsum addrgenmode eui64
+CNI
+361
+
+优点
+配置安装简单，使用方便
+与云平台集成较好，VPC的方式没有额外的性能损失
+缺点
+VXLAN模式对zero-downtime restarts支持不好
+When running with a backend other than udp, the kernel is providing the data path
+with flanneld acting as the control plane. As such, flanneld can be restarted (even
+to do an upgrade) without disturbing existing flows. However in the case of vxlan
+backend, this needs to be done within a few seconds as ARP entries can start to
+timeout requiring the flannel daemon to refresh them. Also, to avoid interruptions
+during restart, the configuration must not be changed (e.g. VNI, --iface values).
+参考文档
+https://github.com/coreos/flannel
+https://coreos.com/flannel/docs/latest/
+CNI
+362
+
+Weave Net
+Weave Net是一个多主机容器网络方案，支持去中心化的控制平面，各个host上的
+wRouter间通过建立Full Mesh的TCP链接，并通过Gossip来同步控制信息。这种方式省
+去了集中式的K/V Store，能够在一定程度上减低部署的复杂性，Weave将其称为“data
+centric”，而非RAFT或者Paxos的“algorithm centric”。
+数据平面上，Weave通过UDP封装实现L2 Overlay，封装支持两种模式：
+运行在user space的sleeve mode：通过pcap设备在Linux bridge上截获数据包并由
+wRouter完成UDP封装，支持对L2 traffic进行加密，还支持Partial Connection，但
+是性能损失明显。
+运行在kernal space的 fastpath mode：即通过OVS的odp封装VxLAN并完成转发，
+wRouter不直接参与转发，而是通过下发odp 流表的方式控制转发，这种方式可以
+明显地提升吞吐量，但是不支持加密等高级功能。
+Sleeve Mode:
+Fastpath Mode:
+CNI
+363
+
+关于Service的发布，weave做的也比较完整。首先，wRouter集成了DNS功能，能够动
+态地进行服务发现和负载均衡，另外，与libnetwork 的overlay driver类似，weave要求
+每个POD有两个网卡，一个就连在lb/ovs上处理L2 流量，另一个则连在docker0上处理
+Service流量，docker0后面仍然是iptables作NAT。
+Weave已经集成了主流的容器系统
+Docker: https://www.weave.works/docs/net/latest/plugin/
+Kubernetes: https://www.weave.works/docs/net/latest/kube-addon/
+ kubectl apply -f https://git.io/weave-kube 
+CNI: https://www.weave.works/docs/net/latest/cni-plugin/
+Prometheus: https://www.weave.works/docs/net/latest/metrics/
+CNI
+364
+
+Weave Kubernetes
+kubectl apply -n kube-system -f "https://cloud.weave.works/k8s/net?k8
+s-version=$(kubectl version | base64 | tr -d '\n')"
+这会在所有Node上启动Weave插件以及Network policy controller：
+$ ps -ef | grep weave | grep -v grep
+root     25147 25131  0 16:22 ?        00:00:00 /bin/sh /home/weave/l
+aunch.sh
+root     25204 25147  0 16:22 ?        00:00:00 /home/weave/weaver --
+port=6783 --datapath=datapath --host-root=/host --http-addr=127.0.0.1
+:6784 --status-addr=0.0.0.0:6782 --docker-api= --no-dns --db-prefix=/
+weavedb/weave-net --ipalloc-range=10.32.0.0/12 --nickname=ubuntu-0 --
+ipalloc-init consensus=2 --conn-limit=30 --expect-npc 10.146.0.2 10.1
+46.0.3
+root     25669 25654  0 16:22 ?        00:00:00 /usr/bin/weave-npc
+这样，容器网络为
+所有容器都连接到weave网桥
+weave网桥通过veth pair连到内核的openvswitch模块
+跨主机容器通过openvswitch vxlan通信
+policy controller通过配置iptables规则为容器设置网络策略
+Weave Scope
+CNI
+365
+
+Weave Scope是一个容器监控和故障排查工具，可以方便的生成整个集群的拓扑并智能
+分组（Automatic Topologies and Intelligent Grouping）。
+Weave Scope主要由scope-probe和scope-app组成
++--Docker host----------+
+|  +--Container------+  |    .---------------.
+|  |                 |  |    | Browser       |
+|  |  +-----------+  |  |    |---------------|
+|  |  | scope-app |<---------|               |
+|  |  +-----------+  |  |    |               |
+|  |        ^        |  |    |               |
+|  |        |        |  |    '---------------'
+|  | +-------------+ |  |
+|  | | scope-probe | |  |
+|  | +-------------+ |  |
+|  |                 |  |
+|  +-----------------+  |
++-----------------------+
+优点
+去中心化
+故障自动恢复
+加密通信
+Multicast networking
+缺点
+UDP模式性能损失较大
+参考文档
+https://github.com/weaveworks/weave
+https://www.weave.works/products/weave-net/
+https://github.com/weaveworks/scope
+https://www.weave.works/guides/monitor-docker-containers/
+CNI
+366
+
+Contiv
+Contiv是思科开源的容器网络方案，是一个用于跨虚拟机、裸机、公有云或私有云的异
+构容器部署的开源容器网络架构，并与主流容器编排系统集成。Contiv最主要的优势是
+直接提供了多租户网络，并支持L2(VLAN), L3(BGP), Overlay (VXLAN)以及思科自家的
+ACI。
+主要特征
+原生的Tenant支持，一个Tenant就是一个virtual routing and forwarding (VRF)
+两种网络模式
+L2 VLAN Bridged
+Routed network, e.g. vxlan, BGP, ACI
+Network Policy，如Bandwidth, Isolation等
+CNI
+368
+
+CNI
+369
+
+Kubernetes集成
+Ansible部署见https://github.com/kubernetes/contrib/tree/master/ansible/roles/contiv。
+CNI
+370
+
+export VERSION=1.0.0-beta.3
+curl -L -O https://github.com/contiv/install/releases/download/$VERSI
+ON/contiv-$VERSION.tgz
+tar xf contiv-$VERSION.tgz
+cd ~/contiv/contiv-$VERSION/install/k8s
+netctl --netmaster http://$netmaster:9999 global set --fwd-mode routi
+ng
+cd ~/contiv/contiv-$VERSION
+install/k8s/install.sh -n 10.87.49.77 -v b -w routing
+# check contiv pods
+export NETMASTER=http://10.87.49.77:9999
+netctl global info
+# create a network
+# netctl network create --encap=vlan --pkt-tag=3280 --subnet=10.100.1
+00.215-10.100.100.220/27 --gateway=10.100.100.193 vlan3280
+netctl net create -t default --subnet=20.1.1.0/24 default-net
+#  create BGP connections to each of the nodes
+netctl bgp create devstack-77 --router-ip="30.30.30.77/24" --as="6500
+0" --neighbor-as="65000" --neighbor="30.30.30.2"
+netctl bgp create devstack-78 --router-ip="30.30.30.78/24" --as="6500
+0" --neighbor-as="65000" --neighbor="30.30.30.2"
+netctl bgp create devstack-71 --router-ip="30.30.30.79/24" --as="6500
+0" --neighbor-as="65000" --neighbor="30.30.30.2"
+# then create pod with label "io.contiv.network"
+参考文档
+http://contiv.github.io/
+https://github.com/contiv/netplugin
+http://blogs.cisco.com/cloud/introducing-contiv-1-0
+Kubernetes and Contiv on Bare-Metal with L3/BGP
+CNI
+371
+
+Calico
+Calico 是一个纯三层的数据中心网络方案（不需要Overlay），并且与OpenStack、
+Kubernetes、AWS、GCE等IaaS和容器平台都有良好的集成。
+Calico在每一个计算节点利用Linux Kernel实现了一个高效的vRouter来负责数据转发，
+而每个vRouter通过BGP协议负责把自己上运行的workload的路由信息像整个Calico网络
+内传播——小规模部署可以直接互联，大规模下可通过指定的BGP route reflector来完
+成。 这样保证最终所有的workload之间的数据流量都是通过IP路由的方式完成互联的。
+Calico节点组网可以直接利用数据中心的网络结构（无论是L2或者L3），不需要额外的
+NAT，隧道或者Overlay Network。
+此外，Calico基于iptables还提供了丰富而灵活的网络Policy，保证通过各个节点上的
+ACLs来提供Workload的多租户隔离、安全组以及其他可达性限制等功能。
+Calico架构
+Calico主要由Felix、etcd、BGP client以及BGP Route Reflector组成
+1. Felix，Calico Agent，跑在每台需要运行Workload的节点上，主要负责配置路由及
+ACLs等信息来确保Endpoint的连通状态；
+2. etcd，分布式键值存储，主要负责网络元数据一致性，确保Calico网络状态的准确
+性；
+3. BGP Client（BIRD）, 主要负责把Felix写入Kernel的路由信息分发到当前Calico网
+络，确保Workload间的通信的有效性；
+CNI
+372
+
+4. BGP Route Reflector（BIRD），大规模部署时使用，摒弃所有节点互联的 mesh
+模式，通过一个或者多个BGP Route Reflector来完成集中式的路由分发。
+IP-in-IP
+Calico控制平面的设计要求物理网络得是L2 Fabric，这样vRouter间都是直接可达的，路
+由不需要把物理设备当做下一跳。为了支持L3 Fabric，Calico推出了IPinIP的选项。
+Calico CNI
+见https://github.com/projectcalico/cni-plugin。
+Calico CNM
+Calico通过Pool和Profile的方式实现了docker CNM网络：
+CNI
+373
+
+1. Pool，定义可用于Docker Network的IP资源范围，比如：10.0.0.0/8或者
+192.168.0.0/16；
+2. Profile，定义Docker Network Policy的集合，由tags和rules组成；每个 Profile默认
+拥有一个和Profile名字相同的Tag，每个Profile可以有多个Tag，以List形式保存。
+具体实现见https://github.com/projectcalico/libnetwork-plugin，而使用方法可以参
+考http://docs.projectcalico.org/v2.1/getting-started/docker/。
+Calico Kubernetes
+见http://docs.projectcalico.org/v2.1/getting-started/kubernetes/.
+For Kubeadm 1.5 with Kubernetes 1.5.x:
+kubectl apply -f http://docs.projectcalico.org/v2.3/getting-started/k
+ubernetes/installation/hosted/kubeadm/1.5/calico.yaml
+For Kubeadm 1.6 with Kubernetes 1.6.x:
+kubectl apply -f http://docs.projectcalico.org/v2.3/getting-started/k
+ubernetes/installation/hosted/kubeadm/1.6/calico.yaml
+这会在Pod中启动Calico-etcd，在所有Node上启动bird6、felix以及confd，并配置CNI网
+络为calico插件：
+CNI
+374
+
+# Calico相关进程
+$ ps -ef | grep calico | grep -v grep
+root      9012  8995  0 14:51 ?        00:00:00 /bin/sh -c /usr/local
+/bin/etcd --name=calico --data-dir=/var/etcd/calico-data --advertise-
+client-urls=http://$CALICO_ETCD_IP:6666 --listen-client-urls=http://0
+.0.0.0:6666 --listen-peer-urls=http://0.0.0.0:6667
+root      9038  9012  0 14:51 ?        00:00:01 /usr/local/bin/etcd -
+-name=calico --data-dir=/var/etcd/calico-data --advertise-client-urls
+=http://10.146.0.2:6666 --listen-client-urls=http://0.0.0.0:6666 --li
+sten-peer-urls=http://0.0.0.0:6667
+root      9326  9325  0 14:51 ?        00:00:00 bird6 -R -s /var/run/
+calico/bird6.ctl -d -c /etc/calico/confd/config/bird6.cfg
+root      9327  9322  0 14:51 ?        00:00:00 confd -confdir=/etc/c
+alico/confd -interval=5 -watch --log-level=debug -node=http://10.96.2
+32.136:6666 -client-key= -client-cert= -client-ca-keys=
+root      9328  9324  0 14:51 ?        00:00:00 bird -R -s /var/run/c
+alico/bird.ctl -d -c /etc/calico/confd/config/bird.cfg
+root      9329  9323  1 14:51 ?        00:00:04 calico-felix
+CNI
+375
+
+# CNI网络插件配置
+$ cat /etc/cni/net.d/10-calico.conf
+{
+    "name": "k8s-pod-network",
+    "cniVersion": "0.1.0",
+    "type": "calico",
+    "etcd_endpoints": "http://10.96.232.136:6666",
+    "log_level": "info",
+    "ipam": {
+        "type": "calico-ipam"
+    },
+    "policy": {
+        "type": "k8s",
+         "k8s_api_root": "https://10.96.0.1:443",
+         "k8s_auth_token": "<token>"
+    },
+    "kubernetes": {
+        "kubeconfig": "/etc/cni/net.d/calico-kubeconfig"
+    }
+}
+$ cat /etc/cni/net.d/calico-kubeconfig
+# Kubeconfig file for Calico CNI plugin.
+apiVersion: v1
+kind: Config
+clusters:
+- name: local
+  cluster:
+    insecure-skip-tls-verify: true
+users:
+- name: calico
+contexts:
+- name: calico-context
+  context:
+    cluster: local
+    user: calico
+current-context: calico-context
+CNI
+376
+
+Calico的不足
+既然是三层实现，当然不支持VRF
+不支持多租户网络的隔离功能，在多租户场景下会有网络安全问题
+Calico控制平面的设计要求物理网络得是L2 Fabric，这样vRouter间都是直接可达的
+参考文档
+https://xuxinkun.github.io/2016/07/22/cni-cnm/
+https://www.projectcalico.org/
+http://blog.dataman-inc.com/shurenyun-docker-133/
+CNI
+377
+
+SR-IOV
+SR-IOV 技术是一种基于硬件的虚拟化解决方案，可提高性能和可伸缩性
+SR-IOV 标准允许在虚拟机之间高效共享 PCIe（Peripheral Component
+Interconnect Express，快速外设组件互连）设备，并且它是在硬件中实现的，可以
+获得能够与本机性能媲美的 I/O 性能。SR-IOV 规范定义了新的标准，根据该标
+准，创建的新设备可允许将虚拟机直接连接到 I/O 设备（SR-IOV 规范由 PCI-SIG
+在 http://www.pcisig.com 上进行定义和维护）。单个 I/O 资源可由许多虚拟机共
+享。共享的设备将提供专用的资源，并且还使用共享的通用资源。这样，每个虚拟
+机都可访问唯一的资源。因此，启用了 SR-IOV 并且具有适当的硬件和 OS 支持的
+PCIe 设备（例如以太网端口）可以显示为多个单独的物理设备，每个都具有自己的
+PCIe 配置空间。
+SR-IOV主要用于虚拟化中，当然也可以用于容器。
+SR-IOV配置
+CNI
+378
+
+modprobe ixgbevf
+lspci -Dvmm|grep -B 1 -A 4 Ethernet
+echo 2 > /sys/bus/pci/devices/0000:82:00.0/sriov_numvfs
+# check ifconfig -a. You should see a number of new interfaces create
+d, starting with “eth”, e.g. eth4
+docker sriov plugin
+Intel给docker写了一个SR-IOV network plugin，源码位于
+https://github.com/clearcontainers/sriov，同时支持runc和clearcontainer。
+CNI插件
+Intel维护了一个SR-IOV的CNI插件，fork自hustcat/sriov-cni，并扩展了DPDK的支持。
+项目主页见https://github.com/Intel-Corp/sriov-cni。
+优点
+性能好
+不占用计算资源
+缺点
+VF数量有限
+硬件绑定，不支持容器迁移
+参考文档
+http://blog.scottlowe.org/2009/12/02/what-is-sr-iov/
+https://github.com/clearcontainers/sriov
+https://software.intel.com/en-us/articles/single-root-inputoutput-virtualization-sr-iov-
+with-linux-containers
+http://jason.digitalinertia.net/exposing-docker-containers-with-sr-iov/
+CNI
+379
+
+Romana
+Romana是Panic Networks在2016年提出的开源项目，旨在解决Overlay方案给网络带来
+的开销。
+工作原理
+layer 3 networking，消除overlay带来的开销
+基于iptables ACL的网络隔离
+基于hierarchy CIDR管理Host/Tenant/Segment ID
+CNI
+380
+
+优点
+纯三层网络，性能好
+缺点
+基于IP管理租户，有规模上的限制
+物理设备变更或地址规划变更麻烦
+参考文档
+http://romana.io/
+https://github.com/romana/romana
+http://romana.io/how/background/
+CNI
+381
+
+OpenContrail
+OpenContrail是Juniper推出的开源网络虚拟化平台，其商业版本为Contrail。
+架构
+OpenContrail主要由控制器和vRouter组成：
+控制器提供虚拟网络的配置、控制和分析功能
+vRouter提供分布式路由，负责虚拟路由器、虚拟网络的建立以及数据转发
+vRouter支持三种模式
+Kernel vRouter：类似于ovs内核模块
+DPDK vRouter：类似于ovs-dpdk
+CNI
+382
+
+Netronome Agilio Solution (商业产品)：支持DPDK, SR-IOV and Express Virtio
+(XVIO)
+参考文档
+http://www.opencontrail.org/opencontrail-architecture-documentation/
+http://www.opencontrail.org/network-virtualization-architecture-deep-dive/
+CNI
+383
+
+CNI Plugin Chains
+CNI还支持Plugin Chains，即指定一个插件列表，由Runtime依次执行每个插件。这对
+支持portmapping、vm等非常有帮助。
+Network Configuration Lists
+CNI SPEC支持指定网络配置列表，包含多个网络插件，由Runtime依次执行。注意
+ADD操作，按顺序依次调用每个插件；而DEL操作调用顺序相反
+ADD操作，除最后一个插件，前面每个插件需要增加 prevResult 传递给其后的插
+件
+第一个插件必须要包含ipam插件
+示例
+下面的例子展示了bridge+portmap插件的用法。
+CNI
+384
+
+# cat /root/mynet.conflist
+{
+  "name": "mynet",
+  "cniVersion": "0.3.0",
+  "plugins": [
+    {
+      "type": "bridge",
+      "bridge": "mynet",
+      "ipMasq": true,
+      "isGateway": true,
+      "ipam": {
+      "type": "host-local",
+      "subnet": "10.244.10.0/24",
+      "routes": [
+          { "dst": "0.0.0.0/0"  }
+      ]
+      }
+    },
+    {
+       "type": "portmap",
+       "capabilities": {"portMappings": true}
+    }
+  ]
+}
+# export CAP_ARGS='{
+    "portMappings": [
+        {
+            "hostPort":      9090,
+            "containerPort": 80,
+            "protocol":      "tcp",
+            "hostIP":        "127.0.0.1"
+        }
+    ]
+}'
+# ip netns add test
+# CNI_PATH=/opt/cni/bin NETCONFPATH=/root ./cnitool add mynet /var/ru
+n/netns/test
+{
+CNI
+385
+
+    "interfaces": [
+        {
+            "name": "mynet",
+            "mac": "0a:58:0a:f4:0a:01"
+        },
+        {
+            "name": "veth2cfb1d64",
+            "mac": "4a:dc:1f:b7:56:b1"
+        },
+        {
+            "name": "eth0",
+            "mac": "0a:58:0a:f4:0a:07",
+            "sandbox": "/var/run/netns/test"
+        }
+    ],
+    "ips": [
+        {
+            "version": "4",
+            "interface": 2,
+            "address": "10.244.10.7/24",
+            "gateway": "10.244.10.1"
+        }
+    ],
+    "routes": [
+        {
+            "dst": "0.0.0.0/0"
+        }
+    ],
+    "dns": {}
+}
+# iptables-save | grep 10.244.10.7
+-A CNI-DN-be1eedf7a76853f303ebd -d 127.0.0.1/32 -p tcp -m tcp --dport
+ 9090 -j DNAT --to-destination 10.244.10.7:80
+-A CNI-SN-be1eedf7a76853f303ebd -s 127.0.0.1/32 -d 10.244.10.7/32 -p 
+tcp -m tcp --dport 80 -j MASQUERADE
+# CNI_PATH=/opt/cni/bin NETCONFPATH=/root ./cnitool del mynet /var/ru
+n/netns/test
+CNI
+386
+
+Volume插件扩展
+Kubernetes已经提供丰富的Volume和Persistent Volume插件，可以根据需要使用这些插
+件给容器提供持久化存储。
+如果内置的这些Volume还不满足要求，则可以使用FlexVolume实现自己的Volume插
+件。
+FlexVolume
+实现一个FlexVolume包括两个步骤
+实现FlexVolume插件接口，包括 init/attach/detach/mount/umount 等命令
+（可参考lvm示例和NFS示例）
+将插件放到 /usr/libexec/kubernetes/kubelet-
+plugins/volume/exec/<vendor~driver>/<driver> 目录中
+而在使用flexVolume时，需要指定卷的driver，格式为 <vendor~driver>/<driver> ，
+如下面的例子使用了 kubernetes.io/lvm 
+5.3 Volume插件
+388
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+  namespace: default
+spec:
+  containers:
+  - name: nginx
+    image: nginx
+    volumeMounts:
+    - name: test
+      mountPath: /data
+    ports:
+    - containerPort: 80
+  volumes:
+  - name: test
+    flexVolume:
+      driver: "kubernetes.io/lvm"
+      fsType: "ext4"
+      options:
+        volumeID: "vol1"
+        size: "1000m"
+        volumegroup: "kube_vg"
+5.3 Volume插件
+389
+
+使用glusterfs做持久化存储
+我们复用kubernetes的三台主机做glusterfs存储。
+安装glusterfs
+我们直接在物理机上使用yum安装，如果你选择在kubernetes上安装，请参
+考：https://github.com/gluster/gluster-kubernetes/blob/master/docs/setup-guide.md
+# 先安装 gluster 源
+$ yum install centos-release-gluster -y
+# 安装 glusterfs 组件
+$ yum install -y glusterfs glusterfs-server glusterfs-fuse glusterfs-
+rdma glusterfs-geo-replication glusterfs-devel
+## 创建 glusterfs 目录
+$ mkdir /opt/glusterd
+## 修改 glusterd 目录
+$ sed -i 's/var\/lib/opt/g' /etc/glusterfs/glusterd.vol
+# 启动 glusterfs
+$ systemctl start glusterd.service
+# 设置开机启动
+$ systemctl enable glusterd.service
+#查看状态
+$ systemctl status glusterd.service
+配置 glusterfs
+glusterfs
+390
+
+# 配置 hosts
+$ vi /etc/hosts
+172.20.0.113   sz-pg-oam-docker-test-001.tendcloud.com 
+172.20.0.114   sz-pg-oam-docker-test-002.tendcloud.com 
+172.20.0.115   sz-pg-oam-docker-test-003.tendcloud.com
+# 开放端口
+$ iptables -I INPUT -p tcp --dport 24007 -j ACCEPT
+# 创建存储目录
+$ mkdir /opt/gfs_data
+# 添加节点到 集群
+# 执行操作的本机不需要probe 本机
+[root@sz-pg-oam-docker-test-001 ~]#
+gluster peer probe sz-pg-oam-docker-test-002.tendcloud.com
+gluster peer probe sz-pg-oam-docker-test-003.tendcloud.com
+# 查看集群状态
+$ gluster peer status
+Number of Peers: 2
+Hostname: sz-pg-oam-docker-test-002.tendcloud.com
+Uuid: f25546cc-2011-457d-ba24-342554b51317
+State: Peer in Cluster (Connected)
+Hostname: sz-pg-oam-docker-test-003.tendcloud.com
+Uuid: 42b6cad1-aa01-46d0-bbba-f7ec6821d66d
+State: Peer in Cluster (Connected)
+配置 volume
+GlusterFS中的volume的模式有很多中，包括以下几种：
+分布卷（默认模式）：即DHT, 也叫 分布卷: 将文件已hash算法随机分布到 一台服
+务器节点中存储。
+复制模式：即AFR, 创建volume 时带 replica x 数量: 将文件复制到 replica x 个节点
+glusterfs
+391
+
+中。
+条带模式：即Striped, 创建volume 时带 stripe x 数量： 将文件切割成数据块，分别
+存储到 stripe x 个节点中 ( 类似raid 0 )。
+分布式条带模式：最少需要4台服务器才能创建。 创建volume 时 stripe 2 server =
+4 个节点： 是DHT 与 Striped 的组合型。
+分布式复制模式：最少需要4台服务器才能创建。 创建volume 时 replica 2 server =
+4 个节点：是DHT 与 AFR 的组合型。
+条带复制卷模式：最少需要4台服务器才能创建。 创建volume 时 stripe 2 replica 2
+server = 4 个节点： 是 Striped 与 AFR 的组合型。
+三种模式混合： 至少需要8台 服务器才能创建。 stripe 2 replica 2 , 每4个节点 组成
+一个 组。
+这几种模式的示例图参考：CentOS7安装GlusterFS。
+因为我们只有三台主机，在此我们使用默认的分布卷模式。请勿在生产环境上使用该模
+式，容易导致数据丢失。
+glusterfs
+392
+
+# 创建分布卷
+$ gluster volume create k8s-volume transport tcp sz-pg-oam-docker-tes
+t-001.tendcloud.com:/opt/gfs_data sz-pg-oam-docker-test-002.tendcloud
+.com:/opt/gfs_data sz-pg-oam-docker-test-003.tendcloud.com:/opt/gfs_d
+ata force
+# 查看volume状态
+$ gluster volume info
+Volume Name: k8s-volume
+Type: Distribute
+Volume ID: 9a3b0710-4565-4eb7-abae-1d5c8ed625ac
+Status: Created
+Snapshot Count: 0
+Number of Bricks: 3
+Transport-type: tcp
+Bricks:
+Brick1: sz-pg-oam-docker-test-001.tendcloud.com:/opt/gfs_data
+Brick2: sz-pg-oam-docker-test-002.tendcloud.com:/opt/gfs_data
+Brick3: sz-pg-oam-docker-test-003.tendcloud.com:/opt/gfs_data
+Options Reconfigured:
+transport.address-family: inet
+nfs.disable: on
+# 启动 分布卷
+$ gluster volume start k8s-volume
+Glusterfs调优
+glusterfs
+393
+
+# 开启 指定 volume 的配额
+$ gluster volume quota k8s-volume enable
+# 限制 指定 volume 的配额
+$ gluster volume quota k8s-volume limit-usage / 1TB
+# 设置 cache 大小, 默认32MB
+$ gluster volume set k8s-volume performance.cache-size 4GB
+# 设置 io 线程, 太大会导致进程崩溃
+$ gluster volume set k8s-volume performance.io-thread-count 16
+# 设置 网络检测时间, 默认42s
+$ gluster volume set k8s-volume network.ping-timeout 10
+# 设置 写缓冲区的大小, 默认1M
+$ gluster volume set k8s-volume performance.write-behind-window-size 
+1024MB
+Kubernetes中配置glusterfs
+官方的文档
+见：https://github.com/kubernetes/kubernetes/tree/master/examples/volumes/glusterfs
+以下用到的所有yaml和json配置文件可以在glusterfs中找到。注意替换其中私有镜像地
+址为你自己的镜像地址。
+kubernetes安装客户端
+glusterfs
+394
+
+# 在所有 k8s node 中安装 glusterfs 客户端
+$ yum install -y glusterfs glusterfs-fuse
+# 配置 hosts
+$ vi /etc/hosts
+172.20.0.113   sz-pg-oam-docker-test-001.tendcloud.com
+172.20.0.114   sz-pg-oam-docker-test-002.tendcloud.com
+172.20.0.115   sz-pg-oam-docker-test-003.tendcloud.com
+因为我们glusterfs跟kubernetes集群复用主机，因为此这一步可以省去。
+配置 endpoints
+glusterfs
+395
+
+$ curl -O https://raw.githubusercontent.com/kubernetes/kubernetes/mas
+ter/examples/volumes/glusterfs/glusterfs-endpoints.json
+# 修改 endpoints.json ，配置 glusters 集群节点ip
+# 每一个 addresses 为一个 ip 组
+    {
+      "addresses": [
+        {
+          "ip": "172.22.0.113"
+        }
+      ],
+      "ports": [
+        {
+          "port": 1990
+        }
+      ]
+    },
+# 导入 glusterfs-endpoints.json
+$ kubectl apply -f glusterfs-endpoints.json
+# 查看 endpoints 信息
+$ kubectl get ep
+配置 service
+$ curl -O https://raw.githubusercontent.com/kubernetes/kubernetes/mas
+ter/examples/volumes/glusterfs/glusterfs-service.json
+# service.json 里面查找的是 enpointes 的名称与端口，端口默认配置为 1，我改成
+了1990
+# 导入 glusterfs-service.json
+$ kubectl apply -f glusterfs-service.json
+# 查看 service 信息
+$ kubectl get svc
+glusterfs
+396
+
+创建测试 pod
+$ curl -O https://raw.githubusercontent.com/kubernetes/kubernetes/mas
+ter/examples/volumes/glusterfs/glusterfs-pod.json
+# 编辑 glusterfs-pod.json
+# 修改 volumes  下的 path 为上面创建的 volume 名称
+"path": "k8s-volume"
+# 导入 glusterfs-pod.json
+$ kubectl apply -f glusterfs-pod.json
+# 查看 pods 状态
+$ kubectl get pods               
+NAME                             READY     STATUS    RESTARTS   AGE
+glusterfs                        1/1       Running   0          1m
+# 查看 pods 所在 node
+$ kubectl describe pods/glusterfs
+# 登陆 node 物理机，使用 df 可查看挂载目录
+$ df -h
+172.20.0.113:k8s-volume 1073741824        0 1073741824   0% 172.20.0.
+113:k8s-volume  1.0T     0  1.0T   0% /var/lib/kubelet/pods/3de9fc69-
+30b7-11e7-bfbd-8af1e3a7c5bd/volumes/kubernetes.io~glusterfs/glusterfs
+vol
+配置PersistentVolume
+PersistentVolume（PV）和 PersistentVolumeClaim（PVC）是kubernetes提供的两种
+API资源，用于抽象存储细节。管理员关注于如何通过pv提供存储功能而无需关注用户
+如何使用，同样的用户只需要挂载PVC到容器中而不需要关注存储卷采用何种技术实
+现。
+PVC和PV的关系跟pod和node关系类似，前者消耗后者的资源。PVC可以向PV申请指
+定大小的存储资源并设置访问模式。
+PV属性
+glusterfs
+397
+
+storage容量
+读写属性：分别为ReadWriteOnce：单个节点读写； ReadOnlyMany：多节点只读
+； ReadWriteMany：多节点读写
+$ cat glusterfs-pv.yaml
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: gluster-dev-volume
+spec:
+  capacity:
+    storage: 8Gi
+  accessModes:
+    - ReadWriteMany
+  glusterfs:
+    endpoints: "glusterfs-cluster"
+    path: "k8s-volume"
+    readOnly: false
+# 导入PV
+$ kubectl apply -f glusterfs-pv.yaml
+# 查看 pv
+$ kubectl get pv
+NAME                 CAPACITY   ACCESSMODES   RECLAIMPOLICY   STATUS 
+     CLAIM     STORAGECLASS   REASON    AGE
+gluster-dev-volume   8Gi        RWX           Retain          Availab
+le                                      3s
+PVC属性
+访问属性与PV相同
+容量：向PV申请的容量 <= PV总容量
+配置PVC
+glusterfs
+398
+
+$ cat glusterfs-pvc.yaml
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: glusterfs-nginx
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 8Gi
+# 导入 pvc
+$ kubectl apply -f glusterfs-pvc.yaml
+# 查看 pvc
+$ kubectl get pv
+NAME              STATUS    VOLUME               CAPACITY   ACCESSMOD
+ES   STORAGECLASS   AGE
+glusterfs-nginx   Bound     gluster-dev-volume   8Gi        RWX      
+                    4s
+创建 nginx deployment 挂载 volume
+$ vi nginx-deployment.yaml
+apiVersion: extensions/v1beta1 
+kind: Deployment 
+metadata: 
+  name: nginx-dm
+spec: 
+  replicas: 2
+  template: 
+    metadata: 
+      labels: 
+        name: nginx 
+    spec: 
+      containers: 
+        - name: nginx 
+glusterfs
+399
+
+          image: nginx:alpine 
+          imagePullPolicy: IfNotPresent
+          ports: 
+            - containerPort: 80
+          volumeMounts:
+            - name: gluster-dev-volume
+              mountPath: "/usr/share/nginx/html"
+      volumes:
+      - name: gluster-dev-volume
+        persistentVolumeClaim:
+          claimName: glusterfs-nginx
+# 导入 deployment
+$ kubectl apply -f nginx-deployment.yaml 
+# 查看 deployment
+$ kubectl get pods |grep nginx-dm
+nginx-dm-3698525684-g0mvt       1/1       Running   0          6s
+nginx-dm-3698525684-hbzq1       1/1       Running   0          6s
+# 查看 挂载
+$ kubectl exec -it nginx-dm-3698525684-g0mvt -- df -h|grep k8s-volume
+172.20.0.113:k8s-volume         1.0T     0  1.0T   0% /usr/share/ngin
+x/html
+# 创建文件 测试
+$ kubectl exec -it nginx-dm-3698525684-g0mvt -- touch /usr/share/ngin
+x/html/index.html
+$ kubectl exec -it nginx-dm-3698525684-g0mvt -- ls -lt /usr/share/ngi
+nx/html/index.html
+-rw-r--r-- 1 root root 0 May  4 11:36 /usr/share/nginx/html/index.htm
+l
+# 验证 glusterfs
+# 因为我们使用分布卷，所以可以看到某个节点中有文件
+[root@sz-pg-oam-docker-test-001 ~] ls /opt/gfs_data/
+[root@sz-pg-oam-docker-test-002 ~] ls /opt/gfs_data/
+index.html
+[root@sz-pg-oam-docker-test-003 ~] ls /opt/gfs_data/
+glusterfs
+400
+
+参考
+CentOS 7 安装 GlusterFS
+GlusterFS with kubernetes
+glusterfs
+401
+
+Container Runtime Interface
+Container Runtime Interface (CRI)是Kubelet 1.5/1.6中主要负责的一块项目，它重新定
+义了Kubelet Container Runtime API，将原来完全面向Pod级别的API拆分成面向
+Sandbox和Container的API，并分离镜像管理和容器引擎到不同的服务。
+CRI最早从从1.4版就开始设计讨论和开发，在v1.5中发布第一个测试版。在v1.6时已经
+有了很多外部Runtime，如frakti、cri-o的alpha支持。v1.7版本新增了containerd的alpha
+支持，而frakti和cri-o则升级到beta支持。
+CRI接口
+CRI基于gRPC定义了RuntimeService和ImageService，分别用于容器运行时和镜像的
+管理。其定义在
+v1.7: pkg/kubelet/apis/cri/v1alpha1/runtime
+v1.6: pkg/kubelet/api/v1alpha1/runtime
+Kubelet作为CRI的客户端，而Runtime维护者则需要实现CRI服务端，并在启动kubelet
+时将其传入：
+kubelet --container-runtime=remote --container-runtime-endpoint=/var/
+run/frakti.sock ..
+如何开发新的Container Runtime
+开发新的Container Runtime只需要实现CRI gRPC Server，包括RuntimeService和
+ImageService。该gRPC Server需要监听在本地的unix socket（Linux支持unix socket格
+式，Windows支持tcp格式）。
+具体的实现方法可以参考下面已经支持的Container Runtime列表。
+5.4 Container Runtime Interface
+402
+
+目前支持的Container Runtime
+目前，有多家厂商都在基于CRI集成自己的容器引擎，其中包括
+Docker: 核心代码依然保留在kubelet内部（pkg/kubelet/dockershim），依然是最稳
+定和特性支持最好的Runtime
+HyperContainer: https://github.com/kubernetes/frakti，支持Kubernetes
+v1.6/v1.7，提供基于hypervisor和docker的混合运行时，适用于运行非可信应用，
+如多租户和NFV等场景
+Rkt: https://github.com/kubernetes-incubator/rktlet，开发中
+Runc有两个实现，cri-o和cri-containerd
+cri-containerd，支持kubernetes v1.7。
+cri-o，支持Kubernetes v1.6/v1.7，底层运行时支持runc和intel clear
+container。
+Mirantis: https://github.com/Mirantis/virtlet，直接管理libvirt虚拟机，镜像须是
+qcow2格式
+Infranetes: https://github.com/apporbit/infranetes，直接管理IaaS平台虚拟机，如
+GCE、AWS等
+5.4 Container Runtime Interface
+403
+
+Network Policy扩展
+Network Policy提供了基于策略的网络控制，用于隔离应用并减少攻击面。它使用标签
+选择器模拟传统的分段网络，并通过策略控制它们之间的流量以及来自外部的流量。
+Network Policy需要网络插件来监测这些策略和Pod的变更，并为Pod配置流量控制。
+如何开发Network Policy扩展
+实现一个支持Network Policy的网络扩展需要至少包含两个组件
+CNI网络插件：负责给Pod配置网络接口
+Policy controller：监听Network Policy的变化，并将Policy应用到相应的网络接口
+支持Network Policy的网络插件
+Calico
+Romana
+Weave Net
+Trireme
+OpenContrail
+5.5 Network Policy
+404
+
+Network Policy使用方法
+具体Network Policy的使用方法可以参考这里。
+5.5 Network Policy
+405
+
+Ingress Controller扩展
+Ingress为Kubernetes集群中的服务提供了外部入口以及路由，而Ingress Controller监测
+Ingress和Service资源的变更并根据规则配置负载均衡和提供访问入口。
+如何开发Ingress Controller扩展
+kubernetes/ingress提供了一个Ingress Controller的基本框架，可以在此基础上方便的开
+发新的Ingress Controller。
+常见Ingress Controller
+Ingress Examples
+Dummy controller backend
+HAProxy Ingress controller
+Linkerd
+traefik
+AWS Application Load Balancer Ingress Controller
+kube-ingress-aws-controller
+Voyager: HAProxy Ingress Controller
+Ingress使用方法
+具体Ingress的使用方法可以参考这里。
+5.6 Ingress Controller
+406
+
+Traefik ingress
+Traefik是一个开源的反向代理和负载均衡工具，它监听后端的变化并自动更新服务配
+置。
+主要功能包括
+Golang编写，部署容易
+快（nginx的85%)
+支持众多的后端（Docker, Swarm, Kubernetes, Marathon, Mesos, Consul, Etcd
+等）
+内置Web UI、Metrics和Let’s Encrypt支持，管理方便
+自动动态配置
+集群模式高可用
+本章内容包括
+安装Traefik ingress
+分布式负载测试
+网络和集群性能测试
+边缘节点配置
+Traefik
+407
+
+安装traefik ingress
+Ingress简介
+简单的说，ingress就是从kubernetes集群外访问集群的入口，将用户的URL请求转发到
+不同的service上。Ingress相当于nginx、apache等负载均衡方向代理服务器，其中还包
+括规则定义，即URL的路由信息，路由信息得的刷新由Ingress controller来提供。
+Ingress Controller 实质上可以理解为是个监视器，Ingress Controller 通过不断地跟
+kubernetes API 打交道，实时的感知后端 service、pod 等变化，比如新增和减少 pod，
+service 增加与减少等；当得到这些变化信息后，Ingress Controller 再结合下文的
+Ingress 生成配置，然后更新反向代理负载均衡器，并刷新其配置，达到服务发现的作
+用。
+部署Traefik
+介绍traefik
+Traefik是一款开源的反向代理与负载均衡工具。它最大的优点是能够与常见的微服务系
+统直接整合，可以实现自动化动态配置。目前支持Docker, Swarm, Mesos/Marathon,
+Mesos, Kubernetes, Consul, Etcd, Zookeeper, BoltDB, Rest API等等后端模型。
+以下配置文件可以在kubernetes-handbookGitHub仓库中的manifests/traefik-ingress/目
+录下找到。
+创建ingress-rbac.yaml
+将用于service account验证。
+Traefik
+409
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ingress
+  namespace: kube-system
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+  name: ingress
+subjects:
+  - kind: ServiceAccount
+    name: ingress
+    namespace: kube-system
+roleRef:
+  kind: ClusterRole
+  name: cluster-admin
+  apiGroup: rbac.authorization.k8s.io
+创建名为 traefik-ingress 的ingress，文件名traefik.yaml
+Traefik
+410
+
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: traefik-ingress
+spec:
+  rules:
+  - host: traefik.nginx.io
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: my-nginx
+          servicePort: 80
+  - host: traefik.frontend.io
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: frontend
+          servicePort: 80
+这其中的 backend 中要配置default namespace中启动的service名字。 path 就是
+URL地址后的路径，如traefik.frontend.io/path，service将会接受path这个路径，host最
+好使用service-name.filed1.filed2.domain-name这种类似主机名称的命名方式，方便区
+分服务。
+根据你自己环境中部署的service的名字和端口自行修改，有新service增加时，修改该文
+件后可以使用 kubectl replace -f traefik.yaml 来更新。
+我们现在集群中已经有两个service了，一个是nginx，另一个是官方的 guestbook 例
+子。
+创建Depeloyment
+Traefik
+411
+
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: traefik-ingress-lb
+  namespace: kube-system
+  labels:
+    k8s-app: traefik-ingress-lb
+spec:
+  template:
+    metadata:
+      labels:
+        k8s-app: traefik-ingress-lb
+        name: traefik-ingress-lb
+    spec:
+      terminationGracePeriodSeconds: 60
+      hostNetwork: true
+      restartPolicy: Always
+      serviceAccountName: ingress
+      containers:
+      - image: traefik
+        name: traefik-ingress-lb
+        resources:
+          limits:
+            cpu: 200m
+            memory: 30Mi
+          requests:
+            cpu: 100m
+            memory: 20Mi
+        ports:
+        - name: http
+          containerPort: 80
+          hostPort: 80
+        - name: admin
+          containerPort: 8580
+          hostPort: 8580
+        args:
+        - --web
+        - --web.address=:8580
+        - --kubernetes
+Traefik
+412
+
+注意我们这里用的是Deploy类型，没有限定该pod运行在哪个主机上。Traefik的端口是
+8580。
+Traefik UI
+apiVersion: v1
+kind: Service
+metadata:
+  name: traefik-web-ui
+  namespace: kube-system
+spec:
+  selector:
+    k8s-app: traefik-ingress-lb
+  ports:
+  - name: web
+    port: 80
+    targetPort: 8580
+---
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: traefik-web-ui
+  namespace: kube-system
+spec:
+  rules:
+  - host: traefik-ui.local
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: traefik-web-ui
+          servicePort: web
+配置完成后就可以启动treafik ingress了。
+kubectl create -f .
+我查看到traefik的pod在 172.20.0.115 这台节点上启动了。
+访问该地址 http://172.20.0.115:8580/ 将可以看到dashboard。
+Traefik
+413
+
+左侧黄色部分部分列出的是所有的rule，右侧绿色部分是所有的backend。
+测试
+在集群的任意一个节点上执行。假如现在我要访问nginx的"/"路径。
+Traefik
+414
+
+$ curl -H Host:traefik.nginx.io http://172.20.0.115/
+<!DOCTYPE html>
+<html>
+<head>
+<title>Welcome to nginx!</title>
+<style>
+    body {
+        width: 35em;
+        margin: 0 auto;
+        font-family: Tahoma, Verdana, Arial, sans-serif;
+    }
+</style>
+</head>
+<body>
+<h1>Welcome to nginx!</h1>
+<p>If you see this page, the nginx web server is successfully install
+ed and
+working. Further configuration is required.</p>
+<p>For online documentation and support please refer to
+<a href="http://nginx.org/">nginx.org</a>.<br/>
+Commercial support is available at
+<a href="http://nginx.com/">nginx.com</a>.</p>
+<p><em>Thank you for using nginx.</em></p>
+</body>
+</html>
+如果你需要在kubernetes集群以外访问就需要设置DNS，或者修改本机的hosts文件。
+在其中加入：
+172.20.0.115 traefik.nginx.io
+172.20.0.115 traefik.frontend.io
+所有访问这些地址的流量都会发送给172.20.0.115这台主机，就是我们启动traefik的主
+机。
+Traefik会解析http请求header里的Host参数将流量转发给Ingress配置里的相应service。
+修改hosts后就就可以在kubernetes集群外访问以上两个service，如下图：
+Traefik
+415
+
+参考文档
+Traefik-kubernetes 初试
+Traefik简介
+Guestbook example
+Traefik
+416
+
+分布式负载测试
+该教程描述如何在Kubernetes中进行分布式负载均衡测试，包括一个web应用、docker
+镜像和Kubernetes controllers/services。更多资料请查看Distributed Load Testing Using
+Kubernetes 。
+准备
+不需要GCE及其他组件，你只需要有一个kubernetes集群即可。
+如果你还没有kubernetes集群，可以参考kubernetes-handbook部署一个。
+部署Web应用
+ sample-webapp  目录下包含一个简单的web测试应用。我们将其构建为docker镜像，
+在kubernetes中运行。你可以自己构建，也可以直接用这个我构建好的镜
+像 index.tenxcloud.com/jimmy/k8s-sample-webapp:latest 。
+在kubernetes上部署sample-webapp。
+$ cd kubernetes-config
+$ kubectl create -f sample-webapp-controller.yaml
+$ kubectl create -f kubectl create -f sample-webapp-service.yaml
+部署Locust的Controller和Service
+ locust-master 和 locust-work 使用同样的docker镜像，修改cotnroller
+中 spec.template.spec.containers.env 字段中的value为你 sample-webapp 
+service的名字。
+- name: TARGET_HOST
+  value: http://sample-webapp:8000
+创建Controller Docker镜像（可选）
+Traefik
+417
+
+ locust-master 和 locust-work  controller使用的都是 locust-tasks  docker镜
+像。你可以直接下载 gcr.io/cloud-solutions-images/locust-tasks ，也可以自己
+编译。自己编译大概要花几分钟时间，镜像大小为820M。
+$ docker build -t index.tenxcloud.com/jimmy/locust-tasks:latest .
+$ docker push index.tenxcloud.com/jimmy/locust-tasks:latest
+注意：我使用的是时速云的镜像仓库。
+每个controller的yaml的 spec.template.spec.containers.image  字段指定的是我的
+镜像：
+image: index.tenxcloud.com/jimmy/locust-tasks:latest
+部署locust-master
+$ kubectl create -f locust-master-controller.yaml
+$ kubectl create -f locust-master-service.yaml
+部署locust-worker
+Now deploy  locust-worker-controller :
+$ kubectl create -f locust-worker-controller.yaml
+你可以很轻易的给work扩容，通过命令行方式：
+```ba sh $ kubectl scale --replicas=20 replicationcontrollers locust-worker
+Traefik
+418
+
+当然你也可以通过WebUI：Dashboard - Workloads - Replication Controllers -
+ **ServiceName** - Scale来扩容。
+![dashboard-scale](images/dashbaord-scale.jpg)
+### 配置Traefik
+参考[kubernetes的traefik ingress安装](https://github.com/feiskyer/kube
+rnetes-handbook/blob/master/practice/service-discovery-lb/traefik-ing
+ress-installation.md)，在`ingress.yaml`中加入如下配置：
+```Yaml
+  - host: traefik.locust.io
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: locust-master
+          servicePort: 8089
+然后执行 kubectl replace -f ingress.yaml 即可更新traefik。
+通过Traefik的dashboard就可以看到刚增加的 traefik.locust.io 节点。
+Traefik
+419
+
+执行测试
+打开 http://traefik.locust.io 页面，点击 Edit 输入伪造的用户数和用户每秒发
+送的请求个数，点击 Start Swarming 就可以开始测试了。
+Traefik
+420
+
+在测试过程中调整 sample-webapp 的pod个数（默认设置了1个pod），观察pod的负载
+变化情况。
+从一段时间的观察中可以看到负载被平均分配给了3个pod。
+在locust的页面中可以实时观察也可以下载测试结果。
+Traefik
+421
+
+Traefik
+422
+
+Kubernetes网络和集群性能测试
+准备
+测试环境
+在以下几种环境下进行测试：
+Kubernetes集群node节点上通过Cluster IP方式访问
+Kubernetes集群内部通过service访问
+Kubernetes集群外部通过traefik ingress暴露的地址访问
+测试地址
+Cluster IP: 10.254.149.31
+Service Port：8000
+Ingress Host：traefik.sample-webapp.io
+测试工具
+Locust：一个简单易用的用户负载测试工具，用来测试web或其他系统能够同时处
+理的并发用户数。
+curl
+kubemark
+测试程序：sample-webapp，源码见Github kubernetes的分布式负载测试
+测试说明
+通过向 sample-webapp 发送curl请求获取响应时间，直接curl后的结果为：
+$ curl "http://10.254.149.31:8000/"
+Welcome to the "Distributed Load Testing Using Kubernetes" sample web
+ app
+网络延迟测试
+场景一、 Kubernetes集群node节点上通过Cluster IP访问
+Traefik
+423
+
+测试命令
+curl -o /dev/null -s -w '%{time_connect} %{time_starttransfer} %{time
+_total}' "http://10.254.149.31:8000/"
+10组测试结果
+No
+time_connect
+time_starttransfer
+time_total
+1
+0.000
+0.003
+0.003
+2
+0.000
+0.002
+0.002
+3
+0.000
+0.002
+0.002
+4
+0.000
+0.002
+0.002
+5
+0.000
+0.002
+0.002
+6
+0.000
+0.002
+0.002
+7
+0.000
+0.002
+0.002
+8
+0.000
+0.002
+0.002
+9
+0.000
+0.002
+0.002
+10
+0.000
+0.002
+0.002
+平均响应时间：2ms
+时间指标说明
+单位：秒
+time_connect：建立到服务器的 TCP 连接所用的时间
+time_starttransfer：在发出请求之后，Web 服务器返回数据的第一个字节所用的时间
+time_total：完成请求所用的时间
+场景二、Kubernetes集群内部通过service访问
+测试命令
+curl -o /dev/null -s -w '%{time_connect} %{time_starttransfer} %{time
+_total}' "http://sample-webapp:8000/"
+Traefik
+424
+
+10组测试结果
+No
+time_connect
+time_starttransfer
+time_total
+1
+0.004
+0.006
+0.006
+2
+0.004
+0.006
+0.006
+3
+0.004
+0.006
+0.006
+4
+0.004
+0.006
+0.006
+5
+0.004
+0.006
+0.006
+6
+0.004
+0.006
+0.006
+7
+0.004
+0.006
+0.006
+8
+0.004
+0.006
+0.006
+9
+0.004
+0.006
+0.006
+10
+0.004
+0.006
+0.006
+平均响应时间：6ms
+场景三、在公网上通过traefik ingress访问
+测试命令
+curl -o /dev/null -s -w '%{time_connect} %{time_starttransfer} %{time
+_total}' "http://traefik.sample-webapp.io" >>result
+10组测试结果
+Traefik
+425
+
+No
+time_connect
+time_starttransfer
+time_total
+1
+0.043
+0.085
+0.085
+2
+0.052
+0.093
+0.093
+3
+0.043
+0.082
+0.082
+4
+0.051
+0.093
+0.093
+5
+0.068
+0.188
+0.188
+6
+0.049
+0.089
+0.089
+7
+0.051
+0.113
+0.113
+8
+0.055
+0.120
+0.120
+9
+0.065
+0.126
+0.127
+10
+0.050
+0.111
+0.111
+平均响应时间：110ms
+测试结果
+在这三种场景下的响应时间测试结果如下：
+Kubernetes集群node节点上通过Cluster IP方式访问：2ms
+Kubernetes集群内部通过service访问：6ms
+Kubernetes集群外部通过traefik ingress暴露的地址访问：110ms
+注意：执行测试的node节点/Pod与serivce所在的pod的距离（是否在同一台主机上），
+对前两个场景可以能会有一定影响。
+网络性能测试
+网络使用flannel的vxlan模式。
+使用iperf进行测试。
+服务端命令：
+iperf -s -p 12345 -i 1 -M
+客户端命令：
+Traefik
+426
+
+iperf -c ${server-ip} -p 12345 -i 1 -t 10 -w 20K
+场景一、主机之间
+[ ID] Interval       Transfer     Bandwidth
+[  3]  0.0- 1.0 sec   598 MBytes  5.02 Gbits/sec
+[  3]  1.0- 2.0 sec   637 MBytes  5.35 Gbits/sec
+[  3]  2.0- 3.0 sec   664 MBytes  5.57 Gbits/sec
+[  3]  3.0- 4.0 sec   657 MBytes  5.51 Gbits/sec
+[  3]  4.0- 5.0 sec   641 MBytes  5.38 Gbits/sec
+[  3]  5.0- 6.0 sec   639 MBytes  5.36 Gbits/sec
+[  3]  6.0- 7.0 sec   628 MBytes  5.26 Gbits/sec
+[  3]  7.0- 8.0 sec   649 MBytes  5.44 Gbits/sec
+[  3]  8.0- 9.0 sec   638 MBytes  5.35 Gbits/sec
+[  3]  9.0-10.0 sec   652 MBytes  5.47 Gbits/sec
+[  3]  0.0-10.0 sec  6.25 GBytes  5.37 Gbits/sec
+场景二、不同主机的Pod之间(使用flannel的vxlan模式)
+[ ID] Interval       Transfer     Bandwidth
+[  3]  0.0- 1.0 sec   372 MBytes  3.12 Gbits/sec
+[  3]  1.0- 2.0 sec   345 MBytes  2.89 Gbits/sec
+[  3]  2.0- 3.0 sec   361 MBytes  3.03 Gbits/sec
+[  3]  3.0- 4.0 sec   397 MBytes  3.33 Gbits/sec
+[  3]  4.0- 5.0 sec   405 MBytes  3.40 Gbits/sec
+[  3]  5.0- 6.0 sec   410 MBytes  3.44 Gbits/sec
+[  3]  6.0- 7.0 sec   404 MBytes  3.39 Gbits/sec
+[  3]  7.0- 8.0 sec   408 MBytes  3.42 Gbits/sec
+[  3]  8.0- 9.0 sec   451 MBytes  3.78 Gbits/sec
+[  3]  9.0-10.0 sec   387 MBytes  3.25 Gbits/sec
+[  3]  0.0-10.0 sec  3.85 GBytes  3.30 Gbits/sec
+场景三、Node与非同主机的Pod之间（使用flannel的vxlan
+模式）
+Traefik
+427
+
+[ ID] Interval       Transfer     Bandwidth
+[  3]  0.0- 1.0 sec   372 MBytes  3.12 Gbits/sec
+[  3]  1.0- 2.0 sec   420 MBytes  3.53 Gbits/sec
+[  3]  2.0- 3.0 sec   434 MBytes  3.64 Gbits/sec
+[  3]  3.0- 4.0 sec   409 MBytes  3.43 Gbits/sec
+[  3]  4.0- 5.0 sec   382 MBytes  3.21 Gbits/sec
+[  3]  5.0- 6.0 sec   408 MBytes  3.42 Gbits/sec
+[  3]  6.0- 7.0 sec   403 MBytes  3.38 Gbits/sec
+[  3]  7.0- 8.0 sec   423 MBytes  3.55 Gbits/sec
+[  3]  8.0- 9.0 sec   376 MBytes  3.15 Gbits/sec
+[  3]  9.0-10.0 sec   451 MBytes  3.78 Gbits/sec
+[  3]  0.0-10.0 sec  3.98 GBytes  3.42 Gbits/sec
+场景四、不同主机的Pod之间（使用flannel的host-gw模
+式）
+[ ID] Interval       Transfer     Bandwidth
+[  5]  0.0- 1.0 sec   530 MBytes  4.45 Gbits/sec
+[  5]  1.0- 2.0 sec   576 MBytes  4.84 Gbits/sec
+[  5]  2.0- 3.0 sec   631 MBytes  5.29 Gbits/sec
+[  5]  3.0- 4.0 sec   580 MBytes  4.87 Gbits/sec
+[  5]  4.0- 5.0 sec   627 MBytes  5.26 Gbits/sec
+[  5]  5.0- 6.0 sec   578 MBytes  4.85 Gbits/sec
+[  5]  6.0- 7.0 sec   584 MBytes  4.90 Gbits/sec
+[  5]  7.0- 8.0 sec   571 MBytes  4.79 Gbits/sec
+[  5]  8.0- 9.0 sec   564 MBytes  4.73 Gbits/sec
+[  5]  9.0-10.0 sec   572 MBytes  4.80 Gbits/sec
+[  5]  0.0-10.0 sec  5.68 GBytes  4.88 Gbits/sec
+场景五、Node与非同主机的Pod之间（使用flannel的host-
+gw模式）
+Traefik
+428
+
+[ ID] Interval       Transfer     Bandwidth
+[  3]  0.0- 1.0 sec   570 MBytes  4.78 Gbits/sec
+[  3]  1.0- 2.0 sec   552 MBytes  4.63 Gbits/sec
+[  3]  2.0- 3.0 sec   598 MBytes  5.02 Gbits/sec
+[  3]  3.0- 4.0 sec   580 MBytes  4.87 Gbits/sec
+[  3]  4.0- 5.0 sec   590 MBytes  4.95 Gbits/sec
+[  3]  5.0- 6.0 sec   594 MBytes  4.98 Gbits/sec
+[  3]  6.0- 7.0 sec   598 MBytes  5.02 Gbits/sec
+[  3]  7.0- 8.0 sec   606 MBytes  5.08 Gbits/sec
+[  3]  8.0- 9.0 sec   596 MBytes  5.00 Gbits/sec
+[  3]  9.0-10.0 sec   604 MBytes  5.07 Gbits/sec
+[  3]  0.0-10.0 sec  5.75 GBytes  4.94 Gbits/sec
+网络性能对比综述
+使用Flannel的vxlan模式实现每个pod一个IP的方式，会比宿主机直接互联的网络性能损
+耗30%～40%，符合网上流传的测试结论。而flannel的host-gw模式比起宿主机互连的网
+络性能损耗大约是10%。
+Vxlan会有一个封包解包的过程，所以会对网络性能造成较大的损耗，而host-gw模式是
+直接使用路由信息，网络损耗小，关于host-gw的架构请访问Flannel host-gw
+architecture。
+Kubernete的性能测试
+参考Kubernetes集群性能测试中的步骤，对kubernetes的性能进行测试。
+我的集群版本是Kubernetes1.6.0，首先克隆代码，将kubernetes目录复制
+到 $GOPATH/src/k8s.io/ 下然后执行：
+Traefik
+429
+
+$ ./hack/generate-bindata.sh
+/usr/local/src/k8s.io/kubernetes /usr/local/src/k8s.io/kubernetes
+Generated bindata file : test/e2e/generated/bindata.go has 13498 test
+/e2e/generated/bindata.go lines of lovely automated artifacts
+No changes in generated bindata file: pkg/generated/bindata.go
+/usr/local/src/k8s.io/kubernetes
+$ make WHAT="test/e2e/e2e.test"
+...
++++ [0425 17:01:34] Generating bindata:
+    test/e2e/generated/gobindata_util.go
+/usr/local/src/k8s.io/kubernetes /usr/local/src/k8s.io/kubernetes/test
+/e2e/generated
+/usr/local/src/k8s.io/kubernetes/test/e2e/generated
++++ [0425 17:01:34] Building go targets for linux/amd64:
+    test/e2e/e2e.test
+$ make ginkgo
++++ [0425 17:05:57] Building the toolchain targets:
+    k8s.io/kubernetes/hack/cmd/teststale
+    k8s.io/kubernetes/vendor/github.com/jteeuwen/go-bindata/go-bindat
+a
++++ [0425 17:05:57] Generating bindata:
+    test/e2e/generated/gobindata_util.go
+/usr/local/src/k8s.io/kubernetes /usr/local/src/k8s.io/kubernetes/test
+/e2e/generated
+/usr/local/src/k8s.io/kubernetes/test/e2e/generated
++++ [0425 17:05:58] Building go targets for linux/amd64:
+    vendor/github.com/onsi/ginkgo/ginkgo
+$ export KUBERNETES_PROVIDER=local
+$ export KUBECTL_PATH=/usr/bin/kubectl
+$ go run hack/e2e.go -v -test  --test_args="--host=http://172.20.0.11
+3:8080 --ginkgo.focus=\[Feature:Performance\]" >>log.txt
+测试结果
+Apr 25 18:27:31.461: INFO: API calls latencies: {
+  "apicalls": [
+    {
+      "resource": "pods",
+      "verb": "POST",
+Traefik
+430
+
+      "latency": {
+        "Perc50": 2148000,
+        "Perc90": 13772000,
+        "Perc99": 14436000,
+        "Perc100": 0
+      }
+    },
+    {
+      "resource": "services",
+      "verb": "DELETE",
+      "latency": {
+        "Perc50": 9843000,
+        "Perc90": 11226000,
+        "Perc99": 12391000,
+        "Perc100": 0
+      }
+    },
+    ...
+Apr 25 18:27:31.461: INFO: [Result:Performance] {
+  "version": "v1",
+  "dataItems": [
+    {
+      "data": {
+        "Perc50": 2.148,
+        "Perc90": 13.772,
+        "Perc99": 14.436
+      },
+      "unit": "ms",
+      "labels": {
+        "Resource": "pods",
+        "Verb": "POST"
+      }
+    },
+...
+2.857: INFO: Running AfterSuite actions on all node
+Apr 26 10:35:32.857: INFO: Running AfterSuite actions on node 1
+Ran 2 of 606 Specs in 268.371 seconds
+SUCCESS! -- 2 Passed | 0 Failed | 0 Pending | 604 Skipped PASS
+Ginkgo ran 1 suite in 4m28.667870101s
+Test Suite Passed
+Traefik
+431
+
+从kubemark输出的日志中可以看到API calls latencies和Performance。
+日志里显示，创建90个pod用时40秒以内，平均创建每个pod耗时0.44秒。
+不同type的资源类型API请求耗时分布
+Resource
+Verb
+50%
+90%
+99%
+services
+DELETE
+8.472ms
+9.841ms
+38.226ms
+endpoints
+PUT
+1.641ms
+3.161ms
+30.715ms
+endpoints
+GET
+931µs
+10.412ms
+27.97ms
+nodes
+PATCH
+4.245ms
+11.117ms
+18.63ms
+pods
+PUT
+2.193ms
+2.619ms
+17.285ms
+从 log.txt 日志中还可以看到更多详细请求的测试指标。
+注意事项
+测试过程中需要用到docker镜像存储在GCE中，需要翻墙下载，我没看到哪里配置这个
+镜像的地址。该镜像副本已上传时速云：
+用到的镜像有如下两个：
+Traefik
+432
+
+gcr.io/google_containers/pause-amd64:3.0
+gcr.io/google_containers/serve_hostname:v1.4
+时速云镜像地址：
+index.tenxcloud.com/jimmy/pause-amd64:3.0
+index.tenxcloud.com/jimmy/serve_hostname:v1.4
+将镜像pull到本地后重新打tag。
+Locust测试
+请求统计
+Method
+Name
+#
+requests
+#
+failures
+Median
+response
+time
+Average
+response
+time
+Min
+response
+time
+POST
+/login
+5070
+78
+59000
+80551
+11218
+POST
+/metrics
+5114232
+85879
+63000
+82280
+29518
+None
+Total
+5119302
+85957
+63000
+82279
+11218
+响应时间分布
+Name
+#
+requests
+50%
+66%
+75%
+80%
+90%
+95%
+POST
+/login
+5070
+59000
+125000
+140000
+148000
+160000
+16600
+POST
+/metrics
+5114993
+63000
+127000
+142000
+149000
+160000
+16600
+None
+Total
+5120063
+63000
+127000
+142000
+149000
+160000
+16600
+以上两个表格都是瞬时值。请求失败率在2%左右。
+Sample-webapp起了48个pod。
+Locust模拟10万用户，每秒增长100个。
+Traefik
+433
+
+参考
+基于 Python 的性能测试工具 locust (与 LR 的简单对比)
+Locust docs
+python用户负载测试工具：locust
+Kubernetes集群性能测试
+CoreOS是如何将Kubernetes的性能提高10倍的
+Kubernetes 1.3 的性能和弹性 —— 2000 节点，60,0000 Pod 的集群
+运用Kubernetes进行分布式负载测试
+Kubemark User Guide
+Flannel host-gw architecture
+Traefik
+434
+
+边缘节点配置
+前言
+为了配置kubernetes中的traefik ingress的高可用，对于kubernetes集群以外只暴露一个
+访问入口，需要使用keepalived排除单点问题。本文参考了kube-keepalived-vip，但并
+没有使用容器方式安装，而是直接在node节点上安装。
+定义
+首先解释下什么叫边缘节点（Edge Node），所谓的边缘节点即集群内部用来向集群外
+暴露服务能力的节点，集群外部的服务通过该节点来调用集群内部的服务，边缘节点是
+集群内外交流的一个Endpoint。
+边缘节点要考虑两个问题
+边缘节点的高可用，不能有单点故障，否则整个kubernetes集群将不可用
+对外的一致暴露端口，即只能有一个外网访问IP和端口
+架构
+为了满足边缘节点的以上需求，我们使用keepalived来实现。
+在Kubernetes集群外部配置nginx来访问边缘节点的VIP。
+选择Kubernetes的三个node作为边缘节点，并安装keepalived。
+Traefik
+435
+
+准备
+复用kubernetes测试集群的三台主机。
+172.20.0.113
+172.20.0.114
+172.20.0.115
+安装
+Traefik
+436
+
+使用keepalived管理VIP，VIP是使用IPVS创建的，IPVS已经成为linux内核的模块，不
+需要安装
+LVS的工作原理请参
+考：http://www.cnblogs.com/codebean/archive/2011/07/25/2116043.html
+不使用镜像方式安装了，直接手动安装，指定三个节点为边缘节点（Edge node）。
+因为我们的测试集群一共只有三个node，所有在在三个node上都要安装keepalived和
+ipvsadmin。
+yum install keepalived ipvsadm
+配置说明
+需要对原先的traefik ingress进行改造，从以Deployment方式启动改成DeamonSet。还
+需要指定一个与node在同一网段的IP地址作为VIP，我们指定成172.20.0.119，配置
+keepalived前需要先保证这个IP没有被分配。。
+Traefik以DaemonSet的方式启动
+通过nodeSelector选择边缘节点
+通过hostPort暴露端口
+当前VIP漂移到了172.20.0.115上
+Traefik根据访问的host和path配置，将流量转发到相应的service上
+配置keepalived
+参考基于keepalived 实现VIP转移，lvs，nginx的高可用，配置keepalived。
+keepalived的官方配置文档见：http://keepalived.org/pdf/UserGuide.pdf
+配置文件 /etc/keepalived/keepalived.conf 文件内容如下：
+! Configuration File for keepalived
+global_defs {
+   notification_email {
+     root@localhost
+   }
+   notification_email_from kaadmin@localhost
+Traefik
+437
+
+   smtp_server 127.0.0.1
+   smtp_connect_timeout 30
+   router_id LVS_DEVEL
+}
+vrrp_instance VI_1 {
+    state MASTER
+    interface eth0
+    virtual_router_id 51
+    priority 100
+    advert_int 1
+    authentication {
+        auth_type PASS
+        auth_pass 1111
+    }
+    virtual_ipaddress {
+        172.20.0.119
+    }
+}
+virtual_server 172.20.0.119 80{
+    delay_loop 6
+    lb_algo loadbalance
+    lb_kind DR
+    nat_mask 255.255.255.0
+    persistence_timeout 0
+    protocol TCP
+    real_server 172.20.0.113 80{
+        weight 1
+        TCP_CHECK {
+        connect_timeout 3
+        }
+    }
+    real_server 172.20.0.114 80{
+        weight 1
+        TCP_CHECK {
+        connect_timeout 3
+        }
+    }
+    real_server 172.20.0.115 80{
+        weight 1
+Traefik
+438
+
+        TCP_CHECK {
+        connect_timeout 3
+        }
+    }
+}
+ Realserver 的IP和端口即traefik供外网访问的IP和端口。
+将以上配置分别拷贝到另外两台node的 /etc/keepalived 目录下。
+我们使用转发效率最高的 lb_kind DR 直接路由方式转发，使用TCP_CHECK来检测
+real_server的health。
+启动keepalived
+systemctl start keepalived
+三台node都启动了keepalived后，观察eth0的IP，会在三台node的某一台上发现一个
+VIP是172.20.0.119。
+$ ip addr show eth0
+2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP
+ qlen 1000
+    link/ether f4:e9:d4:9f:6b:a0 brd ff:ff:ff:ff:ff:ff
+    inet 172.20.0.115/17 brd 172.20.127.255 scope global eth0
+       valid_lft forever preferred_lft forever
+    inet 172.20.0.119/32 scope global eth0
+       valid_lft forever preferred_lft forever
+关掉拥有这个VIP主机上的keepalived，观察VIP是否漂移到了另外两台主机的其中之一
+上。
+改造Traefik
+在这之前我们启动的traefik使用的是deployment，只启动了一个pod，无法保证高可用
+（即需要将pod固定在某一台主机上，这样才能对外提供一个唯一的访问地址），现在
+使用了keepalived就可以通过VIP来访问traefik，同时启动多个traefik的pod保证高可用。
+配置文件 traefik.yaml 内容如下：
+Traefik
+439
+
+apiVersion: extensions/v1beta1
+kind: DaemonSet
+metadata:
+  name: traefik-ingress-lb
+  namespace: kube-system
+  labels:
+    k8s-app: traefik-ingress-lb
+spec:
+  template:
+    metadata:
+      labels:
+        k8s-app: traefik-ingress-lb
+        name: traefik-ingress-lb
+    spec:
+      terminationGracePeriodSeconds: 60
+      hostNetwork: true
+      restartPolicy: Always
+      serviceAccountName: ingress
+      containers:
+      - image: traefik
+        name: traefik-ingress-lb
+        resources:
+          limits:
+            cpu: 200m
+            memory: 30Mi
+          requests:
+            cpu: 100m
+            memory: 20Mi
+        ports:
+        - name: http
+          containerPort: 80
+          hostPort: 80
+        - name: admin
+          containerPort: 8580
+          hostPort: 8580
+        args:
+        - --web
+        - --web.address=:8580
+        - --kubernetes
+      nodeSelector:
+        edgenode: "true"
+Traefik
+440
+
+注意，我们使用了 nodeSelector 选择边缘节点来调度traefik-ingress-lb运行在它上
+面，所有你需要使用：
+kubectl label nodes 172.20.0.113 edgenode=true
+kubectl label nodes 172.20.0.114 edgenode=true
+kubectl label nodes 172.20.0.115 edgenode=true
+给三个node打标签。
+查看DaemonSet的启动情况：
+$ kubectl -n kube-system get ds
+NAME                 DESIRED   CURRENT   READY     UP-TO-DATE   AVAIL
+ABLE   NODE-SELECTOR                              AGE
+traefik-ingress-lb   3         3         3         3            3    
+       edgenode=true                              2h
+现在就可以在外网通过172.20.0.119:80来访问到traefik ingress了。
+参考
+kube-keepalived-vip
+http://www.keepalived.org/
+keepalived工作原理与配置说明
+LVS简介及使用
+基于keepalived 实现VIP转移，lvs，nginx的高可用
+Traefik
+441
+
+minikube Ingress
+虽然minikube支持LoadBalancer类型的服务，但它并不会创建外部的负载均衡器，而是
+为这些服务开放一个NodePort。这在使用Ingress时需要注意。
+本节展示如何在minikube上开启Ingress Controller并创建和管理Ingress资源。
+启动Ingress Controller
+minikube已经内置了ingress addon，只需要开启一下即可
+$ minikube addons enable ingress
+稍等一会，nginx-ingress-controller和default-http-backend就会起来
+$ kubectl get pods -n kube-system
+NAME                             READY     STATUS    RESTARTS   AGE
+default-http-backend-5374j       1/1       Running   0          1m
+kube-addon-manager-minikube      1/1       Running   0          2m
+kube-dns-268032401-rhrx6         3/3       Running   0          1m
+kubernetes-dashboard-xh74p       1/1       Running   0          2m
+nginx-ingress-controller-78mk6   1/1       Running   0          1m
+创建Ingress
+首先启用一个echo server服务
+$ kubectl run echoserver --image=gcr.io/google_containers/echoserver:
+1.4 --port=8080
+$ kubectl expose deployment echoserver --type=NodePort
+$ minikube service echoserver --url
+http://192.168.64.36:31957
+然后创建一个Ingress，将 http://mini-echo.io 和 http://mini-web.io/echo 转
+发到刚才创建的echoserver服务上
+minikube Ingress
+442
+
+$ cat <<EOF | kubectl create -f -
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: echo
+  annotations:
+    ingress.kubernetes.io/rewrite-target: /
+spec:
+  backend:
+    serviceName: default-http-backend
+    servicePort: 80
+  rules:
+  - host: mini-echo.io
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: echoserver
+          servicePort: 8080
+  - host: mini-web.io
+    http:
+      paths:
+      - path: /echo
+        backend:
+          serviceName: echoserver
+          servicePort: 8080
+EOF
+为了访问 mini-echo.io 和 mini-web.io 这两个域名，手动在hosts中增加一个映射
+$ echo "$(minikube ip) mini-echo.io mini-web.io" | sudo tee -a /etc/h
+osts
+然后，就可以通过 http://mini-echo.io 和 http://mini-web.io/echo 来访问服务
+了。
+使用xip.io
+minikube Ingress
+443
+
+前面的方法需要每次在使用不同域名时手动配置hosts，借助 xip.io 可以省掉这个步
+骤。
+跟前面类似，先启动一个nginx服务
+$ kubectl run nginx --image=nginx --port=80
+$ kubectl expose deployment nginx --type=NodePort
+然后创建Ingress，与前面不同的是host使用 nginx.$(minikube ip).xip.io ：
+cat <<EOF | kubectl create -f -
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+ name: my-nginx-ingress
+spec:
+ rules:
+  - host: nginx.$(minikube ip).xip.io
+    http:
+     paths:
+      - path: /
+        backend:
+         serviceName: nginx
+         servicePort: 80
+EOF
+然后就可以直接访问该域名了
+$ curl nginx.$(minikube ip).xip.io
+minikube Ingress
+444
+
+Cloud Provider扩展
+当Kubernetes集群运行在云平台内部时，Cloud Provider使得Kubernetes可以直接利用
+云平台实现持久化卷、负载均衡、网络路由、DNS解析以及横向扩展等功能。
+常见Cloud Provider
+Kubenretes内置的Cloud Provider包括
+GCE
+AWS
+Azure
+Mesos
+OpenStack
+CloudStack
+Ovirt
+Photon
+Rackspace
+Vsphere
+如何开发Cloud Provider扩展
+Kubernetes的Cloud Provider目前正在重构中
+v1.6添加了独立的 cloud-controller-manager 服务，云提供商可以构建自己
+的 cloud-controller-manager 而无须修改Kubernetes核心代码
+v1.7进一步重构 cloud-controller-manager ，解耦了Controller Manager与
+Cloud Controller的代码逻辑
+构建一个新的云提供商的Cloud Provider步骤为
+编写实现cloudprovider.Interface的cloudprovider代码
+将该cloudprovider链接到 cloud-controller-manager 
+在 cloud-controller-manager 中导入新的cloudprovider： import
+"pkg/new-cloud-provider" 
+初始化时传入新cloudprovider的名字，
+如 cloudprovider.InitCloudProvider("rancher", s.CloudConfigFile) 
+5.7 Cloud Provider
+445
+
+配置kube-controller-manager  --cloud-provider=external 
+启动 cloud-controller-manager 
+具体实现方法可以参考rancher-cloud-controller-manager。
+5.7 Cloud Provider
+446
+
+Scheduler扩展
+如果默认的调度器不满足要求，还可以部署自定义的调度器。并且，在整个集群中还可
+以同时运行多个调度器实例，通过 podSpec.schedulerName 来选择使用哪一个调度器
+（默认使用内置的调度器）。
+开发自定义调度器
+自定义调度器主要的功能是查询未调度的Pod，按照自定义的调度策略选择新的Node，
+并将其更新到Pod的Node Binding上。
+比如，一个最简单的调度器可以用shell来编写（假设Kubernetes监听
+在 localhost:8001 ）：
+#!/bin/bash
+SERVER='localhost:8001'
+while true;
+do
+    for PODNAME in $(kubectl --server $SERVER get pods -o json | jq '
+.items[] | select(.spec.schedulerName == "my-scheduler") | select(.sp
+ec.nodeName == null) | .metadata.name' | tr -d '"')
+;
+    do
+        NODES=($(kubectl --server $SERVER get nodes -o json | jq '.it
+ems[].metadata.name' | tr -d '"'))
+        NUMNODES=${#NODES[@]}
+        CHOSEN=${NODES[$[ $RANDOM % $NUMNODES ]]}
+        curl --header "Content-Type:application/json" --request POST 
+--data '{"apiVersion":"v1", "kind": "Binding", "metadata": {"name": "'
+$PODNAME'"}, "target": {"apiVersion": "v1", "kind"
+: "Node", "name": "'$CHOSEN'"}}' http://$SERVER/api/v1/namespaces/def
+ault/pods/$PODNAME/binding/
+        echo "Assigned $PODNAME to $CHOSEN"
+    done
+    sleep 1
+done
+5.8 Scheduler扩展
+447
+
+使用自定义调度器
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+  labels:
+    app: nginx
+spec:
+  # 选择使用自定义调度器my-scheduler
+  schedulerName: my-scheduler
+  containers:
+  - name: nginx
+    image: nginx:1.10
+5.8 Scheduler扩展
+448

@@ -1,0 +1,273 @@
+134 ff 第一篇 基础篇 
+第7 章 
+TensorFlow 的高级框架 
+得益于TensorFlow 社区的繁荣，诞生出许多高质量的元框架（metaframework），如Keras、
+TFLearn、TensorLayer 等。使用元框架能够大大减少编写TensorFlow 代码的工作量，方便开发
+者很速搭建网络模型，并且使代码简单、可读性强。
+本章我们主要讲解官方默认支持的Keras 和老牌的TFLearn 提供的高级API。 
+ 7.1  TFLearn 
+TFLearn 是一个建立在TensorFlow 顶部的模块化的深度学习框架，它为TensorFlow 提供更
+高级的API，以便于很速实验，同时保持完全透明和兼容。 
+在6.2 节中我们已经用原生的TensorFlow 代码完成了AlexNet。读者可能已经感受到其代
+码的冗长，下面我们就用TFLearn 框架，看看如何将代码写得简洁。
+① 
+7.1.1  加载数据 
+这里用的是牛津大学的鲜花数据集
+②（Flower Dataset）。这个数据集提供了17 个类别的鲜
+花数据，每个类别80 张图片，并且图片有大量的姿态和光的变化。 
+注意，在代码的开始需要导入用到的与卷积、池化、规范化相关的类，方法如下：
+import tflearn 
+from tflearn.layers.core import input_data, dropout, fully_connected 
+from tflearn.layers.conv import conv_2d, max_pool_2d 
+from tflearn.layers.normalization import local_response_normalization 
+from tflearn.layers.estimator import regression 
+①
+本节代码参参https://github.com/tflearn/tflearn/blob/master/examples/images/alexnet.py。
+②
+http://www.robots.ox.ac.uk/～vgg/data/flowers/17/
+
+第7 章 TensorFlow 的高级框架 ee 135 
+import tflearn.datasets.oxflower17 as oxflower17 
+X, Y = oxflower17.load_data(one_hot=True, resize_pics=(227, 227)) 
+7.1.2  构建网络模型 
+构建AlexNet 网络模型时，直接使用TFLearn 中的卷积、池化、规范化、全连接、dropout
+函数来构建即可。方法如下：
+# 构建AlexNet 网络 
+network = input_data(shape=[None, 227, 227, 3]) 
+network = conv_2d(network, 96, 11, strides=4, activation='relu') 
+network = max_pool_2d(network, 3, strides=2) 
+network = local_response_normalization(network) 
+network = conv_2d(network, 256, 5, activation='relu') 
+network = max_pool_2d(network, 3, strides=2) 
+network = local_response_normalization(network) 
+network = conv_2d(network, 384, 3, activation='relu') 
+network = conv_2d(network, 384, 3, activation='relu') 
+network = conv_2d(network, 256, 3, activation='relu') 
+network = max_pool_2d(network, 3, strides=2) 
+network = local_response_normalization(network) 
+network = fully_connected(network, 4096, activation='tanh') 
+network = dropout(network, 0.5) 
+network = fully_connected(network, 4096, activation='tanh') 
+network = dropout(network, 0.5) 
+network = fully_connected(network, 17, activation='softmax') 
+network = regression(network, optimizer='momentum', 
+loss='categorical_crossentropy', 
+learning_rate=0.001) # 回归操作，同时规定网络所使用的学习率、损失函数和优化器 
+7.1.3  训练模型 
+构建完模型之后，就可以训练模型了。这里我们加了一步，就是假设有训练好或训练到一
+半的AlexNet 模型的检查点文件，直接载入，方法如下： 
+model = tflearn.DNN(network, checkpoint_path='model_alexnet', 
+max_checkpoints=1, tensorboard_verbose=2) 
+model.fit(X, Y, n_epoch=1000, validation_set=0.1, shuffle=True, 
+show_metric=True, batch_size=64, snapshot_step=200, 
+snapshot_epoch=False, run_id='alexnet_oxflowers17') 
+可见，代码简洁得让人惊讶。这就是第三方库的优点。
+ 7.2  Keras 
+Keras 是一个高级的Python 神经网络框架，其文档详见https://keras.io/。Keras 已经被添加
+
+136 ff 第一篇 基础篇 
+到TensorFlow 中，成为其默认的框架，为TensorFlow 提供更高级的API。 
+如果读者不想了解TensorFlow 的细节，只需要模块化，那么Keras 是一个不错的选择。如
+果将TensorFlow 比喻为编程界的Java 或C++，那么Keras 就是编程界的Python。它作为
+TensorFlow 的高层封装，可以与TensorFlow 联合使用，用它很速搭建原型。 
+另外，Keras 兼容两种后端，即Theano 和TensorFlow，并且其接口形式和Torch 有几分相
+像。掌握Keras 可以大幅提升对开发效率和网络结构的理解。 
+7.2.1  Keras 的优点 
+Keras 是高度封装的，非常适合新手使用，代码更新速度比较很，示例代码也比较多，文
+档和我论区也比较完善。最重要的是，Keras 是TensorFlow 官方支持的。当机器上有可用的GPU
+时，代码会自动调用GPU 进行并行计算。 
+Keras 官方网站上描述了它的几个优点，具体如下。 
+●
+模块化：模型的各个部分，如神经层、成本函数、优化器、初始化、激活函数、规范
+化都是独立的模块，可以组合在一起来创建模型。
+●
+极简主义：每个模块都保持简短和简单。
+●
+易扩展性：很容易添加新模块，因此Keras 适于做进一步的高级研究。
+●
+使用Python 语言：模型用Python 实现，非常易于调试和扩展。
+7.2.2  Keras 的模型① 
+Keras 的核心数据结构是模型。模型是用来组织网络层的方式。模型有两种，一种叫
+Sequential 模型，另一种叫Model 模型。Sequential 模型是一系列网络层按顺序构成的栈，是单
+输入和单输出的，层与层之间只有相邻关系，是最简单的一种模型。Model 模型是用来建立更
+复杂的模型的。
+这里先介绍简单的Sequential 模型的使用（7.2.3 节将会以一个示例来介绍Model 模型）。首先
+是加载数据，这里我们假设数据已经加载完毕，是X_train, Y_train 和X_test, Y_test。然后构建模型： 
+from keras.models import Sequential 
+from keras.layers import Dense, Activation 
+model = Sequential() 
+model.add(Dense(output_dim=64, input_dim=100)) 
+model.add(Activation("relu")) 
+model.add(Dense(output_dim=10)) 
+model.add(Activation("softmax")) 
+①
+本节的示例参参Keras 的官方文档：https://keras.io/。
+
+第7 章 TensorFlow 的高级框架 ee 137 
+然后，编译模型，同时指明损失函数和优化器：
+model.compile(loss='categorical_crossentropy', optimizer='sgd', metrics=['accuracy']) 
+最后，训练模型和评估模型：
+model.fit(X_train, Y_train, nb_epoch=5, batch_size=32) 
+loss_and_metrics = model.evaluate(X_test, Y_test, batch_size=32) 
+这就是一个最简单的模型的使用。如果要搭建复杂的网络，可以使用Keras 的Model 模型，
+它能定义多输出模型、含有共享层的模型、共享视觉模型、图片问答模型、视觉问答模型等。
+在Keras 的源代码的examples 文件夹里还有更多的例子，有兴趣的读者可以参参。 
+7.2.3  Keras 的使用 
+我们下载Keras 代码
+①到本地目录，将下载后的目录命名为keras。Keras 源代码中包含很多
+示例，例如：
+●
+CIFAR10—图片分类（使用CNN 和实时数据）；
+●
+IMDB—电影评论观点分类（使用LSTM）；
+●
+Reuters—新闻主题分类（使用多层感知器）；
+●
+MNIST—手写数字识别（使用多层感知器和CNN）；
+●
+OCR—识别字符级文本生成（使用LSTM）。
+这里我们主要用MNIST 示例进行讲解。后续在第13 章中，我们仍会以Keras 框架来讲解
+原理及代码实现。
+1．安装 
+Keras 的安装非常简单，不依赖操作系统，建议大家直接通过pip 命令安装： 
+pip install keras 
+安装完成后，需要选择依赖的后端，在~/.keras/keras.json 下修改最后一行backend 对应的
+值即可。修改后的文件如下：
+{ 
+  "image_dim_ordering": "tf", 
+  "epsilon": 1e-07, 
+  "floatx": "float32", 
+  "backend": "tensorflow" 
+} 
+①
+https://github.com/fchollet/keras
+
+138 ff 第一篇 基础篇 
+2．实现卷积神经网络
+① 
+用Keras 实现一个网络模型，主要分为加载数据、模型构建、模型编译、模型训练、模型
+评估或者模型预测几步。下面我们就用最简单的MNIST 示例来看如何用Keras 实现一个卷积神
+经网络（CNN）。 
+首先，定义好一参数以及加载数据，如下：
+batch_size = 128 
+nb_classes = 10 # 分类数 
+nb_epoch = 12 # 训练轮数 
+# 输入图片的维度 
+img_rows, img_cols = 28, 28 
+# 卷积滤镜的个数 
+nb_filters = 32 
+# 最大池化，池化核大小 
+pool_size = (2, 2) 
+# 卷积核大小 
+kernel_size = (3, 3) 
+(X_train, y_train), (X_test, y_test) = mnist.load_data() 
+if K.image_dim_ordering() == 'th': 
+  # 使用Theano 的顺序：(conv_dim1, channels, conv_dim2, conv_dim3) 
+  X_train = X_train.reshape(X_train.shape[0], 1, img_rows, img_cols) 
+  X_test = X_test.reshape(X_test.shape[0], 1, img_rows, img_cols) 
+  input_shape = (1, img_rows, img_cols) 
+else: 
+  # 使用TensorFlow 的顺序：(conv_dim1, conv_dim2, conv_dim3, channels) 
+  X_train = X_train.reshape(X_train.shape[0], img_rows, img_cols, 1) 
+  X_test = X_test.reshape(X_test.shape[0], img_rows, img_cols, 1) 
+  input_shape = (img_rows, img_cols, 1) 
+X_train = X_train.astype('float32') 
+X_test = X_test.astype('float32') 
+X_train /= 255 
+X_test /= 255 
+# 将类向量转换为二进制类矩阵 
+Y_train = np_utils.to_categorical(y_train, nb_classes) 
+Y_test = np_utils.to_categorical(y_test, nb_classes) 
+下面来构建模型，这里用2 个卷积层、1 个池化层和2 个全连接层来构建，如下： 
+model = Sequential() 
+①
+本节代码参参https://github.com/fchollet/keras/blob/master/examples/mnist_cnn.py。 
+
+第7 章 TensorFlow 的高级框架 ee 139 
+model.add(Convolution2D(nb_filters, kernel_size[0], kernel_size[1], 
+border_mode='valid', 
+input_shape=input_shape)) 
+model.add(Activation('relu')) 
+model.add(Convolution2D(nb_filters, kernel_size[0], kernel_size[1])) 
+model.add(Activation('relu')) 
+model.add(MaxPooling2D(pool_size=pool_size)) 
+model.add(Dropout(0.25)) 
+model.add(Flatten()) 
+model.add(Dense(128)) 
+model.add(Activation('relu')) 
+model.add(Dropout(0.5)) 
+model.add(Dense(nb_classes)) 
+model.add(Activation('softmax')) 
+随后，用model.compile()函数编译模型，采用多分类的损失函数，用Adadelta 算法做优化
+方法，如下：
+model.compile(loss='categorical_crossentropy', 
+optimizer='adadelta', 
+metrics=['accuracy']) 
+然后，开始用model.fit()函数训练模型，输入训练集和测试数据，以及batch_size 和nb_epoch
+参数，如下：
+model.fit(X_train, Y_train, batch_size=batch_size, nb_epoch=nb_epoch, 
+verbose=1, validation_data=(X_test, Y_test)) 
+最后，用model.evaluate()函数来评估模型，输出测试集的损失值和准确率，如下： 
+score = model.evaluate(X_test, Y_test, verbose=0) 
+print('Test score:', score[0]) 
+print('Test accuracy:', score[1]) 
+计算出的损失值和准确率如下：
+Test score: 0.0327563833317 
+Test accuracy: 0.9893 
+这是一个非常简单的例子。尽管模型架构是不变的，但是读者要将其应用到自己的开发领
+域，一般是先读懂对应的神经网络论文，然后用这个架构去搭建和训练模型。
+3．模型的加载及保存 
+Keras 的save_model 和load_model 方法可以将Keras 模型和权重保存在一个HDF5 文件中，
+这里面包括模型的结构、权重、训练的配置（损失函数、优化器）等。如果训练因为某种原因
+
+140 ff 第一篇 基础篇 
+中止，就用这个HDF5 文件从上次训练的地方重新开始训练。 
+keras/tests 目录中的test_model_saving.py 文件中给出了加载和保存模型的方式。test_model_ 
+saving.py 文件的内容如下： 
+from keras.models import save_model, load_model 
+def test_sequential_model_saving(): 
+   model = Sequential() 
+   model.add(Dense(2, input_dim=3)) 
+   model.add(RepeatVector(3)) 
+   model.add(TimeDistributed(Dense(3))) 
+   model.compile(loss=objectives.MSE, 
+optimizer=optimizers.RMSprop(lr=0.0001), 
+metrics=[metrics.categorical_accuracy], 
+sample_weight_mode='temporal') 
+   x = np.random.random((1, 3)) 
+   y = np.random.random((1, 3, 3)) 
+   model.train_on_batch(x, y) 
+   out = model.predict(x) 
+   _, fname = tempfile.mkstemp('.h5')  # 创建一个HDFS 5 文件 
+   save_model(model, fname) 
+   new_model = load_model(fname) 
+   os.remove(fname) 
+   out2 = new_model.predict(x) 
+   assert_allclose(out, out2, atol=1e-05) 
+   # 检测新保存的模型和之前定义的模型是否一致 
+   x = np.random.random((1, 3)) 
+   y = np.random.random((1, 3, 3)) 
+   model.train_on_batch(x, y) 
+   new_model.train_on_batch(x, y) 
+   out = model.predict(x) 
+   out2 = new_model.predict(x) 
+   assert_allclose(out, out2, atol=1e-05) 
+如果只是希望保存模型的结构，而不包含其权重及训练的配置（损失函数、优化器），可
+以使用下面的代码将模型序列化成json 或者yaml 文件： 
+json_string = model.to_json() 
+json_string = model.to_yaml() 
+保存完成后，还可以手动编辑，并且使用如下语句进行加载：
+from keras.models import model_from_json 
+model = model_from_json(json_string) 
+model = model_from_yaml(yaml_string) 
+
+第7 章 TensorFlow 的高级框架 ee 141 
+如果仅需要保存模型的权重，而不包含模型的结构，可以使用save_weights 和load_weights
+语句来保存和加载：
+model.save_weights('my_model_weights.h5') 
+model.load_weights('my_model_weights.h5') 
+ 7.3  小结 
+本章主要介绍了TensorFlow 的高质量的元框架—Keras 和TFLearn。当读者熟练使用
+TensorFlow 去构建神经网络后，会发现TensorFlow 的确过于灵活，且代码十分冗长。使用元框
+架提供的高级API 能够可以极大地提高开发效率，很容易做一些模型实验。在第11 章和第13
+章中都会用Keras 和TFLearn 里的高级API 来构建网络。 

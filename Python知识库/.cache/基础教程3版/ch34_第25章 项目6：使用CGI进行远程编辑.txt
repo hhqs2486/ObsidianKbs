@@ -1,0 +1,290 @@
+25.2 有用的工具  379 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+24 
+25 
+11 
+12 
+13 
+14 
+项目6：使用CGI进行远程 
+编辑
+本章的项目使用第15章详细讨论过的CGI进行远程编辑——在另一台机器上通过Web来编辑
+文档。这在协作系统（群件）中很有用，如多人协作编辑一个文档。你还可使用它来更新网页。 
+25.1 问题描述 
+你在一台机器上存储了一个文档，希望能够在另一台机器上通过Web来编辑它。这让多个用
+户能够协作编辑一个文档，且无需使用FTP或类似的文件传输技术，也无需操心同步多个副本的
+问题。要编辑文件，只要有Web浏览器就行。 
+注意 这种远程编辑是维基系统（参见http://en.wikipedia.org/wiki/Wiki）的核心机制之一。 
+具体地说，这个系统应满足如下需求。 
+能够以普通网页的方式显示文档。
+能够在Web表单的文本区域内显示文档。
+用户能够保存表单中的文本。
+程序应使用密码对文档进行保护。
+程序应易于扩展，以支持对多个文档进行编辑。
+你将看到，这些需求都很容易实现，只需使用Python标准库模块cgi并编写一些简单的Python
+代码即可。然而请注意，使用这个应用程序采用的技术，可为任何Python程序提供Web界面，因
+此这些技术很有用。 
+25.2 有用的工具 
+第15章讨论过，编写CGI程序时，使用的主要工具包括模块cgi以及用于调试的模块cgitb。
+有关这方面的详细信息，请参阅第15章。 
+第25 章
+                          
+
+380  第25 章 项目6：使用CGI 进行远程编辑 
+25.3 准备工作 
+在15.2节中详细介绍了能够通过Web访问CGI脚本所需的步骤，你只需按这些步骤做就行。 
+25.4 初次实现 
+初次实现基于代码清单15-7所示问候脚本的基本结构。就这个原型而言，只需做些文件处理
+工作即可。 
+脚本要发挥作用，必须将修改后的文本存盘。另外，表单应比问候脚本（代码清单15-7所示
+的simple3.cgi）中的表单大些，还应将文本框改为文本区域。同时，应使用CGI方法POST，而不
+是默认的GET方法。（通常，要提交大量数据时，应使用POST方法。） 
+这个程序的逻辑大体如下。 
+(1) 获取CGI参数text（默认为数据文件的当前内容）。 
+(2) 将text的值保存到数据文件中。 
+(3) 打印表单，其中的文本区域包含text的值。 
+要让脚本能够写入数据文件，必须先创建这样的文件（如simple_edit.dat）。这个文件可以为
+空，也可包含初始文档（纯文本文件，其中可能包含一些标记，如XML或HTML）。接下来，必
+须按第15章介绍的设置权限，让任何人都可写入这个文件。最终的代码如代码清单25-1所示。 
+代码清单25-1 一个简单的Web编辑器（simple_edit.cgi） 
+#!/usr/bin/env python 
+import cgi 
+form = cgi.FieldStorage() 
+text = form.getvalue('text', open('simple_edit.dat').read()) 
+f = open('simple_edit.dat', 'w') 
+f.write(text)
+f.close()
+print("""Content-type: text/html 
+<html>  
+  <head> 
+    <title>A Simple Editor</title> 
+  </head> 
+  <body> 
+ <form action='simple_edit.cgi' method='POST'> 
+ <textarea rows='10' cols='20' name='text'>{}</textarea><br /> 
+ <input type='submit' /> 
+ </form> 
+  </body> 
+</html> 
+""".format(text)) 
+                          
+
+25.5 再次实现  381 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+24 
+25 
+11 
+12 
+13 
+14 
+通过Web服务器运行时，这个CGI脚本检查输入值text。如果提交了这个值，就将其写入
+simple_edit.dat；没有提交时，这个值默认为文件simple_edit.dat的当前内容。最后，显示一个网
+页，其中包含用于编辑和提交文本的字段，如图25-1所示。 
+图25-1 脚本simple_edit.cgi的运行情况 
+25.5 再次实现 
+至此，第一个原型已编写好，它还缺什么呢？应让用户能够编辑多个文件，并使用密码保护
+这些文件。（直接在浏览器中打开文档就能查看它，因此无需过多关注这个程序的查看部分。） 
+相比于第一个原型，再次实现的主要不同在于，你将把它分成两个CGI脚本，分别对应于系
+统支持的两种操作。新的原型包含如下文件。 
+index.html：一个普通网页，包含一个供用户输入文件名的表单，还包含一个触发edit.cgi
+的Open按钮。
+edit.cgi：在文本区域中显示指定文件的脚本。它还包含一个用于输入密码的文本框以及
+一个触发save.cgi的Save按钮。
+save.cgi：将收到的文本保存到指定的文件并显示一条简单消息（如The file has been saved）
+的脚本。这个脚本还应负责检查密码。
+下面来逐个编写这些文件。 
+25.5.1 创建文件名表单 
+index.html是一个HTML文件，包含用于输入文件名的表单。 
+                          
+
+382  第25 章 项目6：使用CGI 进行远程编辑 
+<html>  
+  <head> 
+    <title>File Editor</title> 
+  </head> 
+  <body> 
+ <form action='edit.cgi' method='POST'> 
+  <b>File name:</b><br /> 
+  <input type='text' name='filename' /> 
+  <input type='submit' value='Open' /> 
+  </body> 
+</html> 
+注意到这个文本框名为filename，这确保其内容将通过CGI参数filename提供给脚本edit.cgi
+（即标签form的属性action的值）。如果你在浏览器中打开这个文件，在文本框中输入文件名，再
+单击Open按钮，将运行脚本edit.cgi。 
+25.5.2 编写编辑器脚本 
+脚本edit.cgi显示的页面应包含一个文本区域和一个文本框，其中前者包含当前编辑的文件的
+内容，而后者用于输入密码。这个脚本需要的唯一输入是文件名，它是从index.html中的表单中
+获得的。然而，可在不提交index.html中表单的情况下直接运行脚本edit.cgi。在这种情况下，
+cgi.FieldStorage的字段将是未设置的。因此，你需要检查是否获得了文件名；如果获得了，就
+打开指定目录中的这个文件。我们将这个目录命名为data（当然，你必须创建这个目录）。 
+警告 通过提供包含路径元素［如..（两个点）］的文件名，可访问指定目录外的文件。为确保
+访问的文件在指定的目录内，应执行额外的检查，如列出指定目录中的所有文件（为此
+可使用模块glob），并核实指定的文件名是这些文件中的一个（务必使用完整的绝对路径
+名）。27.5.3节介绍了另一种方法。 
+这个脚本的代码类似于代码清单25-2。 
+代码清单25-2 编辑器脚本（edit.cgi） 
+#!/usr/bin/env python 
+print('Content-type: text/html\n') 
+from os.path import join, abspath 
+import cgi, sys 
+BASE_DIR = abspath('data') 
+form = cgi.FieldStorage() 
+filename = form.getvalue('filename') 
+if not filename:  
+   print('Please enter a file name') 
+   sys.exit() 
+                          
+
+25.5 再次实现  383 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+24 
+25 
+11 
+12 
+13 
+14 
+text = open(join(BASE_DIR, filename)).read() 
+print(""" 
+<html> 
+   <head> 
+    <title>Editing...</title> 
+   </head> 
+   <body> 
+ <form action='save.cgi' method='POST'> 
+  <b>File:</b> {}<br /> 
+  <input type='hidden' value='{}' name='filename' /> 
+  <b>Password:</b><br /> 
+  <input name='password' type='password' /><br /> 
+  <b>Text:</b><br /> 
+  <textarea name='text' cols='40' rows='20'>{}</textarea><br /> 
+  <input type='submit' value='Save' /> 
+ </form> 
+   </body> 
+</html> 
+""".format(filename, filename, text)) 
+请注意，这里使用了函数abspath来获取目录data的绝对路径。另外，将文件名存储在了一个
+隐藏的表单元素中，以便将其传递给下一个脚本（save.cgi），同时不给用户修改它的机会。（当
+然，并不能禁止用户修改这个文件名，因为用户可编写自己的表单，将它们放在另一台机器上，
+并让这些表单使用自定义值调用你的CGI脚本。） 
+为处理密码，示例代码使用了一个类型为password（而不是text）的input元素，这意味着用
+户输入的字符将显示为星号。 
+注意 这个脚本假定指定的文件存在，你可对其进行扩展，使其能够处理其他情形。 
+25.5.3 编写保存脚本 
+这个简单系统的最后一部分是执行保存的脚本。它接收文件名、密码和一些文本，并检查密
+码是否正确；如果正确，就将这些文本存储到指定的文件中。（你必须妥善地设置这个文件的权
+限。有关如何设置文件权限，请参阅第15章。） 
+出于好玩，我们将使用模块sha来处理密码。安全散列算法（Secure Hash Algorithm，SHA）
+是一种从输入字符串中提取无意义的随机字符串（摘要）的方法。这个算法背后的思想是，几乎
+不可能创建具有指定摘要的字符串，因此即便你知道密码的摘要，也无法重建密码或创建一个具
+有该摘要的密码。这意味着你可将所提供密码的摘要与存储的正确密码的摘要进行比较，而不用
+对密码本身进行比较。通过使用这种方法，无需将密码本身存储在源代码中，这样阅读代码的人
+根本不知道密码是什么。 
+                          
+
+384  第25 章 项目6：使用CGI 进行远程编辑 
+警告 前面说过，实现这种安全功能主要是出于好玩。除非你使用SSL或其他类似的技术（这些
+技术不在这个项目的讨论范围内）来建立安全的连接，否则通过网络提交的密码依然可
+能被窃取。另外，这里使用的SHA1算法现在已不是非常安全了。 
+下面的示例演示了sha的用法： 
+>>> from hashlib import sha1 
+>>> sha1(b'foobar').hexdigest() 
+'8843d7f92416211de9ebb963ff4ce28125932878' 
+>>> sha1(b'foobaz').hexdigest() 
+'21eb6533733a5e4763acacd1d45a60c2e0e404e1' 
+如你所见，密码发生细微的变化时，得到的摘要完全不同。脚本save.cgi的代码如代码清单
+25-3所示。 
+代码清单25-3 保存文件的脚本（save.cgi） 
+#!/usr/bin/env python 
+print('Content-type: text/html\n') 
+from os.path import join, abspath 
+from hashlib import sha1 
+import cgi, sys 
+BASE_DIR = abspath('data') 
+form = cgi.FieldStorage() 
+text = form.getvalue('text') 
+filename = form.getvalue('filename') 
+password = form.getvalue('password') 
+if not (filename and text and password):  
+ print('Invalid parameters.') 
+   sys.exit() 
+if sha1(password.encode()).hexdigest() != '8843d7f92416211de9ebb963ff4ce28125932878': 
+ print('Invalid password') 
+   sys.exit() 
+f = open(join(BASE_DIR,filename), 'w') 
+f.write(text)
+f.close()
+print('The file has been saved.') 
+25.5.4 运行编辑器 
+请按下面的步骤来使用这个编辑器。 
+                          
+
+25.5 再次实现  385 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+24 
+25 
+11 
+12 
+13 
+14 
+(1) 在Web浏览器中打开页面index.html。务必通过Web服务器来打开它（使用形如http://www. 
+someserver.com/index.html的URL），而不要将其作为本地文件打开。结果如图25-2所示。 
+图25-2 CGI编辑器的起始页面 
+(2) 输入这个CGI编辑器可修改的文件的名称，再单击按钮Open。浏览器将包含脚本edit.cgi
+的输出，如图25-3所示。 
+图25-3 CGI编辑器的编辑页面 
+                          
+
+386  第25 章 项目6：使用CGI 进行远程编辑 
+(3) 随意编辑这个文件，输入密码（你设置的密码或这个示例中的密码foobar），再单击按钮
+Save。浏览器将包含脚本save.cgi的输出，也就是消息The file has been saved.。 
+(4) 要核实文件被修改，可重复打开这个文件的过程（第1~2步）。 
+25.6 进一步探索 
+使用这个项目演示的技术，可开发各种Web系统。对于本章开发的系统，可做如下扩展。 
+添加版本控制，保存文件的旧副本，让你能够撤销所做的修改。
+添加用户名支持，以便知道各项修改都是由谁所为。
+添加文件锁定功能（如使用模块fcntl），禁止两个用户同时编辑同一个文件。
+添加脚本view.cgi，自动给文件添加标记（就像第20章所做的那样）。
+更详尽地检查输入并添加对用户更友好的消息，让脚本更健壮。
+不打印类似于The file has been saved.这样的确认消息，而是添加一些更有用的输出或将用
+户重定向到另一个页面/脚本。重定向可使用Location首部来实现，其工作原理类似于
+Content-type。为此，只需在输出的header部分（第一个空行前）加上Location:、空格和
+要重定向到的URL。
+除扩展这个CGI系统的功能外，你可能还想了解一些更复杂的Python Web环境（这在第15章
+讨论过）。 
+预告
+至此，你练习编写了CGI脚本。下一个项目将更进一步，使用SQL数据库来存储数据。你将
+结合使用这两种技术实现一个功能齐备的基于Web的公告板。 
+                          

@@ -1,0 +1,3082 @@
+Ajax 数据爬取
+有时候我们在用requests 抓取页面的时候，得到的结果可能和在浏览器中看到的不一样：在浏览
+器中可以看到正常显示的页面数据，但是使用
+requests 得到的结果并没有。这是因为
+r巳quests 获取的
+都是原始的HTML 文档，而浏览器中的页面则是经过JavaScript 处理数据后生成的结果，这些数据的
+来源有多种，可能是通过Ajax 加载的，可能是包含在HTML 文档中的，也可能是经过JavaScript 和特
+定算法计算后生成的。
+对于第一种情况，数据加载是一种异步加载方式，原始的页面最初不会包含某些数据，原始页面
+加载完后，会再向服务器请求某个接口获取数据，然后数据才被处理从而呈现到网页上，这其实就是
+发送了一个人jax 请求。
+照Web 发展的趋势来看，这种形式的页面越来越多。网页的原始HTML 文档不会包含任何数据，
+数据都是通过Aj缸统一加载后再呈现出来的，这样在Web 开发上可以做到前后端分离，而且降低服
+务器直接渲染页面带来的压力。
+所以如果遇到这样的页面，直接利用requests 等库来抓取原始页面，是无法获取到有效数据的，
+这时需要分析网页后台向接口发送的Ajax 请求，如果可以用requests 来模拟Ajax 请求，那么就可以
+成功抓取了。
+所以，本章我们的主要目的是了解什么是Ajax 以及如何去分析和抓取Ajax 请求。
+6.1 
+什么是Ajax
+Ajax ，全称为Asynchronous JavaScript and XML ，即异步的JavaScript 和XML 。它不是一门编程
+语言，而是利用
+JavaScript 在保证页面不被刷新、页面链接不改变的情况下与服务器交换数据并更新
+部分网页的技术。
+对于传统的网页，如果想更新其内容，那么必须要刷新整个页面，但有了Ajax ，便可以在页面不
+被全部刷新的情况下更新其内容。在这个过程中，页面实际上是在后台与服务器进行了数据交互，获
+取到数据之后，再利用JavaScript 改变网页，这样网页内容就会更新了。
+可以到W3School 上体验几个示例来感受一下：
+http://www.w3school.eom.cn/ajax/句ax＿：刀叫h即request_
+send.asp 。
+更多免费资源请访问ppbuzz.com
+
+6.1 
+什么是Ajax
+233 
+1. 实例引入
+浏览网页的时候，我们会发现很多网页都有下滑查看更多的选项。
+比如，拿微博来说，以我的主
+页为例：
+htψs://m.weibo.cn/u/28306784 7 4 ，切换到微博页面，一直下滑，可以发现下滑几个微博之后，
+再向下就没有了，转而会：－H 现一个加载的动间，不一会儿下方就继续出现了新的微博内容，这个过程
+真实就是Ajax 加载的过程，如图6-1 所示。
+崔庆才｜静觅
+2016-11-27 来自翻”调Ibo.com
+’ 
+＠一起神回复·论如何拍出好看的滑雪照片γ
+曰$毒发
+。评论
+61 
+3
+细’Z申”。
+图6-1
+页面加载过程
+我们注意到页面其实并没有整个刷新，也就意味着页面的链接没有变化，但是网页中却多了新内
+容，也就是后面刷出来的新微博。这就是通过Ajax 获取新数据’并呈现的过程。
+2. 基本原理
+初步了解了Ajax 之后，我们再来详细了解它的基本原理。发送Ajax 请求到网页更新的这个过程
+吁以简单分为以下3 步：
+(I ）发送请求；
+(2）解析内容；
+(3）渲染网页。
+下面我们分别来详细介绍这几个过程。
+·发送请求
+我们知道JavaScript 可以实现页丽的各种交互功能，
+Ajax 也不例外，它也是由JavaScript 实现的，
+实际上执行了如下代码：
+var xmlhttp; 
+if (window.XMLHttpRequest) { 
+II code for IE7+, Firefox, Chrome, Opera, Safari 
+xmlhttp=new XMLHttpRequest(); 
+} else {II code for IE6, IES 
+xmlhttp=new ActiveXObject(”Microsoft.XMLHTTP”); 
+回
+更多免费资源请访问ppbuzz.com
+
+234 
+第6 幸
+Ajax 数据爬取
+xmlhttp. onreadystatechange=function() { 
+if (xmlhttp.ready5tate==4 && xmlhttp.status==200) { 
+do cu阳it.getEle阳itByld （” myDiv ”）.in附rHTML=xmlhttp.responseText;
+xmlhttp.open("POST”,"/ajax/”,true); 
+xmlhttp.send(); 
+这是
+JavaScript 对
+Ajax 最底层的实现，实际上就是新建了
+XMLHttpRequest 对象，然后调用
+onreadystatechange 属性设置了监昕，然后调用open （）和send （）方法向某个链接（也就是服务器）发
+送了请求。前面用Python 实现请求发送之后，可以得到响应结果，但这里请求的发送变成JavaScript
+来完成。由于设置了监听，所以当服务器返回响应时，
+onreadystatechange 对应的方法便会被触发，
+然后在这个方法里面解析响应内容即可。
+·解析内容
+得到响应之后，
+onreadystatechange 属性对应的方法便会被触发，此时利用
+xmlhttp
+的
+response Text 属性便可取到响应内容。这类似于Python 中利用requests 向服务器发起请求，然后得到
+响应的过程。那么返回内容可能是HTML ，可能是JSON ，接下来只需要在方法中用JavaScript 进一步
+处理即可。比如，如果是JSON 的话，可以进行解析和转化。
+·渲染网页
+JavaScr刷有改变网页内容的能力，解析完响应内容之后，就可以调用JavaScript 来针对解析完的
+内容对网页进行下一步处理了。比如，通过document.getElementByid().innerHTML 这样的操作，便可
+以对某个元素内的源代码进行更改，这样网页显示的内容就改变了，这样的操作也被称作DOM 操作，
+即对Document 网页文档进行操作，如更改、删除等。
+上例中，
+document . getElementByid("myDiv ”）
+. innerHTML=xmlhttp. 四sponseText 便将
+ID 为
+myDiv
+的节点内部的HTML 代码更改为服务器返回的内容，这样myDiv 元素内部便会呈现出服务器返回的新
+数据，网页的部分内容看上去就更新了。
+我们观察到，这3 个步骤其实都是由JavaScript 完成的，它完成了整个请求、解析和渲染的过程。
+再回想微博的下拉刷新，这其实就是JavaScript 向服务器发送了一个Ajax 请求，然后获取新的做
+博数据，将其解析，并将其谊染在网页中。
+因此，我们知道，真实的数据其实都是一次次Ajax 请求得到的，如果想要抓取这些数据，需要
+知道这些请求到底是怎么发送的，发往哪里，发了哪些参数。如果我们知道了这些，不就可以用Python
+模拟这个发送操作，获取到其中的结果了吗？
+在下一节中，我们就来了解哪里可以看到这些后台
+Ajax 操作，了解它到底是怎么发迭的，发送
+了什么参数。
+6.2 
+Ajax 分析方法
+这里还以前面的微博为例，我们知道拖动刷新的内容由Ajax 加载，而且页面的URL 没有变化，
+那么应该到哪里去查看这些Ajax 请求呢？
+更多免费资源请访问ppbuzz.com
+
+6.2 
+人jax 分析方法
+235 
+1. 查看请求
+这里还需要借助浏览器的开发者工具，下面以Chrome 浏览器为例来介绍。
+首先，用Chrome 浏览器打开微博的链接
+https: //m.weibo.cn/u/2830678474 ，随后在页面中点击鼠
+标有键，从弹州的快捷菜单中选择
+“检查”选项，此时便会弹出开发者工具，如图6-2 所示。
+. • 
+~ ，，僧
+”
+令
+。
+．理舍
+htt psol/m .we ibo.c时u/2830678474
+电正
+阳＂＂＂＇"'""""' M阳阳酬•
+N创w0<1<
+崎刑。atlo们如响曲
+Perlonnonce
+＂＂°＇刷
+, 
+’ html tano•"•h-<0”, 
+’ ＜hea d＞－‘J head ~ 
+电嗯胃eC\OSS•" •-con~ainCM°'">
+’‘di• >t ylc誓“ height "'‘:“, 
+’ <di Y> 
+‘’-> 
+‘’一－，，
+,. ..:div:,” /diV> 
+．‘ ．一→
+〈」→
+川一－~
+• <di • d ata－、，－103ld572>-</ diY>
+’<div
+cla ss:” card 仲四”c l cord9"•- </d1'> 
+• <d1' cl嗣S率＂card 仲阳net card9"•-•!div> 
+• ＂＂如
+class•”四rd m-pancl cord9">- </div> 
+><div etas ＂＂”臼『d v间net
+ca 『d9＂＞－旷div>
+•<div elm恕” card m-pm l ca rd9＂＞－时div:'>'
+’ <div cl ass•"card •• panel card9">- </d1V> 
+•<div c\15..,"card m-ponc\ card9">-</div>
+> <lliv class="ca rd m-pml card9">-</di” 
+’ <d1' d的旷＇car d m-panel card9">-</div> 
+• <div clm •"m d m-poncl card9">- </diV> 
+叫旧”
+时也菇叫叫…由
+aolde.dps.……巾
+图6-2
+开发者工具
+．，愿
+岱
+, ... × 
+l stytoo 川剧阳… DOMB叫＂＂
+孙
+｜町....
+'h•• ·＇＂飞
+cle侃圳飞＂＇＂{ 
+>
+;ht•l, b o d y ，由＂{ 
+I 
+hcioht' 10 0龟，
+却始组组且斗Z
+1>
+lb•dy <
+I "…ighto 1; 
+} 
+组且呈4且ti
+.. 抽be ,
+＇＇＇＂＂＂盯tic le ，因.Id<,
+胆盟4掘ti
+""""· b, b坤，趴DC同uote, body. coptlon, 
+cent.ec, clte, code, d<f, del, dmits, df”, dl, 
+dt, "'· e刷bed, fie lds<t，’ igcu伽tion,
+figu 沪...
+fo。ter,
+for筒，
+h玉，
+h2, h3. "4, h>, h6, hcodec, 
+hgm鸣b
+ht 阳L t, tfr甜.....,, 1的毡，'"""'· 
+legend, 11，回叶，酣刷，＂＂，
+。飞，。＂＇阳t, p, pre, 
+也
+ruby. s, so时，盹目血”’
+S阳口，
+itrike,
+！$飞r。吨，
+sub ,
+＇＂晒a 可，
+＇＂＇＇
+table，由回y’时，
+I 
+！
+”a 「g in ·• 0, 
+I 
+•＇＂＂咱· 协＠，
+I 
+border • 0, 
+.I 
+tont '''" 100句；
+I 
+font:• i川ierit;
+此时在Elements 选项卡中便会观察到网页的源代码，右侧便是节点的样式。
+不过这不是我们想要寻找的内容。切换到Network 选项卡，随后重新刷新页面，可以发现这里出
+现了非常多的条目，如图6-3 所示。
+1 日
+• 
+& 
+自町陶ints
+Mem叫
+句..,.. 
+Con回怆
+阳twork
+句酣阳脚
+Sauro回
+P«阳m•noe
+5'curity 
+• 
+"i' 
+Ille悦目飞
+由＿.，，h州
+街回彻咽问a c到回抽C脏惘
+F 。ffline On 'ne 
+Y 
+r趴.
+可叫J
+H响dataU阳。制晶臼S
+l吨M础
+Font
+Doc 响＂＂＂幅t 00,.. 
+Nwne 
+＂＂坦3067847•
+~AJ 
+base.c圃
+’＂＇局，＂＂＇＂＂σ、阳刚V唰/v1 ~队ti时峨lllb
+c’”’·'” 
+瞄俯酣咱cnm田唰M.3.1/CSl/cat划
+·阳剧739b85 .α”
+闹剧陶俐，.cn/<rWBI•ι蝇
+一J 唰咖：阳；7e陆拍
+国街瞄咱en/ml呻J如
+....四衍1 8帽”
+闹剧田mo.a的附时·
+响帕.I•
+j 陆时咱刷抽回J闹剧的。，7111/30
+StaltJs 
+W田
+200 
+OK 
+zoo 
+200 
+200 
+2田
+去∞
+2回
+d。＇＂＇厅＂＂、t
+，叩饱怕“
+”、4国heet
+时四回t
+scnpt 
+脆叩f
+剧；pt
+图6-3
+Network 面板结果
+In阳•I。w
+。制W
+2l埠锺™且
+P111Sj都
+a锺锺ZMll
+PW'\li$r 
+Zill也应阻M
+Parser 
+主且握ZMll
+Pa<醋，
+Zill边缸且且
+阳，制
+a盟锺ZMll
+Pw“” 
+""' 
+A B 
+i 
+X 
+n 1wa1ena• 
+49 KB 4 . 
+4.3 KB 
+4_ 
+四川B
+7... 1 I 
+目。阳＞
+I 回
+99KB7 .I . 
+』－' 
+48 7KB 
+4. 1• 
+6 t KB 
+B 1-
+155KB 6 
+l ” 
+108 KB 9 
+I _ 
+统渴KB
+5 i ’ 
+1‘O KB 
+8 ... 1 
+41 6K自
+4
+I -
+1.6KB 8 ... 1 
+><KB 4. ' ’ 
+• 
+更多免费资源请访问ppbuzz.com
+
+236 
+第6 幸
+Ajax 数据爬取
+前面也提到过，这里其实就是在页面加载过程中浏览器与服务器之间发送请求和接收响应的所有
+记录。
+Ajax 其实有其特殊的请求类型，它叫作xhr 。在图6-4 中，我们可以发现一个名称以getlndex 开
+头的请求，其Type 为xhr ，这就是一个Ajax 请求。用鼠标点击这个请求，可以查看这个请求的详细
+信息。
+r. OJ 
+＂＂唰梅阳时时，阳明陶叫翩翩翩辄呻
+Perlom咖悼斟制W
+"8 
+e
+× 
+''"'" ：：飞
+＠阳p by 伽回闹
+户＂＂＇帽”’！咱a Dlsable 帽相
+时’崎αW睛
+’ 
+·1 H刷剧oURU 。
+XHR JS CSS 问
+Modlo M 阳晒
+M~tt剧由阳
+Name 
+’‘川幅描....
+P得ψ，，咽W
+Re剑民到＂＂
+Cook阳＠
+7有啊... 
+＝－’”＝队楠、§伽呻Cr1/fnlflllC\Jll
+佩
+.,… 
+＂＂＇耀b538787".
+闸，翩翩咱酬mlV剧·
+稠eque，世U伺k http• //o.wdb。＇＂＇画＇＂＂＂＂＇＂＇＇＇＇＂＇＂＇＂＇＇＂＂创id&"'"""28366784 7 4&contai•• '!<'"1005"28386 7847 4 
+...嗣st Me伪。.t GET 
+.］＂＂＇耻’叫
+地伪瞄呻m加肉也＂
+3 啕I•
+瞄...酣＂＇＇＇＇＂呻田。”田驯的。17!11t.l0
+;:J 3. 78b6抽咱
+h5.刽网捕机gu叽厅的1llJ>
+.. 民阳”。－饵lolld&~蹦刷咄酬”丽的幅“糊幅由W捕时础%施踊篇，.，.，
+峭的酬－
+J 唰川剧、叫
+恤蜘酬h制飞刷刷刷15'0li/15/28
+25.99c缸且4”
+陆刨耐＂＂＂·a内的⑤，.
+_j ＂幽瞄叫
+’也搁四”有g.on加执忍＂＇
+23.19c28474” 
+盹蜘柿＂＂α＂＇＂＂旬，s
+Stol"'Codo •2盹OK
+，有emote Add附觑航
+180 149 139 248 443 
+槐树emlf'"P副阳＂＇＂＇＇＂＂＂＂』when
+do制呻rade
+’民”，。...，也«Mrl.
+y梅W!IOUl'C&
+Coo~比划。”t keep-o\1'° 
+Coo幅州•~odlng ,,,, 
+Coot酬t-Seeu时1)'-PoU町，""'"de-1mme- '"'""" 
+Coo幅.，_ _, opp\kotl。o/j ••o: <hmet•,tf-8 
+。．”：Wed,
+24 Jon 2018 17 21183 明T
+P例。G N。。E:
+vS-web-930. 侧weibo
+bx.sinanode.c。”
+Server:γ町、gioe/2 2 e 
+制C伺嗣凡WEI00CN_PARAMS•feotomod由302 890032抽26lu icod甜01eeeee11日创H响30187613283867847抽血fid\301885
+852830678474旧6uicode龟3010800011 ，制＇＇＂＇＂＂＇时，
+24-Jan-2818 口
+31 回回T,
+M＂－崎em688 ，＂协时，由旧inm wdbo c 
+n,’lttpOn\y 
+盹.....。DE1 <S\-027 mwe曲。.yf
+＇＂＂＇晴曲。＇＂
+y悟”’，.，筐。。..... '"""ked 
+v..,, Ampt-Eo<odiog 
+X-L。g " "" 283867847‘ 
+X-Pow.-.By PHP/7 "15 
+’”·””侃”．。den
+view sou畏精
+？”用酷附隐
+l 
+晶。ept opplicatiM/j>Oo, t"t/p\alo，呐
+坦响U饵” 1873 阻＂＂＂＇阳回1 阳由110alOOM臼ntentload回2s•
+I 
+...，酬，..倍，＂＂＇＇'"'· dof\ate, ,, 
+图6-4
+详细信息
+在右侧可以观察到其Request Headers 、URL 和Response Headers 等信息。其中Request Headers 
+中有一个信息为X-Requested-With:XMLHt甲Request ，这就标记了此请求是Ajax 请求，如图6-5 所示。
+•Re申Je剧”eaders
+view 民XJroe
+Accept: app lication/j son, text/plain ，时尊
+Ac帽pt·Encodlng. gzip, deflate, br 
+缸。＠酬，U呻uage.
+zh－凹，zh,q=0.9 ，凹，q=0.B,ja,q=0.7,zh
+1"';q=0.6 ，耐，q=0.5
+Cache-C。何trol· no-cache 
+c。nnectt。”：keep-alive
+c。。kle· _T＿嗣＝05653bl472523dc629653e00c8eded8e; SUS= _2A253bM5RDeRhGeRG6FIX9ybI zDiI阳VUrtIZrDV6PUJbkdAKLU7 -kWlNU
+j 7qvj b lC0_LeYWxntEaSGuX!YgGn时，
+SUHB=0LcTStTlDYRwhD,
+SCF=ApMtV7IW_G阳Vqpik旧msvYRs71zzqqZ盯叫27fem倒lKlZJ问Pa
+AWEcGDdABZMs rEhdvF rYYDHL08xs8hODFto. , SSOLoginState=1516813825 ；用，INDE几TITLE吨ES咄崎94旺阴阳咽抽E抽89喃阳E帆
+BB•蛐抽E9咽。皂白地回V.7咄5；用，INDEX=3;
+WEIBDCN_FR恻＝1110006旧＠；凡WEIBOCN_P翩翩S=featurecod由302刷刷32阳26\uicod
+e‘3010000011、26l f id%301076032830678474、－26fid%3口1005052830678474%26uicode‘3010000011
+”。st m.weib。.cn
+Pragma: no-cache 
+饲ofereπhttps •/Im weibo cn/u/2830678474 
+U回睛，ent Hozilla/5.0 （何acintosh; Intel Mac OS X 10_13_2) AppleWebKit/537.36 （阳T阻，
+like Gecko) Chr酬e/63 .0.
+3239,132 Safari/537.36 
+x－向eq1跑回ad-W时，
+XMLHttpRequest
+，。uery S衍如g Perameters 
+川治制s。ur℃刻’
+V陷wυRL encodec 
+type· uid 
+value: 2830678474 
+can姐inerld. 1005052830678474 
+图6-5
+详细信息
+随后点击一下Preview ，即可看到响应的内容，它是JSON 格式的。这里Chrome 为我们自动做了
+解析，点击箭头即可展开和收起相应内容，如图6-6 所示。
+观察可以发现，这里的返回结果是我的个人信息，如昵称、简介、头像等，这也是用来渲染个人主
+页所使用的数据。
+JavaScript 接收到这些数据之后，再执行相应的渲染方法，整个页面就渲染出来了。
+更多免费资源请访问ppbuzz.com
+
+6.2 
+Ajax 分析方法
+237 
+X
+陶... ”’＂＂＇州阳同帽町，．。“＊国
+Y阳... 
+’《础’
+1. d•to. {"'"lofo <M
+2831盯制74,
+scr回＂－＂剖.，
+”’‘庆牙，.觅飞＿），＿））
+’曲” <"'"'"''
+{id ""'""" ＂＂＇＂－＇＂随
+”··底才1 静觅飞－l.-l
+＇＇＂＇－＂＇~幌：“ http,. I/a.we拢。. <0/p/lodox?<0otoio"ld~口1816‘M<ode•l…··口创H•• 10m5283867剧？他featureco
+，。lt""-"'...”http• II• we!bo '"" .. '""""""'""'"""'"''°'_."',.m&lfid»eosesm届7847崎featurecode
+＂＂~” 1阳，畸曲。：／／m,iofo?oid•283067"74&Mcod.. 18eo"11&tfi.;.1170旧，• 
+.，.肘..,.&t .. ＇＂＂＇＇。...，刷..,,. .. 
+，，阳峙，Tips. 1 
+•tabsln阳，《sell!c.te盯曲：
+1, "'" ｛仅仅U：”3'页飞...＿，，..，”，rofi 飞e飞
+container id ：吁31128328386784 7 4吟，J 》
+T omlofo. {id. 2836678474, mm＿，.，..：”‘段写T I ”觅～J
+av a taιhd 'htt .. H嗣＇""''"" '"'°' J 崎9/o8b8b9caJw胆＂＇＂＂＂叫＇＂＇＂~＇’，JPO''
+clo,._bloe_, fol,. 
+""' 
+＿，..，.＿.，.晴. "htt" ＂＂＇＂＇＇＂＇＇吨＇＂＇＂＇＇.....剧’剧’/549d6121Me,.lkj ly3jj28h<8h•q4f j 阳”
+曲事＇＂＇＇＇°＂”Mqiogca立C帽”
+foll°"-'"""' m 
+，。n... _ .. , ,,,,. 
+lol\owierscount 2829 
+foll""'"', .... 
+-m·a” 
+id: 283167&474 
+like fllse 
+lil‘飞F阻·’<11\se
+mbrank.8 
+.. ., ... 
+’,.m,_1uo•-"''' "'tt＇＂＂＂＇＇＂＇＂＇＇啕＇＂＇＂°＇.... ,. '58.188/08b8b0<0j呻H吨＂＂l4" j "'"""''" i四”
+p<0fil＜..＂＇＂吨，ttp•' 11•· welbo. tolo/2SJI盯剧747uid"'2回回78474&luicodeo>leet81口＆lf1d=1895852曰“78474&featuro
+scree.n_n翻””.，晨’ti•凰”
+革革且旦」且且三豆豆
+图6-6
+JSON 结果
+另外，也可以切换到Response 选项卡，从中观察到真实的返回数据，如图6 -7 所示。
+’‘ 陶捕。，.
+p畸惕，.
+Ro”Xlnll QM描，.，.，情＂＇
+l
+｛”。v
+1. ＂曲to”｛＂omlofo• 俨ld" 2830678474. "mm ＂＇田””、U5dl4、＂＂＂＇＂＇＂叭”d队。975趴u89c5”，＂p<0f1\飞
+a
+图6-7 
+Response 内容
+接下来，切回到第一个请求，观察一下它的Response 是什么，如图6-8 所示。
+r, CJ 
+......,.. 
+＿，明剑刷理阳回陶陶阳”“刷刷恤’阳－阳抽回回』＂＂＂＇
+．
+。... －串飞
+Groupb'(,,.,., 
+阶回－问＠国碰掏－帽
+臼愉~＂＇甜、．
+. 
+i阳
+-
+-
+－－幽υ饨，。酬
+JS
+CSS 同时. ＂＇＂＇＂＂＇附阳帽h
+1 
+’‘闹闹。－
+P!9'I唱”’阳归XJl'IM 。，佩凰－咱
+Ao 
+X 
+JJ 
+.‘mlpe> 
+ψ＂ '""'.<
+.. , .,,,.., 
+" 
+'e2f2<1'. 
+'°''"' 11){1], 
+uid 
+'2831678474’, 
+.... 
+“”’＇＇＇
+I 俨可耻＂：＂uid ＂，”valu＂＇”“2831678474”》｝【tJ
+II 0, 
+呻川，
+阴阳皇。”
+＇•！.日.26'.
+"" lomioo '"' •pli<("') Ill 
+}, 
+呻＇＇＂＂＂＇－＂＂• loollllll II(}, 
+‘lmip宝〉
+"""'" .... ＂以叫“＂＂＇＂”，！tunct1刷(el{旬＂＇＂。””｛叫{.I.flt Ir 】）~tom tl'l.e•po<t•"" c-tl,l•U.<,l.11,< 
+•mipt ＇＇＂♂饵附lj•"'"'''" """""' ＇＂＇＂啕to/oMIJ•lm由r5387日’E J•"-lmipt> 
+唱＂＇＇＇＇＇... ”""ll"""'''”'"""'"' ""'""'""'"''"j•’＇＂＂＂＇＂蝇。”“－1mipt>
+"lc ri，，富，
+叫··~·－＂＂－＂＇＇＇~＂＂－＇＂＇. <
+". 
+M阂’
+图6-8
+Response 内容
+这是最原始的链接https: //m.weibo.cn/u/28306784 74 返回的结果，其代码只有不到
+50 行，结构也
+｜非常简单，只是执行了一些JavaScript。
+所以说，我们看到的微博页面的真实数据并不是最原始的页面返回的，而是后来执行
+JavaScript
+后再次向后台发送了Ajax 请求，浏览器拿到数据后再进一步渲染出来的。
+2. 过滤请求
+接下来，再利用Chrome 开发者t具的筛选功能筛选出所有的人jax 请求。在请求的上方有一层筛
+更多免费资源请访问ppbuzz.com
+
+238 
+第6 章
+Ajax 数据爬取
+选栏，直接点击XHR，此时在下方显示的所有请求便都是Ajax 请求了，如图6-9 所示。
+r. QJ
+』喃喃阳明兔幽阳帽阳晒－血牺－.... 旬’回国抽啕
+• ＆•？－＝飞
+°＂＂＂＇＂＇帽”
+饵”’精崎＠团”抽回·
+α脚。市· • 
+B旦｛叶时嗣同－
+’蛐制叩翩
+G:il,3臼S 问叫＇~＂＂＇咽阳阳阳
+陆前．
+· 唱、K
+S皿－
+Typo 
+」酬阳？协峭叩峭揭
+r‘刽创H耐啕町
+。，<
+」酬阳阳翩叩酬＂＇＇叩…佣…
+m
+... 的XW1tWw
+OK 
+」酬由阳问时翩＂＇＂何向阳07饵跚跚
+＇•由钮’回岛”
+。K
+...］＇＂－响－晴时...，..，町睛睁，＂＂＂＇＂· ·
+捆
+俑’隙，而a刷Ir
+OK 
+J 问巾叫由叩阳山…＂＇＂幽幽捆
+衡阳酬翩W
+"" 
+J 酬酬－刷础时酬7川剧由胁’07阳”
+棚
+，.民＂＂呗－
+QI( 
+J…W叫“翩翩叩叫“07阳”酬
+，？φ忧刷仙－
+C古民
+币lo”刷刷忡’H揭仙鹤串26306764746酣键就W胁，07«四” “
+200 
+－＂例”km舷曲．，
+。’‘
+J …－晴＿，，，，.，.，叩由申阳－.... 
+200 
+句嗣~
+OK 
+图6-9
+Ajax 请求
+~ 
+盟画画画温Z皇盟监且监
+""" 
+盟国也血，.，..，..坠
+配，回
+”－监＂＂＇也比.. 
+a洲”
+’“皿－
+战捎回
+皿且皿＂＂＂‘＂
+5”明
+回国销也S泪ill!比单＂
+""" 
+’“皿幽ill!也＂＂岳
+阳制
+塑园缸... 
+理n单单温
+邸’‘”
+姐“国且沮匾画a
+"'" 
+"" 
+.’”. • 
+川↓…
+’ 5K8 2 
+4711（蝠’
+..κ. , 
+”’咱
+t
+7.0 民B
+2 
+”’“B 
+• 
+··.<. ' 
+.. ，瞄
+2
+1‘ ·κ，，
+1 
+”u 帽
+1
+”睛’
+“‘阳，
+5.7 1<11 
+1 
+…用
+1
+H 瞄
+1
+‘，，呻
+1
+．届四’ 
+” AICB 
+1 
+接下来，不断滑动页面，可以看到页面底部有一条条新的微博被刷出，而开发者工具下方也一个
+个地出现人jax 请求，这样我们就可以捕获到所有的Ajax 请求了。
+随意点开一个条目，都可以清楚地看到其
+Request URL 、
+Request Headers 、
+Response Headers 、
+Response Body 等内容，此时想要模拟请求和提取就非常简单了。
+图6-10 所示的内容便是我的某一页微博的列表信息。
+日旬
+阳帽’饱阳晒y
+..... 绵阳田”阳晒掣崎阵脚、阳帽阳－咽抽刷
+01 A.11 
+．
+。.. 'i' 
+~酬Z 飞＂＂＂＇＂＇伽－防~同
+1110!”“•cec:ne
+0酣”·＠窜，．．
+一－
+－』
+一
+院院’
+! 
+陶，．。“ URU 州
+Ill画JS
+css 嗣‘’”“‘内剧。”
+ws
+Mn!'翩。－
+棚”－
+M 阳睛”向阴阳胁酣－＂＇础＂＂＂阳咆
+”帽，归叩＿..，.时阳恤，4 ’｛由
+1, .. ) 
+” 
+” 
+相幅幅喃
+I •don {mOUHlof" !oooui"'" 
+1176eJ2B3阳”’.. ,_,, '" ...... ＿.削e:l,
+tot眈＂＇，，附拈J
+属
+,.urdl1stlnfo：《cont11.neric:I 。” 11761132旧1678474”，＇－＇＂'" """-"''" l, ＂＂＇＇＇””匈缸”
+”钳由？’”刷刷唱“四阳...，啦’蛐－·
+1
+’”，，军＂＂＇＂＂阳’a ite-id 
+"11768l28lt67”问－
+41…·阳回2125’”，.. ), .. ! 
+』d 呻棚阳w
+I 
+＂＇《目叫：＿type
+’，
+1tesid：咱76132曰“，..，，＿.. _., ..”刷692125’”，J
+阴阳阳刷曲阜叩阴阳将阳’＇＂＇
+I
+叫《＂＂＇＇＇饵，，
+iteitld
+"1176'32曰“，..，川剧＂川2棚”，J
+I 
+""'-'""' 
+h院’‘、。””曲回W
+I l 
+ite.ld "117刷＂＂＂＇＂卜’“脯，，＂＇＂＂回M
+c..J －叫阳剧由阳刚叩蛐叫＂
+I
+·叫2 《叫＂＂·＇＂"2117 12-13＂，”：咱酬，，阳川81",
+•id ：叩＂＇＂＇＂阴阳”，
+ids tr：”叫’”’”1'
+匈盹阳蛐w
+I 
+时帽..问
+I 
+＇＇~＂＇＂ . 
+－铃阳翩咱h翩翩翩时恤耐叫
+｜
+刊，（md t隅。，，
+.item.id:
+"1176tl283”？”’·－－－＂＂＂＂阳1翩翩J
+仙”阳
+I
+＂＂·＇＇阳’
+J 酬叫阳刚咄时时刷叫叫＂＂
+I
+itNiO ＇＂＂＂＂＂＇…，＿.，阳剧旧时
+地国锢吮－
+I 
+伽盹1句《E陀＇＂＂·＂＇·m’-12-13", .. ”“刷518342s.tl”’“，＇＂
+呗18.<15183425'18””，
+idnr. "41“ 518:M2” 
+I 
+＇＂－。”＂＇＇＂’””elbo
+cn/stat11strn附Jafl”＇＂。＇＂＂＇＂附Jaflt岳luicode•l…Mll6lf汩汩1'76U2831671!1474&f•
+J 酬叫阿刷申明？”问叫““｜
+m』田·
+旭耐田帽W
+I 
+., ｛四＇＇＂＂'· i飞回u
+q肘6932831678474_- 4”“”“272t422",_>
+...J ＝－－血？“阳蛐四川” l
+川ι 仅叩隅，，明id:"ll761328蝴叭叫阳，，，..，，..，＿，
+I 
+" 
+"'"'-''" o, "'""· ·10’‘＂＇曰“，..，.___ .，.”“16l23S6蝇飞J
+----
+I 
+＂、＇＂＇＇－＇＇＂＇'· "'""' .，.’”32曰“，，.，.___ .,., ...帽”＂＇回•，＿）
+＿，’”刷刷晴＿，，，曲刚刚酣蛐W幅“
+｜
+.，，《＂＇＇－＂＂＇’。
+1te1nd.
+"1176832曰“，.. ,._._ .. .，..，，刷刷刷飞J
+J酣阴阳
+I 
+••《card_ty间’，
+itMid
+吨17613283”’..,. ___ .,,.,,.,.,.,,.,..,_, 
+一酬响施加峭由4皿酬即向制
+｜
+·’:<""'-''" '· "'"" ""'"'"'""'"---""'"''”55g741",-} 
+I 
+＂＂＂回”！. inawei”／／cudt1川忧”Ui僧俨1dooll76t32思列前..，“酬’”’＿.＼11lc0de-l…”11剧’ 10-117”l21Jt6’”’·
+”’创·－翩翩187.1 KB/5.2 ”’审市商伽晴d I 阳＂＂＇°·＇＂I
+＂。“创刻，r l .. I 
+图6-10
+微博列表信息
+到现在为止，我们已经可以分析出Ajax 请求的一些详细信息了，接下来只需要用程序模拟这些
+Ajax 请求，就可以轻松提取我们所需要的信息了。
+在下一节中，我们用Python 实现Ajax 请求的模拟，从而实现数据的抓取。
+6.3 
+Ajax 结果提取
+这里仍然以微博为例，接下来用Python 来模拟这些Ajax 请求，把我发过的微博爬取下来。
+更多免费资源请访问ppbuzz.com
+
+6.3 
+Ajax 结果提取
+239 
+1. 分析请求
+打开
+Ajax 的XHR 过滤器，然后一直滑动页面以加载新的微博内容。可以看到，会不断有
+Ajax
+请求发出。
+选定其中一个请求，分析它的参数信息。点击该请求，进入详情页面，如图6-1 l 所示。
+<R F
+阳由阳帽V
+A幽阳明＊－＂＇
+~』－... 伽帽回阳的
+0 12 .:i u 
+' 
+x 
+. 。• '9 -
+：：、
+°'"°"PbJlr-
+伪…·啕．剧”国”...
+倪蜻咽。曲· • 
+l楠
+’蛐曲阳翩...嗣同叫阳阳晒嗣阳阳
+”陶帽”．，，啕”凋．．．．．。鹏氟确而咱’
+’… 
+I一树唰恤由描画画幽幽画国国画
+… L凰，，阳””·叩C11/itpl.Jconta1Mr/te tl ~de•tt,-peoul!W.v1\ uea2t圃’”’翩翩1 Vfll!ri"*ll1MJ11町，阳
+,.., 
+J …协咄咄叩＂＇！－‘叫“
+，＿酬时
+……阳
+”翩翩．。”阳•lHOI(
+’“” .. 。”刷’”“‘~筒’“Y创监唰蛐.. 
+岖’.，
+饵”－
+…… 2川’ m
+211~~0 
+”·”’啊．，，．缸’饵，愧’－”’窜，＂户”机e仲·．帽”’，... 
+且＂＂伽”“’””‘战精帽勘...，‘舅舅？”’“”’啕帽俑，．$ -……m 
+～…由白
+4一
+命”·供销，tin ti” 2’”＂叭’pt.in,
+•/•
+…… g1ip,dl!f\•”," 
+’酣网”＂＂＇，帆.. 
+阳融＿，抱301TM7qc划”a刷刷...
+匈怕回啤－
+~附~唱“”“”4剿，阶•q•ID,en 晴…，”....，，，加阳＠… ，•I '(!Ki ~ 
+I
+J －咖均阳幽幽时刷刷惕。，睛峙’
+d 咖呵
+…… 
+…… 
+。“＊”？”··”＂＇”η”34i6196Slel”陈阳据dk,
+Sllta_2κ＇＂帽”邸，．‘’剧，IX9yblrOU阳VllrtllrOV6PUJ跳a眼＇＂＇→tW1"Uj7q
+, .. 
+田旬””“睛’幽暗’＂＇＇铺幽晴.....，，..’
+徊．俯~
+_j ... 由－鸭，，...，，.叫“恤’
+闭’.. ””“., 
+vjb\Cl_Ldl鼠”“岛也反”’汩的
+SlHI回悦。到＂’于侃而..筑h龟fttVJIW_Glil'Hqplklll涮S>'YRS71uqqZ!ll'){C晨”·‘11l.ltll1"Pit.”“＂＇
+M越剧，饨’睛’r啊1111..Qkslh(嚣的a,SSO息’A崎；ut.. Ul创13US ，”’－·‘四”』πTl f＂＇‘雀””、”键5帽”…llf6"'9'lllO‘是…＂＂＂＂＇
+H协喃时’~，幽，崎＿DllltXe3, ... 眼Z回X到」＂°＂＇111•刷刷＂；”－·便IllOOLrW剑S-tnt~~四”、，JD:zto”“，.”6lw1code'tl01阳””·
+•11'2&\fld\lll\17611113"11104"'2titl"'"3011’”’明7刷7~lfHUC*"'lOllHflli\
+时·叫“
+J …咿叫“...，..，即蛐唰叫
+匈勤””的，
+……” 
+…
+MIPl' 11• 叫＇＂＇W"21l8671M7'
+”·协衡’蛐融机飞W.51
+（”＂m””＇＂＇＂悔cOSX1'Jl_2 ）句ljl\twiMlltt/51"ll61削”他，
+t~GeckolChr－’“·．罩＂
+tll2S.l1rl/”’" 
+句J ”阳帽棚”“阳蜘帆揭嗣帽”’“国蝴帽楠’
+”阳楠，
+比胡刷，~髦’‘＂＂，恰““‘
+”啕
+1
+• 缸”蜘啕阳帽”嗣
+抽翩翩
+阳υ龟回瓢剧
+"" 
+I －喇
+J
+曲－1nKt1M74
+iJ 酬叩F叫申皿m叩阳恤＇
+I
+……..，.”)21）鹏，”
+峭唰酬笛锢w
+! 
+”．悦2
+图6－门详情页面
+可以发现，这是一个GET 类型的请求，请求链接为https ://m.weibo.cn/api/container/getlndex?type=
+uid&value=28306784 74&containerid= I 0760328306784 74&page=2 。请求的参数有4 个：
+type 、
+value 、
+container id 和page 。
+随后再看看其他请求，可以发现，它们的type 、value 和containerid 始终如一。type 始终为uid,
+val ue 的值就是页面链接中的数字，其实这就是用户的id 。另外，还有containerid 。可以发现，它就
+是107603 加上用户id 。改变的值就是page ，很明显这个参数是用来控制分页的，
+page=l 代表第一页，
+page= 2 代表第二页，以此类推。
+2. 分析响应
+随后，观察这个请求的响应内容，如图6-12 所示。
+’略问也＂＂＂＂＇衔’响w
+R蝇ρ阳帽
+Cookl幽
+Tlm1吨
+’｛。.，,,_) 
+·由”· !cardlistlnfo, ｛四川剧，'lerid 
+” 1876832839678474“，＇－＇＂咀，
+show_styl<' 1. total 
+7白，
+pa伊：卦，J
+• cardlistlnfo' {conta inerid ，” 1076932830678474”，，＿.，咀，
+show_s tyl<' 1, total' 756. ”’.. 3) 
+container id ：叮876832838678474”
+•• ,. 3 
+show_style• 1 
+t。te l• 756 
+'-'" 42 
+’ card" l!md_type• 9，“帽＂＇” 1076032838670474二＿41848盹966921259” ，＿），＿）
+··：｛四rd_type' 9, it .. 
+id ＇” 107回32830678474_-- 4184886966921259”,J 
+• 1· {card_type· 9. ite•id· ”1076032830678474_ -- 4184579579418282”,.} 
+• '' {card_ type• 9. it回id. 飞87603283067847ι－-4184518342541回驴，J
+• 3' !c>'d_ type' 9. it ea id ：” 1876832田0678474_-- 4184447412728422”,J 
+• 4. { ca叫＿ty pe
+9, iteoid 
+” 1176032回0678474_-- 4184062375坦白甜”，J
+'5. 《四叫＿ty田
+9,
+i t .. 
+id .
+” 1876032回回78474_-_4183368163235回6”，J
+• 6• <card_type• 9, it .. 
+id ：” 1176回2830678474_- - 4182846995922069”,J 
+’ 7, lea俨•－•Yoe• 9, a .. 1• ”1076032830678474_ -- 41814023520剧的3”，J
+• 8. <md_type• 9. it帽id
+"1076032830678474二＿41793565回659636”，J
+•9:<card_ type• 9, iteoid:”1076032831678474_ --417回55口，855974”，J
+sche帽”S却，.，.，，• .,//ca rdlistlcontaine rid"1076'!32830678474&extpa r幅吨飞ui《od.. 
+10000011且tid•l076032830678474"fe• 
+showAppTips. e 
+ok: 1 
+图6 -1 2
+响应内容
+因
+更多免费资源请访问ppbuzz.com
+
+240 
+第6 幸
+Ajax 数据爬取
+这个内容是JSON 格式的，浏览器开发者工具自动做了解析以方便我们查看。可以看到，最关键
+的两部分信息就是cardlistlnfo 和cards ：前者包含一个比较重要的信息total ，观察后可以发现，
+它其实是微博的总数量，我们可以根据这个数字来估算分页数；后者则是一个列表，它包含
+10 个元
+素，展开其中一个看一下，如图6-13 所示。
+x 
+He国...同－侧向眉，α，盟
+Cα＊蝠，
+TITTlir啕
+，｛。k: 1,-l 
+•data. {cardlistinf。.
+{c。ntainerid.
+” 1076032830678474 ”，
+v_p. 42, show_sty\e: 1, total: 756 , page• 3),”} 
+• card\istlnfo: {containe口d ：” 1076032830678474"', v_p: 42, show_sty\e 1, total: 756, page: 3) 
+•cards: [{card type: 9, it酬id. '’1076032838678474_ -- 4184886966921259”,_),_) 
+’ B· {card_type- 9, itemid:”1076832830678474_ -- 4184886966921259"'. _) 
+car世＿type: 9 
+item id:”1076832830678474_ -- 4184886966921259"' 
+• mb ＼。g. {created_at: “ 2017-12- 14"'. id:”4184886966921259”, mid· ” 4184886966921259”, idstr· ”4184886966921259 
+attitudes_c。unt: 9 
+bid. ” FzCist2xd” 
+bmidd ＼ιpit"
+”h忧p: //wx3 sinaimg cn/bmidd\e/a8b8b9ca \y口，gcpxg4xdj20zk0q 。jyw.jpg"'
+can edit. false 
+c。－nts_count" 1 
+ε。ntent auth: 0 
+created_ at,”2017-12-1‘” 
+’ edit_c。nfig. {edited: false} 
+favorited· false 
+id:”4184886966921259"' 
+idstr:”4184886966921259"' 
+isLongText. false 
+is_paid: false 
+mblog_vip_type· 0 
+mb \ogtype: 0 
+mid:”4184886966921259"' 
+more_in，。＿type · 0 
+origina\_pic ：“ http.I/嗣3 . sinaimg. cn/\arge/a8b8b9ca\yl fmgcp吨何dj 20zk0qoj yw. j pg"' 
+• pagιinfo· {page_pic" {ur\: "'https: ／／刷4
+sinain唱
+cn/thumb18即b0ele9dagylffxgma24回j20v四川jzz
+j问“），＿）
+pending_approva\_count. 0 
+P立c_v主de。：咱：000Yl”jGj x87gzxyUqp9010f010制LKE0k01"'
+•pies:“pid’”a8b8b9ca \yl fmgcpxg4xdj 20zk8qo j yw“，咱｝）
+reposts_c。unt: 0 
+source·
+”！Phone臀户’‘”
+text ：”将盹9:i!l!l传回Tensorf\ow Eager Execution 吨由ta-ur\="'http. //t. 四川2dLij3"' href=”https .//m. weibo.cn/ 
+图6-13
+列表内容
+可以发现，这个元素有一个比较重要的字段
+mblog 。展开它，可以发现它包含的正是微博的一些
+信息，比如
+attitudes count （赞数目）、
+comments_count （评论数目）、
+reposts_count （转发数目）、
+created at （发布时间）、
+text （微博正文）等，而且它们都是－些格式化的内容。
+这样我们请求一个接口，就可以得到10 条微博，而且请求时只需要改变page 参数即可。
+这样的话，我们只需要简单做一个循环，就可以获取所有微博了。
+3. 实战演练
+这里我们用程序模拟这些Ajax 请求，将我的前10 页微博全部爬取下来。
+首先，定义一个方法来获取每次请求的结果。在请求时，
+page 是一个可变参数，所以我们将它作
+为方法的参数传递进来，相关代码如下：
+from urllib.parse import urlencode 
+import requests 
+base url = 'https://m.weibo .cn/api/container/getlndex7 ’ 
+headers = { 
+'Host': 'm.weibo.cn ’, 
+'Re手erer ＇：’ https://m.weibo.cn/u/2830 678474',
+’ User-Agent’:’Mozilla/s .o (Macintosh; Intel Mac OS X 10_12_3) AppleWebKit/537.36 (KHTML, like Gecko) 
+Chrome/58.0.3029.110 Sa 于ari/537.36',
+更多免费资源请访问ppbuzz.com
+
+’X-Requested-With ·.’XMLHttpRequest ’, 
+def get_page(page)’ 
+params = { 
+} 
+’type ·.’ uid ’, 
+’value ’·’ 2830678474', 
+’container id’:’ 1076032830678474’, 
+’ page': page 
+url = base_url + urlencode(params) 
+try: 
+response = requests.get(url, headers=headers) 
+if response.status_code == 200: 
+return response.json() 
+except requests.ConnectionError as e: 
+print(' Error ' , e. args) 
+6.3 
+Ajax 结果提取
+241 
+首先，这里定义了base_url 来表示请求的URL 的前半部分。接下来，构造参数字典，其中type 、
+value 和
+containerid 是固定参数，
+page 是可变参数。接下来，调用
+urlencode （）方法将参数转化为--
+URL 的GET 请求参数，即类似于type=ui d&value=2830678474&containerid=1076032830678474&page=2
+E置
+这样的形式。随后，
+base_url 与参数拼合形成一个新的URL 。接着，我们用requests 请求这个链接，
+...
+加入headers 参数。然后判断响应的状态码，如果是200 ，则直接调用j son （）方法将内容解析为JSON
+返回，否则不返回任何信息。如果出现异常，则捕获并输出其异常信息。
+随后，我们需要定义一个解析方法，用来从结果中提取想要的信息，比如这次想保存微博的id 、
+正文、赞数、评论数和转发数这几个内容，那么可以先遍历cards ，然后获取mblog 中的各个信息，
+赋值为一个新的字典返回即可：
+from pyquery import PyQuery as pq 
+def parse _page (j son): 
+if json: 
+items = j son. get(' data ’) .get(’ cards ’) 
+for item in items: 
+item = item.get (’ mblog') 
+weibo = {} 
+weibo[ ' id’ J = item.get('id’) 
+weibo['text'] = pq(item.get(’ text')). text() 
+陆ibo[ 'attitudes '] = item.get(’ attitudes_count') 
+weibo [ 'comments ’ J = item.get(’ comments_count') 
+weibo[’reposts’] = item.get(’ reposts_count ’) 
+yield weibo 
+这里我们借助pyquery 将正文中的HTML 标签去掉。
+最后，遍历一下page ，一共10 页，将提取到的结果打印输出即可：
+i干
+name
+== ' 
+main 
+for page in range(l, 11): 
+json = get_page(page) 
+results = parse_page(json) 
+for result in results: 
+print(result) 
+另外，我们还可以加一个方法将结果保存到MongoDB 数据库：
+更多免费资源请访问ppbuzz.com
+
+242 
+第6 幸
+Ajax 数据爬取
+from pymongo import MongoClient 
+client = MongoClient () 
+db = client [ 'weibo ' ] 
+collection = db[ ' weibo'] 
+) 
+＋
+L
+、
+j
+14
+’ 
+HU
+<U
+C3nku 
+ρ
+』
+n
+H
+γ
+－
+－
+《
+U
+飞
+J
+J
+t
+、
+M
+门
++
+L
++
+L 
+、
+4
+－
+－
+Y
+ι
+－
+n
+u
+u
+u
+ρ
+」
+4
+L
+C
+J
+r
+、
+“
+ρ
+ι
+』
+n
+川
+’
+n
+u
+Y
+I‘
+、
+I
+‘
+ρ
+，
+l
+、
+．
+V
+n
+》
+n
+川
+向
+d
+n
+r
+。
+n
+υ
+r
+、
+J
+n
+川
+、
+l
+＆
+’
+。
+＋
+L
+r
+飞
+mct 
+－
+ρ
+』
+n
+H
+n
+u
+、
+t
+企
+·
+叮
+I
+企
++L14r 
+-onv 
+puFL 
+v 
+ar
+• 
+C
+J
+、
+－
+‘
+主
+了
+ρ
+』
+Jnu 
+这样所有功能就实现完成了。运行程序后，样例输出结果如下：
+｛’ id 勺’ 4134879836735238', 'text': ＇惊不惊喜咱刺不剌激，意不意外，
+感不感动’，
+’ attitudes ’
+3, 
+’ comments': 
+1 ，’ reposts ’。｝
+Saved to Mongo 
+｛’ id 勺’ 4143853554221385 ',
+' text 勺’曾经梦想仗剑走天涯，后来过安捡给收走了。
+分享单曲i在走高飞’，
+'attitudes ’目
+5 ，’ comments' : 1,’reposts' : o} 
+Saved to Mongo 
+查看一下MongoDB ，相应的数据’也被保存到MongoDB ，如图6-14 所示。
+，。
+（39) Objectld("5a68c56315c260453a3831d3") 
+w 
+id 
+巳二i id 
+4二j text 
+w attitudes 
+<.!.! comments 
+巳l reposts 
+，。
+（40) Objectld(”5a68c56315c260453a3831d4") 
+w _id 
+.:.::, id 
+以j text 
+出j attitudes 
+W comments 
+W reposts 
+{ 6 fields} 
+Objectld("5a68c56315c260453a3831d3叮
+4151300449516001 
+滑织验证码。骨动验证码）比图形验证码更容易被解？·回答作者．
+2 
+0 
+3 
+{ 6fields} 
+Objectld("5a68c56315c260453a3831d4叮
+4143853554221385 
+曾经梦想仗剑走天涯．后来过安输给收走了．ω 分享单曲远走…
+0 
+0 
+Object 
+ObJectld 
+String 
+String 
+lnt32 
+lnt32 
+lnt32 
+Object 
+Object Id 
+String 
+String 
+lnt32 
+lnt32 
+lnt32 
+医I 6- 14
+保存结果
+这样，我们就顺利通过分析Ajax 并编写爬虫爬取下来微博列表。最后，给出本节的代码地址：
+https ://github .com/Python3WebSpider/WeiboLis t 。
+本节的目的是为了演示
+Ajax 的模拟请求过程，爬取的结果不是重点。该程序仍有很多可以完善
+的地方，如页码的动态计算、微博查看全文等，若感兴趣，可以尝试一下。
+通过这个实例，我们主要学会了怎样去分析人jax 请求，怎样用程序来模拟抓取Ajax 请求。了解
+了抓取原理之后，下一节的人jax 实战演练会更加得心应手。
+6.4 
+分析Ajax 爬取今日头条街拍美图
+本节中，我们以今日头条为例来尝试通过分析Ajax 请求来抓取网页数据的方法。这次要抓取的
+目标是今日头条的街拍美图，抓取完成之后，将每组图片分文件夹下载到本地并保存下来。
+1 准备工作
+在本节开始之前，请确保已经安装好requests 库。如果没有安装，可以参考第
+l 章。
+更多免费资源请访问ppbuzz.com
+
+6.4 
+分析Ajax 爬取今日头条街拍美图
+243 
+2. 抓取分析
+不E抓取之前，首先要分析’抓取的逻辑。打开今日头条的首页
+h即：／／www.toutiao.com／，如图
+6-15
+所示。
+主主日头策
+’圈·
+a
+铺
+附
+子
+u
+n
+·
+团
+”
+S土舍
+’‘乐
+精憔
+中国酣.Rlf章马量南海蓝呈爆悻？外直面回应
+:1111} ..，‘霄”向．
+。？工
+噩噩
+臼副支付蝠低费＂＇除7纷倒置能这得
+E州
+回
+’“ 
+" 
+得··例”’无酌
+” 
+24小崎鹅闺
+·
+·萨，
+叫’段佳
+.. 
+圄．．
+，安..
+EfJV1前人6tU: "'!ll ，，内瘾’
+撞盐母酬。置“精搏精”的盘大女生噩不量帽神啊？开址
+－·~巧－~~H
+万E生说
+--- 
+’困山民．组．曼·，帽”’ 的翼又k't.•
+。因头篇
+l 嗣
+c 
+G> －.饱＂~隐－”肌也n•..，.，.回酌”h他
+• I 囚’曲陷J民... 
+K
+币
+翩
+翩
+U
+H
+4 饨，.毡
+’“”
+t 
+槐绸
+图’R
+F困户
+植入笛姐，衙捆友面儿的牛仔擒喃喃
+a自抱离噩气屑的~『ll
+回
+图6-15
+首页内容
+不7上角有一个搜索入口，这里尝试抓取街拍美图，所以输入“街拍” 二字搜索一下，结果如罔6- 16
+所示。
+军
+已
+。
+食
+二一一一一一
+－一一
+•!t街指古剿，盟入＂＇西伯
+C> •昆乞川”璋
+？’惜丁’
+圈人能徊，噩民街头的520街稽
+……－……·回·筐~r
+倒笑，.. 
+Ea~自德
+街跑A ji:
+S.人＂偷
+••.R.• 
+as每俑’8 ··‘’B 
+’t禀刨剿
+”侧面俯
+至…
+籍”
+栅门”E镰行
+U•li:说惆．
+... 
+««混血，·~~领
+A橱，.. 
+，，艘衷’E
+S‘··回事．”’rn
+.嗣同主.llh1•
+'·' 
+＆＂＂圆血安恨a’”
+＇
+＂’”’业．，飞幅严
+＂虫子刷氯翩’电墓
+, ．，机倒.. 
+民附··
+”P 偶H－，事庐”院
+图6-16
+搜索’结果
+这时打开开发者工具，查看所有的网络请求。首先，打开第一个网络请求，这个请求的URL 就
+是吁前的链接http://www.toutiao.com/search/?keyword＝街拍，打开Preview 选项卡查看Response Body 。
+更多免费资源请访问ppbuzz.com
+
+244 
+第6 幸
+Ajax 数据爬取
+如果页面中的内容是根据第一个请求得到的结果渲染出来的，那么第一个请求的源代码中必然会包含
+页面结果中的文字。为了验证，我们可以尝试搜索一下搜索结果的标题，比如“路人” 二字，如阁6-17
+所示。
+民日
+口W阳”阳明阳晦协
+＂＇附忧
+嗣刷刷
+Sowc”阳帽唰四
+M惚$翩翩y
+·
+~·'i'
+＇＇＇＂＂＂飞
+阴晴＂＂＂崎曲曲~＂＂＂＂＂
+m阳阳l~t甘、．
+队，
+？问＂＇c
+H刷刷URU C!) 阳A 础问
+M9dia Font Doc 晒阳阳阳
+阳回
+如
+！”…－－阅、.. c甜”叫
+l, ?koY叫•＂E8'KA1 弛’＂＇自翩翩
+… 
+l 
+俨
+,, ，，...，.，.何时〉喘H h<tp吃＇＂＇旷叫‘－p,.frnh-<0mol"
+toot<nt＝＇＇°＂叫川咄咄户也
+lb＿！俱陆现剑”
+『
+' 
+</•-Jdi .. 
+<d止\l><I
+c\ass="fit四”＂＇甘萃”/lim" • t\m•" i<p" ,..,., •• _b\ook与帽．文化罐蕾”可Q
+• 
+3 
+＂＂孔几S缸＂°＇＇。”
+i 
+< I 
+if lwtrnt剧.Rllve时{ 
+＂＇＂＂＇－＂＇＇嗣同
+I : I 
+11 .!!!l~！：； :!;'?;l~＇.~；：：；：. ~：.~l!.＇.＇帽／＼ogi•<nt'YM/51 '. { 
+· －－＂＂＇睛也png
+: 
+7 
+曲＇＂＂＂＂＇＇＂
+{/pmtp、· ＇帽川
+[
+. 
+)).1n'1•l\(); 
+u －吭抽，，，..圃
+t . 
+} 
+斗”翻℃tl_...:l2·衔’...
+t \I ' 
+} 
+I 11 
+＇－＇麟，....，旧叫自帽咱阪>2&W.OJ”“，.目12＆田
+[ f 12 1 
+window.g\oboh •wind脚，，100.t.
+II 0: 
+pmmo由U“..,,.. 
+I
+日
+】M回吼叫且骨时时附4圃，跚
+f :; 
+··~·！~：！：，~／山，，....... ,,{{ 
+”-· 
+I
+四
+川，
+h腼酣巾四国叫1刷＇＂＂＂＇，国问F叩伽...，嗣
+｜
+口
+"'"'"'" .. , .. ,.,,. ................町，《》｝，
+'l 18 
+yfcn1_"'80o17"°""'•0.0.I 
+19 
+m 
+'°ti阿liandler .. utns 。，，叫叫剧，
+i moll', ＇＂＇＂＇。”｛el { 
+I " 
+＂＇＂＇＂＇＂＇＇品＇＂＂＇＇＂＂"""""u,.,..,_., <>).
+］省四”....
+.I 21 
+且且＂＂旦J_f(wio也迦..：..至咆1.i;. '""""'"""': 
+1田.... 翩俑’ 24
+1 阻＇™回阳回lFr曲也4, 11 .sl OOMCorrtentl.o回回!” . I幅入
+。创..
+叫
+C曲恻
+图6- 17
+搜索结果
+我们发现，网页、源代码中并没有包含这两个字，搜索匹配结果数目为0 。因此，可以初步判断这
+些内容是由Ajax 加载，然后用JavaScript 渲染出来的。接下来，我们可以切换到XHR 过滤选项卡，
+查看一下有没有Ajax 请求。
+不汁1所料，此处出现了一个比较常规的Ajax 请求，看看它的结果是杏包含了页面中的相关数据。
+点击data 字段展开，发现这里有许多条数据。点击第一条展开，可以发现有一个title 字段，它
+的值正好就是页面中第一条数据的标题。再检查一下其他数据，也正好是一一对应的，如图6-18 所示。
+兮臼头篇~
+综合
+视频
+画集
+用户
+路人m剿，街？自女孩儿的牛仔裤特辅
+· 剖间Ill
+旧7哼i始＂同别
+jfj白’高级雪质的文孩l
+价U
+＂＂＂＂＂＇＂＂＇嗡酬.... _ 
+＂＂＇＇卧相
+S制。”
+问同＂＂＂’”咀
+hldil:I 
+S阳山·~
+1 
+-
+：：飞
+”回描W 崎
+凶射曲“，。＂＇＂＇
+α偏咽削。＇＂＂＇怕叫
+jt 坷似咄咄URL> All 
+Clllll 战
+C目
+lmg
+M酬阳。”
+WS
+M时剧协由
+x
+闹“掬w，肉，咱W
+向帽回'IM
+Co制”
+llm""
+问制阳叫酬A1 ＂叫些揭'!l!l吨－· 』
+•• ＂＂＂”时脚”
+制响W’‘四%曲’‘四
+| 
+’刷＂＇－＂＇＇＇’.，，，。up/642411曲＠刷4377838缸”
+••• ’'news 
+tesh.i。n”
+"'-" .. ,..16…
+84377…· 
+title
+””人’b愉街剿，k孩儿岛牛仔貌特””
+＂＇” http//tαUt.1.aoCOft/，，。＂＇＇＂＇＇＇816&&0043778305/"
+帽关规索
+王盟电位3抱
+能细羹交
+植入锚’自
+，羹支a
+aE英街饱
+lj矗街抱
+北禀街细
+町御街细
+王傻凯
+锚，．
+热门搜索排行
+’ 王思’掌握说圃，．
+J 
+.旺源!e肌肉怨”
+J L锹童电来钱R曹
+’ 1 
+{goll"Y..J>i<＿＜刷ot. S, ＂＇＂＇－＂剧院
+”箩在鹰’在“，＂＇＇＂＇.＂＂＇"''"-'”-"' ,,_} 
+'2 {oedio "'""'-'' 日2 89723剖，~d ill n司曾
+·．花乞”，
+r叩1n_<ooot: 59, ''"-""""''· e, _} 
+’ 3: !"""-"'"°'-"· 55952125892, gotle吁.＿.，，＿，.，，..’. ＂＂＂－＂＇嗣：“町俑箱”，，.，..＿，.，，，，
+13目．．》
+…｛oedi＇－＇＂＇＇•＇－＇＇：剖’6272541"
+gol\e叮＇－＇＂－＇＇＂＂＂'" ..... ＿，割脏”局负Ifill，，”，陀，in＿＜剧M
+,,_} 
+.，，《酣＇＂－＂＇＂•＇－＂＇日1日咽5935，居..._, ....”，守”’”，吨，立”－臼＇°＂16, bOOc山”<Ol
+,,_} 
+.,, ｛盹＂＇－＂＇＂°＇－＂＇58232779929, .四＂－＂剧”’”Solley羹轨”，＂＇＇＂－＇＇＂＂＇＇"· ... _,”-"' ,,_} 
+’ 7 ｛·四”－＇阿，，.，＿id 。”3’. ...,,. ＂＂＇＇－＂拥帽
+”象·入·”，＂＇＇＂－＇.＂＂＇
+15, .. ，＿，帽”＇＂＇,,_} 
+图6- 18
+对比结果
+更多免费资源请访问ppbuzz.com
+
+6.4 
+分析Ajax 爬取今日头条街拍美图
+245 
+这就确定了这些数据确实是由Ajax 加载的。
+我们的目的是要抓取其中的美图，这里一组图就对应前面
+data 字段中的一条数据。每条数据还
+有一个image_detail 字段，它是列表形式，这其中就包含了组图的所有图片列表，如图6-19 所示。
+• hight且ght: (source: [), abstract: [], title: [[2 , 2], [5, 2)]} 
+i d: 64240160自由043778000
+Y :!Jllage_detail: [(url:”http:/ /p3. pstatp. com/ la rge/22dl000035dd9b85559d”, width: 1024,“>.-1 
+• 0 (url ”http· //p3. pstatp. com/large/22dl000035dd9b85559d”, width· 1024,”} 
+•l: (url:”http: //p3. pstatp. com/large/21390004987482da8767", width: 1024, _} 
+•2:(url:”http: //p3. pstatp. com/large/22dl000035e68f0a3c27", width: 1024,_} 
+’ 3: (url:“http l/p3 .pstatp.com/large/22ce0001063d416bddfl", width. 1024,”} 
+’ 4: (url:“http: //p9. pstatp. com/large/22ce000106429ed3ab7a”, width: 1024, _} 
+• 5 : (url:”http· l/p3. pstatp. com/large/21390004987828322e31", width: 1024,”} 
+• 6 : (url:“http: I / p3 . pstatp. c。m/large/22d1000035fl49ebd635 " , width : 1024,_} 
+• image_list. [(url:”http: //p3. pstatp, com/list/190xl24/21390004987482da8767"} , _) 
+item id: ”6424019077261427202" 
+item_seo_url:“/group/6424016000043778305/" 
+ltem_s。u rce_url:
+"/gr。up/6424016000043778305／”
+keywords ．
+··牛仔，破洞牛仔裤，牛仔裤，休闲裤，直筒牛仔裤“
+图6-19
+图片列表信息
+因叫门只需朋制川段提问并下载下来就好M一组图都建刊文件夹，因
+文件夹的名称就为组图的标题。
+接下来，就可以直接用Python 来模拟这个Ajax 请求，然后提取出相关美图链接井下载。但是在
+这之前，我们还需要分析一下URL 的规律。
+切换回Headers 选项卡，观察一下它的请求URL 和Headers 信息，如图6-20 所示。
+’‘”·四”阶－阳酬，－
+Cook!咽
+n阳同
+’ o.n.r•I 
+肉崎ω“t UR'-' http //W嗣
+touti>o
+co•/search_content/1offset=8&f 。rmat=j son& keyword均由'-A.1'9;97旺6咽抽80臼川oload:t rce&count=28&cur _ tab•l 
+a叫幽创M甜＇°＂＇GET
+Stot"' Code: • 288 OK 
+”·”。饱Add同撼＂＇148.285 132. 228: •• 
+” ..... 呻，p剑陆y:n。，. ferrer -•hen d队＂＂gcade
+·肉”阳，－H-(14)
+，民..－·－。．”、州－·锐，.. 
+AC<刻，....飞icotion/ js。n, text/javascript 
+－··’”。曲、g: 9＇坤，
+deflate, sdch 
+... 
+刻’佟Lo，咖剑”，，＿剧，，h,q=O 8,en,q=8.6,”,q=8.4,zh-TW,q=8 2,•t,q=O 2 
+Connection· keep-a Uve 
+Cα，. .. 税－~
+appllcation/x ＂帧耐－fo 晴－urtencoded
+c。。k跑回＿distin ct id-15cea 17ea 7b 129f-85a2d 1977 e f bd2-3865 7 519-13c680-15cea17 ea 7 c9a 2; uuid="w: 82c87 a 7d2ba7 48359249b崎9513a88cl":
+csrlt。ken=e
+865 791189128c3 la62a 25cd37la3a6• ，旺ATHE凡口TY到旺5咽臼97‘f4"6A,..C;
+_tasessi。nid=54izyeud81498576855162,
+tt_webid=6436335122787 856129 ；四u
+OATAl 259612882•945464686-14985 75569-nu l l‘7(1498575569, _ga=GAl. 2.232485749.1498576855, _gid=GAl 2 1456372451.1498576855 
+”。ot..,..,
+touti雹o co• 
+肉.，....，
+http://..,..,.toutiao. 四”／search/1k町回rd喝ESUl\97旺的回咽D
+υ－－·但睛”。＇illa/5.8 ”acintosh;
+Inte飞”’c 05 x 18_12_3) AppleWebK让／537 36 （附衍，悦，
+like Gecko) Chrome/58.8 3829 118 Safari/537 36 
+3牛肉·”翩翩od-Wlttr
+JO鸣LHttpRequest
+，。”’ySu’”’.......匈帽
+”..以沫，回
+啪W URL ＂＂＇回回
+。”... 8 
+’ormat json 
+k四w。＂＇筒抱
+OU幅“a<t true 
+o。“”也，.
+剧，tab 1 
+图6-20 请求信息
+可以看到，这是一个GET 请求，请求URL 的参数有offset 、
+format 、
+keyword 、
+autoload 、
+count
+和cur
+tab 。我们需要找出这些参数的规律，因为这样才可以方便地用程序构造出来。
+接下来，可以前动页面，多加载一些新结果。在加载的同时可以发现，
+Network 中又出现了许多
+Ajax 请求，如罔6-21 所示。
+更多免费资源请访问ppbuzz.com
+
+246 
+第6 章
+Ajax 数据爬取
+＂＇白白酬m
+M啊啊
+Coo附阳毗阳阳tion
+Sou.田
+P""om>ance
+Audit. 
+Sec.咐
+’ e • 'i' 
+\/low' ：主飞
+阳回.....闻
+’
+因回阳cache
+四”阴阳.. 时吨
+~－一一丁
+向m
+H刷刷URLs 翩. JS 臼SI吨
+Media Font Doc 附
+Manifest
+Other 
+Name 
+口？。”回.a&!onnat•阳曲町阳出旺8%A1%97%自%8B%8D&auto
+LJ ?keyword•’‘四'6A1'697'6自%88%80
+u hOLwool" 
+LJ ?on.et• 2皿.fom>昨阳呻阳阳酬•%E8'6A1 '697%E8%8B%8D&au 
+LJ ?offset·幽lonnat•J阳啤阳ywonMIE8阳，，..，，.臼刷刷由M
+cJ 7oflset"6耐°＂＂＂＂＇I叫＿...酬A1'697'6E6'688%刷刷
+I~~. 口、同＇＂＇＇智丽日F’r"'fCTOi'.i
+····！＂＇飞、＝日u’“吧’缸’，.. ，，’，.，岛~－：＇！; 
+l t”自臂－
+u ?on.et•HX温fonn'1＝问W幽即－耻’‘E8%A1'697'6田’‘88%8D&a.
+LJ ?off晒·12恤阳mat叫W融町叫<l•%E8%A1 '697'6E8'688%8国a
+L ＇°＇他磁叫咽＆1onnat:问。”曲即wool•%凹’‘A1'697'6白’‘86%8国a
+’O 15国""I•曲” t 112KB/1 .6MBtransfen回IA时由29.0m阳10。MCo. ,
+x 
+Headers
+阳啊附W
+伺幅ponae
+Coo“倒
+rm，咱
+，。””创
+”四U回t UR'-' http ·//-
+toutia。
+comJsea rch_con tent门。ffset =8e&forma t:J son&keyw. 
+”.. , ... ... 恼。d' GET 
+StatuaC。.. 
+’.，.目
+。，《
+何em。” Add附··’
+140 205. 132 227' 88 
+肉·’... 帽，p创始y.
+no-referrer....,,hen-d 。"'1grade
+’肉”阳帽·”幅幅’（1•1
+. ..电局附t ”.. 
+。”、s
+v附WllOUIC&
+阳帽pt: aρplication/json, text/javascript 
+＂＂＇冶pt·EnαM阳，
+gzip, deflate, sdch 
+k回回·Lo呻蛐9.,
+zh-CN,zh,q=0.8 ，酬，q=0.6,jo;q=0.4, z h l\l;q=0.2,ot:q• 0.2 
+Con nee俗。”
+keep-alive
+c“’”晌－飞llM' app ti cat ion/x吨剧协－form-urlencoded
+c。。比悔：
+t州＿distioct id•lS cea 17ea7b129f-05a2dl 97 7e fbd2-3065 7 509· llc 686- 15cea l 7 eo 
+66570118912Bc31•目前Scd37la3a6a:
+WEATHER_C ITY•咂如町、，7"E4喃陆AC:
+tt ＿，回bid＝制
+2 1456372451 14985760白，回zzo盯Al259612862=945464666-1498575569-nuI\\7C14985
+”。st w阶仇toutiao .com 
+’司．，创＂＂
+http;//....,.toutiao.com/search/7k町回rd晴EB\A1%肝、E盹88咽。
+υ”or·A肘，rt; Mozil \a/5.0 阳acintosh.
+Inte l 例ac OS X 10_12_31 Appl酬曲“ t/537.36
+X·R－创“’·Wl由X”LHttpRequest
+，。睛’V Strl吨阳刚回蚀得
+嘲W 缸”rce
+view U肉Leno回回
+。仔set 80 
+fonn盹json
+k町响。咱街’8
+autoload; true 
+count 20 
+国飞tob;l
+图6-21
+Ajax 请求
+这里观察一下后续链接的参数，发现变化的参数只有offset ，其他参数都没有变化，而且第二次
+请求的o干fset 值为20 ，第三次为40 ，第四次为60 ，所以可以发现规律，这个o忏set 值就是偏移盐，
+进而可以推断出count 参数就是一次性获取的数据条数。因此，我们可以用offset 参数来控制数据分
+页。这样一来，我们就可以通过接口批量获取数据了，然后将数据解析，将图片下载下来即可。
+3 实战演练
+我们刚才已经分析了一下人jax 请求的逻辑，下面就用程序来实现美图下载吧。
+首先，实现方法get_page （）来加载单个Aj ax 请求的结果。其中唯一变化的参数就是offset ，所
+以我们将它当作参数传递，实现如下：
+import requests 
+from urllib.parse import urlencode 
+def get_page(o忏set):
+params = { 
+} 
+’offset ' : offset, 
+’format ’' json’, 
+’keyword ’. 
+’ 街才白’ ，
+’auto load’:’ true', 
+’count ·.’ 20’, 
+’cur_tab”'1'' 
+川
+＝
+’ h ttp ：／／川.toutiao.com/search content/?’+ urlencode(params) 
+try: 
+response = requests.get(url) 
+if response .status_code == 200: 
+return response. j son() 
+except requests.ConnectionError: 
+return None 
+更多免费资源请访问ppbuzz.com
+
+6.4 
+分析Ajax 爬取今日头条街拍美图
+247 
+这里我们用urlencode （）方法构造请求的GET 参数，然后用requests 请求这个链接，如果返回状
+态码为200 ，则调用response 的json （）方法将结果转为JSON 格式，然后返回。
+接下来，再实现一个解析方法：提取每条数据的image_detail 字段中的每一张图片链接，将图片
+链接和图片所属的标题一并返回，此时可以构造一个生成器。实现代码如下：
+, 
+)) 
+-t414 
+·
+1
+I
+牟
+γ
+A
+au 
++LP 
+ρ
+、
+，
+t
+、
+AU
++L 
+、
+－
+J
+－
+ρ
+」
+飞
+／
+－
+e
+n
+k
+u
+enB
+- 
+a14aeE 
+f
+』
+＋
+L
+m
+o
+b
+－
+＆
+afl·
+-1··a
++L 
+AU
++L’
+5m
+-1 
+，
+，
+l
+、
+e
+l
+t
+f
+t
+、
+r
+t
+、
+＋
+L
+O
+b
+ttend
+- 
+EEnBm
+,. 
+nEns
+·-
+ee 
+·
+·
+m
+川
+n
+k
+u、
+t
+l
+＆
+·
+·
+n
+H
+m
+m
+O
+L
+n
+H
+2
+M
+牛
+L
+、
+－
+J
+D
+E
+＋
+L
+J
+i
+r
+4
+k
+m
+·
+－
+t
+《
+d
+＋
+L
+、
+4
+．
+、
+4
+＋
+L
+·
+·
+『
+d
+．
+、，
+J
+．
+、
+I
+企
+《
+巳
+l
+n
+u
+，
+、
+，
+，
+，
+＋L
+Z
+n
+s
+1
+4
+n
+川
+R
+J
+a
+n
+H
+＝
+气
+d
+ρ
+」
+n
+v
+J
+n
+u
+－
+－
+A
+C
+D
+m
+川
+、
+A
+e
+3
+·
+a
+r
+》
+A
+C
+、
+4
+v
+y
+－
+－
+J
+f
+、
+m
+－
+A
+O
+b
+，
+l
+、
+＋
+L
+a
+L
+＋
+L
+2
+U
+V
+A
+q
+d
+o
+h
+－
+＋
+L
+·
+唱
+E
+h
+m
+川
+《
+U
+Ens·
+-&
+LlrT 
+nkuv· 
+anr 
+m
+川
+n
+u
+《
+u
+lpbrT 
+-1J 
++
+L 
+ρ
+、
+，
+＋l
+n
+v
+o
+、
+A
+r?’ 
+ρ
+」
+Jnu 
+接下来，实现一个保存图片的方法save_image （），其中item 就是前面get_i mages （）方法返回的一
+个字典。在该方法中，首先根据item 的title 来创建文件夹，然后请求这个图片链接，获取图片的二
+a圈圈
+进制数据，以二进制的形式写入文件。图片的名称可以使用其内容的MD5 值，这样可以去除重复。
+E温·
+相关代码如下：
+import os 
+from hashlib import 
+I『ids
+) 
+何
+民
+u
+v
+nv 
+·
+『
+I
+J
+, 
+) 
+( 
++
+L 
+S 
+E 
+n6 
+·1AA 
+』
+n
+u
+x 
+ρ
+、
+」
+门
+. 
+) 
++
+L 
+n
+川
+ρ
+h
+h
+ 
++
+L 
+nH 
+nu 
+FL 
+. 
+ρ
+」
+s 
+nH 
+nu 
+n
+μ
+’
+ 
+5 
+ρ
+』
+γ
+4
+ 
+( 
+F
+、
+J
+AU 
+m
+川
+, 
+) 
+ρ
+L
+ 
+14 
+4L 
+．
+叮I
+企
+牛
+I
+() 
+牟
+I
+、
+l
+n
+川
+ρ
+、
+4
+L
+n
+v
+。
+宫
+α
+、
+』
+J
+．
+n
+V
+飞
+J
+m
+－
+．
+ρ
+‘
+‘
+ρ
+、
+E
+＋
+L
+俨
+↑
+1
+4
+n
+K
+u
+．
+、
+I
+企．
+1
+牛
+.. 
+a
+，
+｛
+、
+·
+·
+5
+、
+J
+£
+1
+、
+J
+m
+t
+、
+j
+a
+t
+)
+lahns 
+l
+’
+m
+川
+牛
+L
+、
+B
+J
+ρ
+」
+·
+ρ
+L
+F
+l
+、
+γ
+l
+e
+2
+u
+p
+＋
+ι
+A
+U
+--+
+LnvnyLUnE 
++LE
+--
+r•-
+WOAU 
+-
+obo·e
+-
+ca 
+＋
+L
+·
+《
+U
+，
+1
+4
+·
+。
+、
+｝
+，
+’
+m
+2
+、
+P
+J
+－
+1
+’
+E
+1
+l
+＆
+·
+’
+f
+、
+、
+t
+J
+E
+Z
+r
+T
+」
+n
+5
+n
+r
+e
+＋
+L
+、
+，
+，
+，
+＋
+L
+－
+－
+F
+4
+L
+r
+l
+、
+牛
+k
+n
+u
+w
+0
+0
+5
+ρ
+h
+w
+·
+τ
+＆
+－
+－
+－
+C
+J
+「
+d
+n
+v
+n
+v
+γ
+A
+吨
+d
+Ober
+--
+JtnynyDEm 
+--4tE15
+-srtI 
+mtEAur
+--
+lEEvyn 
+E
+-lobo
+,,,
+X14rJUOE 
+＋
+L
+＋
+L
+－
+c
+l
+J
+E
+－
+－
+f
+、
+a
+4
+4
+V
+．
+、
+牛
+’
+r
+3
+－
+n
+u
+·
+r
+＋
+l
+O
+E
+M
+O
+L
+在
+L
+「
+d
+，
+L
+r
+l
+、
+t
+s
+r
+d
+t
+h
+f
+、
+＋
+L
+E
+E
+F
+3
+5
++LSU
+,+
+Lnl14E 
+＋
+L
+O
+h
+』
+ρ
+h
+w
+4
+L
+『
+d
+ρ
+、
+γ
+4
+A
+u
+n
+n
+H
+n
+u
+sobuaznvnyw
+pn
++L 
+1
+·
+q
+，
+4
+L
+－
+n
+u
+－
+－
+飞
+。
+·
+·
+x
+m
+E
+S
+L
+n
+s
+r
+＋
+l
+＋
+L
+P
+L
+J
+口
+、
+，
+，
+，
+ρ
+h
+w
+ρ
+、
+γ
+4
+·
+＋
+L
+n
+v
+」
+n
+n
+H
+·
+ρ
+」
+m
+＋
+L
+E
+a
+＋
+ι
+1
+5
+1
+4
+ 
+E
+ι
+H
+i
+－
+－
+5
+n
+v
+＋
+L
+l
+r
+＋
+L
+l
+ 
+＋
+L
+＋
+、
+，
+f
+、
+n
+H
+－
+n
+u
+M
+W
+·
+·
+n
+y
+c
+d
+a
+l
+a
+r
+e
+o
+E
+n
+H
+E
+E
+P
+「
+／
+飞
+n
+v
+4
+4
+5
+P
+L
+·
+－
+s
+u
+t
+E
+－
+J
+u
+n
+5
+·
+－
+z
+1
+1
+4
+n
+u
+，
+，
+4
+、
+nBCJLKOEF
+•-lEE
++L 
+aomny
+--
+n 
+m
+-
+5·1 
+、
+4
+4
+E
+L
+r
+、
+d
+O
+L
+F
+＋
+l
+＋
+E
+e
+』
+γ
+4
+-oorlnvny 
+a
+」
+n
+H
+－
+O
+」
+U
+V
+U
+V
+J
+F
+」
+2
+M
+E
+T
+γ
+A
+V
+《
+5·lte 
+r+4 
+ρ
+』
+』
+n
+u
+最后，只需要构造一个时fset 数组，遍历offset ，提取图片链接，并将其下载即可：
+from multiprocessing.pool import Pool 
+) 
+n
+川
+nu 
+r
+、
+“
+．
+『
+．
+’
+》
+)( 
+＋
+’
+、
+F
+、
+J 
+ρ
+‘
+－
+ρ
+ 
+F
+》
+o
+b
+、
+’
+，
+, 
+ζ
+l
+a
+m
+ 
+r
+宁
+．
+m
+川
+白
+c
+n
+U
+w
+．
+、
+』
+晶
+牟
+’
+r
+t
+、
+－
+1
+自
+巳
+＋
+E
+、
+、
+、
+，
+，
+，
+，
+‘
+、
+σ
+6
+e
+m
+E
+ 
+.. 
+古
+α
+何
+K
+υ
+ρ
+目
+』
+向
+K
+u
+、
+l
+J
+n
+μ
+l
+＋
+L
+、
+o
+＋
+．
+、
+－
+n
+H
+、
+I
+矗
+m
+川
+e
+＋
+L
+1
+f
+飞
+、
+A 
+《
+d
+ρ
+目
+』
+＋
+a
+‘
+－
+£
+『
+o
+。
+m
+n
+E
+r
+＋
+l
+a
+凰
+”
+、
+I
+企
+u
+v
+口
+＝
+＋
+L
+v
+4
+a
+r
+，
+‘
+、
+叮
+I
+企
+n
+u
+「
+r
+、
+d 
+n
+门
+n
+川
+-lor 
+aso 
+m
+－
+－
+J
+石
+’
+fT 
+ρ
+」
+anu 
+GROUP START = 1 
+GROUP END = 20 
+if 
+name 
+== ' 
+ma in 
+pool = Pool() 
+groups = ( [ x * 20 for x in range (GROUP START, GROUP_ END + 1))) 
+更多免费资源请访问ppbuzz.com
+
+248 
+第6 幸
+Ajax 数据爬取
+pool.map(main, groups) 
+pool. close() 
+pool.join() 
+这里定义了分页的起始页数和终止页数，分别为GROUP
+START 和GROUP
+END ，还利用了多线程的线
+程池，调用其map （）方法实现多线程下载。
+这样整个程序就完成了，运行之后可以发现街拍美图都分文件夹保存下来了，如图6-22 所示。
+e 
+e 
+jie阳l
+< ' 
+:: II 囚阳嚣可三v ←
+b
+j 
+i @ 
+。
+自
+0
+日
+在.. 
+A 
+修理日期
+帽
+慷
+恤
+圃
+剧
+团
+刷
+回
+国
+提
+奕
+奕
+奕
+爽
+。
+G
+G
+簧
+件
+件
+件
+件
+件
+吧
+哇
+哇
+神
+文
+立
+立
+立
+直
+r
+J
+W
+J
+』
+L
+H
+r
+甲
+－
+－
+－
+a
+o
+a
+u
+0
+0
+日
+a
+K
+K
+K
+旬
+，
+咱
+，
+，
+。
+，
+鸣
+”
+739 
+1 
+~• a个子元，j飞众情晶晶牌．街指可能就量这－！步
+寺天。Oo48
+’ ” 798街拍
+寺天00旧
+~ • 201项目街拍雷一波
+今天OOo47
+… E黛酶篇东的时鸭”街u笨代在雪马街头所拍翻
+令天OOo47
+，
+．．北京时尚街抱阜履
+令天00047
+量1a57c9e6f864d7df... 7d526de84bec.j问
+d毁灭。0047
+量3ac3f24d2口215f70... 68ddd315ed25.j问
+令矢。Oo盯
+颤
+3d77fd3ab57b154... 3ddfb45f09b3b.Jpg 
+今天000 47
+…·量配汹汹画画幽幽画画画画画曰“监溢血i血··益画监监，...四·回……··澜邸’回翩翩w-
+暨
+83ee05411dcOcbf2 .. aca748ecc7ddf.jpg 
+寺天∞，盯
+罩
+88a02a46a91f3ff8.•. 46制14bc3795.jpg
+寺天OO o47
+堕2597d991c町9ba7f... 1d崎819bd6eb.j四
+寺天∞！盯
+Id阳326bc70c31b6.. Ofe2213臼2575.jpg
+今天。。盯
+量e2d066a2eedf剧e.. 5463641ba6dbf.jpg 
+今天∞’47
+11 ec5bf5b回c7bd1be.“b0dc302c5b20.j问今天。0，盯
+堕f661b4136601e25b... c525c05852ab.jpg 
+今天00047
+… l!IJ妄想让我·规规矩矩”地穿牛仔槐1
+今天oo ：盯
+• 
+I悔不要路IE71 露最帽圃模~I
+令天00:48
+，
+．．不要再窍，j、自蛙了，这－奴’J、粉艇令2军火了
+今天回咽
+’ . 集兽云，街抽
+寺天00:48
+蜘翩陈坤机场街拍
+9天00:48
+．．．当知道主人有男朋直时，捕瞌踵个瞩’7
+寺天00:48
+’” 迪士后公主们的时尚在脑后愚健全军认识了
+今天00:49
+114 KB 
+JPEG Ill由
+93 KB 
+JPEG Ill幢
+127 KB 
+JPEG 圃’
+105 KB 
+JPEG 留由
+104 KB 
+JPEG Ill像
+88 KB 
+JPEG 画幅’ 
+咱
+央
+提
+R
+R
+奕
+奕
+斑
+白
+件
+件
+件
+件
+件
+件
+件
+m
+r
+宜
+宜
+宜
+宜
+艾
+文
+立
+8
+－
+E
+唱
+4
+ι
+唱
+呻
+w
+n
+e
+电
+『
+E
+E
+－
+－
+A
+缸
+’
+1 
+1 
+图6-22
+保存结果
+最后，我们给出本节的代码地址：
+https: //github.com/Python3WebSpider/Jiepai 。
+通过本节，我们了解了Ajax 分析的流程、
+Ajax 分页的模拟以及图片的下载过程。
+本节的内容需要熟练、掌握，在后面的实战中我们还会用到很多次这样的分析和抓取。
+更多免费资源请访问ppbuzz.com

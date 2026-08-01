@@ -1,0 +1,479 @@
+74 第6 章  文本分类 
+>>>     sms_data.append(preprocessing(line[1])) 
+>>> sms.close() 
+在继续任何下一步动作之前，要确保自己所用的系统中已经安装了scikit-learn 库。 
+>>> import sklearn 
+提示： 
+如果这句代码出了错，或者在安装scikit 的过程中遇到了
+一些困难，可以按照下面链接中的内容来安装scikit 库： 
+http://scikit-learn.org/stable/install.html。 
+6.3  取样操作 
+一旦以列表的形式持有了整个语料库，接下来就要对其进行某种形式的取样操作。 通
+常来说，对语料库的整体取样方式与图6-2 中的训练集、开发测试集和测试集的取样方式
+是类似的，整个练习背后的思路是要避免训练过度。如果将所有数据点都反馈给该模型，
+那么算法就会基于整个语料库来进行机器学习，但这些算法在真实测试中针对的是不可见
+数据。在非常简单的词汇环境中，如果在模型学习过程中使用的是全体数据，那么尽管分
+类器在该数据上能得到很好的执行，但其结果是不稳健的。原因在于一直只在给定数据上
+执行出最佳结果，但这样它是学不会如何处理未知数据的。
+图6-2 
+要想解决此类问题，最好的办法是将整个语料库划分成两个主要集合。在建模练习中，
+应该要避开开发集和测试集，只用开发测试集来完成建模操作。在完成整个建模练习之后，
+再将其结果放到之前搁置的测试集合中来进行预测。这样一来，如果该模型在该集合上表
+现良好，就可以确信它对任何新的数据样本都可以进行准确而稳健的预测。
+
+6.3  取样操作 75 
+取样本来就是一个非常复杂的操作流程，机器学习社区一直在对其深入研究，它本质
+上是一个应对许多数据编程和训练过度问题的补救措施。简单起见，本章将只进行基本取
+样，下面对语料库进行70:30 的划分： 
+>>> trainset_size = int(round(len(sms_data)*0.70))  
+>>> # i chose this threshold for 70:30 train and test split. 
+>>> print 'The training set size for this classifier is ' + str(trainset_  
+size) + '\n'  
+>>> x_train = np.array([''.join(el) for el in sms_data[0:trainset_size]]) 
+>>> y_train = np.array([el for el in sms_labels[0:trainset_size]]) 
+>>> x_test = np.array([''.join(el) for el in sms_data[trainset_  
+size+1:len(sms_data)]]) 
+>>> y_test = np.array([el for el in sms_labels[trainset_size+1:len(sms_  
+labels)]])or el in sms_labels[trainset_size+1:len(sms_labels)]])  
+>>> print x_train 
+>>> print y_train 
+•
+如果将全体数据都用作训练数据，你认为情况会怎样？
+•
+如果面对的是一个非常不平衡的样本，情况又会怎样？
+提示： 
+如果想要了解更多可用的取样技术，请访问以下链接： 
+http://scikit-learn.org/stable/modules/classes.html#module- 
+sklearn.cross_validation。 
+下面将视线转到另一件事上：就是要将整个文本转换成向量形式。这种形式被称之为
+词汇文档矩阵（term-document matrix）。如果有必要为这个给定例子构建一个词汇文档矩
+阵，它看起来应该像下面这样：
+TDM 
+anymore 
+call
+camera color 
+cried
+enough
+entitled
+free
+gon
+had 
+latest 
+mobile 
+SMS1 
+0 
+1 
+1 
+1 
+0 
+0 
+1 
+2 
+0 
+1 
+0 
+3 
+SMS2 
+1 
+0 
+0 
+0 
+1 
+1 
+0 
+0 
+1 
+0 
+0 
+0 
+当然，文本文档也可以用所谓的BOW（bag of word）来表示，这也是文本挖掘和其他相
+关应用中最常见的表示方法之一。基本上，不必去考虑这些单词在相关语境下的表示方式。
+如果想要用Python 来生成一个类似词汇文档矩阵，就需要用到scikit 中的向量化器
+（vectorizer）： 
+
+76 第6 章  文本分类 
+>>>from sklearn.feature_extraction.text import CountVectorizer 
+>>>sms_exp=[ ] 
+>>>for line in sms_list: 
+>>>    sms_exp.append(preprocessing(line[1])) 
+>>>vectorizer = CountVectorizer(min_df=1) 
+>>>X_exp = vectorizer.fit_transform(sms_exp) 
+>>>print "||".join(vectorizer.get_feature_names()) 
+>>>print X_exp.toarray() 
+array([[ 1, 0, 1, 1, 1, 0, 0, 1, 2, 0, 
+1, 0, 1, 3, 1, 0, 0, 0, 1, 0, 0, 2, 
+0, 0], [ 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 
+0, 1, 0, 0, 0, 1, 1, 1, 0, 1, 1, 0, 
+1, 1, ]]) 
+计数向量开了个好头，但它在使用过程中会遇到一个问题：即较长文档所获得的平均
+计数值会高于较短的文档，即使在讨论主题相同的时也是如此。
+小技巧： 
+如果想要避免这些潜在的误差，只要用文档中每个单词
+出现的次数除以该文档中的单词总数就行了。这个新
+的特征值叫做tf（term frequencies）。 
+tf 之上还有另一个更细致的改进，那就是对语料库中许多文档中出现的词汇进行降格
+加权。通过这种方式，就可以得到减少那些只在该语料库的某一小部分中出现的信息。
+这种降格加权被称为tf-idf（term frequency–inverse document frequency）。幸运的是，
+scikit 库也提供了相应的实现方式，具体如下： 
+>>>from sklearn.feature_extraction.text import TfidfVectorizer 
+>>>vectorizer = TfidfVectorizer(min_df=2, ngram_range=(1, 2), stop_ 
+words='english', strip_accents='unicode', norm='l2') 
+>>>X_train = vectorizer.fit_transform(x_train) 
+>>>X_test = vectorizer.transform(x_test) 
+现在得到了一个矩阵格式的文本，它与任何机器学习作业中得到的结果是一样的。现
+在，X_train 和X_test 可以被用于所有机器学习算法中的分类处理了。所以接下来就要看看
+在文本分类这个语境中，有哪些最常用的机器学习算法。
+6.3.1  朴素贝叶斯法 
+下面就来构建第一个文本分类器吧。首先来看朴素贝叶斯分类器。朴素贝叶斯分类器
+
+6.3  取样操作 77 
+依赖于贝叶斯算法，它本质上是一个根据给定特征/属性，基于某种条件概率为样本赋予某
+个类别标签的模型。在这里，将用频率/伯努利数来预估先验概率和后验概率。 
+=
+×
+先验概率
+似然函数
+后验概率
+证据因子
+朴素算法往往会假设其中所有的特征都是相互独立的，这样对于文本环境来说看起来
+会直观一些。但令人惊讶的是，朴素贝叶斯算法在大多数实际用例中的表现也相当良好。
+朴素贝叶斯（NB）法的另一个伟大之处在于它非常简单，实现起来很容易，评分也很
+简单。只需要将各频率值存储起来，并计算出概率。无论在训练时还是测试（评分）时，
+它的速度都很快。基于以上原因，大多数的文本分类问题都会用它来做基准。
+下面就来写一下这个分类器的实现代码：
+>>>from sklearn.naive_bayes import MultinomialNB 
+>>>clf = MultinomialNB().fit(X_train, y_train) 
+>>>y_nb_predicted = clf.predict(X_test) 
+>>>print y_nb_predicted 
+>>>print ' \n confusion_matrix \n ' 
+>>>cm = confusion_matrix(y_test, y_pred) 
+>>>print cm 
+>>>print '\n Here is the classification report:' 
+>>>print classification_report(y_test, y_nb_predicted) 
+confusion_matrix [[1205 5] 
+[26 156]] 
+图6-3 
+该方法将测试集中的所有1 392 个样本读取到了混合矩阵中，其中有1 205 个真阳性判
+例和156 个真阴性判例。同时也预测到了5 个假阴性判例和26 个假阳性判例。其分类如图
+6-3 所示。现在，对于这样一个典型的二元分类器，有不同的测量指标。 
+下面，就来给出其中几个最常见的分类测量指标的定义：
+Accuracy=
+tp
+tn
+tp
+tn
+fp
+fn
++
++
++
++
+
+78 第6 章  文本分类 
+Precision=
+Recall=
+precision recall
+2 precision+recall
+tp
+tp
+fp
+tp
+tp
+fn
+F
++
++
+⋅
+=
+⋅
+现在来看一下分类报告：
+Precision    recall     f1-score    support 
+ham
+0.97
+1.00
+0.98
+1210 
+spam
+1.00
+0.77
+0.87
+182 
+avg / total  0.97
+0.97
+0.97
+1392 
+有了上述定义，现在结果一目了然。因此事实上，上述所有的测量指标看起来都挺
+不错的，这意味着分类器执行得准确而稳健。在这里，我会强烈建议你以更多的选项来
+查看该模块的测量指标，用来分析该分类器所得到的结果。这之中最重要、且最平衡的
+指标是f1 指标（这是R 关于精确率和反馈率的调和平均指标）。该指标之所以被广泛使
+用，是因为它给出了一个具有更高覆盖面的、优质的分类算法。另外，准确度也直观地
+告诉了我们真样本在所有样品中占了多少。精确率与反馈率也都有其各自的含义，精确
+率所讨论的是该分类器能得到多少真阳性判例以及它们的覆盖面，而反馈率则可以让我
+们详细了解自己能从这个关于真阳性和假阴性的判例池中得到多大的准确性。
+提示： 
+如果想了解scikit库中各种类的更多信息，请访问以下链接： 
+http://scikit-learn.org/stable/modules/classes. 
+html#module-sklearn.metrics。 
+下面来看另一个更重要的过程，读者要根据自己理解的模型真正深入地查看这个模型，
+通过查看实际特征来分辨阳性和阴性的判例类。在这里，只写了一段非常小的代码来生成
+前n 个特征并打印出它们。具体如下： 
+>>>feature_names = vectorizer.get_feature_names() 
+>>>coefs = clf.coef_ 
+>>>intercept = clf.intercept_ 
+>>>coefs_with_fns = sorted(zip(clf.coef_[0], feature_names)) 
+>>>n = 10 
+>>>top = zip(coefs_with_fns[:n], coefs_with_fns[:-(n + 1):-1]) 
+
+6.3  取样操作 79 
+>>>for (coef_1, fn_1), (coef_2, fn_2) in top: 
+>>>    print('\t%.4f\t%-15s\t\t%.4f\t%-15s' % (coef_1, fn_1, coef_2, 
+fn_2)) 
+-9.1602    10 den
+-6.0396    free 
+-9.1602    15
+-6.3487    txt 
+-9.1602    1hr
+-6.5067    text 
+-9.1602    1st ur
+-6.5393    claim 
+-9.1602    2go
+-6.5681    reply 
+-9.1602    2marrow
+-6.5808    mobile 
+-9.1602    2morrow
+-6.5858    stop 
+-9.1602    2mrw
+-6.6124    ur 
+-9.1602    2nd innings
+-6.6245    prize 
+-9.1602    2nd ur
+-6.7856    www 
+上述代码只是从向量化器中读取了所有的特征名称，并获取了与给定特征相关的系数，
+然后将其中前10 个特征打印出来。如果想要打印更多的特征，只需要修改代码中的n 值即
+可。如果仔细观察这些特征，就会得到很多关于该模型的信息，以及更多与特征选择和其
+他参数相关的建议，如说关于预处理过程、单元/二元语法、词干提取、标记化处理等方面
+的建议。举个例子，查看垃圾过滤器的前几个特征，可以看到2morrow、2nd innings 和一
+些非常明显的数字。对于阳性判例类（即垃圾信息）来说，“free”是一个非常明显被突出
+的词汇，许多垃圾信息里都有与免费优惠与交易相关的内容。当然，prize、www、claim 等
+其他词汇也同样值得关注的。
+提示： 
+更多细节请参考http://scikitlearn.org/stable/ 
+modules/naive_bayes.html。 
+6.3.2  决策树 
+决策树是最古老的预测建模技术之一，对于给定的特征和目标，基于该技术的算法会
+尝试构建一个相应的逻辑树。使用决策树的算法有很多种类，这里主要介绍的是其中最着
+名和使用最广泛的算法之一：CART。 
+CART 算法会利用特性来构造一些二叉树结构，并构造出一个阈值，用于从每个节点
+中产生大量的信息。下面就通过编写代码来获取一个CART 分类器： 
+>>> from sklearn import tree 
+>>> clf = tree.DecisionTreeClassifier().fit(X_train.toarray(), y_train) 
+>>> y_tree_predicted = clf.predict(X_test.toarray()) 
+
+80 第6 章  文本分类 
+>>> print y_tree_predicted 
+>>> print ' \n Here is the classification report:' 
+>>> print classification_report(y_test, y_tree_predicted) 
+这里唯一的区别在于训练数据集的输入格式。需要将之前的稀疏矩阵格式修改成
+NumPy 数组，因为scikit 库树模块只接受一个NumPy 数组。 
+通常情况下，只有在特征数量非常少时，树结构才是一个不错的选择。因此，尽管乍
+看之下我们在这里得到了不错的结果，但实际上人们很少会在文本分类问题上使用树结构。
+但从另一方面来说，树结构也确实有一些积极面。它仍然是一个最直观的算法，简单易懂，
+易于实现。基于树结构来实现的分类算法也很多，如ID3、C4.5 和C5 等。scikit-learn 库所
+采用的是CART 算法的优化版本。 
+6.3.3  随机梯度下降法 
+随机梯度下降（Stochastic gradient descent，简称SGD）法是一种既简单又非常有效
+的、适用于线性模型的方法。尤其在目标样本数量（和特征数量）非常庞大时，其作用会
+特别突出。如果参照之前的功能列表图，我们会发现SGD 是许多文本分类问题的一站式解
+决方案。另外，由于它也能照顾到规范化问题并可以提供不同的损失函数，所以对于线性
+模型的实验工作来说它也是个很好的选择。
+SGD 算法有时候也被称为最大熵（Maximum entropy，简称MaxEnt）算法，它会用
+不同的（坡面）损失函数（loss function）和惩罚机制来适配针对分类问题与回归问题的线
+性模型。例如当loss = log 时，它适配的是一个对数回归模型，而当loss = hinge 时，它适
+配的则是一个线性的支持向量机（SVM）。 
+下面来看一个具体的SGD 算法用例： 
+>>>from sklearn.linear_model import SGDClassifier 
+>>>from sklearn.metrics import confusion_matrix 
+>>>clf = SGDClassifier(alpha=.0001, n_iter=50).fit(X_train, y_train) 
+>>>y_pred = clf.predict(X_test) 
+>>>print '\n Here is the classification report:' 
+>>>print classification_report(y_test, y_pred) 
+>>>print ' \n confusion_matrix \n ' 
+>>>cm = confusion_matrix(y_test, y_pred) 
+>>>print cm 
+其分类结果报告如下：
+precision  recall   f1-score   support 
+
+6.3  取样操作 81 
+ham
+0.99
+1.00     0.99
+1210 
+spam
+0.96
+0.91     0.93
+182 
+avg / total 0.98
+0.98     0.98
+1392 
+下面是其最翔实的特征列表：
+-1.0002    sir
+2.3815    ringtoneking    
+-0.5239    bed
+2.0481    filthy
+-0.4763    said
+1.8576    service
+-0.4763    happy
+1.7623    story
+-0.4763    might
+1.6671    txt
+-0.4287    added
+1.5242    new
+-0.4287    list
+1.4765    ringtone
+-0.4287    morning
+1.3813    reply
+-0.4287    always
+1.3337    message
+-0.4287    and
+1.2860    call
+-0.4287    plz
+1.2384    chat
+-0.3810    people
+1.1908    text
+-0.3810    actually
+1.1908    real
+-0.3810    urgnt
+1.1431    video 
+6.3.4  逻辑回归 
+逻辑回归（logistic regression）是一种针对分类问题的线性模型。它在某些文献中也
+被称为対元逻辑（logit regression）、最大熵（MaxEnt）分类法或对数线性分类器。在这
+个模型中，我们会用一个対元函数来进行建模，以概率的方式来描述单项试验的可能
+结果。
+作为优化问题，L2 二元类所惩罚的逻辑回归可以用以下成本函数来进行最小化： 
+(
+)
+(
+)
+(
+)
+,
+1
+1
+log exp
+1
+2
+n
+min
+T
+T
+w c
+i
+i
+i
+w w
+C
+y
+X w
+c
+=
++
+−
++
++
+∑
+类似地，由L1 二元类所规范的逻辑回归则用以下函数来解决其优化问题： 
+(
+)
+(
+)
+(
+)
+,
+1
+1
+1
+log exp
+1
+2
+n
+min
+T
+w c
+i
+i
+i
+w
+C
+y
+X w
+c
+=
++
+−
++
++
+∑
+6.3.5  支持向量机 
+支持向量机（Support vector machine，简称SVM）是目前在机器学习领域中最为先
+进的算法。
+
+82 第6 章  文本分类 
+SVM 属于非概率分类器。SVM 会在无限维空间中构造出一组超平面，它可被应用在
+分类、回归或其他任务中。直观来说，可以通过一个超平面来实现良好的分类划界，这个
+超平面应该距离最接近训练数据点的那些类最远（这个距离被称为功能边界），因为在一般
+情况下，这个边界越大，分类器的规模就越小。
+下面就用scikit 库来构建一个最高级的监督式学习算法： 
+>>>from sklearn.svm import LinearSVC 
+>>>svm_classifier = LinearSVC().fit(X_train, y_train) 
+>>>y_svm_predicted = svm_classifier.predict(X_test) 
+>>>print '\n Here is the classification report:' 
+>>>print classification_report(y_test, y_svm_predicted) 
+>>>cm = confusion_matrix(y_test, y_pred) 
+>>>print cm 
+其分类结果报告与之前相同：
+precision    recall  f1-score   support
+ham
+0.99
+1.00
+0.99
+1210  
+spam
+0.97
+0.90
+0.93
+182 
+avg / total
+0.98
+0.98
+0.98
+1392 
+confusion_matrix  [[1204    6] [  17  165]]
+下面是其最翔实的特征列表：
+    -0.9657    road
+2.3724    txt
+    -0.7493    mail
+2.0720    claim
+    -0.6701    morning
+2.0451    service
+    -0.6691    home
+2.0008    uk
+    -0.6191    executive
+1.7909    150p
+    -0.5984    said
+1.7374    www
+    -0.5978    lol
+1.6997    mobile
+    -0.5876    kate
+1.6736    50
+    -0.5754    got
+1.5882    ringtone
+    -0.5642    darlin
+1.5629    video
+    -0.5613    fullonsms
+1.4816    tone
+    -0.5613    fullonsms com
+1.4237    prize 
+这些结果绝对是目前为止所试过的所有监督算法中最好的。介绍完这个算法之后，对
+监督式分类器的介绍也就到此结束了。目前有数以百万计的图书在介绍各种不同的机器学
+习算法，即使是针对个别特定算法，可供选择的书也有很多。但强烈建议读者务必要在对
+上述算法有了一个深入了解之后，然后再在实际应用中使用它们。

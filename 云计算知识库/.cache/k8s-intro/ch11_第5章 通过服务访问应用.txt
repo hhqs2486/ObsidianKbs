@@ -1,0 +1,334 @@
+第5章　通过服务访问应用
+在第4章中，我们详细介绍了在Kubernetes中如何运行一个应
+用。Pod是Kubernetes运行应用的基础，也就是说Kubernetes的各
+项服务都是由Pod提供的。作为一个用户来说，当然希望自己的应用
+是健壮的。但是，Pod本身并不是健壮的，这就给用户带来一个困
+惑，那就是如何使自己的各种服务变得健壮起来。本章将对这个问题
+进行详细讨论。
+本章涉及的知识点有：
+服务及其功能：主要介绍Kubernetes中服务的基本概念及其用
+途。
+管理服务：介绍服务的创建、查看以及删除等常见的操作。
+外网访问服务：主要介绍ClusterIP、NodePort和LoadBalancer
+这三种方式的使用场景。
+通过Cluster DNS访问服务：主要介绍Cluster DNS的安装、配
+置以及如何通过DNS访问服务。
+5.1　服务及其功能
+服务是Kubernetes系统体系中的一个核心概念。借助服务，用
+户可以非常方便地实现应用的服务发现与负载均衡，并实现应用的零
+宕机升级。本节将详细介绍服务的概念及其功能，使读者能够深入掌
+握这个概念。
+5.1.1　服务基本概念
+
+通过前面一章的学习，读者可能会了解到，Kubernetes中的Pod
+是有生命周期的，它们可以被创建，也可以被销毁，然而一旦被销毁
+生命就永远结束。用户通过ReplicaSets能够动态地创建和销毁Pod，
+比如需要进行扩缩容，或者执行滚动升级。另外，Pod本身也会产生
+故障，发生意外退出的情况。在这种情况下，Kubernetes会自动创
+建一个新的Pod副本来代替故障Pod。
+每当新的Pod被创建时，它都会获取它自己的IP地址，这意味着
+Pod的IP地址并不总是稳定可依赖的。这会导致一个问题，在
+Kubernetes集群中，如果一组运行后台服务的Pod为其他运行前台服
+务的Pod提供服务，那么那些提供前台服务的Pod该如何发现，并连
+接到这组提供后台服务的Pod上呢？
+Kubernetes的Service就是解决这个问题而提出的。它定义了这
+样一种抽象为逻辑上的一组Pod，提供了一种可以访问它们的策略，
+这种策略通常被称为微服务。这组Pod能够被Service访问到。
+举个例子，一个图片处理后台服务应用，它运行了3个Pod副本。
+这些副本是可互换的，前台应用不需要关心它们具体调用了哪个后台
+Pod副本。然而组成这一组后台图片处理程序的Pod实际上可能会发
+生变化，前台客户端不应该也没必要知道，而且也不需要跟踪这一组
+后台服务的状态，这些工作由Service来完成，前台服务只要关心相应
+的服务是否正常服务就可以了。服务定义的抽象能够解耦这种Pod之
+间的关联。
+5.1.2　服务的功能原理
+服务的主要功能有两个，一个是实现了服务之间的关联解耦，另
+外一个就是实现了服务发现和负载均衡。图5-1所示描述了一个服务
+与一组Pod的关系。
+
+图5-1　一个服务与一组Pod的关系
+图5-1中黑色六边形是一个节点，节点可以是一台主机或者虚拟
+机。虚线是由三个节点组成的服务，提供负载均衡和服务发现，有一
+个固定的IP地址172.17.5.123。长方形为Pod，Pod的IP地址是不固
+定的，因为需要经常生成和销毁。
+在逻辑层面上，服务被认为是真实应用的抽象，每一个服务通过
+标签选择器关联着一系列的Pod。在物理层面上，服务又是用户应用
+的代理服务器，对外表现为一个单一访问入口，通过Kubernetes
+Proxy转发请求到服务关联的Pod。
+在应用的滚动更新过程中，Kubernetes通过逐个容器替代升级
+的方式实现了无中断的服务升级，如图5-2所示。
+
+图5-2　滚动更新
+在图5-2中，首先更新的是左上角的节点。节点中实线长方形为
+原来的Pod，虚线长方形为更新后的Pod。更新的过程中会创建一个
+新的Pod，并且拥有新的IP地址172.17.0.5。当新的Pod处于可用状
+态后，旧的Pod便被销毁，而其他节点的Pod也会依次开始更新。而
+从服务的服务对象角度来看，整个过程中服务并没有发生变化，所以
+服务可以一直保持服务。
+5.2　管理服务
+跟其他的资源一样，服务的管理主要包括创建、查看以及删除等
+操作。本节将对这些常见的操作进行介绍。
+5.2.1　创建服务
+
+同样，服务也是Kubernetes中的一种资源，所以它的配置文件
+与前面介绍的YAML配置文件非常相似。
+一个典型的服务的YAML配置文件如下：
+第1行的apiVersion为API的版本号，这个是必需属性。第2行的
+kind表示该项资源为服务。第3～9行定义Service的元数据，其中
+name表示服务的名称，为必需属性。从第10行开始，定义Service的
+规格，其中绝大部分属性都是非必需的。需要注意的是，第11行的
+selector为标签选择器，用来选择服务可以代理的Pod。第12行的
+type用来标识服务的类型，可以是以下三种类型：
+
+ClusterIP：该项为默认的类型，提供一个集群内部的虚拟IP，
+与Pod不在同一网段，以供集群内部的Pod之间通信使用。
+nodePort：使用宿主机的端口，是能够访问各节点的外部客户
+通过节点的IP地址和端口就能访问服务。
+loadbalancer：使用外接负载均衡完成服务到负载的分发，需
+要在spec.status.loadBalancer字段指定负载均衡器的IP地
+址，并同时定义nodePort和ClusterIP。
+下面通过配置文件创建一个Service，配置文件的内容如下：
+将以上配置文件保存为service .yaml，然后执行以下命令创建服
+务：
+ 
+   kubectl create -f service.yaml 
+除了使用配置文件之外，用户还可以通过命令行创建Service。命
+令的基本语法如下：
+
+ 
+   kubectl create service 
+通过命令，用户可以创建4种类型的服务，分别为ClusterIP、
+LoadBalancer、nodeport以及ExternalName。其中，ClusterIP
+的创建命令的基本语法如下：
+ 
+   kubectl create clusterip name [--tcp=<port>:
+<targetport>] 
+这个命令中，name为服务的名称。--tcp选项用来指定Service的
+服务端口与Pod端口之间的映射，其中port为Service对外提供服务的
+端口，targetport为服务关联的Pod的端口。对于这两个端口，读者
+一定需要搞清楚它们的用途。简单地说，port就是Service对应的
+ClusterIP的IP地址。当其他的应用访问port所代表的端口时，
+Service就将该请求转发到targetport所定义的端口，进而被转发到
+Pod的相应端口。在本例中，当其他应用访问80端口时，就被转发到
+Pod的80端口，即Pod中Nginx的服务端口。同样，当其他应用访问
+HTTPS的443端口时，请求就会被转发到Pod的443端口，即Nginx
+提供HTTPS服务的端口。
+例如，下面的命令创建一个名为myservice的clusterip，并且将
+服务端口映射到8080端口：
+ 
+   [root@localhost ~]# kubectl create service clusterip my-
+cs --tcp=5678:8080
+创建LoadBalancer的命令的基本语法如下：
+
+ 
+   kubectl create loadbalancer name [--tcp=port:targetport] 
+创建nodeport的命令的基本语法如下：
+ 
+   kubectl create nodeport name [--tcp=port:targetport] 
+创建ExternalName的命令的基本语法如下：
+ 
+   kubectl create externalname name --external-name 
+external.name 
+这些命令的使用方法与clusterIP基本相同，不再举例说明。
+5.2.2　查看服务
+用户可以通过命令kubectl get svc或者kubectl get services查
+看创建的服务，如下所示：
+在上面的输出结果中，NAME为Service的名称，CLUSTER-IP
+为Kubernetes给服务分配的IP地址。EXTERNAL-IP为外部IP地址，
+如果没有指定，则为none。PORTS为服务的服务端口。
+如果想要显示更加详细的信息，可以使用-o wide选项，如下所
+示：
+
+在上面的输出结果中，SELECTOR即为创建Service时指定的标
+签选择器。
+除了查看服务状态信息之外，用户还可以通过kubectl get
+endpoints命令查看服务代理的Pod的信息，如下所示：
+其中ENDPOINTS为当前服务所关联的Pod的IP地址及其端口。
+如果想要查看更为详细的关于服务的信息，则可以使用kube
+describe service命令：
+从上面的输出可知，所使用的选择器为name=nginx，Service的
+类型为ClusterIP ，端口80 所关联的Endpoints 分别为
+
+172.17.0.2:80和172.17.0.3:80，端口433管理的Endpoints分别
+为172.17.0.2:443和172.17.0.3:443。
+5.2.3　销毁服务
+销毁服务有两种方式。如果用户是通过YAML配置文件创建的服
+务，则可以使用kubectl delete -f命令将服务删除。例如，我们想要
+删除刚才创建的web-service，命令如下：
+ 
+   [root@localhost ~]# kubectl delete -f service.yaml 
+   service "web-service" deleted 
+而对于命令行创建的服务，由于没有对应的配置文件，因此无法
+使用上面的命令将其删除。与之相对应，Kubernetes也提供了命令
+行的删除方法。例如，我们想要将名为my-cs的服务删除，则命令如
+下：
+ 
+   [root@localhost ~]# kubectl delete service my-cs 
+   service "my-cs" deleted 
+5.3　外部网络访问服务
+服务想要对外提供服务，就必须能够被外部网络的各种信息系统
+所访问。在Kubernetes中，用户可以通过很多种方式来达到这个目
+的。本节将对其中最常用的两种方式进行介绍。
+5.3.1　kube-proxy结合ClusterIP
+
+前面已经讲过，服务就是一组Pod的服务抽象，相当于一组Pod
+的负载均衡，负责将请求分发给对应的Pod。服务会为这个负载均衡
+提供一个IP地址，一般称为ClusterIP。ClusterIP是一个虚拟的IP地
+址，是由Kubernetes分配给服务使用的。
+kube-proxy的作用主要是负责服务的实现。具体来说，就是实
+现了内部从Pod到服务和外部的从NodePort向服务的访问，如图5-
+3、图5-4所示。
+图5-3　kube-proxy
+
+图5-4　通过kube-proxy访问ClusterIP类型的服务（Service）
+Kubernetes的API提供了外部访问ClusterIP的能力，其访问方
+式如下：
+ 
+    
+http://masterip:8080/api/v1/proxy/namespaces/<namespace>/se
+rvices/<servic 
+e-name>:<port-name>/ 
+在上面的语法中，masterip 为Master 节点的IP 地址，
+<namespace> 为Service 所属的命名空间，<service-name> 为
+Service的名称，<port-name>为端口。
+例如，对于前面定义的名为web-service的Service，我们可以通
+过以下URL来访问：
+http://192.168.1.121:8080/api/v1/proxy/namespaces/d
+efault/services/web-service:http/
+访问结果如图5-5所示。
+
+图5-5　通过kube-proxy访问服务（Service）
+5.3.2　通过NodePort
+NodePort类型的服务是让外部机器可以访问集群内部服务的最基
+本的方式。所谓NodePort，顾名思义可以在所有节点上打开一个特定
+端口，任何发送到此端口的流量都将转发到相应的服务上面。图5-6
+所示描述了通过NodePort访问服务的原理。
+
+图5-6　通过NodePort访问服务
+例如，下面的代码为一个NodePort类型的服务的YAML配置文
+件：
+将以上代码保存为nodeport.yaml，然后使用以下命令创建服
+务：
+ 
+   [root@localhost ~]# kubectl apply -f nodeport.yaml 
+
+   service "nginx-service-nodeport" created 
+查看服务状态，如下所示：
+在上面的输出中，最后一行即为刚刚创建的NodePort类型的服
+务。可以得知，该服务将8000端口映射到了节点的30243端口。而
+在上面的定义中，服务的目标端口为Pod的80端口。因此，用户可以
+通过访问节点的30243端口，间接地访问Pod的80端口，如图5-7所
+示。
+图5-7　通过NodePort访问服务
+5.3.3　通过负载均衡
+负载均衡类型的服务是在公网上面发布服务的标准方式。例如，
+用户在云或者本地的机器上面有个负载均衡系统。该负载均衡系统通
+
+常会有一个固定的IP地址。当外部网络的其他系统访问该IP地址时，
+会将请求转发到服务上面，其原理如图5-8所示。
+图5-8　通过负载均衡访问服务
+5.4　通过CoreDNS访问应用
+前面已经介绍了多种通过服务来访问应用的方法。这些方法在一
+定程度上解决了Pod重建后IP动态变化以及负载均衡问题，但使用服
+务还是要需要预先知道服务的ClusterIP，因此存在着一定的局限
+性。CoreDNS就是专门为了解决这个问题而提出的，本节将详细介绍
+通过CoreDNS来实现服务发现的方法。
+5.4.1　CoreDNS简介
+在早期版本的Kubernetes中，使用kube-dns插件来实现基于域
+名服务（DNS）的服务发现。kube-dns在一个Pod中使用了多个容
+器，例如kubedns 、dnsmasq 和sidecar 。kubedns 容器监视
+Kubernetes API，并基于Kubernetes DNS规范提供DNS记录；
+
+dnsmasq提供缓存和存根域支持；sidecar提供指标和健康检查。由
+于涉及多个容器，因此在实际运行过程中，kube-dns会出现一些难
+以避免的问题。
+CoreDNS 是一个通用的、权威的DNS 服务器，提供与
+Kubernetes后向兼容但可扩展的集成。它解决了kube-dns所遇到的
+问题，并提供了许多独特的功能，可以解决各种各样的问题。与
+kube-dns不同，在CoreDNS中，所有这些功能都在一个容器中完
+成。
+5.4.2　安装CoreDNS
+在Kubernetes中部署CoreDNS作为集群内的DNS服务有很多种
+方式，例如可以使用官方的软件包管理工具Helm部署，也可以通过
+YAML配置文件进行部署。为了能够使读者深入了解CoreDNS的部署
+过程，我们讲解一下通过YAML文件的部署方法。
+首先是获取官方的CoreDNS的YAML配置文件代码，用户可以直
+接在GitHub 的网站上面下载，其网址为：
+https://github.com/kubernetes/kubernetes/tree/master/clu
+ster/addons/dns/coredns 。也可以通过下载二进制包
+kubernetes-server-linux-amd64.tar.gz，从该压缩包中得到，命
+令如下：
+ 
+   [root@localhost ~]# tar -zxvf kubernetes-server-linux-
+amd64.tar.gz
+然后进入kubernetes 目录，会发现一个名为kubernetes-
+src.tar.gz的Kubernetes源代码文件。通过以下命令解压该文件：
+
+ 
+   [root@localhost kubernetes]# tar -zxvf kubernetes-
+src.tar.gz
+其
+中
+CoreDNS
+的
+YAML
+配
+置
+文
+件
+位
+于
+cluster/addons/dns/coredns目录中，如下所示：
+在上面的文件列表中，coredns.yaml.base就是我们所需要的
+YAML模板文件。
+将上述YAML模板文件另存为coredns.yaml，命令如下：
+ 
+   [root@localhost coredns]# cp coredns.yaml.base 
+coredns.yaml
+然后对coredns.yaml进行相应的修改，修改后的完整代码如下：
+
+
+
+
+
+其中，第2 ～5 行创建ServiceAccount；第7 ～29 行创建
+ClusterRole ，其名称为system:coredns；第31 ～46 行创建
+ClusterRoleBinding对象；第48～69行创建ConfigMap对象；第71
+～154行创建Deployment对象；第157～181行创建服务对象，其中
+第171行指定所创建的服务的ClusterIP为10.254.0.2。
+使用以下命令部署CoreDNS：
+ 
+   [root@localhost coredns]# kubectl create -f coredns.yml
+部署完成之后，查看Pod是否部署成功，如下所示：
+
+从上面的输出结果可以看到，CoreDNS已经有2个实例在运行。
+接下来，修改kubelet的配置文件/etc/kubernetes/kubelet，
+增加关于DNS的相关选项，如下所示：
+ 
+   KUBELET_ARGS="--cluster-dns=10.254.0.2 --cluster-
+domain=cluster.local" 
+查看相应的服务的状态：
+从上面的输出结果可知，kube-dns 服务的ClusterIP 为
+10.254.0.2，正是我们在配置文件中指定的IP地址。此外，该服务暴
+露的端口为53/UDP、53/TCP以及9153/TCP。
+接下来，验证所部署的CoreDNS是否可以正常将服务名解析为对
+应的IP地址。首先部署一个Nginx及其服务，其中Deployment的
+YAML代码如下：
+
+服务的YAML代码如下：
+创建一个CentOS的Pod，验证CoreDNS是否能够成功解析名
+称，其YAML配置文件如下：
+
+然后执行以下命令进入CentOS容器里面：
+ 
+   [root@localhost ~]# kubectl exec -it centos -- /bin/sh 
+   sh-4.2# 
+通过nslookup命令验证是否可以解析IP地址：
+从上面的输出结果可知，CoreDNS已经成功地将服务名称解析为
+相应的IP地址。
+注意
+
+如果CentOS容器中没有安装nslookup命令，可以使用以下命令安
+装：
+sh-4.2# yum -y install bind-utils
+通过curl命令访问my-nginx服务，如下所示：

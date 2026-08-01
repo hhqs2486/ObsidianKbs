@@ -1,0 +1,380 @@
+基于 Jenkins 的 CI/CD (⼀)
+前⾯的课程中我们学习了持久化数据存储在 Kubernetes 中的使⽤⽅法，其实接下来按照我们的课程进
+度来说应该是讲解服务发现这⼀部分的内容的，但是最近有很多同学要求我先讲解下 CI/CD 这块的内
+容，所以我们先把这块内容提前来讲解了。提到基于 Kubernete 的 CI/CD ，可以使⽤的⼯具有很多，
+⽐如 Jenkins 、 Gitlab CI 已经新兴的 drone 之类的，我们这⾥会使⽤⼤家最为熟悉的 Jenkins 来
+做 CI/CD 的⼯具。
+安装
+听我们课程的⼤部分同学应该都或多或少的听说过 Jenkins ，我们这⾥就不再去详细讲述什么是
+Jenkins 了，直接进⼊正题，后⾯我们会单独的关于 Jenkins 的学习课程，想更加深⼊学习的同学也可
+以关注下。既然要基于 Kubernetes 来做 CI/CD ，当然我们这⾥需要将 Jenkins 安装到 Kubernetes 集
+群当中，新建⼀个 Deployment：(jenkins2.yaml)
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: jenkins2
+  namespace: kube-ops
+spec:
+  template:
+    metadata:
+      labels:
+        app: jenkins2
+    spec:
+      terminationGracePeriodSeconds: 10
+      serviceAccount: jenkins2
+      containers:
+      - name: jenkins
+        image: jenkins/jenkins:lts
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+          name: web
+          protocol: TCP
+        - containerPort: 50000
+          name: agent
+          protocol: TCP
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+          requests:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /login
+            port: 8080
+          initialDelaySeconds: 60
+动态 Jenkins Slave
+483
+
+          timeoutSeconds: 5
+          failureThreshold: 12
+        readinessProbe:
+          httpGet:
+            path: /login
+            port: 8080
+          initialDelaySeconds: 60
+          timeoutSeconds: 5
+          failureThreshold: 12
+        volumeMounts:
+        - name: jenkinshome
+          subPath: jenkins2
+          mountPath: /var/jenkins_home
+        env:
+        - name: LIMITS_MEMORY
+          valueFrom:
+            resourceFieldRef:
+              resource: limits.memory
+              divisor: 1Mi
+        - name: JAVA_OPTS
+          value: -Xmx$(LIMITS_MEMORY)m -XshowSettings:vm -Dhudson.slaves.NodeProvisioner.i
+nitialDelay=0 -Dhudson.slaves.NodeProvisioner.MARGIN=50 -Dhudson.slaves.NodeProvisioner.MA
+RGIN0=0.85 -Duser.timezone=Asia/Shanghai
+      securityContext:
+        fsGroup: 1000
+      volumes:
+      - name: jenkinshome
+        persistentVolumeClaim:
+          claimName: opspvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jenkins2
+  namespace: kube-ops
+  labels:
+    app: jenkins2
+spec:
+  selector:
+    app: jenkins2
+  type: NodePort
+  ports:
+  - name: web
+    port: 8080
+    targetPort: web
+    nodePort: 30002
+  - name: agent
+    port: 50000
+    targetPort: agent
+为了⽅便演示，我们把本节课所有的对象资源都放置在⼀个名为 kube-ops 的 namespace 下⾯，所以
+我们需要添加创建⼀个 namespace：
+$ kubectl create namespace kube-ops
+动态 Jenkins Slave
+484
+
+我们这⾥使⽤⼀个名为 jenkins/jenkins:lts 的镜像，这是 jenkins 官⽅的 Docker 镜像，然后也有⼀些环
+境变量，当然我们也可以根据⾃⼰的需求来定制⼀个镜像，⽐如我们可以将⼀些插件打包在⾃定义的
+镜像当中，可以参考⽂档：https://github.com/jenkinsci/docker，我们这⾥使⽤默认的官⽅镜像就⾏，
+另外⼀个还需要注意的是我们将容器的 /var/jenkins_home ⽬录挂载到了⼀个名为 opspvc 的 PVC 对
+象上⾯，所以我们同样还得提前创建⼀个对应的 PVC 对象，当然我们也可以使⽤我们前⾯的
+StorageClass 对象来⾃动创建：(pvc.yaml)
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: opspv
+spec:
+  capacity:
+    storage: 20Gi
+  accessModes:
+  - ReadWriteMany
+  persistentVolumeReclaimPolicy: Delete
+  nfs:
+    server: 10.151.30.57
+    path: /data/k8s
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: opspvc
+  namespace: kube-ops
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 20Gi
+创建需要⽤到的 PVC 对象：
+$ kubectl create -f pvc.yaml
+另外我们这⾥还需要使⽤到⼀个拥有相关权限的 serviceAccount：jenkins2，我们这⾥只是给 jenkins
+赋予了⼀些必要的权限，当然如果你对 serviceAccount 的权限不是很熟悉的话，我们给这个 sa 绑定
+⼀个 cluster-admin 的集群⻆⾊权限也是可以的，当然这样具有⼀定的安全⻛险：（rbac.yaml）
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jenkins2
+  namespace: kube-ops
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+  name: jenkins2
+动态 Jenkins Slave
+485
+
+rules:
+  - apiGroups: ["extensions", "apps"]
+    resources: ["deployments"]
+    verbs: ["create", "delete", "get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["create", "delete", "get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create","delete","get","list","patch","update","watch"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create","delete","get","list","patch","update","watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get","list","watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRoleBinding
+metadata:
+  name: jenkins2
+  namespace: kube-ops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: jenkins2
+subjects:
+  - kind: ServiceAccount
+    name: jenkins2
+    namespace: kube-ops
+创建 rbac 相关的资源对象：
+$ kubectl create -f rbac.yaml
+serviceaccount "jenkins2" created
+role.rbac.authorization.k8s.io "jenkins2" created
+rolebinding.rbac.authorization.k8s.io "jenkins2" created
+最后为了⽅便我们测试，我们这⾥通过 NodePort 的形式来暴露 Jenkins 的 web 服务，固定为30002
+端⼝，另外还需要暴露⼀个 agent 的端⼝，这个端⼝主要是⽤于 Jenkins 的 master 和 slave 之间通信
+使⽤的。
+⼀切准备的资源准备好过后，我们直接创建 Jenkins 服务：
+$ kubectl create -f jenkins2.yaml
+deployment.extensions "jenkins2" created
+service "jenkins2" created
+创建完成后，要去拉取镜像可能需要等待⼀会⼉，然后我们查看下 Pod 的状态：
+$ kubectl get pods -n kube-ops
+动态 Jenkins Slave
+486
+
+NAME                        READY     STATUS    RESTARTS   AGE
+jenkins2-7f5494cd44-pqpzs   0/1       Running   0          2m
+可以看到该 Pod 处于 Running 状态，但是 READY 值确为0，然后我们⽤ describe 命令去查看下该
+Pod 的详细信息：
+$ kubectl describe pod jenkins2-7f5494cd44-pqpzs -n kube-ops
+...
+Normal   Created                3m                kubelet, node01    Created container
+  Normal   Started                3m                kubelet, node01    Started container
+  Warning  Unhealthy              1m (x10 over 2m)  kubelet, node01    Liveness probe fail
+ed: Get http://10.244.1.165:8080/login: dial tcp 10.244.1.165:8080: getsockopt: connection
+ refused
+  Warning  Unhealthy              1m (x10 over 2m)  kubelet, node01    Readiness probe fai
+led: Get http://10.244.1.165:8080/login: dial tcp 10.244.1.165:8080: getsockopt: connectio
+n refused
+可以看到上⾯的 Warning 信息，健康检查没有通过，具体原因是什么引起的呢？可以通过查看⽇志进
+⼀步了解：
+$ kubectl logs -f jenkins2-7f5494cd44-pqpzs -n kube-ops
+touch: cannot touch '/var/jenkins_home/copy_reference_file.log': Permission denied
+Can not write to /var/jenkins_home/copy_reference_file.log. Wrong volume permissions?
+很明显可以看到上⾯的错误信息，意思就是我们没有权限在 jenkins 的 home ⽬录下⾯创建⽂件，这是
+因为默认的镜像使⽤的是 jenkins 这个⽤户，⽽我们通过 PVC 挂载到 nfs 服务器的共享数据⽬录下⾯
+却是 root ⽤户的，所以没有权限访问该⽬录，要解决该问题，也很简单，我只需要在 nfs 共享数据⽬
+录下⾯把我们的⽬录权限重新分配下即可：
+$ chown -R 1000 /data/k8s/jenkins2
+当然还有另外⼀种⽅法是我们⾃定义⼀个镜像，在镜像中指定使⽤ root ⽤户也可以
+然后我们再重新创建：
+$ kubectl delete -f jenkins.yaml
+deployment.extensions "jenkins2" deleted
+service "jenkins2" deleted
+$ kubectl create -f jenkins.yaml
+deployment.extensions "jenkins2" created
+service "jenkins2" created
+现在我们再去查看新⽣成的 Pod 已经没有错误信息了：
+$ kubectl get pods -n kube-ops
+NAME                        READY     STATUS        RESTARTS   AGE
+jenkins2-7f5494cd44-smn2r   1/1       Running       0          25s
+动态 Jenkins Slave
+487
+
+等到服务启动成功后，我们就可以根据任意节点的 IP:30002 端⼝就可以访问 jenkins 服务了，可以根
+据提示信息进⾏安装配置即可： 
+初始化的密码我们可以在 jenkins 的容器的⽇志中进⾏查看，也可以直接在 nfs 的共享数据⽬录中查
+看：
+$ cat /data/k8s/jenkins2/secrets/initAdminPassword
+动态 Jenkins Slave
+488
+
+然后选择安装推荐的插件即可。 
+安装完成后添加管理员帐号即可进⼊到 jenkins 主界⾯： 
+动态 Jenkins Slave
+489
+
+优点
+Jenkins 安装完成了，接下来我们不⽤急着就去使⽤，我们要了解下在 Kubernetes 环境下⾯使⽤
+Jenkins 有什么好处。
+我们知道持续构建与发布是我们⽇常⼯作中必不可少的⼀个步骤，⽬前⼤多公司都采⽤ Jenkins 集群
+来搭建符合需求的 CI/CD 流程，然⽽传统的 Jenkins Slave ⼀主多从⽅式会存在⼀些痛点，⽐如：
+主 Master 发⽣单点故障时，整个流程都不可⽤了
+每个 Slave 的配置环境不⼀样，来完成不同语⾔的编译打包等操作，但是这些差异化的配置导致
+管理起来⾮常不⽅便，维护起来也是⽐较费劲
+资源分配不均衡，有的 Slave 要运⾏的 job 出现排队等待，⽽有的 Slave 处于空闲状态
+资源有浪费，每台 Slave 可能是物理机或者虚拟机，当 Slave 处于空闲状态时，也不会完全释放
+掉资源。
+正因为上⾯的这些种种痛点，我们渴望⼀种更⾼效更可靠的⽅式来完成这个 CI/CD 流程，⽽ Docker
+虚拟化容器技术能很好的解决这个痛点，⼜特别是在 Kubernetes 集群环境下⾯能够更好来解决上⾯的
+问题，下图是基于 Kubernetes 搭建 Jenkins 集群的简单示意图： 
+从图上可以看到 Jenkins Master 和 Jenkins Slave 以 Pod 形式运⾏在 Kubernetes 集群的 Node 上，
+Master 运⾏在其中⼀个节点，并且将其配置数据存储到⼀个 Volume 上去，Slave 运⾏在各个节点
+上，并且它不是⼀直处于运⾏状态，它会按照需求动态的创建并⾃动删除。
+动态 Jenkins Slave
+490
+
+这种⽅式的⼯作流程⼤致为：当 Jenkins Master 接受到 Build 请求时，会根据配置的 Label 动态创建
+⼀个运⾏在 Pod 中的 Jenkins Slave 并注册到 Master 上，当运⾏完 Job 后，这个 Slave 会被注销并
+且这个 Pod 也会⾃动删除，恢复到最初状态。
+那么我们使⽤这种⽅式带来了哪些好处呢？
+服务⾼可⽤，当 Jenkins Master 出现故障时，Kubernetes 会⾃动创建⼀个新的 Jenkins Master
+容器，并且将 Volume 分配给新创建的容器，保证数据不丢失，从⽽达到集群服务⾼可⽤。
+动态伸缩，合理使⽤资源，每次运⾏ Job 时，会⾃动创建⼀个 Jenkins Slave，Job 完成后，
+Slave ⾃动注销并删除容器，资源⾃动释放，⽽且 Kubernetes 会根据每个资源的使⽤情况，动态
+分配 Slave 到空闲的节点上创建，降低出现因某节点资源利⽤率⾼，还排队等待在该节点的情
+况。
+扩展性好，当 Kubernetes 集群的资源严重不⾜⽽导致 Job 排队等待时，可以很容易的添加⼀个
+Kubernetes Node 到集群中，从⽽实现扩展。
+是不是以前我们⾯临的种种问题在 Kubernetes 集群环境下⾯是不是都没有了啊？看上去⾮常完美。
+配置
+接下来我们就需要来配置 Jenkins，让他能够动态的⽣成 Slave 的 Pod。
+第1步. 我们需要安装kubernetes plugin， 点击 Manage Jenkins -> Manage Plugins -> Available ->
+Kubernetes plugin 勾选安装即可。 
+动态 Jenkins Slave
+491
+
+第2步. 安装完毕后，点击 Manage Jenkins —> Configure System —> (拖到最下⽅)Add a new cloud
+—> 选择 Kubernetes，然后填写 Kubernetes 和 Jenkins 配置信息。 
+注意 namespace，我们这⾥填 kube-ops，然后点击Test Connection，如果出现 Connection test
+successful 的提示信息证明 Jenkins 已经可以和 Kubernetes 系统正常通信了，然后下⽅的 Jenkins
+URL 地址：http://jenkins2.kube-ops.svc.cluster.local:8080，这⾥的格式为：服务
+名.namespace.svc.cluster.local:8080，根据上⾯创建的jenkins 的服务名填写，我这⾥是之前创建的名
+为jenkins，如果是⽤上⾯我们创建的就应该是jenkins2
+另外需要注意，如果这⾥ Test Connection 失败的话，很有可能是权限问题，这⾥就需要把我们
+创建的 jenkins 的 serviceAccount 对应的 secret 添加到这⾥的 Credentials ⾥⾯。
+动态 Jenkins Slave
+492
+
+另外需要注意我们这⾥需要在下⾯挂载两个主机⽬录，⼀个是 /var/run/docker.sock，该⽂件是⽤于
+Pod 中的容器能够共享宿主机的 Docker，这就是⼤家说的 docker in docker 的⽅式，Docker ⼆进制
+⽂件我们已经打包到上⾯的镜像中了，另外⼀个⽬录下 /root/.kube ⽬录，我们将这个⽬录挂载到容器
+动态 Jenkins Slave
+493
+
+的 /home/jenkins/.kube ⽬录下⾯这是为了让我们能够在 Pod 的容器中能够使⽤ kubectl ⼯具来访问我
+们的 Kubernetes 集群，⽅便我们后⾯在 Slave Pod 部署 Kubernetes 应⽤。 
+另外还有⼏个参数需要注意，如下图中的Time in minutes to retain slave when idle，这个参数表示的
+意思是当处于空闲状态的时候保留 Slave Pod 多⻓时间，这个参数最好我们保存默认就⾏了，如果你
+设置过⼤的话，Job 任务执⾏完成后，对应的 Slave Pod 就不会⽴即被销毁删除。 
+动态 Jenkins Slave
+494
+
+另外⼀些同学在配置了后运⾏ Slave Pod 的时候出现了权限问题，因为 Jenkins Slave Pod 中没有配
+置权限，所以需要配置上 ServiceAccount，在 Slave Pod 配置的地⽅点击下⾯的⾼级，添加上对应的
+ServiceAccount 即可：
+到这⾥我们的 Kubernetes Plugin 插件就算配置完成了。
+测试
+Kubernetes 插件的配置⼯作完成了，接下来我们就来添加⼀个 Job 任务，看是否能够在 Slave Pod 中
+执⾏，任务执⾏完成后看 Pod 是否会被销毁。
+动态 Jenkins Slave
+495
+
+在 Jenkins ⾸⻚点击create new jobs，创建⼀个测试的任务，输⼊任务名称，然后我们选择 Freestyle
+project 类型的任务： 
+注意在下⾯的 Label Expression 这⾥要填⼊haimaxy-jnlp，就是前⾯我们配置的 Slave Pod 中的
+Label，这两个地⽅必须保持⼀致 
+动态 Jenkins Slave
+496
+
+然后往下拉，在 Build 区域选择Execute shell 
+然后输⼊我们测试命令
+echo "测试 Kubernetes 动态⽣成 jenkins slave"
+echo "==============docker in docker==========="
+docker info
+echo "=============kubectl============="
+kubectl get pods
+动态 Jenkins Slave
+497
+
+最后点击保存 
+现在我们直接在⻚⾯点击做成的 Build now 触发构建即可，然后观察 Kubernetes 集群中 Pod 的变化
+$ kubectl get pods -n kube-ops
+NAME                       READY     STATUS              RESTARTS   AGE
+jenkins2-7c85b6f4bd-rfqgv   1/1       Running             3          1d
+jnlp-hfmvd                 0/1       ContainerCreating   0          7s
+我们可以看到在我们点击⽴刻构建的时候可以看到⼀个新的 Pod：jnlp-hfmvd 被创建了，这就是我们
+的 Jenkins Slave。任务执⾏完成后我们可以看到任务信息，⽐如我们这⾥是 花费了 5.2s 时间在 jnlp-
+hfmvd 这个 Slave上⾯ 
+动态 Jenkins Slave
+498
+
+同样也可以查看到对应的控制台信息： 
+到这⾥证明我们的任务已经构建完成，然后这个时候我们再去集群查看我们的 Pod 列表，发现 kube-
+ops 这个 namespace 下⾯已经没有之前的 Slave 这个 Pod 了。
+$ kubectl get pods -n kube-ops
+NAME                       READY     STATUS    RESTARTS   AGE
+jenkins2-7c85b6f4bd-rfqgv   1/1       Running   3          1d
+到这⾥我们就完成了使⽤ Kubernetes 动态⽣成 Jenkins Slave 的⽅法。下节课我们来给⼤家介绍下怎
+么在 Jenkins 中来发布我们的 Kubernetes 应⽤。最后感谢圈友 @TangT-newhope-成都 提供的帮助。
+点击查看本⽂视频
+扫描下⾯的⼆维码(或微信搜索 k8s技术圈 )关注我们的微信公众帐号，在微信公众帐号中回复 加群 即
+可加⼊到我们的 kubernetes 讨论群⾥⾯共同学习。
+动态 Jenkins Slave
+499
+
+k8s技术圈⼆维码
+Copyright © qikqiak.com 2018 all right reserved，powered by GitbookUpdated: 2019-05-05 18:09:35
+动态 Jenkins Slave
+500

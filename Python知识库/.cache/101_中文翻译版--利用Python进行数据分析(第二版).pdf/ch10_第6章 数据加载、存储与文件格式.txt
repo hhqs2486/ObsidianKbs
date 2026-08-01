@@ -1,0 +1,884 @@
+第6章 数据加载、存储与⽂件格式
+访问数据是使⽤本书所介绍的这些⼯具的第⼀步。我会着重介绍
+pandas的数据输⼊与输出，虽然别的库中也有不少以此为⽬的
+的⼯具。
+输⼊输出通常可以划分为⼏个⼤类：读取⽂本⽂件和其他更⾼效
+的磁盘存储格式，加载数据库中的数据，利⽤Web API操作⽹络
+资源。
+6.1 读写⽂本格式的数据
+pandas提供了⼀些⽤于将表格型数据读取为DataFrame对象的
+函数。表6-1对它们进⾏了总结，其中read_csv和read_table可能
+会是你今后⽤得最多的。
+表6-1 pandas中的解析函数
+我将⼤致介绍⼀下这些函数在将⽂本数据转换为DataFrame时所
+⽤到的⼀些技术。这些函数的选项可以划分为以下⼏个⼤类：
+225
+
+索引：将⼀个或多个列当做返回的DataFrame处理，以及是
+否从⽂件、⽤户获取列名。
+类型推断和数据转换：包括⽤户定义值的转换、和⾃定义的
+缺失值标记列表等。
+⽇期解析：包括组合功能，⽐如将分散在多个列中的⽇期时
+间信息组合成结果中的单个列。
+迭代：⽀持对⼤⽂件进⾏逐块迭代。
+不规整数据问题：跳过⼀些⾏、⻚脚、注释或其他⼀些不重
+要的东⻄（⽐如由成千上万个逗号隔开的数值数据）。
+因为⼯作中实际碰到的数据可能⼗分混乱，⼀些数据加载函数
+（尤其是read_csv）的选项逐渐变得复杂起来。⾯对不同的参
+数，感到头痛很正常（read_csv有超过50个参数）。pandas⽂
+档有这些参数的例⼦，如果你感到阅读某个⽂件很难，可以通过
+相似的⾜够多的例⼦找到正确的参数。
+其中⼀些函数，⽐如pandas.read_csv，有类型推断功能，因为
+列数据的类型不属于数据类型。也就是说，你不需要指定列的类
+型到底是数值、整数、布尔值，还是字符串。其它的数据格式，
+如HDF5、Feather和msgpack，会在格式中存储数据类型。
+⽇期和其他⾃定义类型的处理需要多花点⼯夫才⾏。⾸先我们来
+看⼀个以逗号分隔的（CSV）⽂本⽂件：
+In [8]: !cat examples/ex1.csv
+a,b,c,d,message
+1,2,3,4,hello
+5,6,7,8,world
+9,10,11,12,foo
+笔记：这⾥，我⽤的是Unix的cat shell命令将⽂件的原始内容
+打印到屏幕上。如果你⽤的是Windows，你可以使⽤type达
+到同样的效果。
+由于该⽂件以逗号分隔，所以我们可以使⽤read_csv将其读⼊⼀
+个DataFrame：
+226
+
+In [9]: df = pd.read_csv('examples/ex1.csv')
+In [10]: df
+Out[10]: 
+   a   b   c   d message
+0  1   2   3   4   hello
+1  5   6   7   8   world
+2  9  10  11  12     foo
+我们还可以使⽤read_table，并指定分隔符：
+In [11]: pd.read_table('examples/ex1.csv', sep=',')
+Out[11]: 
+   a   b   c   d message
+0  1   2   3   4   hello
+1  5   6   7   8   world
+2  9  10  11  12     foo
+并不是所有⽂件都有标题⾏。看看下⾯这个⽂件：
+In [12]: !cat examples/ex2.csv
+1,2,3,4,hello
+5,6,7,8,world
+9,10,11,12,foo
+读⼊该⽂件的办法有两个。你可以让pandas为其分配默认的列
+名，也可以⾃⼰定义列名：
+In [13]: pd.read_csv('examples/ex2.csv', header=None)
+Out[13]: 
+   0   1   2   3      4
+0  1   2   3   4  hello
+1  5   6   7   8  world
+2  9  10  11  12    foo
+In [14]: pd.read_csv('examples/ex2.csv', names=['a', 
+Out[14]: 
+227
+
+   a   b   c   d message
+0  1   2   3   4   hello
+1  5   6   7   8   world
+2  9  10  11  12     foo
+假设你希望将message列做成DataFrame的索引。你可以明确表
+示要将该列放到索引4的位置上，也可以通过index_col参数指
+定"message"：
+In [15]: names = ['a', 'b', 'c', 'd', 'message']
+In [16]: pd.read_csv('examples/ex2.csv', names=names, 
+Out[16]: 
+         a   b   c   d
+message               
+hello    1   2   3   4
+world    5   6   7   8
+foo      9  10  11  12
+如果希望将多个列做成⼀个层次化索引，只需传⼊由列编号或列
+名组成的列表即可：
+In [17]: !cat examples/csv_mindex.csv
+key1,key2,value1,value2
+one,a,1,2
+one,b,3,4
+one,c,5,6
+one,d,7,8
+two,a,9,10
+two,b,11,12
+two,c,13,14
+two,d,15,16
+In [18]: parsed = pd.read_csv('examples/csv_mindex.csv
+   ....:                      index_col=['key1', 'key2
+228
+
+In [19]: parsed
+Out[19]: 
+           value1  value2
+key1 key2                
+one  a          1       2
+     b          3       4
+     c          5       6
+     d          7       8
+two  a          9      10
+     b         11      12
+     c         13      14
+     d         15      16
+有些情况下，有些表格可能不是⽤固定的分隔符去分隔字段的
+（⽐如空⽩符或其他模式）。有些表格可能不是⽤固定的分隔符
+去分隔字段的（⽐如空⽩符或其他模式来分隔字段）。看看下⾯
+这个⽂本⽂件：
+In [20]: list(open('examples/ex3.txt'))
+Out[20]: 
+['            A         B         C\n',
+ 'aaa -0.264438 -1.026059 -0.619500\n',
+ 'bbb  0.927272  0.302904 -0.032399\n',
+ 'ccc -0.264273 -0.386314 -0.217601\n',
+ 'ddd -0.871858 -0.348382  1.100491\n']
+虽然可以⼿动对数据进⾏规整，这⾥的字段是被数量不同的空⽩
+字符间隔开的。这种情况下，你可以传递⼀个正则表达式作为
+read_table的分隔符。可以⽤正则表达式表达为\s+，于是有有：
+In [21]: result = pd.read_table('examples/ex3.txt', se
+In [22]: result
+Out[22]: 
+            A         B         C
+229
+
+aaa -0.264438 -1.026059 -0.619500
+bbb  0.927272  0.302904 -0.032399
+ccc -0.264273 -0.386314 -0.217601
+ddd -0.871858 -0.348382  1.100491
+这⾥，由于列名⽐数据⾏的数量少，所以read_table推断第⼀列
+应该是DataFrame的索引。这⾥，由于列名⽐数据⾏的数量少，
+所以read_table推断第⼀列应该是DataFrame的索引。
+这些解析器函数还有许多参数可以帮助你处理各种各样的异形⽂
+件格式（表6-2列出了⼀些）。⽐如说，你可以⽤skiprows跳过
+⽂件的第⼀⾏、第三⾏和第四⾏：
+In [23]: !cat examples/ex4.csv
+# hey!
+a,b,c,d,message
+# just wanted to make things more difficult for you
+# who reads CSV files with computers, anyway?
+1,2,3,4,hello
+5,6,7,8,world
+9,10,11,12,foo
+In [24]: pd.read_csv('examples/ex4.csv', skiprows=[0, 
+Out[24]: 
+   a   b   c   d message
+0  1   2   3   4   hello
+1  5   6   7   8   world
+2  9  10  11  12     foo
+缺失值处理是⽂件解析任务中的⼀个重要组成部分。缺失数据经
+常是要么没有（空字符串），要么⽤某个标记值表示。默认情况
+下，pandas会⽤⼀组经常出现的标记值进⾏识别，⽐如NA及
+NULL：
+In [25]: !cat examples/ex5.csv
+something,a,b,c,d,message
+230
+
+one,1,2,3,4,NA
+two,5,6,,8,world
+three,9,10,11,12,foo
+In [26]: result = pd.read_csv('examples/ex5.csv')
+In [27]: result
+Out[27]: 
+  something  a   b     c   d message
+0       one  1   2   3.0   4     NaN
+1       two  5   6   NaN   8   world
+2     three  9  10  11.0  12     foo
+In [28]: pd.isnull(result)
+Out[28]: 
+   something      a      b      c      d  message
+0      False  False  False  False  False     True
+1      False  False  False   True  False    False
+2      False  False  False  False  False    False
+na_values可以⽤⼀个列表或集合的字符串表示缺失值：
+In [29]: result = pd.read_csv('examples/ex5.csv', na_v
+In [30]: result
+Out[30]: 
+  something  a   b     c   d message
+0       one  1   2   3.0   4     NaN
+1       two  5   6   NaN   8   world
+2     three  9  10  11.0  12     foo
+字典的各列可以使⽤不同的NA标记值：
+In [31]: sentinels = {'message': ['foo', 'NA'], 'somet
+In [32]: pd.read_csv('examples/ex5.csv', na_values=sen
+Out[32]:
+231
+
+something  a   b     c   d message
+0       one  1   2   3.0   4     NaN
+1       NaN  5   6   NaN   8   world
+2     three  9  10  11.0  12     NaN
+表6-2列出了pandas.read_csv和pandas.read_table常⽤的选
+项。
+232
+
+逐块读取⽂本⽂件
+在处理很⼤的⽂件时，或找出⼤⽂件中的参数集以便于后续处理
+时，你可能只想读取⽂件的⼀⼩部分或逐块对⽂件进⾏迭代。
+在看⼤⽂件之前，我们先设置pandas显示地更紧些：
+In [33]: pd.options.display.max_rows = 10
+然后有：
+In [34]: result = pd.read_csv('examples/ex6.csv')
+In [35]: result
+Out[35]: 
+           one       two     three      four key
+0     0.467976 -0.038649 -0.295344 -1.824726   L
+1    -0.358893  1.404453  0.704965 -0.200638   B
+2    -0.501840  0.659254 -0.421691 -0.057688   G
+3     0.204886  1.074134  1.388361 -0.982404   R
+4     0.354628 -0.133116  0.283763 -0.837063   Q
+...        ...       ...       ...       ...  ..
+9995  2.311896 -0.417070 -1.409599 -0.515821   L
+9996 -0.479893 -0.650419  0.745152 -0.646038   E
+9997  0.523331  0.787112  0.486066  1.093156   K
+9998 -0.362559  0.598894 -1.843201  0.887292   G
+9999 -0.096376 -1.012999 -0.657431 -0.573315   0
+[10000 rows x 5 columns]
+If you want to only read a small
+233
+
+如果只想读取⼏⾏（避免读取整个⽂件），通过nrows进⾏指定
+即可：
+In [36]: pd.read_csv('examples/ex6.csv', nrows=5)
+Out[36]: 
+        one       two     three      four key
+0  0.467976 -0.038649 -0.295344 -1.824726   L
+1 -0.358893  1.404453  0.704965 -0.200638   B
+2 -0.501840  0.659254 -0.421691 -0.057688   G
+3  0.204886  1.074134  1.388361 -0.982404   R
+4  0.354628 -0.133116  0.283763 -0.837063   Q
+要逐块读取⽂件，可以指定chunksize（⾏数）：
+In [874]: chunker = pd.read_csv('ch06/ex6.csv', chunks
+In [875]: chunker
+Out[875]: <pandas.io.parsers.TextParser at 0x8398150>
+read_csv所返回的这个TextParser对象使你可以根据chunksize
+对⽂件进⾏逐块迭代。⽐如说，我们可以迭代处理ex6.csv，将
+值计数聚合到"key"列中，如下所示：
+chunker = pd.read_csv('examples/ex6.csv', chunksize=10
+tot = pd.Series([])
+for piece in chunker:
+    tot = tot.add(piece['key'].value_counts(), fill_va
+tot = tot.sort_values(ascending=False)
+然后有：
+In [40]: tot[:10]
+Out[40]: 
+234
+
+E    368.0
+X    364.0
+L    346.0
+O    343.0
+Q    340.0
+M    338.0
+J    337.0
+F    335.0
+K    334.0
+H    330.0
+dtype: float64
+TextParser还有⼀个get_chunk⽅法，它使你可以读取任意⼤⼩
+的块。
+将数据写出到⽂本格式
+数据也可以被输出为分隔符格式的⽂本。我们再来看看之前读过
+的⼀个CSV⽂件：
+In [41]: data = pd.read_csv('examples/ex5.csv')
+In [42]: data
+Out[42]: 
+  something  a   b     c   d message
+0       one  1   2   3.0   4     NaN
+1       two  5   6   NaN   8   world
+2     three  9  10  11.0  12     foo
+利⽤DataFrame的to_csv⽅法，我们可以将数据写到⼀个以逗号
+分隔的⽂件中：
+In [43]: data.to_csv('examples/out.csv')
+In [44]: !cat examples/out.csv
+,something,a,b,c,d,message
+0,one,1,2,3.0,4,
+235
+
+1,two,5,6,,8,world
+2,three,9,10,11.0,12,foo
+当然，还可以使⽤其他分隔符（由于这⾥直接写出到
+sys.stdout，所以仅仅是打印出⽂本结果⽽已）：
+In [45]: import sys
+In [46]: data.to_csv(sys.stdout, sep='|')
+|something|a|b|c|d|message
+0|one|1|2|3.0|4|
+1|two|5|6||8|world
+2|three|9|10|11.0|12|foo
+缺失值在输出结果中会被表示为空字符串。你可能希望将其表示
+为别的标记值：
+In [47]: data.to_csv(sys.stdout, na_rep='NULL')
+,something,a,b,c,d,message
+0,one,1,2,3.0,4,NULL
+1,two,5,6,NULL,8,world
+2,three,9,10,11.0,12,foo
+如果没有设置其他选项，则会写出⾏和列的标签。当然，它们也
+都可以被禁⽤：
+In [48]: data.to_csv(sys.stdout, index=False, header=F
+one,1,2,3.0,4,
+two,5,6,,8,world
+three,9,10,11.0,12,foo
+此外，你还可以只写出⼀部分的列，并以你指定的顺序排列：
+In [49]: data.to_csv(sys.stdout, index=False, columns=
+a,b,c
+1,2,3.0
+236
+
+5,6,
+9,10,11.0
+Series也有⼀个to_csv⽅法：
+In [50]: dates = pd.date_range('1/1/2000', periods=7)
+In [51]: ts = pd.Series(np.arange(7), index=dates)
+In [52]: ts.to_csv('examples/tseries.csv')
+In [53]: !cat examples/tseries.csv
+2000-01-01,0
+2000-01-02,1
+2000-01-03,2
+2000-01-04,3
+2000-01-05,4
+2000-01-06,5
+2000-01-07,6
+处理分隔符格式
+⼤部分存储在磁盘上的表格型数据都能⽤pandas.read_table进
+⾏加载。然⽽，有时还是需要做⼀些⼿⼯处理。由于接收到含有
+畸形⾏的⽂件⽽使read_table出⽑病的情况并不少⻅。为了说明
+这些基本⼯具，看看下⾯这个简单的CSV⽂件：
+In [54]: !cat examples/ex7.csv
+"a","b","c"
+"1","2","3"
+"1","2","3"
+对于任何单字符分隔符⽂件，可以直接使⽤Python内置的csv模
+块。将任意已打开的⽂件或⽂件型的对象传给csv.reader：
+237
+
+import csv
+f = open('examples/ex7.csv')
+reader = csv.reader(f)
+对这个reader进⾏迭代将会为每⾏产⽣⼀个元组（并移除了所有
+的引号）：对这个reader进⾏迭代将会为每⾏产⽣⼀个元组（并
+移除了所有的引号）：
+In [56]: for line in reader:
+   ....:     print(line)
+['a', 'b', 'c']
+['1', '2', '3']
+['1', '2', '3']
+现在，为了使数据格式合乎要求，你需要对其做⼀些整理⼯作。
+我们⼀步⼀步来做。⾸先，读取⽂件到⼀个多⾏的列表中：
+In [57]: with open('examples/ex7.csv') as f:
+   ....:     lines = list(csv.reader(f))
+然后，我们将这些⾏分为标题⾏和数据⾏：
+In [58]: header, values = lines[0], lines[1:]
+然后，我们可以⽤字典构造式和zip(*values)，后者将⾏转置为
+列，创建数据列的字典：
+In [59]: data_dict = {h: v for h, v in zip(header, zip
+In [60]: data_dict
+Out[60]: {'a': ('1', '1'), 'b': ('2', '2'), 'c': ('3'
+CSV⽂件的形式有很多。只需定义csv.Dialect的⼀个⼦类即可定
+义出新格式（如专⻔的分隔符、字符串引⽤约定、⾏结束符
+238
+
+等）：
+class my_dialect(csv.Dialect):
+    lineterminator = '\n'
+    delimiter = ';'
+    quotechar = '"'
+    quoting = csv.QUOTE_MINIMAL
+reader = csv.reader(f, dialect=my_dialect)
+各个CSV语⽀的参数也可以关键字的形式提供给csv.reader，⽽
+⽆需定义⼦类：
+reader = csv.reader(f, delimiter='|')
+可⽤的选项（csv.Dialect的属性）及其功能如表6-3所示。
+笔记：对于那些使⽤复杂分隔符或多字符分隔符的⽂件，csv
+模块就⽆能为⼒了。这种情况下，你就只能使⽤字符串的split
+⽅法或正则表达式⽅法re.split进⾏⾏拆分和其他整理⼯作
+了。
+要⼿⼯输出分隔符⽂件，你可以使⽤csv.writer。它接受⼀个已打
+239
+
+开且可写的⽂件对象以及跟csv.reader相同的那些语⽀和格式化
+选项：
+with open('mydata.csv', 'w') as f:
+    writer = csv.writer(f, dialect=my_dialect)
+    writer.writerow(('one', 'two', 'three'))
+    writer.writerow(('1', '2', '3'))
+    writer.writerow(('4', '5', '6'))
+    writer.writerow(('7', '8', '9'))
+JSON数据
+JSON（JavaScript Object Notation的简称）已经成为通过HTTP
+请求在Web浏览器和其他应⽤程序之间发送数据的标准格式之
+⼀。它是⼀种⽐表格型⽂本格式（如CSV）灵活得多的数据格
+式。下⾯是⼀个例⼦：
+obj = """
+{"name": "Wes",
+ "places_lived": ["United States", "Spain", "Germany"
+ "pet": null,
+ "siblings": [{"name": "Scott", "age": 30, "pets": ["Z
+              {"name": "Katie", "age": 38,
+               "pets": ["Sixes", "Stache", "Cisco"]}]
+}
+"""
+除其空值null和⼀些其他的细微差别（如列表末尾不允许存在多余的逗号
+```python
+In [62]: import json
+In [63]: result = json.loads(obj)
+In [64]: result
+Out[64]: 
+{'name': 'Wes',
+ 'pet': None,
+240
+
+ 'places_lived': ['United States', 'Spain', 'Germany'
+ 'siblings': [{'age': 30, 'name': 'Scott', 'pets': ['Z
+  {'age': 38, 'name': 'Katie', 'pets': ['Sixes', 'Stac
+json.dumps则将Python对象转换成JSON格式：
+In [65]: asjson = json.dumps(result)
+如何将（⼀个或⼀组）JSON对象转换为DataFrame或其他便于
+分析的数据结构就由你决定了。最简单⽅便的⽅式是：向
+DataFrame构造器传⼊⼀个字典的列表（就是原先的JSON对
+象），并选取数据字段的⼦集：
+In [66]: siblings = pd.DataFrame(result['siblings'], c
+In [67]: siblings
+Out[67]: 
+    name  age
+0  Scott   30
+1  Katie   38
+pandas.read_json可以⾃动将特别格式的JSON数据集转换为
+Series或DataFrame。例如：
+In [68]: !cat examples/example.json
+[{"a": 1, "b": 2, "c": 3},
+ {"a": 4, "b": 5, "c": 6},
+ {"a": 7, "b": 8, "c": 9}]
+pandas.read_json的默认选项假设JSON数组中的每个对象是表
+格中的⼀⾏：
+In [69]: data = pd.read_json('examples/example.json')
+In [70]: data
+241
+
+Out[70]: 
+   a  b  c
+0  1  2  3
+1  4  5  6
+2  7  8  9
+第7章中关于USDA Food Database的那个例⼦进⼀步讲解了
+JSON数据的读取和处理（包括嵌套记录）。
+如果你需要将数据从pandas输出到JSON，可以使⽤to_json⽅
+法：
+In [71]: print(data.to_json())
+{"a":{"0":1,"1":4,"2":7},"b":{"0":2,"1":5,"2":8},"c":
+In [72]: print(data.to_json(orient='records'))
+[{"a":1,"b":2,"c":3},{"a":4,"b":5,"c":6},{"a":7,"b":8
+XML和HTML：Web信息收集
+Python有许多可以读写常⻅的HTML和XML格式数据的库，包括
+lxml、Beautiful Soup和html5lib。lxml的速度⽐较快，但其它的
+库处理有误的HTML或XML⽂件更好。
+pandas有⼀个内置的功能，read_html，它可以使⽤lxml和
+Beautiful Soup⾃动将HTML⽂件中的表格解析为DataFrame对
+象。为了进⾏展示，我从美国联邦存款保险公司下载了⼀个
+HTML⽂件（pandas⽂档中也使⽤过），它记录了银⾏倒闭的情
+况。⾸先，你需要安装read_html⽤到的库：
+conda install lxml
+pip install beautifulsoup4 html5lib
+如果你⽤的不是conda，可以使⽤pip install lxml。
+pandas.read_html有⼀些选项，默认条件下，它会搜索、尝试解
+242
+
+析<table>标签内的的表格数据。结果是⼀个列表的DataFrame
+对象：
+In [73]: tables = pd.read_html('examples/fdic_failed_b
+In [74]: len(tables)
+Out[74]: 1
+In [75]: failures = tables[0]
+In [76]: failures.head()
+Out[76]: 
+                      Bank Name             City  ST  
+0                   Allied Bank         Mulberry  AR  
+1  The Woodbury Banking Company         Woodbury  GA  
+2        First CornerStone Bank  King of Prussia  PA  
+3            Trust Company Bank          Memphis  TN  
+4    North Milwaukee State Bank        Milwaukee  WI  
+                 Acquiring Institution        Closing 
+0                         Today's Bank  September 23, 
+1                          United Bank     August 19, 
+2  First-Citizens Bank & Trust Company         May 6, 
+3           The Bank of Fayette County      April 29, 
+4  First-Citizens Bank & Trust Company      March 11, 
+因为failures有许多列，pandas插⼊了⼀个换⾏符\。
+这⾥，我们可以做⼀些数据清洗和分析（后⾯章节会进⼀步讲
+解），⽐如计算按年份计算倒闭的银⾏数：
+In [77]: close_timestamps = pd.to_datetime(failures['C
+In [78]: close_timestamps.dt.year.value_counts()
+Out[78]: 
+2010    157
+2009    140
+243
+
+2011     92
+2012     51
+2008     25
+       ... 
+2004      4
+2001      4
+2007      3
+2003      3
+2000      2
+Name: Closing Date, Length: 15, dtype: int64
+利⽤lxml.objectify解析XML
+XML（Extensible Markup Language）是另⼀种常⻅的⽀持分
+层、嵌套数据以及元数据的结构化数据格式。本书所使⽤的这些
+⽂件实际上来⾃于⼀个很⼤的XML⽂档。
+前⾯，我介绍了pandas.read_html函数，它可以使⽤lxml或
+Beautiful Soup从HTML解析数据。XML和HTML的结构很相似，
+danXML更为通⽤。这⾥，我会⽤⼀个例⼦演示如何利⽤lxml从
+XML格式解析数据。
+纽约⼤都会运输署发布了⼀些有关其公交和列⻋服务的数据资料
+（http://www.mta.info/developers/download.html）。这⾥，我
+们将看看包含在⼀组XML⽂件中的运⾏情况数据。每项列⻋或公
+交服务都有各⾃的⽂件（如Metro-North Railroad的⽂件是
+Performance_MNR.xml），其中每条XML记录就是⼀条⽉度数
+据，如下所示：
+<INDICATOR>
+  <INDICATOR_SEQ>373889</INDICATOR_SEQ>
+  <PARENT_SEQ></PARENT_SEQ>
+  <AGENCY_NAME>Metro-North Railroad</AGENCY_NAME>
+  <INDICATOR_NAME>Escalator Availability</INDICATOR_NA
+  <DESCRIPTION>Percent of the time that escalators are
+  systemwide. The availability rate is based on physic
+244
+
+  the morning of regular business days only. This is a
+  began reporting in 2009.</DESCRIPTION>
+  <PERIOD_YEAR>2011</PERIOD_YEAR>
+  <PERIOD_MONTH>12</PERIOD_MONTH>
+  <CATEGORY>Service Indicators</CATEGORY>
+  <FREQUENCY>M</FREQUENCY>
+  <DESIRED_CHANGE>U</DESIRED_CHANGE>
+  <INDICATOR_UNIT>%</INDICATOR_UNIT>
+  <DECIMAL_PLACES>1</DECIMAL_PLACES>
+  <YTD_TARGET>97.00</YTD_TARGET>
+  <YTD_ACTUAL></YTD_ACTUAL>
+  <MONTHLY_TARGET>97.00</MONTHLY_TARGET>
+  <MONTHLY_ACTUAL></MONTHLY_ACTUAL>
+</INDICATOR>
+我们先⽤lxml.objectify解析该⽂件，然后通过getroot得到该XML
+⽂件的根节点的引⽤：
+from lxml import objectify
+path = 'examples/mta_perf/Performance_MNR.xml'
+parsed = objectify.parse(open(path))
+root = parsed.getroot()
+root.INDICATOR返回⼀个⽤于产⽣各个<INDICATOR>XML元素
+的⽣成器。对于每条记录，我们可以⽤标记名（如
+YTD_ACTUAL）和数据值填充⼀个字典（排除⼏个标记）：
+data = []
+skip_fields = ['PARENT_SEQ', 'INDICATOR_SEQ',
+               'DESIRED_CHANGE', 'DECIMAL_PLACES']
+for elt in root.INDICATOR:
+    el_data = {}
+    for child in elt.getchildren():
+245
+
+        if child.tag in skip_fields:
+            continue
+        el_data[child.tag] = child.pyval
+    data.append(el_data)
+最后，将这组字典转换为⼀个DataFrame：
+In [81]: perf = pd.DataFrame(data)
+In [82]: perf.head()
+Out[82]:
+Empty DataFrame
+Columns: []
+Index: []
+XML数据可以⽐本例复杂得多。每个标记都可以有元数据。看看
+下⾯这个HTML的链接标签（它也算是⼀段有效的XML）：
+from io import StringIO
+tag = '<a href="http://www.google.com">Google</a>'
+root = objectify.parse(StringIO(tag)).getroot()
+现在就可以访问标签或链接⽂本中的任何字段了（如href）：
+In [84]: root
+Out[84]: <Element a at 0x7f6b15817748>
+In [85]: root.get('href')
+Out[85]: 'http://www.google.com'
+In [86]: root.text
+Out[86]: 'Google'
+6.2 ⼆进制数据格式
+实现数据的⾼效⼆进制格式存储最简单的办法之⼀是使⽤Python
+内置的pickle序列化。pandas对象都有⼀个⽤于将数据以pickle
+246
+
+格式保存到磁盘上的to_pickle⽅法：
+In [87]: frame = pd.read_csv('examples/ex1.csv')
+In [88]: frame
+Out[88]: 
+   a   b   c   d message
+0  1   2   3   4   hello
+1  5   6   7   8   world
+2  9  10  11  12     foo
+In [89]: frame.to_pickle('examples/frame_pickle')
+你可以通过pickle直接读取被pickle化的数据，或是使⽤更为⽅便
+的pandas.read_pickle：
+In [90]: pd.read_pickle('examples/frame_pickle')
+Out[90]: 
+   a   b   c   d message
+0  1   2   3   4   hello
+1  5   6   7   8   world
+2  9  10  11  12     foo
+注意：pickle仅建议⽤于短期存储格式。其原因是很难保证该
+格式永远是稳定的；今天pickle的对象可能⽆法被后续版本的
+库unpickle出来。虽然我尽⼒保证这种事情不会发⽣在
+pandas中，但是今后的某个时候说不定还是得“打破”该pickle
+格式。
+pandas内置⽀持两个⼆进制数据格式：HDF5和MessagePack。
+下⼀节，我会给出⼏个HDF5的例⼦，但我建议你尝试下不同的
+⽂件格式，看看它们的速度以及是否适合你的分析⼯作。
+pandas或NumPy数据的其它存储格式有：
+bcolz：⼀种可压缩的列存储⼆进制格式，基于Blosc压缩库。
+Feather：我与R语⾔社区的Hadley Wickham设计的⼀种跨语
+247
+
+⾔的列存储⽂件格式。Feather使⽤了Apache Arrow的列式内
+存格式。
+使⽤HDF5格式
+HDF5是⼀种存储⼤规模科学数组数据的⾮常好的⽂件格式。它
+可以被作为C库，带有许多语⾔的接⼝，如Java、Python和
+MATLAB等。HDF5中的HDF指的是层次型数据格式
+（hierarchical data format）。每个HDF5⽂件都含有⼀个⽂件系
+统式的节点结构，它使你能够存储多个数据集并⽀持元数据。与
+其他简单格式相⽐，HDF5⽀持多种压缩器的即时压缩，还能更
+⾼效地存储重复模式数据。对于那些⾮常⼤的⽆法直接放⼊内存
+的数据集，HDF5就是不错的选择，因为它可以⾼效地分块读
+写。
+虽然可以⽤PyTables或h5py库直接访问HDF5⽂件，pandas提供
+了更为⾼级的接⼝，可以简化存储Series和DataFrame对象。
+HDFStore类可以像字典⼀样，处理低级的细节：
+In [92]: frame = pd.DataFrame({'a': np.random.randn(10
+In [93]: store = pd.HDFStore('mydata.h5')
+In [94]: store['obj1'] = frame
+In [95]: store['obj1_col'] = frame['a']
+In [96]: store
+Out[96]: 
+<class 'pandas.io.pytables.HDFStore'>
+File path: mydata.h5
+/obj1                frame        (shape->[100,1])    
+        
+/obj1_col            series       (shape->[100])      
+        
+/obj2                frame_table  (typ->appendable,nro
+248
+
+[index])
+/obj3                frame_table  (typ->appendable,nro
+[index])
+HDF5⽂件中的对象可以通过与字典⼀样的API进⾏获取：
+In [97]: store['obj1']
+Out[97]: 
+           a
+0  -0.204708
+1   0.478943
+2  -0.519439
+3  -0.555730
+4   1.965781
+..       ...
+95  0.795253
+96  0.118110
+97 -0.748532
+98  0.584970
+99  0.152677
+[100 rows x 1 columns]
+HDFStore⽀持两种存储模式，'fixed'和'table'。后者通常会更
+慢，但是⽀持使⽤特殊语法进⾏查询操作：
+In [98]: store.put('obj2', frame, format='table')
+In [99]: store.select('obj2', where=['index >= 10 and 
+Out[99]: 
+           a
+10  1.007189
+11 -1.296221
+12  0.274992
+13  0.228913
+14  1.352917
+15  0.886429
+249
+
+In [100]: store.close()
+put是store['obj2'] = frame⽅法的显示版本，允许我们设置其它的
+选项，⽐如格式。
+pandas.read_hdf函数可以快捷使⽤这些⼯具：
+In [101]: frame.to_hdf('mydata.h5', 'obj3', format='ta
+In [102]: pd.read_hdf('mydata.h5', 'obj3', where=['ind
+Out[102]: 
+          a
+0 -0.204708
+1  0.478943
+2 -0.519439
+3 -0.555730
+4  1.965781
+笔记：如果你要处理的数据位于远程服务器，⽐如Amazon
+S3或HDFS，使⽤专⻔为分布式存储（⽐如Apache
+Parquet）的⼆进制格式也许更加合适。Python的Parquet和
+其它存储格式还在不断的发展之中，所以这本书中没有涉
+及。
+如果需要本地处理海量数据，我建议你好好研究⼀下PyTables和
+h5py，看看它们能满⾜你的哪些需求。。由于许多数据分析问题
+都是IO密集型（⽽不是CPU密集型），利⽤HDF5这样的⼯具能
+显著提升应⽤程序的效率。
+注意：HDF5不是数据库。它最适合⽤作“⼀次写多次读”的数
+据集。虽然数据可以在任何时候被添加到⽂件中，但如果同
+时发⽣多个写操作，⽂件就可能会被破坏。
+读取Microsoft Excel⽂件
+250
+
+pandas的ExcelFile类或pandas.read_excel函数⽀持读取存储在
+Excel 2003（或更⾼版本）中的表格型数据。这两个⼯具分别使
+⽤扩展包xlrd和openpyxl读取XLS和XLSX⽂件。你可以⽤pip或
+conda安装它们。
+要使⽤ExcelFile，通过传递xls或xlsx路径创建⼀个实例：
+In [104]: xlsx = pd.ExcelFile('examples/ex1.xlsx')
+存储在表单中的数据可以read_excel读取到DataFrame（原书这
+⾥写的是⽤parse解析，但代码中⽤的是read_excel，是个笔
+误：只换了代码，没有改⽂字）：
+In [105]: pd.read_excel(xlsx, 'Sheet1')
+Out[105]: 
+   a   b   c   d message
+0  1   2   3   4   hello
+1  5   6   7   8   world
+2  9  10  11  12     foo
+如果要读取⼀个⽂件中的多个表单，创建ExcelFile会更快，但你
+也可以将⽂件名传递到pandas.read_excel：
+In [106]: frame = pd.read_excel('examples/ex1.xlsx', 
+In [107]: frame
+Out[107]: 
+   a   b   c   d message
+0  1   2   3   4   hello
+1  5   6   7   8   world
+2  9  10  11  12     foo
+如果要将pandas数据写⼊为Excel格式，你必须⾸先创建⼀个
+ExcelWriter，然后使⽤pandas对象的to_excel⽅法将数据写⼊到
+其中：
+251
+
+In [108]: writer = pd.ExcelWriter('examples/ex2.xlsx'
+In [109]: frame.to_excel(writer, 'Sheet1')
+In [110]: writer.save()
+你还可以不使⽤ExcelWriter，⽽是传递⽂件的路径到to_excel：
+In [111]: frame.to_excel('examples/ex2.xlsx')
+6.3 Web APIs交互
+许多⽹站都有⼀些通过JSON或其他格式提供数据的公共API。
+通过Python访问这些API的办法有不少。⼀个简单易⽤的办法
+（推荐）是requests包（http://docs.python-requests.org）。
+为了搜索最新的30个GitHub上的pandas主题，我们可以发⼀个
+HTTP GET请求，使⽤requests扩展库：
+In [113]: import requests
+In [114]: url = 'https://api.github.com/repos/pandas-d
+In [115]: resp = requests.get(url)
+In [116]: resp
+Out[116]: <Response [200]>
+响应对象的json⽅法会返回⼀个包含被解析过的JSON字典，加
+载到⼀个Python对象中：
+In [117]: data = resp.json()
+In [118]: data[0]['title']
+Out[118]: 'Period does not round down for frequencies 
+252
+
+data中的每个元素都是⼀个包含所有GitHub主题⻚数据（不包含
+评论）的字典。我们可以直接传递数据到DataFrame，并提取感
+兴趣的字段：
+In [119]: issues = pd.DataFrame(data, columns=['numbe
+   .....:                                      'labels
+In [120]: issues
+Out[120]:
+    number                                            
+0    17666  Period does not round down for frequencies
+1    17665           DOC: improve docstring of functio
+2    17664               COMPAT: skip 32-bit test on i
+3    17662                          implement Delegato
+4    17654  BUG: Fix series rename called with str alt
+..     ...                                            
+25   17603  BUG: Correctly localize naive datetime st
+26   17599                     core.dtypes.generic -->
+27   17596   Merge cdate_range functionality into bdat
+28   17587  Time Grouper bug fix when applied for list
+29   17583  BUG: fix tz-aware DatetimeIndex + Timedelt
+                                               labels 
+0                                                  [] 
+1   [{'id': 134699, 'url': 'https://api.github.com... 
+2   [{'id': 563047854, 'url': 'https://api.github.... 
+3                                                  [] 
+4   [{'id': 76811, 'url': 'https://api.github.com/... 
+..                                                ... 
+25  [{'id': 76811, 'url': 'https://api.github.com/... 
+26  [{'id': 49094459, 'url': 'https://api.github.c... 
+27  [{'id': 35818298, 'url': 'https://api.github.c... 
+28  [{'id': 233160, 'url': 'https://api.github.com... 
+29  [{'id': 76811, 'url': 'https://api.github.com/... 
+[30 rows x 4 columns]
+253
+
+花费⼀些精⼒，你就可以创建⼀些更⾼级的常⻅的Web API的接
+⼝，返回DataFrame对象，⽅便进⾏分析。
+6.4 数据库交互
+在商业场景下，⼤多数数据可能不是存储在⽂本或Excel⽂件
+中。基于SQL的关系型数据库（如SQL Server、PostgreSQL和
+MySQL等）使⽤⾮常⼴泛，其它⼀些数据库也很流⾏。数据库
+的选择通常取决于性能、数据完整性以及应⽤程序的伸缩性需
+求。
+将数据从SQL加载到DataFrame的过程很简单，此外pandas还
+有⼀些能够简化该过程的函数。例如，我将使⽤SQLite数据库
+（通过Python内置的sqlite3驱动器）：
+In [121]: import sqlite3
+In [122]: query = """
+   .....: CREATE TABLE test
+   .....: (a VARCHAR(20), b VARCHAR(20),
+   .....:  c REAL,        d INTEGER
+   .....: );"""
+In [123]: con = sqlite3.connect('mydata.sqlite')
+In [124]: con.execute(query)
+Out[124]: <sqlite3.Cursor at 0x7f6b12a50f10>
+In [125]: con.commit()
+然后插⼊⼏⾏数据：
+In [126]: data = [('Atlanta', 'Georgia', 1.25, 6),
+   .....:         ('Tallahassee', 'Florida', 2.6, 3),
+   .....:         ('Sacramento', 'California', 1.7, 5
+In [127]: stmt = "INSERT INTO test VALUES(?, ?, ?, ?)
+254
+
+In [128]: con.executemany(stmt, data)
+Out[128]: <sqlite3.Cursor at 0x7f6b15c66ce0>
+从表中选取数据时，⼤部分Python SQL驱动器（PyODBC、
+psycopg2、MySQLdb、pymssql等）都会返回⼀个元组列表：
+In [130]: cursor = con.execute('select * from test')
+In [131]: rows = cursor.fetchall()
+In [132]: rows
+Out[132]: 
+[('Atlanta', 'Georgia', 1.25, 6),
+ ('Tallahassee', 'Florida', 2.6, 3),
+ ('Sacramento', 'California', 1.7, 5)]
+你可以将这个元组列表传给DataFrame构造器，但还需要列名
+（位于光标的description属性中）：
+In [133]: cursor.description
+Out[133]: 
+(('a', None, None, None, None, None, None),
+ ('b', None, None, None, None, None, None),
+ ('c', None, None, None, None, None, None),
+ ('d', None, None, None, None, None, None))
+In [134]: pd.DataFrame(rows, columns=[x[0] for x in cu
+Out[134]: 
+             a           b     c  d
+0      Atlanta     Georgia  1.25  6
+1  Tallahassee     Florida  2.60  3
+2   Sacramento  California  1.70  5
+这种数据规整操作相当多，你肯定不想每查⼀次数据库就重写⼀
+255
+
+次。SQLAlchemy项⽬是⼀个流⾏的Python SQL⼯具，它抽象出
+了SQL数据库中的许多常⻅差异。pandas有⼀个read_sql函数，
+可以让你轻松的从SQLAlchemy连接读取数据。这⾥，我们⽤
+SQLAlchemy连接SQLite数据库，并从之前创建的表读取数据：
+In [135]: import sqlalchemy as sqla
+In [136]: db = sqla.create_engine('sqlite:///mydata.sq
+In [137]: pd.read_sql('select * from test', db)
+Out[137]: 
+             a           b     c  d
+0      Atlanta     Georgia  1.25  6
+1  Tallahassee     Florida  2.60  3
+2   Sacramento  California  1.70  5
+6.5 总结
+访问数据通常是数据分析的第⼀步。在本章中，我们已经学了⼀
+些有⽤的⼯具。在接下来的章节中，我们将深⼊研究数据规整、
+数据可视化、时间序列分析和其它主题。
+256

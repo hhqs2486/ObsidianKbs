@@ -1,0 +1,987 @@
+C H A P T E R   2 
+ 
+■ ■ ■ 
+15
+UDP 
+The previous chapter asserted that all network communications these days are built atop the 
+transmission of short messages called packets that are usually no longer than a few thousand bytes. 
+Packets each wing their way across the network independently, free to take different paths toward the 
+same destination if redundant or load-balanced routers are part of the network. This means that packets 
+can arrive out of order. If network conditions are poor, or a packet is simply unlucky, then it might easily 
+not arrive at all. 
+When a network application is built on top of IP, its designers face a fundamental question: will the 
+network conversations in which the application will engage best be constructed from individual, 
+unordered, and unreliable network packages? Or will their application be simpler and easier to write if 
+the network instead appears to offer an ordered and reliable stream of bytes, so that their clients and 
+servers can converse as though talking to a local pipe? 
+There are three possible approaches to building atop IP. Here they are, in order of decreasing 
+popularity! 
+• 
+The vast majority of applications today are built atop TCP, the Transmission 
+Control Protocol, which offers ordered and reliable data streams between IP 
+applications. We will explore its possibilities in Chapter 3. 
+• 
+A few protocols, usually with short, self-contained requests and responses, and 
+simple clients that will not be annoyed if a request gets lost and they have to 
+repeat it, choose UDP, the User Datagram Protocol, described in this chapter. 
+• 
+Very specialized protocols avoid both of these options, and choose to create an 
+entirely new IP-based protocol that sits alongside TCP and UDP as an entirely new 
+way of having conversations across an IP network. 
+The last of these three options is very rare. Normal operating system users are usually not even 
+allowed to communicate on the network without going through TCP or UDP, which is how UDP gets its 
+name: it is the way that normal “Users,” as opposed to operating system administrators, can send 
+packet-based messages. 
+While writing raw network packets is useful for network discovery programs like ping and nmap, this 
+is a very specialized use case, and this book will not discuss how to build and transmit raw packets using 
+Python. If you need this capability, find some example C code for constructing the packets that you need 
+to forge, and try making the same low-level calls to socket() from Python. 
+So that leaves us with the normal, user-accessible IP protocols, TCP and UDP. We are covering UDP 
+first in this book because even though it is used far less often than TCP, its simplicity will give us a 
+window onto how network packets actually behave, which will be helpful when we then examine how 
+TCP works. 
+Another reason for making UDP the subject of this second chapter is that while it can be more 
+complicated to use than TCP—after all, it does so little for you, and you have to remember to watch for 
+dropped or re-ordered packets yourself—its programming interface is correspondingly simpler, and will 
+
+CHAPTER 2 ■ UDP 
+16 
+give us good practice with the Python network API before we move on to the additional complications 
+that are brought by the use of TCP. 
+Should You Read This Chapter? 
+Yes, you should read this chapter—and the next one on TCP—if you are going to be doing any 
+programming on an IP network. The issues raised and answered are simply too fundamental. A good 
+understanding of what is happening down at these low levels will serve you very well, regardless of 
+whether you are fetching pages from a web server, or sending complicated queries to an industrial 
+database. 
+But should you use what you learn in this chapter? Probably not! Unless you are talking to a service 
+that already speaks UDP because of someone else’s decision, you will probably want to use something 
+else. The days when it was useful to sit down with a UDP connection and bang out packets toward 
+another machine are very nearly gone. 
+The deployment of UDP is even rather dangerous for the general health of the IP network. The 
+sophisticated TCP protocol will automatically back off as the network becomes saturated and starts to 
+drop packets. But few UDP programmers want to even think about the complexity of typical congestion-
+avoidance algorithms—much less implement them correctly—with the result that a naively-written 
+application atop UDP can bring a network to its knees, flooding your bandwidth with an increasing 
+number of re-tries until almost no requests are actually getting through successfully. 
+If you even think you want to use the UDP protocol, then you probably want to use a message queue 
+system instead. Take a look at Chapter 8, and you will probably find that ØMQ lets you do everything you 
+wanted to accomplish with UDP, while having been programmed by people who dove far deeper into 
+the efficiencies and quirks of the typical operating system network stack than you could do without 
+months of research. If you need persistence or a broker, then try one of the message queues that come 
+with their own servers for moving messages between parts of your application. 
+Use UDP only if you really want to be interacting with a very low level of the IP network stack. But, 
+again, be sure to read this whole chapter either way, so that you know the details of what lies beneath 
+some of your favorite protocols like DNS, real-time audio and video chat, and DHCP. 
+Addresses and Port Numbers 
+The IP protocol that we learned about in Chapter 1 assigns an IP address—which traditionally takes the 
+form of a four-octet code, like 18.9.22.69—to every machine connected to an IP network. In fact, it does 
+a bit more than this: a machine with several network cards connected to the network will typically have a 
+different IP address for each card, so that other hosts can choose the network over which you want to 
+contact the machine. Multiple interfaces are also used to improve redundancy and bandwidth. 
+But even if an IP-connected machine has only one network card, we learned that it also has at least 
+one other network address: the address 127.0.0.1 is how machines can connect to themselves. It serves 
+as a stable name that each machine has for itself, that stays the same as network cables are plugged and 
+unplugged and as wireless signals come and go. 
+And these IP addresses allow millions of different machines, using all sorts of different network 
+hardware, to pass packets to each other over the fabric of an IP network. 
+But with UDP and TCP we now take a big step, and stop thinking about the routing needs of the 
+network as a whole and start considering the needs of specific applications that are running on a 
+particular machine. And the first thing we notice is that a single computer today can have many dozens 
+of programs running on it at any given time—and many of these will want to use the network at the same 
+moment! You might be checking e-mail with Thunderbird while a web page is downloading in Google 
+Chrome, or installing a Python package with pip over the network while checking the status of a remote 
+
+CHAPTER 2 ■ UDP 
+17
+server with SSH. Somehow, all of those different and simultaneous conversations need to take place 
+without interfering with each other. 
+This is a general problem in both computer networking and electromagnetic signal theory. It is 
+known as the need for multiplexing: the need for a single channel to be shared unambiguously by 
+several different conversations. It was famously discovered that radio signals can be separated from one 
+another by using different frequencies. To distinguish among the different destinations to which a UDP 
+packet might be addressed—where all we have to work with are alphabets of symbols—the designers of 
+IP chose the rough-and-ready technique of labeling each UDP packet with an unsigned 16-bit number 
+(which therefore has a range of 0 to 65,536) that identifies a port to which an application can be attached 
+and listening. 
+Imagine, for example, that you set up a DNS server (Chapter 4) on one of your machines, with the IP 
+address 192.168.1.9. To allow other computers to find the service, the server will ask the operating 
+system for permission to take control of the UDP port with the standard DNS port number 53. Assuming 
+that no process is already running that has claimed that port number, the DNS server will be granted 
+that port. 
+Next, imagine that a client machine with the IP address 192.168.1.30 on your network is given the IP 
+address of this new DNS server and wants to issue a query. It will craft a DNS query in memory, and then 
+ask the operating system to send that block of data as a UDP packet. Since there will need to be some 
+way to identify the client when the packet returns, and since the client has not explicitly requested a port 
+number, the operating system assigns it a random one—say, port 44137. 
+The packet will therefore wing its way toward port 53 with labels that identify its source as the IP 
+address and UDP port numbers (here separated by a colon): 
+192.168.1.30:44137 
+And it will give its destination as the following: 
+192.168.1.9:53 
+This destination address, simple though it looks—just the number of a computer, and the number 
+of a port—is everything that an IP network stack needs to guide this packet to its destination. The DNS 
+server will receive the request from its operating system, along with the originating IP and port number. 
+Once it has formulated a response, the DNS server will ask the operating system to send the response as 
+a UDP packet to the IP address and UDP port number from which the request originally came. 
+The reply packet will have the source and destination swapped from what they were in the original 
+packet, and upon its arrival at the source machine, it will be delivered to the waiting client program. 
+Port Number Ranges 
+So the UDP scheme is really quite simple; an IP address and port are all that is necessary to direct a 
+packet to its destination. 
+As you saw in the story told in the previous section, if two programs are going to talk using UDP, 
+then one of them has to send the first packet. Unavoidably, this means that the first program to talk—
+which is generally called the client—has to somehow know the IP address and port number that it 
+should be sending that first packet to. The other program, the server who can just sit and wait for the 
+incoming connection, does not necessarily need prior knowledge of the client because it can just read 
+client IP addresses and port numbers off of the request packets as they first arrive. 
+The terms client and server generally imply a pattern where the server runs at a known address and 
+port for long periods of time, and may answer millions of requests from thousands of other machines. 
+When this pattern does not pertain—when two programs are not in the relationship of a client 
+demanding a service and a busy server providing it—then you will often see programs cooperating with 
+sockets called peers of each other instead. 
+
+CHAPTER 2 ■ UDP 
+18 
+How do clients learn the IP addresses and ports to which they should connect? There are generally 
+three ways: 
+• 
+Convention: Many port numbers have been designated as the official, well-known 
+ports for specific services by the IANA, the Internet Assigned Numbers Authority. 
+That is why we expected DNS to run at UDP port 53 in the foregoing example. 
+• 
+Automatic configuration: Often the IP addresses of critical services like DNS are 
+learned when a computer first connects to a network, if a protocol like DHCP is 
+used. By combining these IP addresses with well-known port numbers, programs 
+can reach these essential services. 
+• 
+Manual configuration: For all of the situations that are not covered by the 
+previous two cases, some other scheme will have to deliver an IP address or the 
+corresponding hostname. 
+There are all kinds of ways that IP addresses and port numbers can be provided manually: asking a 
+user to type a hostname; reading one from a configuration file; or learning the address from another 
+service. There was, once, even a movement afoot to popularize a portmap daemon on Unix machines 
+that would always live at port 2049 and answer questions about what ports other running programs were 
+listening on! 
+When making decisions about defining port numbers, like 53 for the DNS, the IANA thinks of them 
+as falling into three ranges—and this applies to both UDP and TCP port numbers: 
+• 
+“Well-Known Ports” (0–1023) are for the most important and widely-used 
+protocols. On many Unix-like operating systems, normal user programs cannot 
+use these ports, which prevented troublesome undergraduates on multi-user 
+machines from running programs to masquerade as important system services. 
+Today the same protections apply when hosting companies hand out command-
+line Linux accounts. 
+• 
+“Registered Ports” (1024–49151) are not usually treated as special by operating 
+systems—any user can write a program that grabs port 5432 and pretends to be a 
+PostgreSQL database, for example—but they can be registered by the IANA for 
+specific protocols, and the IANA recommends that you avoid using them for 
+anything but their assigned protocol. 
+• 
+The remaining port numbers (49152–65535) are free for any use. They, as we shall 
+see, are the pool on which modern operating systems draw in order to generate 
+random port numbers when a client does not care what port it is assigned. 
+When you craft programs that accept port numbers from user input like the command line or 
+configuration files, it is friendly to allow not just numeric port numbers but to let users type human-
+readable names for well-known ports. These names are standard, and are available through the 
+getservbyname() call supported by Python’s standard socket module. If we want to ask where the 
+Domain Name Service lives, we could have found out this way: 
+>>> import socket 
+>>> socket.getservbyname('domain') 
+53 
+As we will see in Chapter 4, port names can also be decoded by the more complicated getaddrinfo()
+function, which also lives in the socket module. 
+The database of well-known service names is usually kept in the file /etc/services on Unix 
+machines, which you can peruse at your leisure. The lower end of the file, in particular, is littered with 
+ancient protocols that still have reserved numbers despite not having had an actual packet addressed to 
+
+CHAPTER 2 ■ UDP 
+19
+them anywhere in the world for many years. An up-to-date (and typically much more extensive) copy is 
+also maintained online by the IANA at /www.iana.org/assignments/port-numbers. 
+The foregoing discussion, as we will learn in Chapter 3, applies equally well to TCP 
+communications, and, in fact, the IANA seems to consider the port-number range to be a single resource 
+shared by both TCP and UDP. They never assign a given port number to one service under TCP but to 
+another service under UDP, and, in fact, usually assign both the UDP and TCP port numbers to a given 
+service even if it is very unlikely to ever use anything other than TCP. 
+Sockets 
+Enough explanation! It is time to show you source code. 
+Rather than trying to invent its own API for doing networking, Python made an interesting decision: 
+it simply provides a slightly object-based interface to all of the normal, gritty, low-level operating system 
+calls that are normally used to accomplish networking tasks on POSIX-compliant operating systems. 
+This might look like laziness, but it was actually brilliance, and for two different reasons! First, it is 
+very rare for programming language designers, whose expertise lies in a different area, to create a true 
+improvement over an existing networking API that—whatever its faults—was created by actual network 
+programmers. Second, an attractive object-oriented interface works well until you need some odd 
+combination of actions or options that was perfectly well-supported by grungy low-level operating 
+system calls, but that seems frustratingly impossible through a prettier interface. 
+In fact, this was one of the reasons that Python came as such a breath of fresh air to those of us 
+toiling in lower-level languages in the early 1990s. Finally, a higher-level language had arrived that let us 
+make low-level operating system calls when we needed them without insisting that we try going through 
+an awkward but ostensibly “prettier” interface first! 
+So, Python exposes the normal POSIX calls for raw UDP and TCP connections rather than trying to 
+invent any of its own. And the normal POSIX networking calls operate around a central concept called a 
+socket. 
+If you have ever worked with POSIX before, you will probably have run across the fact that instead of 
+making you repeat a file name over and over again, the calls let you use the file name to create a “file 
+descriptor” that represents a connection to the file, and through which you can access the file until you 
+are done working with it. 
+Sockets provide the same idea for the networking realm: when you ask for access to a line of 
+communication—like a UDP port, as we are about to see—you create one of these abstract “socket” 
+objects and then ask for it to be bound to the port you want to use. If the binding is successful, then the 
+socket “holds on to” that port number for you, and keeps it in your possession until such time as you 
+“close” the socket to release its resources. 
+In fact, sockets and file descriptors are not merely similar concepts; sockets actually are file 
+descriptors, which happen to be connected to network sources of data rather than to data stored on a 
+filesystem. This gives them some unusual abilities relative to normal files. But POSIX also lets you 
+perform normal file operations on them like read() and write(), meaning that a program that just wants 
+to read or write simple data can treat a socket as though it were a file without knowing the difference! 
+What do sockets look like in operation? Take a look at Listing 2–1, which shows a simple server and 
+client. You can see already that all sorts of operations are taking place that are drawn from the socket 
+module in the Python Standard Library. 
+Listing 2–1. UDP Server and Client on the Loopback Interface 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 2 - udp_local.py 
+# UDP client and server on localhost 
+ 
+import socket, sys 
+
+CHAPTER 2 ■ UDP 
+20 
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) 
+MAX = 65535
+PORT = 1060 
+if sys.argv[1:] == ['server']: 
+»   s.bind(('127.0.0.1', PORT)) 
+»   print 'Listening at', s.getsockname() 
+»   while True: 
+»   »   data, address = s.recvfrom(MAX) 
+»   »   print 'The client at', address, 'says', repr(data) 
+»   »   s.sendto('Your data was %d bytes' % len(data), address) 
+elif sys.argv[1:] == ['client']: 
+»   print 'Address before sending:', s.getsockname() 
+»   s.sendto('This is my message', ('127.0.0.1', PORT)) 
+»   print 'Address after sending', s.getsockname() 
+»   data, address = s.recvfrom(MAX)  # overly promiscuous - see text!
+»   print 'The server', address, 'says', repr(data) 
+else: 
+»   print >>sys.stderr, 'usage: udp_local.py server|client' 
+You should be able to run this script right on your own computer, even if you are not currently in
+the range of a network, because both server and client use only the “localhost” IP address. Try running
+the server first: 
+$ python udp_local.py server
+Listening at ('127.0.0.1', 1060) 
+After printing this line of output, the server hangs and waits for an incoming message. In the source
+code, you can see that it took three steps for the server to get up and running. 
+It first created a plain socket with the socket() call. This new socket has no name, is not yet
+connected to anything, and will raise an exception if you attempt any communications with it. But the
+socket is, at least, marked as being of a particular type: its family is AF_INET, the Internet family of
+protocols, and it is of the SOCK_DGRAM datagram type, which means UDP. (The term “datagram” is the
+official term for an application-level block of transmitted data. Some people call UDP packets
+“datagrams”—like Candygrams, I suppose, but with data in them instead.) 
+Next, this simple server uses the bind() command to request a UDP network address, which you can
+see is a simple tuple containing an IP address (a hostname is also acceptable) and a UDP port number.
+At this point, an exception could be raised if another program is already using that UDP port and the
+server script cannot obtain it. Try running another copy of the server—you will see that it complains: 
+$ python udp_local.py server
+Traceback (most recent call last): 
+  ... 
+socket.error: [Errno 98] Address already in use 
+Of course, there is some very small chance that you got this error the first time you ran the server,
+because port 1060 was already in use on your machine. It happens that I found myself in a bit of a bind
+when choosing the port number for this first example. It had to be above 1023, of course, or you could
+not have run the script without being a system administrator—and, while I really do like my little
+example scripts, I really do not want to encourage anyone running them as the system administrator! I
+could have let the operating system choose the port number (as I did for the client, as we will see in a
+moment) and had the server print it out and then made you type it into the client as one of its 
+Download from www.eBookTM.Com
+
+CHAPTER 2 ■ UDP 
+21
+command-line arguments, but then I would not have gotten to show you the syntax for asking for a 
+particular port number yourself. Finally, I considered using a port from the high-numbered “ephemeral” 
+range previously described, but those are precisely the ports that might randomly already be in use by 
+some other application on your machine, like your web browser or SSH client. 
+So my only option seemed to be a port from the reserved-but-not-well-known range above 1023. 
+I glanced over the list and made the gamble that you, gentle reader, are not running SAP 
+BusinessObjects Polestar on the laptop or desktop or server where you are running my Python scripts. If 
+you are, then try changing the PORT constant in the script to something else, and you have my apologies. 
+Note that the Python program can always use a socket’s getsockname() method to retrieve the 
+current IP and port to which the socket is bound. 
+Once the socker has been bound successfully, the server is ready to start receiving requests! It enters 
+a loop and repeatedly runs recvfrom(), telling the routine that it will happily receive messages up to a 
+maximum length of MAX, which is equal to 65535 bytes—a value that happens to be the greatest length 
+that a UDP packet can possibly have, so that we will always be shown the full content of each packet. 
+Until we send a message with a client, our recvfrom() call will wait forever. 
+So let’s start up our client and see the result. The client code is also shown in Listing 2–1, beneath 
+the test of sys.argv for the string 'client'. 
+(I hope, by the way, that it is not confusing that this example—like some of the others in the book—
+combines the server and client code into a single listing, selected by command-line arguments; I often 
+prefer this style since it keeps server and client logic close to each other on the page, and makes it easier 
+to see which snippets of server code go with which snippets of client code.) 
+While the server is still running, open another command window on your system, and try running 
+the client twice in a row like this: 
+$ python udp_local.py client 
+Address before sending: ('0.0.0.0', 0) 
+Address after sending ('0.0.0.0', 33578) 
+The server ('127.0.0.1', 1060) says 'Your data was 18 bytes' 
+$ python udp_local.py client 
+Address before sending: ('0.0.0.0', 0) 
+Address after sending ('0.0.0.0', 56305) 
+The server ('127.0.0.1', 1060) says 'Your data was 18 bytes' 
+Over in the server’s command window, you should see it reporting each connection that it serves: 
+The client at ('127.0.0.1', 41201) says, 'This is my message' 
+The client at ('127.0.0.1', 59490) says, 'This is my message' 
+Although the client code is slightly simpler than that of the server—there are only two substantial 
+lines of code—it introduces several new concepts. 
+First, the client takes the time to attempt a getsockname() before any address has been assigned to 
+the socket. This lets us see that both IP address and port number start as all zeroes—a new socket is a 
+blank slate. Then the client calls sendto() with both a message and a destination address; this simple call 
+is all that is necessary to send a packet winging its way toward the server! But, of course, we need an IP 
+address and port number ourselves, on the client end, if we are going to be communicating. So the 
+operating system assigns one automatically, as you can see from the output of the second call to 
+getsockname(). And, as promised, the client port numbers are each from the IANA range for “ephemeral” 
+port numbers (at least they are here, on my laptop, under Linux; under a different operating system, you 
+might get different results). 
+Since the client knows that he is expecting a reply from the server, he simply calls the socket’s 
+recv() method without bothering with the recvfrom() version that also returns an address. As you can 
+see from their output, both the client and the server are successfully seeing each other’s messages; each 
+time the client runs, a complete round-trip of request and reply is passing between two UDP sockets. 
+Success! 
+
+CHAPTER 2 ■ UDP 
+22 
+Unreliability, Backoff, Blocking, Timeouts 
+Because the client and server in the previous section were both running on the same machine and 
+talking through its loopback interface—which is not even a physical network card that could experience 
+a signaling glitch and lose a packet, but merely a virtual connection back to the same machine deep in 
+the network stack—there was no real way that packets could get lost, and so we did not actually see any 
+of the inconvenience of UDP. How does code change when packets could really be lost? 
+Take a look at Listing 2–2. Unlike the previous example, you can run this client and server on two 
+different machines on the Internet. And instead of always answering client requests, this server 
+randomly chooses to answer only half of the requests coming in from clients—which will let us 
+demonstrate how to build reliability into our client code, without waiting what might be hours for a real 
+dropped packet to occur! 
+Listing 2–2. UDP Server and Client on Different Machines 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 2 - udp_remote.py 
+# UDP client and server for talking over the network 
+ 
+import random, socket, sys 
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) 
+ 
+MAX = 65535 
+PORT = 1060 
+ 
+if 2 <= len(sys.argv) <= 3 and sys.argv[1] == 'server': 
+»   interface = sys.argv[2] if len(sys.argv) > 2 else '' 
+»   s.bind((interface, PORT)) 
+»   print 'Listening at', s.getsockname() 
+»   while True: 
+»   »   data, address = s.recvfrom(MAX) 
+»   »   if random.randint(0, 1): 
+»   »   »   print 'The client at', address, 'says:', repr(data) 
+»   »   »   s.sendto('Your data was %d bytes' % len(data), address) 
+»   »   else: 
+»   »   »   print 'Pretending to drop packet from', address 
+ 
+elif len(sys.argv) == 3 and sys.argv[1] == 'client': 
+»   hostname = sys.argv[2] 
+»   s.connect((hostname, PORT)) 
+»   print 'Client socket name is', s.getsockname() 
+»   delay = 0.1 
+»   while True: 
+»   »   s.send('This is another message') 
+»   »   print 'Waiting up to', delay, 'seconds for a reply' 
+»   »   s.settimeout(delay) 
+»   »   try: 
+»   »   »   data = s.recv(MAX) 
+»   »   except socket.timeout: 
+»   »   »   delay *= 2  # wait even longer for the next request 
+»   »   »   if delay > 2.0: 
+
+CHAPTER 2 ■ UDP 
+23
+»   »   »   »   raise RuntimeError('I think the server is down') 
+»   »   except: 
+»   »   »   raise   # a real error, so we let the user see it 
+»   »   else: 
+»   »   »   break   # we are done, and can stop looping 
+ 
+»   print 'The server says', repr(data) 
+ 
+else: 
+»   print >>sys.stderr, 'usage: udp_remote.py server [ <interface> ]' 
+»   print >>sys.stderr, '   or: udp_remote.py client <host>' 
+»   sys.exit(2) 
+While the server in our earlier example told the operating system that it wanted only packets that 
+arrived from other processes on the same machine through the private 127.0.0.1 interface, this server is 
+being more generous and inviting packets that arrive at the server through any network interface 
+whatsoever. That is why we are specifying the server IP address as '', which means “any local interface,” 
+which my Linux laptop is translating to 0.0.0.0, as we can see from the line that it prints out when it 
+starts: 
+$ python udp_remote.py server 
+Listening at ('0.0.0.0', 1060) 
+As you can see, each time a request is received, the server uses randint() to flip a coin to decide 
+whether this request will be answered, so that we do not have to keep running the client all day waiting 
+for a real dropped packet. Whichever decision it makes, it prints out a message to the screen so that we 
+can keep up with its activity. 
+So how do we write a “real” UDP client, one that has to deal with the fact that packets might be lost? 
+First, UDP’s unreliability means that the client has to perform its request inside a loop, and that it, 
+in fact, has to be somewhat arbitrary—actually, quite aggressively arbitrary—in deciding when it has 
+waited “too long” for a reply and needs to send another one. This difficult choice is necessary because 
+there is generally no way for the client to distinguish between three quite different events: 
+• 
+The reply is taking a long time to come back, but will soon arrive. 
+• 
+The reply will never arrive because it, or the request, was lost. 
+• 
+The server is down and is not replying to anyone. 
+So a UDP client has to choose a schedule on which it will send duplicate requests if it waits a 
+reasonable period of time without getting a response. Of course, it might wind up wasting the server’s 
+time by doing this, because the first reply might be about to arrive and the second copy of the request 
+might cause the server to perform needless duplicate work. But at some point the client must decide to 
+re-send, or it risks waiting forever. 
+So rather than letting the operating system leave it forever paused in the recv() call, this client first 
+does a settimeout() on the socket. This informs the system that the client is unwilling to stay stuck 
+waiting inside a socket operation for more than delay seconds, and wants the call interrupted with a 
+socket.timeout exception once a call has waited for that long. 
+A call that waits for a network operation to complete, by the way, is said to “block” the caller, and 
+the term “blocking” is used to describe a call like recv() that can make the client wait until new data 
+arrives. When we get to Chapter 6 and discuss server architecture, the distinction between blocking and 
+non-blocking network calls will loom very large! 
+This particular client starts with a modest tenth-of-a-second wait. For my home network, where 
+ping times are usually a few dozen milliseconds, this will rarely cause the client to send a duplicate 
+request simply because the reply is delayed in getting back. 
+
+CHAPTER 2 ■ UDP 
+24 
+A very important feature of this client is what happens if the timeout is reached. It does not simply 
+start sending out repeat requests over and over again at a fixed interval! Since the leading cause of packet 
+loss is congestion—as anyone knows who has tried sending normal data upstream over a DSL modem at 
+the same time as photographs or videos are uploading—the last thing we want to do is to respond to a 
+possibly dropped packet by sending even more of them. 
+Therefore, this client uses a technique known as exponential backoff, where its attempts become 
+less and less frequent. This serves the important purpose of surviving a few dropped requests or replies, 
+while making it possible that a congested network will slowly recover as all of the active clients back off 
+on their demands and gradually send fewer packets. Although there exist fancier algorithms for 
+exponential backoff—for example, the Ethernet version of the algorithm adds some randomness so that 
+two competing network cards are unlikely to back off on exactly the same schedule—the basic effect can 
+be achieved quite simply by doubling the delay each time that a reply is not received. 
+Please note that if the requests are being made to a server that is 200 milliseconds away, this naive 
+algorithm will always send at least two packets because it will never learn that requests to this server 
+always take more than 0.1 seconds! If you are writing a UDP client that lives a long time, think about 
+having it save the value of delay between one call and the next, and use this to adjust its expectations so 
+that it gradually comes to accept that the server really is 200 milliseconds away and that the network is 
+not simply always dropping the first request! 
+Of course, you do not want to make your client become intolerably slow simply because one request 
+ran into trouble and ran the delay up very high. A good technique might be to set a timer and measure 
+how long the successful calls to the server take, and use this to adjust delay back downward over time 
+once a string of successful requests has taken place. Something like a moving average might be helpful. 
+When you run the client, give it the hostname of the other machine on which you are running the 
+server script, as shown previously. Sometimes, this client will get lucky and get an immediate reply: 
+$ python udp_remote.py client guinness 
+Client socket name is ('127.0.0.1', 45420) 
+Waiting up to 0.1 seconds for a reply 
+The server says 'Your data was 23 bytes' 
+But often it will find that one or more of its requests never result in replies, and will have to re-try. If 
+you watch its repeated attempts carefully, you can even see the exponential backoff happening in real 
+time, as the print statements that echo to the screen come more and more slowly as the delay timer 
+ramps up: 
+$ python udp_remote.py client guinness 
+Client socket name is ('127.0.0.1', 58414) 
+Waiting up to 0.1 seconds for a reply 
+Waiting up to 0.2 seconds for a reply 
+Waiting up to 0.4 seconds for a reply 
+Waiting up to 0.8 seconds for a reply 
+The server says 'Your data was 23 bytes' 
+You can see over at the server whether the requests are actually making it, or whether by any chance 
+you hit a real packet drop on your network. When I ran the foregoing test, I could look over at the 
+server’s console and see that all of the packets had actually made it: 
+Pretending to drop packet from ('192.168.5.10', 53322) 
+Pretending to drop packet from ('192.168.5.10', 53322) 
+Pretending to drop packet from ('192.168.5.10', 53322) 
+Pretending to drop packet from ('192.168.5.10', 53322) 
+The client at ('192.168.5.10', 53322) says, 'This is another message' 
+What if the server is down entirely? Unfortunately, UDP gives us no way to distinguish between a 
+server that is down and a network that is simply in such poor condition that it is dropping all of our 
+packets. Of course, I suppose we should not blame UDP for this problem; the fact is, simply, that the 
+
+CHAPTER 2 ■ UDP 
+25
+world itself gives us no way to distinguish between something that we cannot detect and something that 
+does not exist! So the best that the client can do is give up once it has made enough attempts. Kill the 
+server process, and try running the client again: 
+$ python udp_remote.py client guinness 
+Waiting up to 0.1 seconds for a reply 
+Waiting up to 0.2 seconds for a reply 
+Waiting up to 0.4 seconds for a reply 
+Waiting up to 0.8 seconds for a reply 
+Waiting up to 1.6 seconds for a reply 
+Traceback (most recent call last): 
+  ... 
+RuntimeError: I think the server is down 
+Of course, giving up makes sense only if your program is trying to perform some brief task and 
+needs to produce output or return some kind of result to the user. If you are writing a daemon program 
+that runs all day—like, say, a weather icon in the corner of the screen that displays the temperature and 
+forecast fetched from a remote UDP service—then it is fine to have code that keeps re-trying “forever.” 
+After all, the desktop or laptop machine might be off the network for long periods of time, and your code 
+might have to patiently wait for hours or days until the forecast server can be contacted again. 
+If you are writing daemon code that re-tries all day, then do not adhere to a strict exponential 
+backoff, or you will soon have ramped the delay up to a value like two hours, and then you will probably 
+miss the entire half-hour period during which the laptop owner sits down in a coffee shop and you could 
+actually have gotten to the network! Instead, choose some maximum delay—like, say, five minutes—and 
+once the exponential backoff has reached that period, keep it there, so that you are always guaranteed to 
+attempt an update once the user has been on the network for five minutes after a long time 
+disconnected. 
+Of course, if your operating system lets your process be signaled for events like the network coming 
+back up, then you will be able to do much better than to play with timers and guess about when the 
+network might come back! But system-specific mechanisms like that are, sadly, beyond the scope of this 
+book, so let’s now return to UDP and a few more issues that it raises. 
+Connecting UDP Sockets 
+Listing 2–2, which we examined in the previous section, introduced another new concept that needs 
+explanation. We have already discussed binding—both the explicit bind() call that the server uses to 
+grab the port number that it wants to use, as well as the implicit binding that takes place when the client 
+first tries to use the socket and is assigned a random ephemeral port number by the operating system. 
+But this remote UDP client also uses a new call that we have not discussed before: the connect() 
+socket operation. You can see easily enough what it does. Instead of having to use sendto() and an 
+explicit UDP address every time we want to send something to the server, the connect() call lets the 
+operating system know ahead of time which remote address to which we want to send packets, so that 
+we can simply supply data to the send() call and not have to repeat the server address again. 
+But connect() does something else important, which will not be obvious at all from reading the 
+Listing 2–2 script. 
+To approach this topic, let us return to Listing 2–1 for a moment. You will recall that both its client 
+and server use the loopback IP address and assume reliable delivery—the client will wait forever for a 
+response. Try running the client from Listing 2–1 in one window: 
+$ python udp_local.py client 
+Address before sending: ('0.0.0.0', 0) 
+Address after sending ('0.0.0.0', 47873) 
+
+CHAPTER 2 ■ UDP 
+26 
+The client is now waiting—perhaps forever—for a response in reply to the packet it has just sent to 
+the localhost IP address at UDP port 1060. But what if we nefariously try sending it back a packet from a 
+different server, instead? 
+From another command prompt on the same system, try running Python and entering these 
+commands—and for the port number, copy the integer that was just printed to the screen when you ran 
+the UDP client: 
+>>> import socket 
+>>> s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) 
+>>> s.sendto('Fake reply', ('127.0.0.1', 47873)) 
+10 
+(You can see, by the way, that the actual return value of sendto() is the length of the UDP packet 
+that was sent.) 
+Even though this Python session has grabbed a completely wild port number, which looks nothing 
+like 1060 nor is even close, the client happily accepts this fake reply as an answer and prints it to the 
+screen! Returning to the command line where the client was running, we see the following: 
+The server ('127.0.0.1', 49371) says 'Fake reply' 
+$ 
+Disaster! It turns out that our first client accepts answers from anywhere. Even though the server is 
+running on the localhost, and remote network connectivity is not even desirable for Listing 1-1, the 
+client will even accept packets from another machine! If I bring up a Python prompt on another box and 
+run the same two lines of code as just shown, then a waiting client can even see the remote IP address: 
+The server ('192.168.5.10', 59970) says 'Fake reply from elsewhere' 
+$ 
+If a real UDP client were written this way, and an attacker or malcontent knew that we were running 
+it, then they could send packets to its UDP port—or, even if they did not know its address, they could 
+quickly flood random ports on your machine, hoping to find the client—and feed it a different answer 
+than the server would have given it. 
+Now you can return to Listing 2–2, and if you will perform the foregoing tests, you will find that this 
+second client is not susceptible to receiving packets from other servers. This is because of the second, 
+less-obvious effect of using connect() to select a UDP socket’s destination instead of specifying the 
+address each time yourself: once you have run connect(), the operating system will discard any 
+incoming packets to your port whose return address and port number do not match the server to which 
+you are sending packets. 
+There are, then, two ways to write UDP clients that are careful about the return addresses of the 
+packets arriving back: 
+• 
+You can use sendto() and direct each outgoing packet to a specific destination, 
+and then use recvfrom() to receive the replies and carefully check the return 
+address it gives you against the list of servers to which you have made outstanding 
+requests. 
+• 
+You can connect() your socket right after creating it, and then simply use send() 
+and recv(), and the operating system will filter out unwanted packets for you. This 
+works only for speaking to one server at a time, because running connect() a 
+second time on the same socket does not add a second destination address to 
+your UDP socket. Instead, it wipes out the first address entirely, so that no further 
+replies from the earlier address will be delivered to your program. 
+After you have connected a UDP socket using connect(), you can use the socket’s getpeername() 
+method to remember the address to which you have connected it. Be careful about calling this on a 
+
+CHAPTER 2 ■ UDP 
+27
+socket that is not yet connected, however; rather than returning 0.0.0.0 or some other wildcard 
+response, the call will raise socket.error instead. 
+Two last points should be made about the connect() call. 
+First, doing a connect() on a UDP socket, of type SOCK_DGRAM, does not send any information across 
+the network, nor do anything to warn the server that packets might be coming. It simply writes the 
+address and port number into the operating system’s memory for use when you run send() and recv(), 
+and then returns control to your program without doing any actual network communication. 
+Second, doing a connect(), or even filtering out unwanted packets yourself using the return address, 
+is not a form of security! If there is someone on the network who is really malicious, it is usually easy 
+enough for their computer to forge packets with the server’s return address so that their faked replies 
+will make it in past your address filter just fine. 
+Sending packets with another computer’s return address is called spoofing, and is one of the first 
+things that protocol designers have to think about when designing protocols that are supposed to be safe 
+against interference. See Chapter 6 for more information. 
+Request IDs: A Good Idea 
+The messages sent in both Listings 2–1 and 2–2 were simple text. But if you should ever design a scheme 
+of your own for doing UDP requests and responses, you should strongly consider adding a sequence 
+number to each request and making sure that the reply you accept uses the same number. On the server 
+side, you will just copy the number from each request into the reply that the server sends back. This has 
+at least two big advantages. 
+First, it protects you from being confused by duplicate answers to  requests that you repeated 
+several times in your exponential backoff loop. You can see easily enough how this could happen: you 
+send request A; you get bored waiting for an answer; so you repeat request A and then you finally get an 
+answer, reply A. You assume that the first copy got lost, so you continue merrily on your way. 
+But—what if both requests made it to the server, and the replies have been just a bit slow in making 
+it back, and so you have received one of the two replies but the other is about to arrive? If you now send 
+request B to the server and start listening, you will almost immediately receive the duplicate reply A, and 
+perhaps think that it is the answer to the question you asked in request B and become very confused. 
+You could from then on wind up completely out of step, interpreting each reply as corresponding to a 
+different request than the one that you think it does! 
+Request IDs protect you against that. If you gave every copy of request A the request ID #42496, and 
+request B the ID #16916, then the program loop waiting for the answer to B can simply keep throwing 
+out replies whose IDs do not equal #16916 until it finally receives one that matches. This protects against 
+duplicate replies, which arise not only in the case where you repeated the question, but also in rare 
+circumstances because a redundancy in the network fabric accidentally generates two copies of the 
+packet somewhere between the server and the client. 
+The other purpose that request IDs can serve is to provide a barrier against spoofing, at least in the 
+case where the attackers cannot see your packets. If they can, of course, then you are completely lost: 
+they will see the IP, port number, and request ID of every single packet you send, and can try sending 
+fake replies—hoping that their answers arrive before those of the server, of course!—to any request that 
+they like. But in the case where the attackers cannot observe your traffic, but have to shoot UDP packets 
+at your server blindly, a good-sized request ID number can make it much less likely that their answer will 
+not be discarded by your client. 
+You will note that the example request IDs that I used in the story I just told were neither sequential, 
+nor easy to guess—precisely so that an attacker would have no idea what a likely sequence number is. If 
+you start with 0 or 1 and count upward from there, you make an attacker’s job much easier. Instead, try 
+using the random module to generate large integers. If your ID number is a random number between 0 
+and N, then an attacker’s chance of hitting you with a valid packet—even assuming that the attacker 
+knows the server’s address and port—is at most 1/N, and maybe much less if he or she has to wildly try 
+hitting all possible port numbers on your machine. 
+
+CHAPTER 2 ■ UDP 
+28 
+But, of course, none of this is real security—it just protects against naive spoofing attacks from 
+people who cannot observe your network traffic. Real security protects you even if attackers can both 
+observe your traffic and insert their own messages whenever they like. In Chapter 6, we will look at how 
+real security works. 
+Binding to Interfaces 
+So far we have seen two possibilities for the IP address used in the bind() call that the server makes: you 
+can use '127.0.0.1' to indicate that you only want packets from other programs running on the same 
+machine, or use an empty string '' as a wildcard, indicating that you are willing to receive packets from 
+any interface. 
+It actually turns out that there is a third choice: you can provide the IP address of one of the 
+machine’s external IP interfaces, like its Ethernet connection or wireless card, and the server will listen 
+only for packets destined for those IPs. You might have noticed that Listing 2–2 actually allows us to 
+provide a server string for the bind() call, which will now let us do a few experiments. 
+First, what if we bind solely to an external interface? Run the server like this, using whatever your 
+operating system tells you is the external IP address of your system: 
+$ python udp_remote.py server 192.168.5.130 
+Listening at ('192.168.5.130', 1060) 
+Connecting to this IP address from another machine should still work just fine: 
+$ python udp_remote.py client guinness 
+Client socket name is ('192.168.5.10', 35084) 
+Waiting up to 0.1 seconds for a reply 
+The server says 'Your data was 23 bytes' 
+But if you try connecting to the service through the loopback interface by running the client script 
+on the same machine, the packets will never be delivered: 
+$ python udp_remote.py client 127.0.0.1 
+Client socket name is ('127.0.0.1', 60251) 
+Waiting up to 0.1 seconds for a reply 
+Traceback (most recent call last): 
+  ... 
+socket.error: [Errno 111] Connection refused 
+Actually, on my operating system at least, the result is even better than the packets never being 
+delivered: because the operating system can see whether one of its own ports is opened without sending 
+a packet across the network, it immediately replies that a connection to that port is impossible! 
+You might think this means that programs running on the localhost cannot now connect to the 
+server. Unfortunately, you would be wrong! Try running the client again on the same machine, but this 
+time use the external IP address of the box, even though the client and server are both running there: 
+$ python udp_remote.py client 192.168.5.130 
+Client socket name is ('192.168.5.130', 34919) 
+Waiting up to 0.1 seconds for a reply 
+The server says 'Your data was 23 bytes' 
+Do you see what happened? Programs running locally are allowed to send requests that originate 
+from any of the machine’s IP addresses that they want—even if they are just using that IP address to talk 
+back to another service on the same machine! 
+
+CHAPTER 2 ■ UDP 
+29
+So binding to an IP interface might limit which external hosts can talk to you; but it will certainly not 
+limit conversations with other clients on the same machine, so long as they know the IP address that 
+they should use to connect. 
+Second, what happens if we try to run two servers at the same time? Stop all of the scripts that are 
+running, and we can try running two servers on the same box. One will be connected to the loopback: 
+$ python udp_remote.py server 127.0.0.1 
+Listening at ('127.0.0.1', 1060) 
+And then we try running a second one, connected to the wildcard IP address that allows requests 
+from any address: 
+$ python udp_remote.py server 
+Traceback (most recent call last): 
+  ... 
+socket.error: [Errno 98] Address already in use 
+Whoops! What happened? We have learned something about operating system IP stacks and the 
+rules that they follow: they do not allow two different sockets to listen at the same IP address and port 
+number, because then the operating system would not know where to deliver incoming packets. And 
+both of the servers just shown wanted to hear packets coming from the localhost to port 1060. 
+But what if instead of trying to run the second server against all IP interfaces, we just ran it against 
+an external IP interface—one that the first copy of the server is not listening to? Let us try: 
+$ python udp_remote.py server 192.168.5.130 
+Listening at ('192.168.5.130', 1060) 
+It worked! There are now two servers running on this machine, one of which is bound to the inward-
+looking port 1060 on the loopback interface, and the other looking outward for packets arriving on port 
+1060 from the network to which my wireless card has connected. If you happen to be on a box with 
+several remote interfaces, you can start up even more servers, one on each remote interface. 
+Once you have these servers running, try to send them some packets with the client program. You 
+will find that each request is received by only one server, and that in each case it will be the server that 
+holds the particular IP address to which you have directed the UDP request packet. 
+The lesson of all of this is that an IP network stack never thinks of a UDP port as a lone entity that is 
+either entirely available, or else in use, at any given moment. Instead, it thinks in terms of UDP “socket 
+names” that are always a pair linking an IP interface—even if it is the wildcard interface—with a UDP 
+port number. It is these socket names that must not conflict among the listening servers at any given 
+moment, rather than the bare UDP ports that are in use. 
+One last warning: since the foregoing discussion indicated that binding your server to the interface 
+127.0.0.1 protects you from possibly malicious packets generated on the external network, you might 
+think that binding to one external interface will protect you from malicious packets generated by 
+malcontents on other external networks. For example, on a large server with multiple network cards, you 
+might be tempted to bind to a private subnet that faces your other servers, and think thereby that you 
+will avoid spoofed packets arriving at your Internet-facing public IP address. 
+Sadly, life is not so simple. It actually depends on your choice of operating system, and then upon 
+how it is specifically configured, whether inbound packets addressed to one interface are allowed to 
+appear at another interface. It might be that your system will quite happily accept packets that claim to 
+be from other servers on your network if they appear over on your public Internet connection! Check 
+with your operating system documentation, or your system administrator, to find out more about your 
+particular case. Configuring and running a firewall on your box could also provide protection if your 
+operating system does not. 
+
+CHAPTER 2 ■ UDP 
+30 
+UDP Fragmentation 
+I have been claiming so far in this chapter that UDP lets you, as a user, send raw network packets to
+which just a little bit of information (an IP address and port for both the sender and receiver) has been
+added. But you might already have become suspicious, because the foregoing program listings have
+suggested that a UDP packet can be up to 64kB in size, whereas you probably already know that your
+Ethernet or wireless card can only handle packets of around 1,500 bytes instead. 
+The actual truth is that IP sends small UDP packets as single packets on the wire, but splits up larger UDP
+packets into several small physical packets, as was briefly discussed in Chapter 1. This means that large
+packets are more likely to be dropped, since if any one of their pieces fails to make its way to the destination,
+then the whole packet can never be reassembled and delivered to the listening operating system. 
+But aside from the higher chance of failure, this process of fragmenting large UDP packets so that
+they will fit on the wire should be invisible to your application. There are three ways, however, in which
+it might be relevant: 
+•
+If you are thinking about efficiency, you might want to limit your protocol to small
+packets, to make retransmission less likely and to limit how long it takes the
+remote IP stack to reassemble your UDP packet and give it to the waiting
+application. 
+•
+If the ICMP packets are wrongfully blocked by a firewall that would normally allow
+your host to auto-detect the MTU between you and the remote host, then your
+larger UDP packets might disappear into oblivion without your ever knowing. The
+MTU is the “maximum transmission unit” or “largest packet size” that all of the
+network devices between two hosts will support. 
+•
+If your protocol can make its own choices about how it splits up data between
+different packets, and you want to be able to auto-adjust this size based on the
+actual MTU between two hosts, then some operating systems let you turn off
+fragmentation and receive an error if a UDP packet is too big. This lets you
+regroup and split it into several packets if that is possible. 
+Linux is one operating system that supports this last option. Take a look at Listing 2–3, which sends
+a very large message to one of the servers that we have just designed. 
+Listing 2–3. Sending a Very Large UDP Packet 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 2 - big_sender.py
+# Send a big UDP packet to our server. 
+import IN, socket, sys 
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) 
+MAX = 65535
+PORT = 1060 
+if len(sys.argv) != 2: 
+»   print >>sys.stderr, 'usage: big_sender.py host'
+»   sys.exit(2) 
+hostname = sys.argv[1] 
+Download from www.eBookTM.Com
+
+CHAPTER 2 ■ UDP 
+31
+s.connect((hostname, PORT)) 
+s.setsockopt(socket.IPPROTO_IP, IN.IP_MTU_DISCOVER, IN.IP_PMTUDISC_DO) 
+try: 
+»   s.send('#' * 65000) 
+except socket.error: 
+»   print 'The message did not make it' 
+»   option = getattr(IN, 'IP_MTU', 14)  # constant taken from <linux/in.h> 
+»   print 'MTU:', s.getsockopt(socket.IPPROTO_IP, option) 
+else: 
+»   print 'The big message was sent! Your network supports really big packets!' 
+If we run this program against a server elsewhere on my home network, then we discover that my 
+wireless network allows physical packets that are no bigger than the 1,500 bytes typically supported by 
+Ethernet-style networks: 
+$ python big_sender.py guinness 
+The message did not make it 
+MTU: 1500 
+It is slightly more surprising that the loopback interface on my laptop, which presumably could 
+support packets as large as my RAM, also imposes an MTU that is far short of the maximum UDP packet 
+length: 
+$ python big_sender.py localhost 
+The message did not make it 
+MTU: 16436 
+But, the ability to check the MTU is a fairly obscure feature. As you can see from the program listing, 
+Python 2.6.5 on my machine for some reason fails to include the IP_MTU socket option name that is 
+necessary to determine a socket’s current MTU, so I had to manually copy the integer option code 14 out 
+of one of the system C header files. So you should probably ignore the issue of fragmentation and, if you 
+worry about it at all, try to keep your UDP packets short; but this example was at least useful in showing 
+you that fragmentation does need to take place, in case you run into any of its consequences! 
+Socket Options 
+The POSIX socket interface also supports all sorts of socket options that control specific behaviors of 
+network sockets. These are accessed through the Python socket methods getsockopt() and setsockopt(), 
+using the options you will find documented for your operating system. On Linux, for example, try viewing 
+the manual pages socket(7), udp(7), and—when you progress to the next chapter—tcp(7). 
+When setting socket options, you have to first name the “option group” in which they live, and then 
+as a subsequent argument name the actual option you want to set; consult your operating system 
+manual for the names of these groups. See Listing 2–3 in the next section for some example real-world 
+calls involving socket options. Just like the Python calls getattr() and setattr(), the set call simply 
+takes one more argument: 
+value = s.getsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST) 
+s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, value) 
+Many options are specific to particular operating systems, and may be finicky about how their 
+options are presented. Here are some of the more common: 
+• 
+SO_BROADCAST: Allows broadcast UDP packets to be sent and received; see the next 
+section for details. 
+
+CHAPTER 2 ■ UDP 
+32 
+• 
+SO_DONTROUTE: Only be willing to send packets that are addressed to hosts on 
+subnets to which this computer is connected directly. My laptop, for example, at 
+this moment would be willing to send packets to the networks 127.0.0.0/8 and 
+192.168.5.0/24 if this socket option were set, but would not be willing to send 
+them anywhere else. 
+• 
+SO_TYPE: When passed to getsockopt(), this returns to you regardless of whether a 
+socket is of type SOCK_DGRAM and can be used for UDP, or it is of type SOCK_STREAM 
+and instead supports the semantics of TCP (see Chapter 3). 
+The next chapter will introduce some further socket options that apply specifically to TCP sockets. 
+Broadcast 
+If UDP has a superpower, it is its ability to support broadcast: instead of sending a packet to some 
+specific other host, you can point it at an entire subnet to which your machine is attached and have the 
+physical network card broadcast the packet so that all attached hosts see it without its having to be 
+copied separately to each one of them. 
+Now, it should be immediately mentioned that broadcast is considered passé these days, because a 
+more sophisticated technique called “multicast” has been developed, which lets modern operating 
+systems take better advantage of the intelligence built into many networks and network interface 
+devices. Also, multicast can work with hosts that are not on the local subnet, which is what makes 
+broadcast unusable for many applications! But if you want an easy way to keep something like gaming 
+clients or automated scoreboards up-to-date on the local network, and each client can survive the 
+occasional dropped packet, then UDP broadcast is an easy choice. 
+Listing 2–4 shows an example of a server that can receive broadcast packets and a client that can 
+send them. And if you look closely, you will see that there is pretty much just one difference between this 
+listing and the techniques we were using in previous listings: before using this socket object, we are 
+using its setsockopt() method to turn on broadcast. Aside from that, the socket is used quite normally 
+by both server and client. 
+Listing 2–4. UDP Broadcast 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 2 - udp_broadcast.py 
+# UDP client and server for broadcast messages on a local LAN 
+ 
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) 
+s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1) 
+ 
+MAX = 65535 
+PORT = 1060 
+ 
+if 2 <= len(sys.argv) <= 3 and sys.argv[1] == 'server': 
+»   s.bind(('', PORT)) 
+»   print 'Listening for broadcasts at', s.getsockname() 
+»   while True: 
+»   »   data, address = s.recvfrom(MAX) 
+»   »   print 'The client at %r says: %r' % (address, data) 
+ 
+elif len(sys.argv) == 3 and sys.argv[1] == 'client': 
+»   network = sys.argv[2] 
+»   s.sendto('Broadcast message!', (network, PORT)) 
+
+CHAPTER 2 ■ UDP 
+33
+else: 
+»   print >>sys.stderr, 'usage: udp_broadcast.py server' 
+»   print >>sys.stderr, '   or: udp_broadcast.py client <host>' 
+»   sys.exit(2) 
+When trying this server and client out, the first thing you should notice is they behave exactly like a 
+normal client and server if you simply use the client to send packets that are addressed to the IP address 
+of a particular server. Turning on broadcast for a UDP socket does not disable or change its normal 
+ability to send and receive specifically addressed packets. 
+The magic happens when you view the settings for your local network, and use its IP “broadcast 
+address” as the destination for the client. First bring up one or two servers on your network, using 
+commands like the following: 
+$ python udp_broadcast.py server 
+Listening for broadcasts at ('0.0.0.0', 1060) 
+Then, while they are running, first use the client to send messages to each server. You will see that 
+only one server gets each message: 
+$ python udp_broadcast.py client 192.168.5.10 
+But when you use the local network’s broadcast address, suddenly you will see that all of the 
+broadcast servers get the packet at the same time! (But no normal servers will see it—run a few copies of 
+the normal udp_remote.py server while making broadcasts to be convinced!) On my local network at the 
+moment, the ifconfig command tells me that the broadcast address is this: 
+$ python udp_broadcast.py client 192.168.5.255 
+And, sure enough, both servers immediately report that they see the message! In case your 
+operating system makes it difficult to determine the broadcast address, and you do not mind doing a 
+broadcast out of every single network port of your host, Python lets you use the special hostname 
+'<broadcast>' when sending with a UDP socket. Be careful to quote that name when passing it to our 
+client, since the < and > characters are quite special to any normal POSIX shell: 
+$ python udp_broadcast.py client "<broadcast>" 
+If there were any platform-independent way to learn each connected subnet and its broadcast 
+address, I would show you; but unfortunately you will have to consult your own operating system 
+documentation if you want to do anything more specific than use this special '<broadcast>' string. 
+When to Use UDP 
+You might think that UDP would be very efficient for sending small messages. Actually, UDP is efficient 
+only if your host ever only sends one message at a time, then waits for a response. If your application 
+might send several messages in a burst, then using an intelligent message queue algorithm like ØMQ will 
+actually be more efficient because it will set a short timer that lets it bundle several small messages 
+together to send them over a single round-trip to the server, probably on a TCP connection that does a 
+much better job of splitting the payload into fragments than you would! 
+There are two good reasons to use UDP: 
+• 
+Because you are implementing a protocol that already exists, and it uses UDP 
+• 
+Because unreliable subnet broadcast is a great pattern for your application, and 
+UDP supports it perfectly 
+
+CHAPTER 2 ■ UDP 
+34 
+Outside of these two situations, you should probably look at later chapters of this book for 
+inspiration about how to construct the communication for your application. 
+Summary 
+The User Data Protocol, UDP, lets user-level programs send individual packets across an IP network. 
+Typically, a client program sends a packet to a server, which then replies back using the return address 
+built into every UDP packet. 
+The POSIX network stack gives you access to UDP through the idea of a “socket,” which is a 
+communications endpoint that can sit at an IP address and UDP port number—these two things 
+together are called the socket’s “name”—and send and receive UDP packets. These primitive network 
+operations are offered by Python through the built-in socket module. 
+The server needs to bind() to an address and port before it can receive incoming packets. Client 
+UDP programs can just start sending, and the operating system will choose a port number for them 
+automatically. 
+Since UDP is built atop the actual behavior of network packets, it is unreliable: packets can be 
+dropped either because of a glitch on a network transmission medium, or because a network segment 
+becomes too busy. Clients have to compensate for this by being willing to re-transmit a request until 
+they receive a reply. To prevent making a busy network even worse, clients should use exponential 
+backoff as they encounter repeated failure, and should also make their initial wait time longer if they 
+find that round-trips to the server are simply taking longer than their author expected. 
+Request IDs are crucial to combat the problem of reply duplication, where a reply you thought was 
+lost arrives later after all and could be mistaken for the reply to your current question. If randomly 
+chosen, request IDs can also help protect against naive spoofing attacks. 
+When using sockets, it is important to distinguish the act of “binding”—by which you grab a 
+particular UDP port for the use of a particular socket—from the act that the client performs by 
+“connecting,” which limits all replies received so that they can come only from the particular server to 
+which you want to talk. 
+Among the socket options available for UDP sockets, the most powerful is broadcast, which lets you 
+send packets to every host on your subnet without having to send to each host individually. This can 
+help when programming local LAN games or other cooperative computation, and is one of the few 
+reasons that you would select UDP for new applications. 
+ 

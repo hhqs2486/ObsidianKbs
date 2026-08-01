@@ -1,0 +1,248 @@
+48. Helm模板之其他注意事项
+上节课我们学习了命名模板的使⽤，命名模板是 Helm 模板中⾮常重要的⼀个功能，在我们实际开发
+Helm Chart 包的时候⾮常有⽤，到这⾥我们基本上就把 Helm 模板中经常使⽤到的⼀些知识点和⼤家
+介绍完了。但是仍然还是有⼀些在开发中值得我们注意的⼀些知识点，⽐如 NOTES.txt ⽂件的使⽤、
+⼦ Chart 的使⽤、全局值的使⽤，这节课我们就来和⼤家⼀起了解下这些知识点。
+NOTES.txt ⽂件
+我们前⾯在使⽤ helm install 命令的时候，Helm 都会为我们打印出⼀⼤堆介绍信息，这样当别的⽤户
+在使⽤我们的 chart 包的时候就可以根据这些注释信息快速了解我们的 chart 包的使⽤⽅法，这些信息
+就是编写在 NOTES.txt ⽂件之中的，这个⽂件是纯⽂本的，但是它和其他模板⼀样，具有所有可⽤的
+普通模板函数和对象。
+现在我们在前⾯的示例中 templates ⽬录下⾯创建⼀个 NOTES.txt ⽂件：
+Thank you for installing {{ .Chart.Name }}.
+Your release is named {{ .Release.Name }}.
+To learn more about the release, try:
+  $ helm status {{ .Release.Name }}
+  $ helm get {{ .Release.Name }}
+我们可以看到我们在 NOTES.txt ⽂件中也使⽤ Chart 和 Release 对象，现在我们在 mychart 包根⽬录
+下⾯执⾏安装命令查看是否能够得到上⾯的注释信息：
+$ helm install .
+Error: release nomadic-deer failed: ConfigMap in version "v1" cannot be handled as a Confi
+gMap: v1.ConfigMap: Data: ReadString: expects " or n, but found [, error found in #10 byte
+ of ...|rselist":[{"0":"K8s"|..., bigger context ...|:{"app":"mychart","chart":"mychart","
+courselist":[{"0":"K8s"},{"1":"Python"},{"2":"Search"},{"3":"Go|...
+我们可以看到出现了上⾯的错误信息，但是如果我们去执⾏ debug 命令来调试的话是没有任何问题
+的，是可以正常渲染的，但是为什么在正式安装的时候确出现了问题呢？这是因为我们在 debug 调试
+阶段只是检验模板是否可以正常渲染，并没有去检查对应的 kubernetes 资源对象对 yaml ⽂件的格式
+要求，所以我们说 debug 测试通过，并不代表 chart 就真正的是可⽤状态，⽐如我们这⾥是⼀个
+ConfigMap 的资源对象，ConfigMap 对 data 区域的内容是有严格要求的，⽐如我们这⾥出现了下⾯这
+样的内容：
+web: true
+courselist:
+- 0: "K8s"
+- 1: "Python"
+- 2: "Search"
+- 3: "Golang"
+Helm 模板之其他注意事项
+306
+
+这的确是⼀个合法的 yaml ⽂件的格式，但是对 ConfigMap 就不合法了，需要把 true 变成字符串，下
+⾯的字典数组变成⼀个多⾏的字符串，这样就是⼀个合法的 ConfigMap了：(templates/config.yaml)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-configmap
+  labels:
+{{- include "mychart.labels" . | indent 4}}
+data:
+  app: mychart
+  myvalue: {{ .Values.hello | default  "Hello World" | quote }}
+  {{- $releaseName := .Release.Name }}
+  {{- with .Values.course }}
+  k8s: {{ .k8s | upper | quote }}
+  python: {{ .python | repeat 5 | quote }}
+  release: {{ $releaseName }}
+  {{- if eq .python "django" }}
+  web: "true"
+  {{- end }}
+  {{- end }}
+  courselist: |
+    {{- range $index, $course := .Values.courselist }}
+    {{ $course | title | quote }}
+    {{- end }}
+  {{- range $key, $val := .Values.course }}
+  {{ $key }}: {{ $val | upper | quote }}
+  {{- end }}
+{{- include "mychart.labels" . | indent 2 }}
+现在我们再来执⾏安装命令：
+$ helm install .
+NAME:   nosy-pig
+LAST DEPLOYED: Sat Sep 29 19:26:16 2018
+NAMESPACE: default
+STATUS: DEPLOYED
+RESOURCES:
+==> v1/ConfigMap
+NAME                DATA  AGE
+nosy-pig-configmap  11    0s
+NOTES:
+Thank you for installing mychart.
+Your release is named nosy-pig.
+To learn more about the release, try:
+  $ helm status nosy-pig
+  $ helm get nosy-pig
+现在已经安装成功了，⽽且下⾯的注释部分也被渲染出来了，我们可以看到 NOTES.txt ⾥⾯使⽤到的
+模板对象都被正确渲染了。
+Helm 模板之其他注意事项
+307
+
+为我们创建的 chart 包提供⼀个清晰的 NOTES.txt ⽂件是⾮常有必要的，可以为⽤户提供有关如何使
+⽤新安装 chart 的详细信息，这是⼀种⾮常友好的⽅式⽅法。
+⼦ chart 包
+我们到⽬前为⽌都只⽤了⼀个 chart，但是 chart 也可以有 ⼦ chart 的依赖关系，它们也有⾃⼰的值和
+模板，在学习字 chart 之前，我们需要了解⼏点关于⼦ chart 的说明：
+⼦ chart 是独⽴的，所以⼦ chart 不能明确依赖于其⽗ chart
+⼦ chart ⽆法访问其⽗ chart 的值
+⽗ chart 可以覆盖⼦ chart 的值
+Helm 中有全局值的概念，可以被所有的 chart 访问
+创建⼦ chart
+现在我们就来创建⼀个⼦ chart，还记得我们在创建 mychart 包的时候，在根⽬录下⾯有⼀个空⽂件夹
+charts ⽬录吗？这就是我们的⼦ chart 所在的⽬录，在该⽬录下⾯添加⼀个新的 chart：
+$ cd mychart/charts
+$ helm create mysubchart
+Creating mysubchart
+$ rm -rf mysubchart/templates/*.*
+$ tree ..
+..
+├── charts
+│   └── mysubchart
+│       ├── charts
+│       ├── Chart.yaml
+│       ├── templates
+│       └── values.yaml
+├── Chart.yaml
+├── templates
+│   ├── configmap.yaml
+│   ├── _helpers.tpl
+│   └── NOTES.txt
+└── values.yaml
+5 directories, 7 files
+同样的，我们将⼦ chart 模板中的⽂件全部删除了，接下来，我们为⼦ chart 创建⼀个简单的模板和
+values ⽂件了。
+$ cat > mysubchart/values.yaml <<EOF
+in: mysub
+EOF
+$ cat > mysubchart/templates/configmap.yaml <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-configmap2
+data:
+  in: {{ .Values.in }}
+Helm 模板之其他注意事项
+308
+
+EOF
+我们上⾯已经提到过每个⼦ chart 都是独⽴的 chart，所以我们可以单独给 mysubchart 进⾏测试：
+$ helm install --dry-run --debug ./mysubchart
+[debug] Created tunnel using local port: '33568'
+......
+---
+# Source: mysubchart/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: washed-indri-configmap2
+data:
+  in: mysub
+我们可以看到正常渲染出了结果。
+值覆盖
+现在 mysubchart 这个⼦ chart 就属于 mychart 这个⽗ chart 了，由于 mychart 是⽗级，所以我们可以
+在 mychart 的 values.yaml ⽂件中直接配置⼦ chart 中的值，⽐如我们可以在 mychart/values.yaml ⽂
+件中添加上⼦ chart 的值：
+course:
+  k8s: devops
+  python: django
+courselist:
+- k8s
+- python
+- search
+- golang
+mysubchart:
+  in: parent
+注意最后两⾏，mysubchart 部分内的任何指令都会传递到 mysubchart 这个⼦ chart 中去的，现在我
+们在 mychart 根⽬录中执⾏调试命令，可以查看到⼦ chart 也被⼀起渲染了：
+$ helm install --dry-run --debug .
+[debug] Created tunnel using local port: '44798'
+......
+---
+# Source: mychart/charts/mysubchart/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ideal-ostrich-configmap2
+data:
+Helm 模板之其他注意事项
+309
+
+  in: parent
+---
+# Source: mychart/templates/configmap.yaml
+......
+我们可以看到⼦ chart 中的值已经被顶层的值给覆盖了。但是在某些场景下⾯我们还是希望某些值在所
+有模板中都可以使⽤，这就需要⽤到全局 chart 值了。
+全局值
+全局值可以从任何 chart 或者⼦ chart中进⾏访问使⽤，values 对象中有⼀个保留的属性
+是 Values.global ，就可以被⽤来设置全局值，⽐如我们在⽗ chart 的 values.yaml ⽂件中添加⼀个全
+局值：
+course:
+  k8s: devops
+  python: django
+courselist:
+- k8s
+- python
+- search
+- golang
+mysubchart:
+  in: parent
+global:
+  allin: helm
+我们在 values.yaml ⽂件中添加了⼀个 global 的属性，这样的话⽆论在⽗ chart 中还是在⼦ chart 中我
+们都可以通过 {{ .Values.global.allin }} 来访问这个全局值了。⽐如我们在
+mychart/templates/configmap.yaml 和 mychart/charts/mysubchart/templates/configmap.yaml ⽂件的
+data 区域下⾯都添加上如下内容：
+...
+data:
+  allin: {{ .Values.global.allin }}
+...
+现在我们在 mychart 根⽬录下⾯执⾏ debug 调试模式：
+$ helm install --dry-run --debug .
+[debug] Created tunnel using local port: '32775'
+......
+MANIFEST:
+---
+# Source: mychart/charts/mysubchart/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+Helm 模板之其他注意事项
+310
+
+metadata:
+  name: wistful-spaniel-configmap2
+data:
+  allin: helm
+  in: parent
+---
+# Source: mychart/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wistful-spaniel-configmap
+......
+data:
+  allin: helm
+......
+我们可以看到两个模板中都输出了 allin: helm 这样的值，全局变量对于传递这样的信息⾮常有⽤，
+不过也要注意我们不能滥⽤全局值。
+另外值得注意的是我们在学习命名模板的时候就提到过⽗ chart 和⼦ chart 可以共享模板。任何 chart
+中的任何定义块都可⽤于其他 chart，所以我们在给命名模板定义名称的时候添加了 chart 名称这样的
+前缀，避免冲突。
+点击查看本⽂视频
+扫描下⾯的⼆维码(或微信搜索 k8s技术圈 )关注我们的微信公众帐号，在微信公众帐号中回复 加群 即
+可加⼊到我们的 kubernetes 讨论群⾥⾯共同学习。
+Helm 模板之其他注意事项
+311
+
+k8s技术圈⼆维码
+Copyright © qikqiak.com 2018 all right reserved，powered by GitbookUpdated: 2019-03-12 13:05:03
+Helm 模板之其他注意事项
+312

@@ -1,0 +1,478 @@
+swift -A http://{IP ADDRESS}:{port}/auth/1.0 -U
+testuser:swift -K '{swift_secret_key}' list
+使用网关服务器的外网IP 地址替换其中的{IP ADDRESS} ，使用新建swift 用户时执行
+的命令radosgw-admin key create 的输出替换其中的{swift_secret_key} 。
+使用你的Civetweb 所使用的端口替换其中{port} ，比如默认是7480 。如果你不替换这个端
+口，它的默认值是80. 举例如下:
+swift -A http://10.19.143.116:7480/auth/1.0 -U
+testuser:swift -K
+'244+fz2gSqoHwR3lYtSbIyomyPHf3i7rgSJrF/IA' list
+输出类似下面这样:
+my-new-bucket
+配置CEPH 对象网关
+要配置一个Ceph 对象网关需要一个运行着的Ceph 存储集群，以及启用了FastCGI 模块的
+Apache web 服务器。
+Ceph 对象网关是Ceph 存储集群的一个客户端，作为Ceph 存储集群的客户端，它需要：
+
+需要为网关实例配置一个名字，在本手册中我们使用gateway .
+
+存储集群的一个用户名，并且该用户在keyring 中有合适的权限.
+
+存储数据的资源池.
+
+网关实例的一个数据目录.
+
+Ceph 配置文件中有一个实例配置入口.
+
+web 服务器有一个配置文件跟FastCGI 交互.
+
+新建用户和KEYRING
+每一个实例必须有一个用户名和key 来跟Ceph 存储集群通信.在下面的步骤中,我们使用管理
+节点来新建keyring.然后,我们新建一个客户端用户名和key.然后我们将这个key 添加到Ceph
+存储集群中.最后,分发这个key ring 到包含这个网关实例的节点.
+Monitor Key CAPS
+当你给key 分配CAPS 的时候,你必须提供读权限.然而,你也可以选择为monitor 提供写的权限.
+这是一个重要的抉择.如果你给key 分配了写权限, Ceph 对象网关将具备自动新建资源池的能
+力; 此时,它将会根据默认的PG 值(不是最合适的)或者你在Ceph 配置文件中指定的PG 数. 如
+果你允许Ceph 对象网关自动新建资源池，请确保你首先定义好了合理的默认PG 值. 查看资
+源池配置获取详细信息.
+关于Ceph 认证请参考用户管理。
+1.
+为每一个实例生成一个Ceph 对象网关用户名和key. 举一个典型实例, 我们将使
+用client.radosgw 后使用gateway 作为用户名:
+sudo ceph auth get-or-create client.radosgw.gateway
+osd 'allow rwx' mon 'allow rwx' -o
+/etc/ceph/ceph.client.radosgw.keyring
+2.
+分发生成的keyring 到网关实例所在节点.
+3. sudo scp /etc/ceph/ceph.client.radosgw.keyring
+ceph@{hostname}:/home/ceph
+4. ssh {hostname}
+sudo mv ceph.client.radosgw.keyring
+/etc/ceph/ceph.client.radosgw.keyring
+Note
+
+如果admin node 就是gateway host ，那第2 步就没必要。
+创建存储池
+Ceph 对象网关需要Ceph 存储集群资源池来存储特定的网关数据. 如果你新建的用户有权限,
+网关将会自动新建所需资源池. 然而,你需要确保在你的Ceph 配置文件中给资源池设置了合理
+的默认PG 值.
+Note
+Ceph 对象网关有多个存储池，考虑到所有存储池会共用相同的CRUSH 分级结构，所以PG
+数不要设置得过大，否则会影响性能。
+当使用默认的region 和zone 时,资源池的命名规则通常省略了region 和zone 的名字，但是
+你可以使用任何你想要的命名规则. 举例如下:
+
+.rgw
+
+.rgw.root
+
+.rgw.control
+
+.rgw.gc
+
+.rgw.buckets
+
+.rgw.buckets.index
+
+.rgw.buckets.extra
+
+.log
+
+.intent-log
+
+.usage
+
+.users
+
+.users.email
+
+.users.swift
+
+.users.uid
+查看配置参考——存储池获取关于网关默认资源池的详细信息. 查看资源池获取新建资源池
+的详细信息. 正如前面所说，如果具备写权限,Ceph 对象网关将会自动新建资源池. 如果想手动
+新建资源池,执行下面的命令:
+
+ceph osd pool create {poolname} {pg-num} {pgp-num}
+{replicated | erasure} [{erasure-code-profile}]
+{ruleset-name} {ruleset-number}
+Tip
+Ceph 允许多级CRUSH 和多种CRUSH 规则集，这样在配置你自己的网关时就有很大的灵活
+性。像rgw.buckets.index 这样的存储池就可以利用SSD 来做存储池以获取高性能；
+后端存储也可以从更经济的纠删编码的存储中获益，还可利用缓存层提升性能。
+完成上述步骤之后，执行下列的命令确认前述存储池都已经创建了：
+rados lspools
+为CEPH 新增网关配置
+添加Ceph 对象网关配置到admin node 节点的Ceph 配置文件中. Ceph 对象网关配置需
+要你指定Ceph 对象网关实例. 然后你必须指定你安装有Ceph 对象网关守护进程的节点的主
+机名, 一个keyring (为了使用cephx), FastCGI 的socket 路径和日志文件.
+对于使用Apache 2.2 和Apache 2.4 早期版本(RHEL 6, Ubuntu 12.04, 14.04 etc) 的发行版,
+追加下面的配置到admin node 的文件/etc/ceph/ceph.conf 中:
+[client.radosgw.gateway]
+host = {hostname}
+keyring = /etc/ceph/ceph.client.radosgw.keyring
+rgw socket path = ""
+log file = /var/log/radosgw/client.radosgw.gateway.log
+rgw frontends = fastcgi socket_port=9000
+socket_host=0.0.0.0
+
+rgw print continue = false
+Note
+Apache 2.2 和早期Apache 2.4 版本不使用Unix Domain Sockets 而是用localhost TCP.
+对于使用Apache 2.4.9 或者更新版版本的发行版(RHEL 7, CentOS 7 等), 追加下面的配置
+到admin node 的文件/etc/ceph/ceph.conf 中:
+[client.radosgw.gateway]
+host = {hostname}
+keyring = /etc/ceph/ceph.client.radosgw.keyring
+rgw socket path =
+/var/run/ceph/ceph.radosgw.gateway.fastcgi.sock
+log file = /var/log/radosgw/client.radosgw.gateway.log
+rgw print continue = false
+Note
+Apache 2.4.9 支持Unix Domain Socket (UDS) ，但是Ubuntu 14.04 附带
+的Apache 2.4.7 不支持UDS ,并且默认配置使用localhost TCP. 在``Ubuntu 14.04`` 中
+的Apache 2.4.7 已经发现一个bug ，并且已经申请一个补丁以支持UDS. 查看: Ubuntu
+Trusty 中支持UDS 的补丁
+这里, {hostname} 是即将提供网关服务的节点的主机名( hostname -s 命令的输出), 比
+如gateway host. 网关实例的[client.radosgw.gateway] 部分标识了Ceph 配置
+文件的这个部分是用来配置Ceph 存储集群的一个客户端的，这个客户端的类型是Ceph 对象
+网关(比如, radosgw).
+
+Note
+配置文件的最后一行rgw print continue = false 是用来避免PUT 操作可能出现
+的问题.
+一旦你完成了这些安装过程, 如果你所做的配置遇到了问题, 你可以在Ceph 配置文件
+的[global] 部分添加调试选项, 然后重启你的网关来帮忙排错,找到可能的配置问题. 举例
+如下:
+[global]
+#append the following in the global section.
+debug ms = 1
+debug rgw = 20
+分发更新后的CEPH 配置文件
+更新后的Ceph 配置文件需要从admin node 分发到Ceph 集群节点上.
+它包含以下步骤:
+1.
+将更新后ceph.conf 从/etc/ceph/ 目录拷贝到管理节点上新建集群时的根目录
+中(比如. my-cluster 目录). 因此my-cluster 中``ceph.conf`` 将会被覆盖. 为此,
+执行下面的命令:
+ceph-deploy --overwrite-conf config pull {hostname}
+这里, {hostname} 是Ceph 管理节点的精简主机名.
+2.
+将更新后ceph.conf f 文件从管理节点推送到集群中其他所有节点，包
+含gateway host:
+
+ceph-deploy --overwrite-conf config push [HOST]
+[HOST...]
+使用其他Ceph 节点的主机名代替上面命令中的[HOST] [HOST...].
+从管理节点拷贝CEPH.CLIENT.ADMIN.KEYRING 到网关主机
+因为gateway host 有可能是集群之外的其他节点,所以需要
+将ceph.client.admin.keyring 从admin node 拷贝到gateway host. 为此,在
+admin node 上执行下面的命令:
+sudo scp /etc/ceph/ceph.client.admin.keyring
+ceph@{hostname}:/home/ceph
+ssh {hostname}
+sudo mv ceph.client.admin.keyring
+/etc/ceph/ceph.client.admin.keyring
+Note
+如果你的admin node 就是gateway host 则无需执行上面的步骤.
+新建数据目录
+部署脚本不会创建默认的Ceph 对象网关数据目录. 因此需要为每一个radosgw 守护进程实
+例新建数据目录. Ceph 配置文件中的host 变量决定了在哪一个主机上运行radosgw 守护
+进程实例.数据目录的典型命名规则是指定radosgw 守护进程,集群名和守护进程ID.
+执行下面的命令在gateway host 上新建所需的数据目录:
+sudo mkdir -p /var/lib/ceph/radosgw/ceph-radosgw.gateway
+
+调整SOCKET 目录权限
+在一些发行版中, radosgw 守护进程是以没有什么权利的UID 为apache 的用户运行的, 但
+是这个UID 必须在运行时写入socket 文件的目录中具备写权限.
+在gateway host 上执行下面的命令来给上述UID 授予默认socket 位置的权限:
+sudo chown apache:apache /var/run/ceph
+改变日志文件所有者
+在一些发行版中, radosgw 守护进程是以没有什么权利的UID 为apache 的用户运行的, 但
+是日志文件默认是root 用户所有的. 你必须日志文件的将所有者修改apache 用户,以便
+Apache 可以在这里写入日志文件. 为此，执行下面的命令:
+sudo chown apache:apache
+/var/log/radosgw/client.radosgw.gateway.log
+启动RADOSGW 服务
+Ceph 对象网关守护进程需要启动. 为此，在gateway host 上执行下面的命令:
+在基于Debian 的发行版上:
+sudo /etc/init.d/radosgw start
+在基于RPM 的发行版上:
+sudo /etc/init.d/ceph-radosgw start
+
+新建一个网关配置文件
+在你安装了Ceph 对象网关的主机上, 比如gateway host, 新建一个rgw.conf 文件, 对
+于Debian-based 发行版将该文件放在/etc/apache2/conf-available 目录下,对
+于RPM-based 发行版则将其放在/etc/httpd/conf.d 目录下. 这个是radosgw 所需
+的一个Apache 配置文件. 对于web 服务器而言这个文件必须是可读的.
+按照下面的步骤执行:
+1.
+新建文件:
+对于基于Debian 的发行版, 执行:
+sudo vi /etc/apache2/conf-available/rgw.conf
+对于基于RPM 的发行版, 执行:
+sudo vi /etc/httpd/conf.d/rgw.conf
+2.
+对于使用Apache 2.2 或者Apache 2.4 早期版本的使用localhost TCP 并且不支持
+Unix Domain Socket 的发行版而言，添加下面的内容到该文件中:
+3. <VirtualHost *:80>
+4. ServerName localhost
+5. DocumentRoot /var/www/html
+6.
+7. ErrorLog /var/log/httpd/rgw_error.log
+8. CustomLog /var/log/httpd/rgw_access.log combined
+9.
+
+10.
+# LogLevel debug
+11.
+12.
+RewriteEngine On
+13.
+14.
+RewriteRule .* -
+[E=HTTP_AUTHORIZATION:%{HTTP:Authorization},L]
+15.
+16.
+SetEnv proxy-nokeepalive 1
+17.
+18.
+ProxyPass / fcgi://localhost:9000/
+19.
+</VirtualHost>
+Note
+For Debian-based distros
+replace /var/log/httpd/ with /var/log/apache2.
+20. 对于使用Apache 2.4.9 或者更新版本的支持Unix Domain Socket 的发行版而言，添
+加下面的内容到该文件中add the following contents to the file:
+21.
+<VirtualHost *:80>
+22.
+ServerName localhost
+
+23.
+DocumentRoot /var/www/html
+24.
+25.
+ErrorLog /var/log/httpd/rgw_error.log
+26.
+CustomLog /var/log/httpd/rgw_access.log
+combined
+27.
+28.
+# LogLevel debug
+29.
+30.
+RewriteEngine On
+31.
+32.
+RewriteRule .* -
+[E=HTTP_AUTHORIZATION:%{HTTP:Authorization},L]
+33.
+34.
+SetEnv proxy-nokeepalive 1
+35.
+36.
+ProxyPass /
+unix:///var/run/ceph/ceph.radosgw.gateway.fastcgi.so
+ck|fcgi://localhost:9000/
+37.
+</VirtualHost>
+
+重启APACHE
+Apache 服务需要重启来加载新的配置文件.
+对于基于Debian 的发行版, 执行:
+sudo service apache2 restart
+对于基于RPM 的发行版, 执行:
+sudo service httpd restart
+或者:
+sudo systemctl restart httpd
+使用网关
+为了使用REST 接口, 首先需要为S3 接口初始化一个Ceph 对象网关用户. 然后为Swift 接口
+新建一个子用户. 查看管理手册获取有关用户管理的详细信息.
+为S3 访问新建一个RADOSGW 用户
+A radosgw 用户需要新建并且赋予访问权限. 命令man radosgw-admin 将展示提供更多
+额外的命令选项信息.
+为了新建用户, 在gateway host 上执行下面的命令:
+sudo radosgw-admin user create --uid="testuser" --
+display-name="First User"
+上述命令的输出结果类似下面这样:
+
+{"user_id": "testuser",
+"display_name": "First User",
+"email": "",
+"suspended": 0,
+"max_buckets": 1000,
+"auid": 0,
+"subusers": [],
+"keys": [
+{ "user": "testuser",
+"access_key": "I0PJDPCIYZ665MW88W9R",
+"secret_key":
+"dxaXZ8U90SXydYzyS5ivamEP20hkLSUViiaR+ZDA"}],
+"swift_keys": [],
+"caps": [],
+"op_mask": "read, write, delete",
+"default_placement": "",
+"placement_tags": [],
+"bucket_quota": { "enabled": false,
+"max_size_kb": -1,
+"max_objects": -1},
+
+"user_quota": { "enabled": false,
+"max_size_kb": -1,
+"max_objects": -1},
+"temp_url_keys": []}
+Note
+keys->access_key 和keys->secret_key 两个值在访问时是必需的，用来验证。
+创建一个SWIFT 用户
+如果要通过Swift 访问，必须创建一个Swift 子用户。需要分两步完成，第一步是创建用户，
+第二步创建密钥。
+在gateway host 主机上进行如下操作：
+创建Swift 用户：
+sudo radosgw-admin subuser create --uid=testuser --
+subuser=testuser:swift --access=full
+此命令的输出类似如下：
+{ "user_id": "testuser",
+"display_name": "First User",
+"email": "",
+"suspended": 0,
+"max_buckets": 1000,
+
+"auid": 0,
+"subusers": [
+{ "id": "testuser:swift",
+"permissions": "full-control"}],
+"keys": [
+{ "user": "testuser:swift",
+"access_key": "3Y1LNW4Q6X0Y53A52DET",
+"secret_key": ""},
+{ "user": "testuser",
+"access_key": "I0PJDPCIYZ665MW88W9R",
+"secret_key":
+"dxaXZ8U90SXydYzyS5ivamEP20hkLSUViiaR+ZDA"}],
+"swift_keys": [],
+"caps": [],
+"op_mask": "read, write, delete",
+"default_placement": "",
+"placement_tags": [],
+"bucket_quota": { "enabled": false,
+"max_size_kb": -1,
+"max_objects": -1},
+
+"user_quota": { "enabled": false,
+"max_size_kb": -1,
+"max_objects": -1},
+"temp_url_keys": []}
+创建用户的密钥：
+sudo radosgw-admin key create --subuser=testuser:swift --
+key-type=swift --gen-secret
+此命令的输出类似如下：
+{ "user_id": "testuser",
+"display_name": "First User",
+"email": "",
+"suspended": 0,
+"max_buckets": 1000,
+"auid": 0,
+"subusers": [
+{ "id": "testuser:swift",
+"permissions": "full-control"}],
+"keys": [
+{ "user": "testuser:swift",
+
+"access_key": "3Y1LNW4Q6X0Y53A52DET",
+"secret_key": ""},
+{ "user": "testuser",
+"access_key": "I0PJDPCIYZ665MW88W9R",
+"secret_key":
+"dxaXZ8U90SXydYzyS5ivamEP20hkLSUViiaR+ZDA"}],
+"swift_keys": [
+{ "user": "testuser:swift",
+"secret_key":
+"244+fz2gSqoHwR3lYtSbIyomyPHf3i7rgSJrF\/IA"}],
+"caps": [],
+"op_mask": "read, write, delete",
+"default_placement": "",
+"placement_tags": [],
+"bucket_quota": { "enabled": false,
+"max_size_kb": -1,
+"max_objects": -1},
+"user_quota": { "enabled": false,
+"max_size_kb": -1,
+"max_objects": -1},
+"temp_url_keys": []}
+
+访问验证
+然后你得验证一下刚创建的用户是否能访问网关。
+测试S3 访问
+你需要写一个Python 测试脚本,并运行它以验证S3 访问. S3 访问测试脚本将会连
+接radosgw, 然后新建一个新的bucket 再列出所有的
+buckets.aws_access_key_id 和aws_secret_access_key 的值就是前面
+radosgw_admin 命令的返回值中的access_key 和secret_key.
+执行下面的步骤:
+1.
+首先你需要安装python-boto 包.
+对于基于Debian 的发行版请执行:
+sudo apt-get install python-boto
+对于基于RPM 的发行版请执行:
+sudo yum install python-boto
+2.
+新建Python 脚本:
+vi s3test.py
+3.
+添加下面的内容到该文件中:
+4. import boto
+5. import boto.s3.connection
+6. access_key = 'I0PJDPCIYZ665MW88W9R'
+
+7. secret_key =
+'dxaXZ8U90SXydYzyS5ivamEP20hkLSUViiaR+ZDA'
+8. conn = boto.connect_s3(
+9. aws_access_key_id = access_key,
+10.
+aws_secret_access_key = secret_key,
+11.
+host = '{hostname}',
+12.
+is_secure=False,
+13.
+calling_format =
+boto.s3.connection.OrdinaryCallingFormat(),
+14.
+)
+15.
+bucket = conn.create_bucket('my-new-bucket')
+16.
+for bucket in conn.get_all_buckets():
+17.
+print "{name}\t{created}".format(
+18.
+name = bucket.name,
+19.
+created = bucket.creation_date,
+20.
+)
+将{hostname} 替换为你配置了网关服务的主机的主机名,比如gateway host.
+21. 运行这个脚本:
+python s3test.py
+输出类似下面的内容:
+
+my-new-bucket 2015-02-16T17:09:10.000Z
+测试SWIFT 访问
+Swift 访问能够通过swift 命令行客户端来验证. 命令man swift 将提供更多、可用命令
+行选项的详细信息.
+执行下面的命令安装``swift`` 客户端:
+对于基于Debian 的发行版:
+sudo apt-get install python-setuptools
+sudo easy_install pip
+sudo pip install --upgrade setuptools
+sudo pip install --upgrade python-swiftclient
+对于基于RPM 的发行版:
+sudo yum install python-setuptools
+sudo easy_install pip
+sudo pip install --upgrade setuptools
+sudo pip install --upgrade python-swiftclient
+执行下面的命令验证swift 访问:
+swift -A http://{IP ADDRESS}/auth/1.0 -U testuser:swift -
+K ‘{swift_secret_key}’ list

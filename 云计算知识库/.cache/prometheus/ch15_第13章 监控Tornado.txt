@@ -1,0 +1,223 @@
+第13章　监控Tornado
+在上一章，我们介绍了使用Prometheus监控Kubernetes的基础知识。而本章我们将在Kubernetes集
+群上部署一个名为Tornado[1]的应用程序并对其进行监控。Tornado是一个简单的REST-ful HTTP API，
+用Clojure语言编写，可在JVM上运行，具有Redis数据存储和MySQL数据库。
+我们会将应用程序的每个组件部署到Kubernetes集群上，并了解如何监控每个组件，收集有关组
+件的信息以及识别一些关键警报。我们会监控如下内容：
+·MySQL[2]
+·Redis[3]
+·Tornado API[4]应用程序
+我们从监控两个数据存储开始，使用一种名为边车（sidecar）的模式（之前在第9章引用过这一模
+式）。接下来快速看一下这种模式。
+[1] https://github.com/turnbullpress/tornado-api/tree/prometheus。
+[2] https://github.com/turnbullpress/tornado-api/blob/prometheus/tornado-db.yaml。
+[3] https://github.com/turnbullpress/tornado-api/blob/prometheus/tornado-redis.yaml。
+[4] https://github.com/turnbullpress/tornado-api/blob/prometheus/tornado-api.yaml。
+
+13.1　边车模式
+为了执行大部分监控，我们将严重依赖一种称为边车的架构模式（如图13-1所示）。这种模式之
+所以被称为边车，是因为它类似于连接到摩托车上的边车：摩托车是我们的应用程序，边车附加到这
+个父应用程序。边车为应用程序提供支持功能——例如，基础设施边车可能会收集日志或进行监控。
+边车还与父应用程序共享相同的生命周期，与父应用程序一起创建和删除。
+边车有时也被称为sidekicks。
+图13-1　边车模式
+在我们的例子中会使用Prometheus的exporter。exporter查询应用程序，然后再由Prometheus查询
+exporter。这种边车模型不仅适用于Kubernetes，你在集群中部署容器或服务的任何地方都适合这种模
+式。
+我们将从MySQL数据库开始，在Redis和MySQL旁边运行边车监控exporter。
+
+13.2　MySQL
+使用Prometheus监控MySQL是通过exporter完成的：MySQLd exporter[1]。exporter使用提供的凭证
+连接到MySQL服务器并查询服务器的状态。然后，查询的数据被暴露，并由Prometheus服务器进行抓
+取。这意味着exporter需要具有对MySQL服务器的网络访问权限以及身份验证凭据。在示例中，我们
+将使用边车模式在部署到Kubernetes的Docker容器中运行exporter[2]。
+以下是MySQL Kubernetes部署的一部分，exporter在边车容器中运行。
+代码清单13-1　exporter容器
+可以看到我们正在使用带有latest标签的prom/mysqld-exporter镜像[3]，并将容器命名为tornado-db-
+exp。我们使用DATA_SOURCE_NAME环境变量指定了数据库连接的详细信息，此连接使用DSN格
+式[4]配置MySQL服务器的连接和凭据的详细信息。
+在容器内运行的exporter将自动从环境变量中获取连接的详细信息。
+你应该单独创建一个具有有限权限集的用户。要从MySQL服务器查询所需数据，你需要向用户授
+予PROCESS、REPLICATION CLIENT和SELECT权限。
+可以使用kubectl的exec命令连接到MySQL容器，如下所示：
+代码清单13-2　连接到MySQL容器
+然后，我们可以运行CREATE USER和GRANT语句来分配所需的权限。
+
+代码清单13-3　创建MySQL用户
+这里，我们创建了一个名为tornado-db-exp的用户，该用户具有所需的权限，包括
+performance_schema数据库中表（包含查询性能数据）的SELECT授权。
+如果有my.cnf文件，那么exporter也可以使用硬编码的凭证。
+我们还可以使用各种参数[5]来配置exporter，以控制其行为，示例已经启用了一些额外的收集器：
+代码清单13-4　额外的MySQL exporter收集器
+它们都是从MySQL的performance_schema数据库[6]中收集数据，使我们能够跟踪特定查询和操作
+的性能。
+在我们的容器部署中还暴露了端口9104，它是MySQL Exporter的默认端口，然后我们在服务中也
+暴露了该端口。
+代码清单13-5　tornado-db服务
+
+我们使用了两个注解：prometheus.io/scrape告诉Prometheus抓取这个服务；prometheus.io/port告诉
+Prometheus要抓取的端口。我们指定这一点是希望Prometheus在端口9104上访问MySQL Exporter，而
+不是直接访问MySQL服务器。这些注解由我们在第12章创建的kubernetes-service-endpoints作业自动获
+取，并通过该作业中的重新标记配置进行解析，如下所示：
+代码清单13-6　Kubernetes端点作业的重新标记
+prometheus.io/scrape注解确保Prometheus仅保留注解设置为true的服务端点的指标。
+prometheus.io/port注解将被放入__address__标签中，以便被作业抓取。接下来的服务发现将开始收集
+这些MySQL指标。
+MySQL监控配置
+由于exporter作为服务端点公开，因此我们不需要配置特定的作业来进行抓取。但是，我们将为
+MySQL时间序列创建一些规则，并将它们添加到规则的ConfigMap中。我们将创建一个可能的规则样
+本，大致与Google的四个黄金指标一致，让你了解如何使用MySQL指标。我们将专注于：
+·延迟
+·流量
+·错误
+·饱和度
+测量MySQL性能很难，尤其是在跟踪延迟等信号时，情况会因应用程序和服务器配置的不
+同而有很大差异。这些规则为你提供了起点，而不是明确的答案。网上有许多指南[7]可能会有帮助。
+让我们看一些规则，首先使用mysql_global_status_slow_queries指标跟踪慢查询的增长率。当查询
+超过long_query_time变量时，此计数器就会递增，该变量默认为10秒。
+代码清单13-7　MySQL慢查询警报
+
+如果两分钟内慢查询超过5个，则会生成一个警报。我们还可以创建记录规则来跟踪服务器上的请
+求速率。
+代码清单13-8　MySQL请求速率记录
+我们使用mysql_global_status_commands_total指标并获取特定命令的所有写请求：insert、update和
+delete。然后，为这些请求计算两分钟的速率。我们对使用select命令的读取请求和总请求执行相同的
+操作。然后使用topk聚合运算符[8]来获取最近五分钟内根据模式和速率分组的最常用语句，这有助于
+我们理解服务器正在做什么（如图13-2所示）。
+图13-2　MySQL语句的topk运算符
+还可以根据需要对这些数据进行图表展示或创建警报。此外，我们还可以跟踪连接请求和错误。
+
+代码清单13-9　连接和中止的连接
+这里，我们将警告中止连接的速率是否超过阈值，并创建一个记录规则以跟踪整体连接速率。
+最后，我们想知道MySQL服务何时不可用。这些警报使用服务状态和特定于exporter的up指标的
+组合：mysql_up。mysql_up指标在MySQL服务器上执行SELECT 1，如果查询成功，则将其设置为1。
+第一个警报检查mysql_up指标的值是否为0，0表示查询失败。第二个警报在服务消失且指标过期时检
+查此指标的存在。
+代码清单13-10　MySQL警报
+这是一些有用的入门规则，你可以在本章的代码[9]中找到这些规则。
+[1] https://github.com/prometheus/mysqld_exporter。
+[2] https://github.com/turnbullpress/tornado-api/blob/prometheus/tornado-db.yaml。
+[3] https://hub.docker.com/r/prom/mysqld-exporter/。
+[4] https://github.com/go-sql-driver/mysql#dsn-data-source-name。
+[5] https://github.com/prometheus/mysqld_exporter#collector-flags。
+[6] https://dev.mysql.com/doc/refman/8.0/en/performance-schema.html。
+[7] https://www.datadoghq.com/blog/monitoring-mysql-performance-metrics/。
+[8] https://prometheus.io/docs/prometheus.lastest/querying/operators/#aggregation-operators。
+
+[9] https://github.com/turnbullpress/prometheusbook-code/blob/master/12-13/。
+
+13.3　Redis
+像MySQL一样，Prometheus也有对应Redis的exporter[1]。Redis Exporter将从INFO命令[2]导出大部
+分条目，其中包含服务器、客户端、内存和CPU使用情况的详细信息。在每个数据库中，还有用于键
+总数、过期键和键的平均TTL的指标，你可以导出这些键的值。
+同样还是像MySQL一样，我们可以将exporter作为Redis容器的边车[3]运行。以下是在Kubernetes
+中部署Redis的代码片段。
+代码清单13-11　Redis服务和边车
+我们正在运行一个名为redis-exporter的容器，该容器通过Docker镜像oliver006/redis_exporter构建。
+我们已经指定了两个环境变量：REDIS_ADDR（指定想要抓取的Redis服务器的地址）以及
+REDIS_PASSWORD（指定连接到服务器的密码）。我们还指定端口9121以导出指标。
+你可以设置其他环境变量和命令行参数，并在文档[4]中阅读更多相关内容。
+然后通过Kubernetes服务暴露这个端口。
+代码清单13-12　Kubernetes中的Redis服务
+
+可以看到我们暴露了端口9121，并指定了两个注解：一个用于告诉Prometheus服务端点作业要抓
+取这个服务，另一个用于指示要抓取的端口。下一次Prometheus进行服务发现时，它将检测更新后的
+服务并开始收集Redis指标。
+Redis监控配置
+由于exporter作为服务端点暴露，因此我们不需要配置特定的作业来进行抓取。但是，我们将为
+Redis时间序列创建一些规则并添加它们。我们将再次向你展示一些规则，例如：
+代码清单13-13　Redis警报
+
+在这里，我们测量缓存未命中数是否超过总数的80%（0.8），以及拒绝连接的平均值是否过高。
+最后，像MySQL服务一样，我们想知道Redis服务何时不可用。这些警报使用服务状态和特定于
+exporter的up指标的组合：redis_up。如果Redis服务器的抓取成功，则redis_up指标设置为1。第一个警
+报检查redis_up指标的值是否为0，0表示查询失败。第二个警报在服务消失且指标过期时检查此指标的
+存在。
+代码清单13-14　Redis可用性警报
+现在我们已经为MySQL和Redis服务添加了一些监控功能，接下来我们希望监控API服务。
+
+[1] https://github.com/oliver006/redis_exporter/。
+[2] https://redis.io/commands/info。
+[3] https://github.com/turnbullpress/tornado-api/blob/prometheus/tornado-redis.yaml。
+[4] https://github.com/oliver006/redis_exporter#flags。
+
+13.4　Tornado
+Tornado API是一个Clojure应用程序，它使用Ring[1]并在JVM上运行。应用程序提供了一个API端
+点，可以购买和销售商品。我们将使用与第8章相同的方式来检测应用程序，以创建监控每个API操作
+的指标。
+[1] https://github.com/ring-clojure/ring。
+
+13.4.1　添加Clojure包装器
+为了检测应用程序，我们使用了iapetos[1]Clojure包装器。有几个针对Prometheus的Clojure包装器
+和客户端，我们选择了iapetos，因为它是最新的，并且易于使用。要启用iapetos包装器，需要将它添
+加到project.clj文件[2]项目的依赖项中。
+代码清单13-15　添加客户端到project.clj
+在这里，我们添加了iapetos和Prometheus的simpleclient_hotspot（需要导出一些JVM指标）依赖
+项。
+然后，在应用程序的源代码[3]中添加包装器的相关组件。
+代码清单13-16　添加包装器组件
+我们已经包含了基本的iapetos包装器，别名为prometheus，以及分别用于导出Ring和JVM指标的
+两个特定于上下文的组件。
+[1] https://github.com/xsc/iapetos。
+[2] https://github.com/turnbullpress/tornado-api/blob/prometheus/project.clj。
+[3] https://github.com/turnbullpress/tornado-api/blob/prometheus/src/tornado_api/handler.clj。
+
+13.4.2　添加注册表
+与第8章中的Ruby应用程序一样，我们需要定义一个注册表来保存所有指标[1]。我们的应用程序
+非常简单，所以只需添加一个注册表，但如果你想在不同的子系统中使用相同的计数器，则可以为每
+个子系统添加多个注册表。
+代码清单13-17　定义注册表
+我们创建了一个名为registry的注册表，并且已经初始化了Ring和JVM指标，这些指标将被自动收
+集和导出。然后我们定义了五个特定的指标，包括四个计数型指标和一个测量型指标，都以tornado为
+前缀。每个API的操作都有一个计数型指标和一个测量型指标，可以作为应用程序的up指标。我们还
+可以为定义的指标添加标签。
+代码清单13-18　添加标签
+这里，我们为item-bought计数器添加了description标签。
+[1] https://github.com/turnbullpress/tornado-api/blob/prometheus/src/tornado_api/handler.clj。
+
+13.4.3　添加指标
+我们现在可以在应用程序上为每个API方法添加函数调用以递增计数器，例如，这是增加购买商
+品的指标的函数：
+代码清单13-19　添加指标调用
+我们调用inc函数，以便在购买商品时增加item-bought计数器。还可以设置测量型指标或者其他时
+间序列，包括直方图。
+我们还添加了一个名为tornado_up的测量型指标，它将作为应用程序的up指标。当应用程序启动
+时，它会自动将值设置为1。
+代码清单13-20　测量型指标tornado_up
+
+13.4.4　导出指标
+最后，我们希望启用/metrics页面本身，在示例中是使用内置的Ring支持。
+代码清单13-21　开始导出
+这将使我们可以在/metrics路径上查看定义的指标、一些以JVM为中心的指标以及一些从Ring发出
+的特定于HTTP的指标。
+如果我们现在浏览到这个路径，则会看到之前发布的指标。以下是一个快速参考的示例。
+代码清单13-22　Tornado指标
+
+13.4.5　Tornado监控配置
+与其他服务一样，Clojure exporter作为端点暴露，我们不需要配置特定的作业来抓取它。我们得到
+了各种各样的指标，如JVM的指标、Ring的HTTP指标和应用程序本身的指标。现在可以创建一些警
+报和规则来监控API[1]。
+下面是我们使用一个Ring HTTP指标创建的延迟记录规则。
+代码清单13-23　Ring延时规则
+我们创建了一个新指标tornado:request_latency_seconds:avg，表示响应为200 HTTP代码的请求的平
+均请求延迟（秒）。
+我们还可以利用一个与Ring相关的历史记录来触发高延迟警报。
+代码清单13-24　Ring高延时警报
+这里，我们使用histogram_quantile函数[2]在5分钟内生成请求延迟的第90百分位数。如果持续10分
+钟超过0.05，那么警报将被触发。
+我们还可以利用创建的up风格指标tornado_up来监控API服务的可用性。
+代码清单13-25　监控Tornado API可用性
+
+在这里，我们将检测tornado_up指标的值是否大于0，或者它是否从我们的指标中消失。这将为你
+提供一个简单的概述，说明如何将在本书中学到的内容应用于监控应用程序堆栈。
+[1] 
+https://github.com/turnbullpress/prometheusbook-code/blob/master/12-13/prometheus-config-rules-map-
+v1.yml。
+[2] https://prometheus.io/docs/prometheus/latest/querying/functions/#histogram_quantile。
+
+13.5　小结
+在本章中，我们已了解了如何监控在Kubernetes上运行的服务和应用程序。我们使用边车模式来
+实现这一点，在同一个部署中，于服务和应用程序旁边并行地执行监控。
+我们还介绍了另一个应用程序的监控，这次是使用iapetos包装器的基于Clojure的应用程序。
+你可以轻松地在此基础上进行构建，以使用这种简单的构建模式来监控更复杂的应用程序和服
+务。

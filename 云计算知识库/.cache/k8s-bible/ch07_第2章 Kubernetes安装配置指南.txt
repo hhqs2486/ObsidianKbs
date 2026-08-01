@@ -1,0 +1,1015 @@
+第2章　Kubernetes安装配置指南
+2.1　系统要求
+Kubernetes系统由一组可执行程序组成，用户可以通过Kubernetes在
+GitHub的项目网站下载编译好的二进制文件或镜像文件，或者下载源码
+并自行将其编译为二进制文件。
+安装Kubernetes对软件和硬件的系统要求如表2.1所示。
+表2.1　安装Kubernetes对软件和硬件的系统要求
+
+Kubernetes需要容器运行时（Container Runtime Interface，CRI）的
+支持，目前官方支持的容器运行时包括：Docker、Containerd、CRI-O和
+frakti等。容器运行时的原理详见5.4.5节的说明。本节以Docker作为容器
+运行环境，推荐的版本为Docker CE 19.03。
+宿主机操作系统以CentOS 
+7为例，使用Systemd系统完成对
+Kubernetes服务的配置。其他Linux发行版的服务配置请参考相关的系统
+
+管理手册。为了便于管理，常见的做法是将Kubernetes服务程序配置为
+Linux系统开机自启动的服务。
+需要注意的是，CentOS 
+7 
+默认启动了防火墙服务
+（firewalld.service），而Kubernetes的Master与工作Node之间会有大量的
+网络通信。安全的做法是在防火墙上配置各组件需要相互通信的端口
+号，具体要配置的端口号如表2.2所示。
+表2.2　具体要配置的端口号
+
+其他组件可能还需要开通某些端口号，例如CNI网络插件calico需要
+179端口号；镜像库需要5000端口号等，需要根据系统要求逐个在防火
+墙服务上配置网络策略。
+
+在安全的网络环境中，可以简单地关闭防火墙服务：
+另外，建议在主机上禁用SELinux（修改文
+件/etc/sysconfig/selinux，将SELINUX=enforcing修改为
+SELINUX=disabled），让容器可以读取主机文件系统。随着Kubernetes
+对SELinux支持的增强，可以逐步启用SELinux机制，并通过Kubernetes
+设置容器的安全机制。
+2.2　使用kubeadm工具快速安装
+Kubernetes集群
+Kubernetes从1.4版本开始引入了命令行工具kubeadm，致力于简化
+集群的安装过程，到Kubernetes 
+1.13版本时，kubeadm工具达到GA阶
+段。本节讲解基于kubeadm的安装过程，操作系统以CentOS 7为例。
+2.2.1　安装kubeadm
+对kubeadm工具的安装在CentOS操作系统上可以通过yum工具一键
+完成。
+首先配置yum源，官方yum源配置文
+件/etc/yum.repos.d/kubernetes.repo的内容如下：
+
+如果无法访问官方yum源的地址，则也可以使用国内的一个yum
+源。
+然后运行yum install命令安装kubeadm、kubelet和kubectl：
+kubeadm将使用kubelet服务以容器方式部署和启动Kubernetes的主要
+服务，所以需要先启动kubelet服务。运行systemctl start命令启动kubelet
+服务，并设置为开机自启动：
+kubeadm还需要关闭Linux的swap系统交换区，这可以通过swapoff-a
+命令实现：
+
+2.2.2　修改kubeadm的默认配置
+kubeadm的初始化控制平面（init）命令和加入节点（join）命令均
+可以通过指定的配置文件修改默认参数的值。kubeadm将配置文件以
+ConfigMap形式保存到集群中，便于后续的查询和升级工作。kubeadm
+config子命令提供了对这组功能的支持。
+◎　kubeadm config print init-defaults：输出kubeadm init命令默认参
+数的内容。
+◎　kubeadm config print join-defaults：输出kubeadm join命令默认
+参数的内容。
+◎　kubeadm config migrate：在新旧版本之间进行配置转换。
+◎　kubeadm config images list：列出所需的镜像列表。
+◎　kubeadm config images pull：拉取镜像到本地。
+例如，运行kubeadm config print init-defaults命令，可以获得默认的
+初始化参数文件：
+对生成的文件进行编辑，可以按需生成合适的配置。例如，若需要
+自定义镜像的仓库地址、需要安装的Kubernetes版本号及Pod的IP地址范
+围，则可以将默认配置修改如下：
+
+将上面的内容保存为init-config.yaml备用。
+2.2.3　下载Kubernetes的相关镜像
+为了加快kubeadm创建集群的过程，可以预先将所需镜像下载完
+成。可以通过kubeadm config images list命令查看镜像列表，例如：
+
+如果无法访问k8s.gcr.io，则可以使用国内镜像托管站点进行下载，
+例如https：//1nj0zren.mirror.aliyuncs.com，这可以通过修改Docker服务
+的配置文件（默认为/etc/docker/daemon.json）进行设置，例如：
+然后，使用kubeadm config images pull命令或者docker pull命令下载
+上述镜像，例如：
+在镜像下载完成之后，就可以进行安装了。
+2.2.4　运行kubeadm init命令安装Master节点
+至此，准备工作已经就绪，运行kubeadm 
+init命令即可一键安装
+Kubernetes的Master节点，也称之为Kubernetes控制平面（Control
+Plane）。
+在开始之前需要注意：kubeadm的安装过程不涉及网络插件
+（CNI）的初始化，因此kubeadm初步安装完成的集群不具备网络功
+能，任何Pod（包括自带的CoreDNS）都无法正常工作。而网络插件的
+安装往往对kubeadm init命令的参数有一定要求。例如，安装Calico插件
+时需要指定--pod-network-cidr=192.168.0.0/16。关于安装CNI网络插件的
+
+更多内容，可参考官方文档的说明。
+kubeadm 
+init命令在执行具体的安装操作之前，会执行一系列被称
+为pre-flight checks的系统预检查，以确保主机环境符合安装要求，如果
+检查失败就直接终止，不再进行init操作。用户可以通过kubeadm 
+init
+phase 
+preflight命令执行预检查操作，确保系统就绪后再执行init操作。
+如果不希望执行预检查，则也可以为kubeadm 
+init命令添加--ignore-
+preflight-errors参数进行关闭。如表2.3所示是kubeadm检查的系统配置，
+对不符合要求的检查项以warning或error级别的信息给出提示。
+表2.3　kubeadm检查的系统配置
+续表
+
+
+另外，Kubernetes默认设置cgroup驱动（cgroupdriver）
+为“systemd”，而Docker服务的cgroup驱动默认值为“cgroupfs”，建议将
+其修改为“systemd”，与Kubernetes保持一致。这可以通过修改Docker服
+务的配置文件（默认为/etc/docker/daemon.json）进行设置：
+准备工作就绪之后，就可以运行kubeadm 
+init命令，使用之前创建
+的配置文件一键安装Master节点（控制平面）了：
+一切正常的话，控制台将输出如下内容：
+
+
+
+
+
+看到“Your Kubernetes control-plane has initialized successfully！”的
+提示，就说明Master节点（控制平面）已经安装成功了。
+接下来就可以通过kubectl命令行工具访问集群进行操作了。由于
+kubeadm默认使用CA证书，所以需要为kubectl配置证书才能访问
+Master。
+按照安装成功的提示，非root用户可以将admin.conf配置文件复制到
+HOME目录的.kube子目录下，命令如下：
+如果用户是root，则也可以通过设置环境变量KUBECONFIG完成
+kubectl的配置：
+然后就可以使用kubectl命令行工具对Kubernetes集群进行访问和操
+作了。
+例如查看命名空间kube-system中的ConfigMap列表：
+
+到此，Kubernetes的Master节点已经可以工作了，但在集群内还是
+没有可用的Worker Node，并缺乏容器网络的配置。
+接下来安装Worker Node，需要用到kubeadm init命令运行完成后的
+最后几行提示信息，其中包含将节点加入集群的命令（kubeadm join）
+和所需的Token。
+2.2.5　将新的Node加入集群
+对于新节点的添加，系统准备和安装Master节点的过程是一致的，
+在待安装的各个Node主机上进行下面的安装过程。
+（1）安装kubeadm和kubelet（在Node上无须安装kubectl）：
+运行systemctl start命令启动kubelet服务，并设置为开机自启动：
+
+（2）使用kubeadm join命令加入集群，可以从安装Master节点的成
+功提示内容中复制完整的命令，例如：
+如果需要调整其他配置，则也可以通过自定义配置文件的方式进行
+操作，通过kubeadm config print join-defaults命令获取默认配置的内容，
+再进行修改，例如：
+修改配置文件join.config.yaml的内容如下：
+其中，apiServerEndpoint的值为Master服务的URL地址，token和
+tlsBootstrapToken的值来自使用kubeadm init安装Master时的最后一行提
+
+示信息。
+运行kubeadm join命令，将本Node加入集群：
+成功将Node加入集群后，可以通过kubectl get nodes命令确认新的
+Node已加入：
+
+另外，在初始安装的Master节点上也启动了kubelet和kube-proxy，
+在默认情况下并不参与工作负载的调度。如果希望Master节点也作为
+Node角色，则可以运行下面的命令（删除Node的Label“node-
+role.kubernetes.io/master”），让Master节点也成为一个Node：
+2.2.6　安装CNI网络插件
+运行kubeadm 
+init和join命令后，Kubernetes提示各节点均为
+NotReady状态，这是因为还没有安装CNI网络插件：
+
+对于CNI网络插件，可以有许多选择。例如选择Calico 
+CNI插件，
+运行下面的命令即可一键完成安装：
+
+
+在CNI网络插件成功运行之后，再次查看Node，其状态会更新为
+Ready：
+
+2.2.7　验证Kubernetes集群是否工作正常
+运行查看Pod的命令，验证Kubernetes集群服务的Pod是否创建成功
+且正常运行：
+
+如果发现有状态错误的Pod，则可以运行kubectl--namespace=kube-
+system describe pod <pod_name>命令查看错误原因，常见的错误原因是
+镜像没有下载完成。
+至此，通过kubeadm工具就实现了Kubernetes集群的快速搭建。
+如果安装失败，则可以运行kubeadm reset命令将主机恢复原状，重
+新运行kubeadm init命令再次进行安装。
+2.3　以二进制文件方式安装Kubernetes安
+全高可用集群
+通过kubeadm能够快速部署一个Kubernetes集群，但是如果需要精
+细调整Kubernetes各组件服务的参数及安全设置、高可用模式等，管理
+员就可以使用Kubernetes二进制文件进行部署。
+本节基于Kubernetes 1.19版本，以二进制文件方式对如何配置、部
+署一个启用了安全机制、3节点高可用的Kubernetes集群进行说明。对于
+测试环境，可以适当进行简化，将某些组件部署为单点。
+2.3.1　Master高可用部署架构
+在Kubernetes系统中，Master节点扮演着总控中心的角色，通过不
+间断地与各个工作节点（Node）通信来维护整个集群的健康工作状态，
+集群中各资源对象的状态则被保存在etcd数据库中。如果Master不能正
+常工作，各Node就会处于不可管理状态，用户就无法管理在各Node上
+运行的Pod，其重要性不言而喻。同时，如果Master以不安全方式提供
+服务（例如通过HTTP的8080端口号），则任何能够访问Master的客户
+端都可以通过API操作集群中的数据，可能导致对数据的非法访问或篡
+改。
+在正式环境中应确保Master的高可用，并启用安全访问机制，至少
+包括以下几方面。
+◎　Master的kube-apiserver、kube-controller-mansger和kube-
+
+scheduler服务至少以3个节点的多实例方式部署。
+◎　Master启用基于CA认证的HTTPS安全机制。
+◎　etcd至少以3个节点的集群模式部署。
+◎　etcd集群启用基于CA认证的HTTPS安全机制。
+◎　Master启用RBAC授权模式（详见6.2节的说明）。
+Master的高可用部署架构如图2.1所示。
+图2.1　Master的高可用部署架构
+
+在Master的3个节点之前，应通过一个负载均衡器提供对客户端的
+唯一访问入口地址，负载均衡器可以选择硬件或者软件进行搭建。软件
+负载均衡器可以选择的方案较多，本文以HAProxy搭配Keepalived为例
+进行说明。主流硬件负载均衡器有F5、A10等，需要额外采购，其负载
+均衡配置规则与软件负载均衡器的配置类似，本文不再赘述。
+本例中3台主机的IP地址分别为192.168.18.3、192.168.18.4、
+192.168.18.5，负载均衡器使用的VIP为192.168.18.100。
+下面分别对etcd、负载均衡器、Master、Node等组件如何进行高可
+用部署、关键配置、CA证书配置等进行详细说明。
+2.3.2　创建CA根证书
+为etcd和Kubernetes服务启用基于CA认证的安全机制，需要CA证书
+进行配置。如果组织能够提供统一的CA认证中心，则直接使用组织颁
+发的CA证书即可。如果没有统一的CA认证中心，则可以通过颁发自签
+名的CA证书来完成安全配置。
+etcd和Kubernetes在制作CA证书时，均需要基于CA根证书，本文以
+为Kubernetes和etcd使用同一套CA根证书为例，对CA证书的制作进行说
+明。
+CA证书的制作可以使用openssl、easyrsa、cfssl等工具完成，本文以
+openssl为例进行说明。下面是创建CA根证书的命令，包括私钥文件
+ca.key和证书文件ca.crt：
+主要参数如下。
+◎　-subj：“/CN”的值为Master主机名或IP地址。
+
+◎　-days：设置证书的有效期。
+将生成的ca.key和ca.crt文件保存在/etc/kubernetes/pki目录下。
+2.3.3　部署安全的etcd高可用集群
+etcd作为Kubernetes集群的主数据库，在安装Kubernetes各服务之前
+需要首先安装和启动。
+1.下载etcd二进制文件，配置systemd服务
+从GitHub官网下载etcd二进制文件，例如etcd-v3.4.13-linux-
+amd64.tar.gz，如图2.2所示。
+图2.2　下载界面
+解压缩后得到etcd和etcdctl文件，将它们复制到/usr/bin目录下。
+然后将其部署为一个systemd的服务，创建systemd服务配置文
+件/usr/lib/systemd/system/etcd.service，内容示例如下：
+
+其中，EnvironmentFile指定配置文件的全路径，例
+如/tc/etcd/etcd.conf，其中的参数以环境变量的格式进行配置。
+接下来先对etcd需要的CA证书配置进行说明。对于配置文
+件/etc/etcd/etcd.conf中的完整配置参数，将在创建完CA证书后统一说
+明。
+2.创建etcd的CA证书
+先创建一个x509 v3配置文件etcd_ssl.cnf，其中subjectAltName参数
+（alt_names）包括所有etcd主机的IP地址，例如：
+
+然后使用openssl命令创建etcd的服务端CA证书，包括
+etcd_server.key和etcd_server.crt文件，将其保存到/etc/etcd/pki目录下：
+
+再创建客户端使用的CA证书，包括etcd_client.key和etcd_client.crt文
+件，也将其保存到/etc/etcd/pki目录下，后续供kube-apiserver连接etcd时
+使用：
+3.etcd参数配置说明
+接下来对3个etcd节点进行配置。etcd节点的配置方式包括启动参
+数、环境变量、配置文件等，本例使用环境变量方式将其配置
+到/etc/etcd/etcd.conf文件中，供systemd服务读取。
+3个etcd节点将被部署在192.168.18.3、192.168.18.4和192.168.18.5 3
+台主机上，配置文件/etc/etcd/etcd.conf的内容示例如下：
+
+
+
+主要配置参数包括为客户端和集群其他节点配置的各监听URL地址
+（均为HTTPS URL地址），并配置相应的CA证书参数。
+etcd服务相关的参数如下。
+◎　ETCD_NAME：etcd节点名称，每个节点都应不同，例如
+etcd1、etcd2、etcd3。
+◎　ETCD_DATA_DIR：etcd数据存储目录，例
+如/etc/etcd/data/etcd1。
+◎　ETCD_LISTEN_CLIENT_URLS和
+ETCD_ADVERTISE_CLIENT_URLS：为客户端提供的服务监听URL地
+址，例如https：//192.168.18.3：2379。
+
+◎　ETCD_LISTEN_PEER_URLS和
+ETCD_INITIAL_ADVERTISE_PEER_URLS：为本集群其他节点提供的
+服务监听URL地址，例如https：//192.168.18.3：2380。
+◎　ETCD_INITIAL_CLUSTER_TOKEN：集群名称，例如etcd-
+cluster。
+◎　ETCD_INITIAL_CLUSTER：集群各节点的endpoint列表，例
+如"etcd1=https：//192.168.18.3：2380，etcd2=https：//192.168.18.4：
+2380，etcd3=https：//192.168.18.5：2380"。
+◎　ETCD_INITIAL_CLUSTER_STATE：初始集群状态，新建集
+群时设置为“new”，集群已存在时设置为“existing”。
+CA证书相关的配置参数如下。
+◎　ETCD_CERT_FILE：etcd服务端CA证书-crt文件全路径，例
+如/etc/etcd/pki/etcd_server.crt。
+◎　ETCD_KEY_FILE：etcd服务端CA证书-key文件全路径，例
+如/etc/etcd/pki/etcd_server.key。
+◎　ETCD_TRUSTED_CA_FILE：CA根证书文件全路径，例
+如/etc/kubernetes/pki/ca.crt。
+◎　ETCD_CLIENT_CERT_AUTH：是否启用客户端证书认证。
+◎　ETCD_PEER_CERT_FILE：集群各节点相互认证使用的CA证
+书-crt文件全路径，例如/etc/etcd/pki/etcd_server.crt。
+◎　ETCD_PEER_KEY_FILE：集群各节点相互认证使用的CA证
+书-key文件全路径，例如/etc/etcd/pki/etcd_server.key。
+◎　ETCD_PEER_TRUSTED_CA_FILE：CA根证书文件全路径，
+例如/etc/kubernetes/pki/ca.crt。
+4.启动etcd集群
+基于systemd的配置，在3台主机上分别启动etcd服务，并设置为开
+机自启动：
+
+然后用etcdctl客户端命令行工具携带客户端CA证书，运行etcdctl
+endpoint health命令访问etcd集群，验证集群状态是否正常，命令如下：
+结果显示各节点状态均为“healthy”，说明集群正常运行。
+至此，一个启用了HTTPS的3节点etcd集群就部署完成了，更多的
+配置参数请参考etcd官方文档的说明。
+2.3.4　部署安全的Kubernetes Master高可用集群
+1.下载Kubernetes服务的二进制文件
+首先，从Kubernetes的官方GitHub代码库页面下载各组件的二进制
+文件，在Releases页面找到需要下载的版本号，单击CHANGELOG链
+接，跳转到已编译好的Server端二进制（Server Binaries）文件的下载页
+
+面进行下载，如图2.3和图2.4所示。
+图2.3　GitHub上Kubernetes的下载页面一
+
+图2.4　GitHub上Kubernetes的下载页面二
+在压缩包kubernetes.tar.gz内包含了Kubernetes的全部服务二进制文
+件和容器镜像文件，也可以分别下载Server Binaries和Node Binaries二进
+制文件。在Server Binaries中包含不同系统架构的服务端可执行文件，例
+如kubernetes-server-linux-amd64.tar.gz文件包含了x86架构下Kubernetes需
+要运行的全部服务程序文件；Node Binaries则包含了不同系统架构、不
+同操作系统的Node需要运行的服务程序文件，包括Linux版和Windows
+
+版等。
+主要的服务程序二进制文件列表如表2.4所示。
+表2.4　主要的服务程序二进制文件列表
+
+
+在Kubernetes的Master节点上需要部署的服务包括etcd、kube-
+apiserver、kube-controller-manager和kube-scheduler。
+在工作节点（Worker Node）上需要部署的服务包括docker、kubelet
+和kube-proxy。
+将Kubernetes的二进制可执行文件复制到/usr/bin目录下，然后
+在/usr/lib/systemd/system目录下为各服务创建systemd服务配置文件（完
+整的systemd系统知识请参考Linux的相关手册），这样就完成了软件的
+安装。
+下面对每个服务的配置进行详细说明。
+2.部署kube-apiserver服务
+（1）设置kube-apiserver服务需要的CA相关证书。准备
+master_ssl.cnf文件用于生成x509 v3版本的证书，示例如下：
+
+
+在该文件中主要需要在subjectAltName字段（[alt_names]）设置
+Master服务的全部域名和IP地址，包括：
+◎　DNS主机名，例如k8s-1、k8s-2、k8s-3等；
+◎　Master Service虚拟服务名称，例如kubernetes.default等；
+◎　IP地址，包括各kube-apiserver所在主机的IP地址和负载均衡器
+的IP地址，例如192.168.18.3、192.168.18.4、192.168.18.5和
+192.168.18.100；
+◎　Master Service虚拟服务的ClusterIP地址，例如169.169.0.1。
+然后使用openssl命令创建kube-apiserver的服务端CA证书，包括
+apiserver.key和apiserver.crt文件，将其保存到/etc/kubernetes/pki目录下：
+（2）为kube-apiserver服务创建systemd服务配置文
+件/usr/lib/systemd/system/kube-apiserver.service，内容如下：
+
+（3）配置文件/etc/kubernetes/apiserver的内容通过环境变量
+KUBE_API_ARGS设置kube-apiserver的全部启动参数，包含CA安全配
+置的启动参数示例如下：
+
+对主要参数说明如下。
+◎　--secure-port：HTTPS端口号，默认值为6443。
+◎　--insecure-port：HTTP端口号，默认值为8080，设置为0表示关
+闭HTTP访问。
+◎　--tls-cert-file：服务端CA证书文件全路径，例
+如/etc/kubernetes/pki/apiserver.crt。
+◎　--tls-private-key-file：服务端CA私钥文件全路径，例
+如/etc/kubernetes/pki/apiserver.key。
+
+◎　--client-ca-file：CA根证书全路径，例
+如/etc/kubernetes/pki/ca.crt。
+◎　--apiserver-count：API Server实例数量，例如3，需要同时设置
+参数--endpoint-reconciler-type=master-count。
+◎　--etcd-servers：连接etcd的URL列表，这里使用HTTPS，例如
+https：//192.168.18.3：2379、https：//192.168.18.4：2379和
+https：//192.168.18.5：2379。
+◎　--etcd-cafile：etcd使用的CA根证书文件全路径，例
+如/etc/kubernetes/pki/ca.crt。
+◎　--etcd-certfile：etcd客户端CA证书文件全路径，例
+如/etc/etcd/pki/etcd_client.crt。
+◎　--etcd-keyfile：etcd客户端私钥文件全路径，例
+如/etc/etcd/pki/etcd_client.key。
+◎　--service-cluster-ip-range：Service虚拟IP地址范围，以CIDR格
+式表示，例如169.169.0.0/16，该IP范围不能与物理机的IP地址有重合。
+◎　--service-node-port-range：Service可使用的物理机端口号范
+围，默认值为30000～32767。
+◎　--allow-privileged：是否允许容器以特权模式运行，默认值为
+true。
+◎　--logtostderr：是否将日志输出到stderr，默认值为true，当使用
+systemd系统时，日志将被输出到journald子系统。设置为false表示不输
+出到stderr，可以输出到日志文件。
+◎　--log-dir：日志的输出目录，例如/var/log/kubernetes。
+◎　--v：日志级别。
+（4）在配置文件准备完毕后，在3台主机上分别启动kube-apiserver
+服务，并设置为开机自启动：
+
+3.创建客户端CA证书
+kube-controller-manager、kube-scheduler、kubelet和kube-proxy服务
+作为客户端连接kube-apiserver服务，需要为它们创建客户端CA证书进
+行访问。这里以对这几个服务统一创建一个证书作为示例。
+（1）通过openssl工具创建CA证书和私钥文件，命令如下：
+其中，-subj参数中“/CN”的名称可以被设置为“admin”，用于标识连
+接kube-apiserver的客户端用户的名称。
+（2）将生成的client.key和client.crt文件保存在/etc/kubernetes/pki目
+录下。
+4.创建客户端连接kube-apiserver服务所需的kubeconfig配置文件
+本节为kube-controller-manager、kube-scheduler、kubelet和kube-
+proxy服务统一创建一个kubeconfig文件作为连接kube-apiserver服务的配
+置文件，后续也作为kubectl命令行工具连接kube-apiserver服务的配置文
+件。
+在Kubeconfig文件中主要设置访问kube-apiserver的URL地址及所需
+CA证书等的相关参数，示例如下：
+
+其中的关键配置参数如下。
+◎　server URL地址：配置为负载均衡器（HAProxy）使用的VIP地
+址（如192.168.18.100）和HAProxy监听的端口号（如9443）。
+◎　client-certificate：配置为客户端证书文件（client.crt）全路径。
+
+◎　client-key：配置为客户端私钥文件（client.key）全路径。
+◎　certificate-authority：配置为CA根证书（ca.crt）全路径。
+◎　users中的user name和context中的user：连接API Server的用户
+名，设置为与客户端证书中的“/CN”名称保持一致，例如“admin”。
+将kubeconfig文件保存到/etc/kubernetes目录下。
+5.部署kube-controller-manager服务
+（1）为kube-controller-manager服务创建systemd服务配置文
+件/usr/lib/systemd/system/kube-controller-manager.service，内容如下：
+（2）配置文件/etc/kubernetes/controller-manager的内容为通过环境
+变量KUBE_CONTROLLER_MANAGER_ARGS设置的kube-controller-
+manager的全部启动参数，包含CA安全配置的启动参数示例如下：
+
+对主要参数说明如下。
+◎　--kubeconfig：与API Server连接的相关配置。
+◎　--leader-elect：启用选举机制，在3个节点的环境中应被设置为
+true。
+◎　--service-account-private-key-file：为ServiceAccount自动颁发
+token使用的私钥文件全路径，例如/etc/kubernetes/pki/apiserver.key。
+◎　--root-ca-file：CA根证书全路径，例
+如/etc/kubernetes/pki/ca.crt。
+◎　--service-cluster-ip-range：Service虚拟IP地址范围，以CIDR格
+式表示，例如169.169.0.0/16，与kube-apiserver服务中的配置保持一致。
+（3）配置文件准备完毕后，在3台主机上分别启动kube-controller-
+manager服务，并设置为开机自启动：
+6.部署kube-scheduler服务
+（1）为kube-scheduler服务创建systemd服务配置文
+件/usr/lib/systemd/system/kube-scheduler.service，内容如下：
+
+（2）配置文件/etc/kubernetes/scheduler的内容为通过环境变量
+KUBE_SCHEDULER_ARGS设置的kube-scheduler的全部启动参数，示
+例如下：
+对主要参数说明如下。
+◎　--kubeconfig：与API Server连接的相关配置。
+◎　--leader-elect：启用选举机制，在3个节点的环境中应被设置为
+true。
+（3）在配置文件准备完毕后，在3台主机上分别启动kube-scheduler
+
+服务，并设置为开机自启动：
+通过systemctl status <service_name>验证服务的启动状态，状态为
+running并且没有报错日志表示启动成功，例如：
+
+7.使用HAProxy和keepalived部署高可用负载均衡器
+接下来，在3个kube-apiserver服务的前端部署HAProxy和
+keepalived，使用VIP 
+192.168.18.100作为Master的唯一入口地址，供客
+户端访问。
+将HAProxy和keepalived均部署为至少有两个实例的高可用架构，以
+避免单点故障。下面以在192.168.18.3和192.168.18.4两台服务器上部署
+为例进行说明。HAProxy负责将客户端请求转发到后端的3个kube-
+apiserver实例上，keepalived负责维护VIP 
+192.168.18.100的高可用。
+HAProxy和keepalived的部署架构如图2.5所示。
+图2.5　HAProxy和keepalived的部署架构
+接下来对部署HAProxy和keepalived组件进行说明。
+1）部署两个HAProxy实例
+准备HAProxy的配置文件haproxy.cfg，内容示例如下：
+
+
+
+对主要参数说明如下。
+◎　frontend：HAProxy的监听协议和端口号，使用TCP，端口号为
+9443。
+◎　backend：后端3个kube-apiserver的地址，以IP：Port方式表
+示，例如192.168.18.3：6443、192.168.18.4：6443和192.168.18.5：
+6443；mode字段用于设置协议，此处为tcp；balance字段用于设置负载
+均衡策略，例如roundrobin为轮询模式。
+◎　listen stats：状态监控的服务配置，其中，bind用于设置监听端
+口号为8888；stats auth用于配置访问账号；stats uri用于配置访问URL路
+径，例如/stats。
+下面以Docker容器方式运行HAProxy且镜像使用
+haproxytech/haproxy-debian为例进行说明。
+在两台服务器192.168.18.3和192.168.18.4上启动HAProxy，将配置
+文件haproxy.cfg挂载到容器的/usr/local/etc/haproxy目录下，启动命令如
+下：
+在一切正常的情况下，通过浏览器访问http：//192.168.18.3：
+8888/stats地址即可访问HAProxy的管理页面，登录后查看到的主页界面
+如图2.6所示。
+
+图2.6　登录后查看到的主页界面
+这里主要关注最后一个表格，其内容为haproxy.cfg配置文件中
+backend配置的3个kube-apiserver地址，它们的状态均为“UP”，表示与3
+个kube-apiserver服务成功建立连接，说明HAProxy工作正常。
+2）部署两个keepalived实例
+Keepalived用于维护VIP地址的高可用，同样在192.168.18.3和
+192.168.18.4两台服务器上进行部署。主要需要配置keepalived监控
+HAProxy的运行状态，当某个HAProxy实例不可用时，自动将VIP地址
+切换到另一台主机上。下面对keepalived的配置和启动进行说明。
+在第1台服务器192.168.18.3上创建配置文件keepalived.conf，内容如
+下：
+
+
+主要参数在vrrp_instance段中进行设置，说明如下。
+◎　vrrp_instance VI_1：设置keepalived虚拟路由器VRRP的名称。
+◎　state：设置为“MASTER”，将其他keepalived均设置
+为“BACKUP”。
+◎　interface：待设置VIP地址的网卡名称。
+◎　virtual_router_id：例如51。
+◎　priority：优先级，例如100。
+◎　virtual_ipaddress：VIP地址，例如192.168.18.100/24。
+◎　authentication：访问keepalived服务的鉴权信息。
+◎　track_script：HAProxy健康检查脚本。
+Keepalived需要持续监控HAProxy的运行状态，在某个HAProxy实
+例运行不正常时，自动切换到运行正常的HAProxy实例上。需要创建一
+个HAProxy健康检查脚本，定期运行该脚本进行监控，例如新建脚本
+check-haproxy.sh并将其保存到/usr/bin目录下，内容示例如下：
+
+若检查成功，则应返回0；若检查失败，则返回非0值。Keepalived
+根据上面的配置，会每隔2s检查一次HAProxy的运行状态。例如，如果
+在192.168.18.3 上检查失败，keepalived就会将VIP地址切换到正常运行
+HAProxy的192.168.18.4服务器上，保证VIP 
+192.168.18.100地址的高可
+用。
+在第2台服务器192.168.18.4上创建配置文件keepalived.conf，内容示
+例如下：
+
+这里与第1个keepalived配置的主要差异如下。
+◎　vrrp_instance中的state被设置为“BACKUP”，这是因为在整个
+
+keepalived集群中只能有一个被设置为“MASTER”。如果keepalived集群
+不止2个实例，那么除了MASTER，其他都应被设置为“BACKUP”。
+◎　vrrp_instance的值“VI_1”需要与MASTER的配置相同，表示它
+们属于同一个虚拟路由器组（VRRP），当MASTER不可用时，同组的
+其他BACKUP实例会自动选举出一个新的MASTER。
+◎　HAProxy健康检查脚本check-haproxy.sh与第1个keepalived的相
+同。
+下面以Docker容器方式运行HAProxy且镜像使用osixia/keepalived为
+例进行说明。在两台服务器192.168.18.3和192.168.18.4上启动
+HAProxy，将配置文件keepalived.conf挂载到容器
+的/container/service/keepalived/assets目录下，启动命令如下：
+在运行正常的情况下，keepalived会在服务器192.168.18.3的网卡
+ens33上设置192.168.18.100的IP地址，同样在服务器192.168.18.3上运行
+的HAProxy将在该IP地址上监听9443端口号，对需要访问Kubernetes
+Master的客户端提供负载均衡器的入口地址，即192.168.18.100：9443。
+通过ip addr命令查看服务器192.168.18.3的IP地址信息，可以看到在
+ens33网卡上新增了192.168.18.100地址：
+
+使用curl命令即可验证通过HAProxy的192.168.18.100：9443地址是
+否可以访问到kube-apiserver服务：
+
+
+
+可以看到TCP/IP连接创建成功，得到响应码为401的应答，说明通
+过VIP地址192.168.18.100成功访问到了后端的kube-apiserver服务。至
+此，Master上所需的3个服务就全部启动完成了。接下来就可以部署
+Node的服务了。
+2.3.5　部署Node的服务
+在Node上需要部署Docker、kubelet、kube-proxy，在成功加入
+Kubernetes集群后，还需要部署CNI网络插件、DNS插件等管理组件。
+Docker的安装和启动详见Docker官网的说明文档。本节主要对如何部署
+kubelet和kube-proxy进行说明。CNI网络插件的安装部署详见7.7节的说
+明，DNS插件的安装部署详见4.3节的说明。
+本节以将192.168.18.3、192.168.18.4和192.168.18.5三台主机部署为
+Node为例进行说明，由于这三台主机都是Master节点，所以最终部署结
+果为一个包含三个Node节点的Kubernetes集群。
+1.部署kubelet服务
+（1）为kubelet服务创建systemd服务配置文
+件/usr/lib/systemd/system/kubelet.service，内容如下：
+
+（2）配置文件/etc/kubernetes/kubelet的内容为通过环境变量
+KUBELET_ARGS设置的kubelet的全部启动参数，示例如下：
+对主要参数说明如下。
+◎　--kubeconfig：设置与API Server连接的相关配置，可以与kube-
+
+controller-manager使用的kubeconfig文件相同。需要将相关客户端证书文
+件从Master主机复制到Node主机的/etc/kubernetes/pki目录下，例如
+ca.crt、client.key、client.crt文件。
+◎　--config：kubelet配置文件，从Kubernetes 1.10版本开始引入，
+设置可以让多个Node共享的配置参数，例如address、port、
+cgroupDriver、clusterDNS、clusterDomain等。关于kubelet.config文件中
+可以设置的参数内容和详细说明，请参见官方文档的说明。
+◎　--hostname-override：设置本Node在集群中的名称，默认值为
+主机名，应将各Node设置为本机IP或域名。
+◎　--network-plugin：网络插件类型，建议使用CNI网络插件。
+配置文件kubelet.config的内容示例如下：
+在本例中设置的kubelet参数如下。
+◎　address：服务监听IP地址。
+◎　port：服务监听端口号，默认值为10250。
+
+◎　cgroupDriver：设置为cgroupDriver驱动，默认值为cgroupfs，
+可选项包括systemd。
+◎　clusterDNS：集群DNS服务的IP地址，例如169.169.0.100。
+◎　clusterDomain：服务DNS域名后缀，例如cluster.local。
+◎　authentication：设置是否允许匿名访问或者是否使用webhook
+进行鉴权。
+（3）在配置文件准备完毕后，在各Node主机上启动kubelet服务并
+设置为开机自启动：
+2.部署kube-proxy服务
+（1）为kube-proxy服务创建systemd服务配置文
+件/usr/lib/systemd/system/kube-proxy.service，内容如下：
+
+（2）配置文件/etc/kubernetes/proxy的内容为通过环境变量
+KUBE_PROXY_ARGS设置的kube-proxy的全部启动参数，示例如下：
+对主要参数说明如下。
+◎　--kubeconfig：设置与API 
+Server连接的相关配置，可以与
+kubelet使用的kubeconfig文件相同。相关客户端CA证书使用部署kubelet
+服务时从Master主机复制到Node主机的/etc/kubernetes/pki目录下的文
+件，包括ca.crt、client.key和client.crt。
+◎　--hostname-override：设置本Node在集群中的名称，默认值为
+主机名，各Node应被设置为本机IP或域名。
+◎　--proxy-mode：代理模式，包括iptables、ipvs、
+kernelspace（Windows节点使用）等。
+
+（3）在配置文件准备完毕后，在各Node主机上启动kube-proxy服
+务，并设置为开机自启动：
+3.在Master上通过kubectl验证Node信息
+在各个Node的kubelet和kube-proxy服务正常启动之后，会将本Node
+自动注册到Master上，然后就可以到Master主机上通过kubectl查询自动
+注册到Kubernetes集群的Node的信息了。
+由于Master开启了HTTPS认证，所以kubectl也需要使用客户端CA证
+书连接Master，可以直接使用kube-controller-manager的kubeconfig文
+件，命令如下：
+我们可以看到各Node的状态为“NotReady”，这是因为还没有部署
+CNI网络插件，无法设置容器网络。
+类似于通过kubeadm创建Kubernetes集群，例如选择Calico CNI插件
+运行下面的命令一键完成CNI网络插件的部署：
+在CNI网络插件成功运行之后，Node的状态会更新为“Ready”：
+
+为了使Kubernetes集群正常工作，我们还需要部署DNS服务，建议
+使用CoreDNS进行部署，请参见4.3节的说明。
+至此，一个有三个Master节点的高可用Kubernetes集群就部署完成
+了，接下来用户就可以创建Pod、Deployment、Service等资源对象来部
+署、管理容器应用和微服务了。
+本节对Kubernetes各服务启动进程的关键配置参数进行了简要说
+明，实际上Kubernetes的每个服务都提供了许多可配置的参数。这些参
+数涉及安全性、性能优化及功能扩展等方方面面。全面理解和掌握这些
+参数的含义和配置，对Kubernetes的生产部署及日常运维都有很大帮
+助。对各服务配置参数的详细说明参见附录A。
+2.3.6　kube-apiserver基于token的认证机制
+Kubernetes除了提供了基于CA证书的认证方式，也提供了基于
+HTTP Token的简单认证方式。各客户端组件与API Server之间的通信方
+式仍然采用HTTPS，但不采用CA数字证书。这种认证机制与CA证书相
+比，安全性很低，在生产环境不建议使用。
+采用基于HTTP 
+Token的简单认证方式时，API 
+Server对外暴露
+HTTPS端口，客户端携带Token来完成认证过程。需要说明的是，
+kubectl命令行工具比较特殊，它同时支持CA证书和简单认证两种方式
+与API Server通信，其他客户端组件只能配置基于CA证书的认证方式或
+者非安全方式与API Server通信。
+基于Token认证的配置过程如下。
+
+（1）创建包括用户名、密码和UID的文件token_auth_file，将其放
+置在合适的目录下，例如/etc/kuberntes目录。需要注意的是，这是一个
+纯文本文件，用户名、密码都是明文。
+（2）设置kube-apiserver的启动参数“--token-auth-file”，使用上述文
+件提供安全认证，然后重启API Server服务。
+（3）用curl客户端工具通过token访问API Server：
+
+2.4　使用私有镜像库的相关配置
+在Kubernetes集群中，容器应用都是基于镜像启动的，在私有云环
+境中建议搭建私有镜像库对镜像进行统一管理，在公有云环境中可以直
+接使用云服务商提供的镜像库。
+私有镜像库有两种选择。
+（1）Docker提供的Registry镜像库，详细说明请参考官网的说明。
+（2）Harbor镜像仓库，详细说明请参考官网的说明或者Harbor项目
+维护者及贡献者编写的《Harbor权威指南》一书。
+此外，Kubernetes对于创建Pod需要使用一个名为“pause”的镜像，
+
+tag名为“k8s.gcr.io/pause：3.2”，默认从镜像库k8s.gcr.io下载，在私有云
+环境中可以将其上传到私有镜像库，并修改kubelet的启动参数--pod-
+infra-container-image，将其设置为使用镜像库的镜像名称，例如：
+2.5　Kubernetes的版本升级
+本节讲解Kubernetes的版本升级方面的内容。
+2.5.1　二进制文件升级
+在进行Kubernetes的版本升级之前，需要考虑不中断正在运行的业
+务容器的灰度升级方案。常见的做法是：先更新Master上Kubernetes服
+务的版本，再逐个或批量更新集群中的Node上Kubernetes服务的版本。
+更新Node的Kubernetes服务的步骤通常包括：先隔离一个或多个Node的
+业务流量，等待这些Node上运行的Pod将当前任务全部执行完成后，停
+掉业务应用（Pod），再更新这些Node上的kubelet和kube-proxy版本，
+更新完成后重启业务应用（Pod），并将业务流量导入新启动的这些
+Node上，再隔离剩余的Node，逐步完成Node的版本升级，最终完成整
+个集群的Kubernetes版本升级。
+同时，应该考虑高版本的Master对低版本的Node的兼容性问题。高
+版本的Master通常可以管理低版本的Node，但版本差异不应过大，以免
+某些功能或API版本被弃用后，低版本的Node无法运行。
+◎　通过官网获取最新版本的二进制包kubernetes.tar.gz，解压后提
+取服务的二进制文件。
+◎　更新Master的kube-apiserver、kube-controller-manager、kube-
+scheduler服务的二进制文件和相关配置（在需要修改时更新）并重启服
+务。
+◎　逐个或批量隔离Node，等待其上运行的全部容器工作完成后停
+
+掉Pod，更新kubelet、kube-proxy服务文件和相关配置（在需要修改时更
+新），然后重启这两个服务。
+2.5.2　使用kubeadm进行集群升级
+kubeadm提供了upgrade命令用于对kubeadm安装的Kubernetes集群进
+行升级。这一功能提供了从1.10到1.11、从1.11到1.12、从1.12到1.13及
+从1.13到1.14升级的能力，本节以从1.13到1.14升级为例进行说明。
+升级之前需要注意：
+◎　虽然kubeadm的升级不会触及工作负载，但还是要在升级之前
+做好备份；
+◎　升级过程中可能会因为Pod的变化而造成容器重启。
+继续以CentOS 7环境为例，首先需要升级的是kubeadm：
+查看kubeadm的版本：
+接下来查看kubeadm的升级计划：
+
+会出现预备升级的内容描述：
+按照任务指引进行升级：
+
+输入“y”，确认后开始升级。
+运行完成之后，再次查询版本：
+
+可以看到，虽然kubectl还是1.13.2，服务端的控制平面已经升级到
+了1.14.0，但是查看Node版本，会发现Node版本还是滞后的：
+然后可以对节点配置进行升级：
+接下来，直接下载新版本的kubectl二进制文件，用其覆盖旧版本的
+文件来完成kubectl的升级，这样就完成了集群的整体升级：
+
+2.6　CRI（容器运行时接口）详解
+归根结底，Kubernetes Node（kubelet）的主要功能就是启动和停止
+容器的组件，我们称之为容器运行时（Container Runtime），其中最知
+名的就是Docker了。为了更具扩展性，Kubernetes从1.5版本开始就加入
+了容器运行时插件API，即Container Runtime Interface，简称CRI。
+2.6.1　CRI概述
+每个容器运行时都有特点，因此不少用户希望Kubernetes能够支持
+更多的容器运行时。Kubernetes从1.5版本开始引入了CRI接口规范，通
+过插件接口模式，Kubernetes无须重新编译就可以使用更多的容器运行
+时。CRI包含Protocol Buffers、gRPC API、运行库支持及开发中的标准
+规范和工具。Docker的CRI实现在Kubernetes 1.6中被更新为Beta版本，
+并在kubelet启动时默认启动。
+可替代的容器运行时支持是Kubernetes中的新概念。在Kubernetes
+1.3发布时，rktnetes项目同时发布，让rkt容器引擎成为除Docker外的又
+一选择。然而，不管是Docker还是rkt，都用到了kubelet的内部接口，同
+kubelet源码纠缠不清。这种程度的集成需要对kubelet的内部机制有非常
+深入的了解，还会给社区带来管理压力，这就给新生代容器运行时造成
+了难以跨越的集成壁垒。CRI接口规范尝试用定义清晰的抽象层清除这
+一壁垒，让开发者能够专注于容器运行时本身。
+2.6.2　CRI的主要组件
+
+kubelet使用gRPC框架通过UNIX 
+Socket与容器运行时（或CRI代
+理）进行通信。在这个过程中kubelet是客户端，CRI代理（shim）是服
+务端，如图2.7所示。
+图2.7　CRI的主要组件
+Protocol 
+Buffers 
+API包含两个gRPC服务：ImageService和
+RuntimeService。
+◎　ImageService提供了从仓库中拉取镜像、查看和移除镜像的功
+能。
+◎　RuntimeService负责Pod和容器的生命周期管理，以及与容器的
+交互（exec/attach/port-forward）。rkt和Docker这样的容器运行时可以使
+用一个Socket同时提供两个服务，在kubelet中可以用--container-runtime-
+endpoint和--image-service-endpoint参数设置这个Socket。
+2.6.3　Pod和容器的生命周期管理
+Pod由一组应用容器组成，其中包含共有的环境和资源约束。在
+CRI里，这个环境被称为PodSandbox。Kubernetes有意为容器运行时留
+下一些发挥空间，它们可以根据自己的内部实现来解释PodSandbox。对
+于Hypervisor类的运行时，PodSandbox会具体化为一个虚拟机。其他例
+如Docker，会是一个Linux命名空间。在v1alpha1 API中，kubelet会创建
+Pod级别的cgroup传递给容器运行时，并以此运行所有进程来满足
+PodSandbox对Pod的资源保障。
+在启动Pod之前，kubelet调用RuntimeService.RunPodSandbox来创建
+
+环境。这一过程包括为Pod设置网络资源（分配IP等操作）。
+PodSandbox被激活之后，就可以独立地创建、启动、停止和删除不同的
+容器了。kubelet会在停止和删除PodSandbox之前首先停止和删除其中的
+容器。
+kubelet的职责在于通过RPC管理容器的生命周期，实现容器生命周
+期的钩子、存活和健康监测，以及执行Pod的重启策略等。
+RuntimeService服务包括对Sandbox和Container操作的方法，下面的
+伪代码展示了主要的RPC方法：
+
+2.6.4　面向容器级别的设计思路
+众所周知，Kubernetes的最小调度单元是Pod，它曾经可能采用的一
+
+个CRI设计就是复用Pod对象，使得容器运行时可以自行实现控制逻辑
+和状态转换，这样一来，就能极大地简化API，让CRI能够更广泛地适
+用于多种容器运行时。但是经过深入讨论之后，Kubernetes放弃了这一
+想法。
+首先，kubelet有很多Pod级别的功能和机制（例如crash-loop backoff
+机制），如果交给容器运行时去实现，则会造成很重的负担；然后，
+Pod标准还在快速演进。很多新功能（如初始化容器）都是由kubelet完
+成管理的，无须交给容器运行时实现。
+CRI选择了在容器级别进行实现，使得容器运行时能够共享这些通
+用特性，以获得更快的开发速度。这并不意味着设计哲学的改变—
+kubelet要负责、保证容器应用的实际状态和声明状态的一致性。
+Kubernetes为用户提供了与Pod及其中的容器进行交互的功能
+（kubectl exec/attach/port-forward）。kubelet目前提供了两种方式来支持
+这些功能：①调用容器的本地方法；②使用Node上的工具（例如nsenter
+及socat）。
+因为多数工具都假设Pod用Linux 
+namespace做了隔离，因此使用
+Node上的工具并不是一种容易移植的方案。在CRI中显式定义了这些调
+用方法，让容器运行时进行具体实现。下面的伪代码显示了Exec、
+Attach、PortForward这几个调用需要实现的RuntimeService方法：
+
+目前还有一个潜在的问题是，kubelet处理所有的请求连接，使其有
+成为Node通信瓶颈的可能。在设计CRI时，要让容器运行时能够跳过中
+间过程。容器运行时可以启动一个单独的流式服务来处理请求（还能对
+Pod的资源使用情况进行记录），并将服务地址返回给kubelet。这样
+kubelet就能反馈信息给API Server，使之可以直接连接到容器运行时提
+供的服务，并连接到客户端。
+2.6.5　尝试使用新的Docker-CRI来创建容器
+要尝试新的kubelet-CRI-Docker集成，只需为kubelet启动参数加上--
+enable-cri=true开关来启动CRI。这个选项从Kubernetes 1.6开始已经作为
+kubelet的默认选项了。如果不希望使用CRI，则可以设置--enable-
+cri=false来关闭这个功能。
+
+查看kubelet的日志，可以看到启用CRI和创建gRPC Server的日志：
+创建一个Deployment：
+查看Pod的详细信息，可以看到将会创建沙箱（Sandbox）的
+Event：
+
+这表明kubelet使用了CRI接口来创建容器。
+2.6.6　CRI的进展
+目前已经有多款开源CRI项目可用于Kubernetes：Docker、CRI-O、
+Containerd、frakti（基于Hypervisor的容器运行时），各CRI运行时的安
+装手册可参考官网的说明。
+2.7　kubectl命令行工具用法详解
+kubectl作为客户端CLI工具，可以让用户通过命令行对Kubernetes集
+群进行操作。本节对kubectl的子命令和用法进行详细说明。
+2.7.1　kubectl用法概述
+
+kubectl命令行的语法如下：
+其中，command、TYPE、NAME、flags的含义如下。
+（1）command：子命令，用于操作资源对象，例如create、get、
+describe、delete等。
+（2）TYPE：资源对象的类型，区分大小写，能以单数、复数或者
+简写形式表示。例如以下3种TYPE是等价的。
+（3）NAME：资源对象的名称，区分大小写。如果不指定名称，
+系统则将返回属于TYPE的全部对象的列表，例如运行kubectl get pods命
+令后将返回所有Pod的列表。
+在一个命令行中也可以同时对多个资源对象进行操作，以多个
+TYPE和NAME的组合表示，示例如下。
+◎　获取多个相同类型资源的信息，以TYPE1 
+name1 
+name2
+name<#>格式表示：
+◎　获取多种不同类型对象的信息，以TYPE1/name1 TYPE1/name2
+TYPE2/name3 TYPE<#>/name<#>格式表示：
+
+◎　同时应用多个YAML文件，以多个-f file参数表示：
+（4）flags：kubectl子命令的可选参数，例如使用-s或--server设置
+API Server的URL地址，而不使用默认值。
+2.7.2　kubectl子命令详解
+kubectl的子命令非常丰富，涵盖了对Kubernetes集群的主要操作，
+包括资源对象的创建、删除、查看、修改、配置、运行等。详细的子命
+令如表2.5所示。
+表2.5　kubectl子命令详解
+
+
+续表
+
+
+续表
+
+
+2.7.3　kubectl可操作的资源对象详解
+kubectl可操作的资源对象列表如表2.6所示，可以通过kubectl 
+api-
+resources命令进行查看。
+表2.6　kubectl可操作的资源对象类型及其缩写
+
+
+续表
+
+
+续表
+2.7.4　kubectl的公共参数说明
+kubectl的公共参数如表2.7所示。
+表2.7　kubectl的公共参数
+
+
+续表
+
+
+每个子命令（如create、delete、get等）还有其特定的命令行参数，
+可以通过$ kubectl [command]--help命令进行查看。
+2.7.5　kubectl格式化输出
+kubectl命令可以对结果进行多种格式化显示，输出的格式通过-o参
+数指定：
+根据不同子命令的输出结果，可选的输出格式如表2.8所示。
+表2.8　kubectl命令的可选输出格式列表
+
+常用的输出格式示例如下。
+（1）显示Pod的更多信息，例如Node IP等：
+（2）以YAML格式显示Pod的详细信息：
+（3）以自定义列名显示Pod的信息：
+（4）基于自定义列名配置文件进行输出：
+template.txt文件的内容如下：
+输出结果为如下：
+
+（5）关闭服务端列名。在默认情况下，Kubernetes服务端会将资源
+对象的某些特定信息显示为列，这可以通过设置--server-print=false参数
+进行关闭，例如：
+输出结果：
+（6）将输出结果按某个字段排序。可以通过--sort-by参数以
+jsonpath表达式进行指定：
+例如，按照资源对象的名称进行排序：
+2.7.6　kubectl常用操作示例
+本节对一些常用的kubectl操作示例进行说明。
+1.kubectl apply（以文件或stdin部署或更新一个或多个资源）
+基于example-service.yaml中的定义创建一个Service资源：
+使用example-controller.yaml中的定义创建一个Replication Controller
+
+资源：
+使用<directory>目录下所有.yaml、.yml和.json文件中的定义进行创
+建：
+2.kubectl get（列出一个或多个资源对象的信息）
+以文本格式列出所有Pod：
+以文本格式列出所有Pod，包含附加信息（如Node IP）：
+以文本格式列出指定名称的RC：
+以文本格式列出所有RC和Service：
+以文本格式列出所有Daemonset，包括未初始化的Daemonset：
+
+列出在节点server01上运行的所有Pod：
+3.kubectl describe（显示一个或多个资源的详细信息）
+显示名称为<node-name>的节点的详细信息：
+显示名称为<pod-name>的Pod的详细信息：
+显示名称为<rc-name>的RC控制器管理的所有Pod的详细信息：
+描述所有Pod的详细信息：
+对kubectl get和kubectl describe命令说明如下。
+◎　kubectl get命令常用于查看同一资源类型的一个或多个资源对
+象，可以使用-o或--output参数自定义输出格式，还可以通过-w或--watch
+参数开启对资源对象更新的监控。
+◎　kubectl 
+describe命令更侧重于描述指定资源的各方面详细信
+息，通过对API Server的多个API调用来构建结果视图。例如通过kubectl
+describe node命令不仅会返回节点信息，还会返回在其上运行的Pod的摘
+要、节点事件等信息。
+
+4.kubectl delete
+该命令可以使用文件、stdin的输入删除指定的资源对象，还可以通
+过标签选择器、名称、资源选择器等条件来限定待删除的资源范围。
+使用在pod.yaml文件中指定的类型和名称删除Pod：
+删除所有带有'<label-key>=<label-value>'标签的Pod和Service：
+删除所有Pod，包括未初始化的Pod：
+5.kubectl exec（在Pod的容器中运行命令）
+在名称为<pod-name>的Pod的第1个容器中运行date命令并打印输出
+结果：
+在指定的容器中运行date命令并打印输出结果：
+在Pod的第1个容器中运行/bin/bash命令进入交互式TTY终端界面：
+
+6.kubectl logs（打印Pod中容器的日志）
+显示Pod中名称为<container-name>的容器输出到stdout的日志：
+持续监控显示Pod中的第1个容器输出到stdout的日志，类似于tail-f
+命令的功能：
+7.在线编辑运行中的资源对象
+可以使用kubectl edit命令编辑运行中的资源对象，例如使用下面的
+命令编辑运行中的一个Deployment：
+在命令运行之后，会通过YAML格式展示该对象的文本格式定义，
+用户可以对代码进行编辑和保存，从而完成对在线资源的直接修改。
+8.将Pod的端口号映射到宿主机
+将Pod的80端口映射到宿主机的8888端口，客户端即可通过
+http：//<NodeIP>：8888访问容器服务了：
+9.在容器和Node之间复制文件
+
+把Pod（默认为第1个容器）中的/etc/fstab文件复制到宿主机的/tmp
+目录下：
+10.设置资源对象的标签
+为名为“default”的命名空间设置“testing=true”标签：
+11.创建和使用命令行插件
+为了扩展kubectl的功能，Kubernetes从1.8版本开始引入插件机制，
+在1.14版本时达到稳定版。
+用户自定义插件的可执行文件名需要以“kubectl-”开头，复制到
+$PATH中的某个目录（如/usr/local/bin）下，然后就可以通过kubectl
+<plugin-name>运行自定义插件了。
+例如，通过Shell脚本实现一个名为hello的插件，其功能为在屏幕上
+输出字符串“hello world”。创建名为“kubectl-hello”的Shell脚本文件，内
+容如下：
+为该脚本添加可执行权限：
+复制kubectl-hello文件到/usr/local/bin/目录下，就完成了安装插件的
+工作：
+
+然后在kubectl命令后带上插件名称就能使用该插件了：
+卸载插件也很简单，只需要删除插件文件即可：
+通过插件机制，可以将某些复杂的kubectl命令简化为运行插件的方
+式。例如想创建一个命令来查看当前上下文环境（context）中的用户
+名，则可以通过kubectl config view命令进行查看。为此，可以创建一个
+名为“kubectl-whoami”的Shell脚本，内容如下：
+为该脚本添加可执行权限，并复制到/usr/local/bin/目录下完成插件
+的安装：
+运行kubectl whoami命令，就能通过插件功能查看上下文环境中的
+
+用户名了：
+另外，使用kubectl plugin list命令可以查看当前系统中已安装的插
+件列表：

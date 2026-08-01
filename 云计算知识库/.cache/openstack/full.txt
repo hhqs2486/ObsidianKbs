@@ -1,0 +1,1956 @@
+笔记本：
+Blocain
+创建时间：
+2019/3/4 9:45
+更新时间：
+2019/6/9 16:32
+作者：
+handesimu@sina.com
+标签：
+OpenStack
+URL：
+https://www.cnblogs.com/netonline/p/9201049.html
+OpenStack-Rocky高可用集群部署
+这篇文章值得参考
+https://www.dwhd.org/20180910_205907.html
+https://www.cnblogs.com/netonline/p/9201049.html
+https://docs.openstack.org/install-guide/
+https://blog.csdn.net/u012881331/article/details/83543668
+安装前参数调整
+https://blog.csdn.net/mx_steve/article/details/85925774
+A、基础环境
+各节点设置各节点配置IP与主机名解析
+[root@controller1 ~]# more /etc/hosts
+192.168.100.100 controller
+192.168.100.181 controller1
+192.168.100.182 controller2
+192.168.100.183 controller3
+192.168.100.184 compute1
+[root@controller1 ~]#
+各节点关闭相关服务与防火墙
+[root@controller1 ~]# systemctl stop NetworkManager
+[root@controller1 ~]# systemctl disable NetworkManager
+[root@controller1 ~]# systemctl stop firewalld.service
+[root@controller1 ~]# systemctl stop iptables.service
+[root@controller1 ~]# setenforce 0
+各节点时间同步，安装chrony并配置
+控制节点：
+[root@controller1 ~]# yum install chrony
+[root@controller1 ~]# vim /etc/chrony.conf
+server 127.0.0.1 iburst           #注释其它的server
+allow 192.168.100.0/24
+local stratum 10
+[root@controller1 ~]# service chronyd restart
+其它节点：
+[root@computer1 ~]# yum install chrony
+server 192.168.100.181 iburst        #这里填入控制节点的主机IP或主机名
+server controller1 iburst
+[root@computer1 ~]# service chronyd restart
+验证（控制节点）
+[root@controller1 ~]# chronyc sources
+210 Number of sources = 1
+MS Name/IP address         Stratum Poll Reach LastRx Last sample               
+===============================================================================
+^? localhost                     0   6     0     -     +0ns[   +0ns] +/-    0ns
+[root@controller1 ~]#
+验证（其它节点）
+[root@computer1 ~]# chronyc sources
+210 Number of sources = 2
+MS Name/IP address         Stratum Poll Reach LastRx Last sample               
+===============================================================================
+^* 192.168.122.15               10   6   177    19   +506ns[+4678ns] +/-  136us
+^? controller1          0   8     0     -     +0ns[   +0ns] +/-    0ns
+[root@computer1 ~]#
+各节点配置yum源，安装配置依赖服务（OpenStack客户端）
+[root@controller1 ~]# more /etc/yum.repos.d/openstack-rocky.repo
+[openstack-rocky]
+name=openstack-rocky
+baseurl=https://mirrors.aliyun.com/centos/7/cloud/x86_64/openstack-rocky/
+enabled=1
+gpgcheck=0
+[root@controller1 ~]# yum install python-openstackclient openstack-selinux
+
+[root@controller1 ~]# yum upgrade
+B、配置高可用环境
+B1、配置MariaDB-Galera-server集群
+节点A：
+[root@controller1 ~]# yum install mariadb mariadb-server
+[root@controller1 ~]# service mariadb start
+[root@controller1 ~]# mysql_secure_installation
+[root@controller1 ~]# yum install mariadb-server-galera
+[root@controller1 ~]# vim /etc/my.cnf.d/mariadb-server.cnf
+[galera]
+bind-address = 192.168.100.181
+wsrep_provider = /usr/lib64/galera/libgalera_smm.so
+wsrep_cluster_address ="gcomm://controller1,controller2,controller3"  
+wsrep_cluster_name = openstack-cluster-01
+wsrep_node_name = controller1
+wsrep_node_address = 192.168.100.181
+wsrep_on=ON
+wsrep_slave_threads=4
+wsrep_sst_method=rsync
+default_storage_engine=InnoDB
+wsrep_sst_auth=galera:galera        #集群认证用户密码
+[root@controller1 ~]#
+启动集群第1个节点，添加集群认证用户
+[root@controller1 ~]#  service mariadb stop
+[root@controller1 ~]# galera_new_cluster
+[root@controller1 ~]# mysql
+MariaDB [(none)]> GRANT ALL PRIVILEGES ON *.* TO 'galera'@'%' IDENTIFIED BY 'galera' WITH GRANT OPTION;
+MariaDB [(none)]> flush privileges;
+MariaDB [(none)]> exit
+节点B、C 安装配置数据库(以节点B 为例）
+[root@controller2 ~]# yum install mariadb mariadb-server
+[root@controller2 ~]# service mariadb start
+[root@controller2 ~]# mysql_secure_installation
+[root@controller2 ~]# service mariadb stop
+[root@controller2 ~]# yum install mariadb-server-galera
+在节点B和C，将节点A的配置文件复制过来，改一下
+[root@controller2 ~]# more /etc/my.cnf.d/mariadb-server.cnf
+[galera]
+bind-address = 192.168.100.182                        #这里改成各个节点的IP
+wsrep_provider = /usr/lib64/galera/libgalera_smm.so
+wsrep_cluster_address ="gcomm://controller1,controller2,controller13" 
+wsrep_cluster_name = openstack-cluster-01
+wsrep_node_name = controller2       #这里改成各个节点的主机名
+wsrep_node_address = 192.168.100.182        #这里改成各个节点的IP
+wsrep_on=ON
+wsrep_slave_threads=4
+wsrep_sst_method=rsync
+default_storage_engine=InnoDB
+启动后查看日志
+[root@controller2 ~]# service mariadb start
+[root@controller2 ~]# tail /var/log/mariadb/mariadb.log -n 20
+2019-03-05 20:39:01 140188135188224 [Note] WSREP: 1.0 (controller1): State transfer from 0.0 (controller1) complete.
+2019-03-05 20:39:01 140188135188224 [Note] WSREP: Shifting JOINER -> JOINED (TO: 0)
+2019-03-05 20:39:01 140188135188224 [Note] WSREP: Member 1.0 (controller1) synced with group.
+2019-03-05 20:39:01 140188135188224 [Note] WSREP: Shifting JOINED -> SYNCED (TO: 0)
+2019-03-05 20:39:01 140188337101568 [Note] WSREP: Synchronized with group, ready for connections
+2019-03-05 20:39:01 140188337101568 [Note] WSREP: wsrep_notify_cmd is not defined, skipping notification.
+2019-03-05 20:39:01 140188478163136 [Note] /usr/libexec/mysqld: ready for connections.
+Version: '10.1.20-MariaDB'  socket: '/var/lib/mysql/mysql.sock'  port: 3306  MariaDB Server
+[root@controller2 ~]#
+验证：
+在A节点创建测试数据库，在B、C节点查看
+再从B删除测试数据库，在A节点查看
+集群启动关闭：
+1节点（按启动顺序，与机器无关）：
+[root@controller1 ~]# galera_new_cluster
+其它节点：
+[root@controller2 ~]# service mariadb start
+关闭：
+[root@controller1 ~]# service mariadb stop
+B2、设置心跳检测clustercheck
+任意控制节点，创建心跳检测用户，注意这里的用户名需要与/usr/bin/clustercheck脚本里的用户名相同，该脚本由mariadb-server-galera
+安装产生
+[root@controller1 ~]# mysql -u root -p
+MariaDB [mysql]> GRANT PROCESS ON *.* TO 'clustercheckuser'@'localhost' IDENTIFIED BY 'clustercheckpassword!';
+MariaDB [mysql]> GRANT PROCESS ON *.* TO 'clustercheckuser'@'127.0.0.1' IDENTIFIED BY 'clustercheckpassword!';
+MariaDB [(none)]> FLUSH PRIVILEGES;
+
+MariaDB [(none)]> exit
+[root@controller1 ~]#
+所有控制节点，创建心跳检测服务脚本
+[root@controller1 ~]# more /etc/xinetd.d/mysqlchk
+#default:on
+#description:mysqlchk
+servicemysqlchk
+{
+port=9200
+disable=no
+socket_type=stream
+protocol=tcp
+wait=no
+user=root
+group=root
+groups=yes
+server=/usr/bin/clustercheck
+type=UNLISTED
+per_source=UNLIMITED
+log_on_success=
+log_on_failure=HOST
+flags=REUSE
+}
+[root@controller1 ~]# vim /etc/services        #改变9200端口的用途说明
+#wap-wsp         9200/tcp                # WAP connectionless session service
+mysqlchk         9200/tcp                # mysqlcheck
+[root@controller1 ~]# systemctl daemon-reload
+[root@controller1 ~]# systemctl start xinetd.service
+[root@controller1 ~]# systemctl enable xinetd.service
+测试脚本
+[root@controller1 ~]# /usr/bin/clustercheck
+HTTP/1.1 503 Service Unavailable
+Content-Type: text/plain
+Connection: close
+Content-Length: 36
+Galera cluster node is not synced.
+[root@controller1 ~]#
+B3、安装配置RabbitMq集群
+所有控制节点，安装
+[root@controller1 ~]# yum install erlang rabbitmq-server -y
+所有节点修改配置文件，只监听本地，如有需要删除IPV6监听端口
+[root@controller1 ~]# vim /etc/rabbitmq/rabbitmq.config
+23    %% {tcp_listeners, [{"192.168.100.181", 5672},
+…………
+[root@controller1 ~]# systemctl enable rabbitmq-server.service
+任选1节点，启动
+[root@controller1 ~]# systemctl start rabbitmq-server.service
+[root@controller1 ~]# rabbitmqctl cluster_status
+Cluster status of node 'rabbit@controller1' ...
+[{nodes,[{disc,['rabbit@controller1']}]},
+{running_nodes,['rabbit@controller1']},
+{cluster_name,<<"rabbit@controller1">>},
+{partitions,[]},
+{alarms,[{'rabbit@controller1',[]}]}]
+从主节点分发.erlang.cookie到其它节点
+[root@controller1 ~]# scp /var/lib/rabbitmq/.erlang.cookie controller2:/var/lib/rabbitmq/.erlang.cookie
+在其它节点，修改其属主、组；然后启动服务
+[root@controller2 ~]# chown rabbitmq.rabbitmq /var/lib/rabbitmq/.erlang.cookie
+[root@controller2 ~]# systemctl start rabbitmq-server
+其它节点以ram形式加入集群
+[root@controller2 ~]# rabbitmqctl stop_app
+[root@controller2 ~]# rabbitmqctl join_cluster --ram rabbit@controller1
+[root@controller2 ~]# rabbitmqctl start_app
+任意节点查看集群状态
+[root@controller2 ~]# rabbitmqctl cluster_status
+Cluster status of node 'rabbit@controller1' ...
+[{nodes,[{disc,['rabbit@controller1']},
+         {ram,['rabbit@controller2']}]},
+{running_nodes,['rabbit@controller2',
+                 'rabbit@controller1']},
+{cluster_name,<<"rabbit@controller1">>},
+{partitions,[]},
+{alarms,[{'rabbit@controller2',[]},
+          {'rabbit@controller1',[]}]}]
+[root@controller1 ~]#
+任意节点添加openstack用户：
+[root@controller1 ~]# rabbitmqctl add_user openstack kAkJf10RuzhT5V4hrtwvk5bvSuX
+任意节点允许用户进行配置，写入和读取访问 openstack
+[root@controller1 ~]# rabbitmqctl set_permissions openstack ".*" ".*" ".*"
+任意节点，设置镜像队列高可用
+[root@controller1 ~]# rabbitmqctl set_policy ha-all "^" '{"ha-mode":"all"}'
+全部节点，安装web管理插件
+[root@controller1 ~]# rabbitmq-plugins enable rabbitmq_management
+rabbitmq启动报错
+systemctl status rabbitmq-server.service显示报错如下
+Totem is unable to form a cluster because of an operating system or network fau……
+
+解决：将haproxy配置文件中，关于rabbitmq的监听注释掉，重启haproxy
+systemctl status rabbitmq-server.service显示报错如下
+Crash dump is being written to: erl_crash.dump...done
+find / -name recovery.dets |xargs -i rm -rf {}
+journalctl -xel节点3启动，报错无法连接到节点3
+Error: unable to connect to node rabbit@controller3: nodedown
+由于复制的其它节点的信息，导致controller03 认为 controller03 是其 cluster node
+rm -rf  /var/lib/rabbitmq/mnesia/
+重建集群报错
+Error: {inconsistent_cluster,"Node rabbit@controller1 thinks it's clustered with node rabbit@controller3, but
+rabbit@controller3 disagrees"
+https://www.rabbitmq.com/clustering.html
+修改太复杂，最终方案，销毁集群，重建
+所有节点systemctl stop rabbitmq-server.service，并且rm -rf /var/lib/rabbitmq/*
+再重建集群
+B4、Memcached集群（Memcached用来缓存令牌）
+Memcached是无状态的，各控制节点独立部署，
+在配置openstack各服务模块时，统一调用多个控制节点的memcached服务，即可实现多节点数据同步，达到高可用的目的
+所有节点
+[root@controller1 ~]# yum install memcached python-memcached
+所有节点，编辑配置文件，每个节点只监听自己的主机
+[root@controller1 ~]# vim /etc/sysconfig/memcached
+OPTIONS="-l 127.0.0.1,::1,controller1"    #另一个节点，这里改成controller2，注意，如果内核参数里禁用了IPV6，那么这里的::1需要删掉，否则启动失败，日志显
+示为 Cannot assign requested address
+[root@controller1 ~]# systemctl enable memcached.service
+[root@controller1 ~]# systemctl start memcached.service
+官方集群安装文档里，需要安装ETCD服务，这里暂时没有配置！！！
+所有节点安装
+[root@controller1 ~]# yum install -y etcd
+节点1配置
+[root@controller1 ~]# grep -Ev "^$|^#" /etc/etcd/etcd.conf
+ETCD_DATA_DIR="/var/lib/etcd/default.etcd"
+ETCD_LISTEN_PEER_URLS="http://192.168.1.31:2380"            #其它节点配置，监听的IP需要改成自己的IP
+ETCD_LISTEN_CLIENT_URLS="http://localhost:2379,http://192.168.1.31:2379"
+ETCD_NAME="etcd1"
+ETCD_INITIAL_ADVERTISE_PEER_URLS="http://192.168.1.31:2380"
+ETCD_ADVERTISE_CLIENT_URLS="http://localhost:2379,http://192.168.1.31:2379"
+ETCD_INITIAL_CLUSTER="etcd1=http://192.168.1.31:2380,etcd2=http://192.168.1.32:2380,etcd3=http://192.168.1.33:2380"
+ETCD_INITIAL_CLUSTER_TOKEN="etcd-cluster"
+ETCD_INITIAL_CLUSTER_STATE="new"                #其它节点的配置，这里需要改成existing
+[root@controller1 ~]#
+所有节点的配置文件改好
+先启动第1节点，此时命令不会返回，hang住一样
+[root@controller1 ~]# systemctl start etcd
+再启动其它节点
+[root@controller2 ~]# systemctl start etcd  
+[root@controller3 ~]# systemctl start etcd
+此时返回正常
+查看集群状态
+[root@controller1 ~]# etcdctl member list
+35ef855791ca152c: name=etcd3 peerURLs=http://192.168.1.33:2380 clientURLs=http://192.168.1.33:2379,http://localhost:2379 isLeader=false
+4f7fb6af0c0375b8: name=etcd2 peerURLs=http://192.168.1.32:2380 clientURLs=http://192.168.1.32:2379,http://localhost:2379 isLeader=false
+df62a5e4f56215a4: name=etcd1 peerURLs=http://192.168.1.31:2380 clientURLs=http://192.168.1.31:2379,http://localhost:2379 isLeader=true
+[root@controller1 ~]#
+所有节点
+[root@controller1 ~]# systemctl enable etcd
+集群测试，节点A存储值，到节点B查询，正常返回即集群正常
+[root@controller1 ~]# etcdctl set /testdir/testkey "hello world"
+[root@controller2 ~]# etcdctl get /testdir/testkey
+hello world
+[root@controller2 ~]#
+B5、安装pacemaker
+# pacemaker：资源管理器（CRM），负责启动与停止服务，位于 HA 集群架构中资源管理、资源代理层
+# corosync：消息层组件（Messaging Layer），管理成员关系、消息与仲裁，为高可用环境中提供通讯服务，位于高可用集群架构的底层，为各节点（node）之间提供心跳信
+息；相当于做为一个vote system
+# resource-agents：资源代理，在节点上接收CRM的调度，对某一资源进行管理的工具，管理工具通常为脚本；
+# pcs：命令行工具集；由于corosync和pacemaker不好配置，所以有了PCS来一起配置
+# fence-agents：fencing 在一个节点不稳定或无答复时将其关闭，使其不会损坏集群的其它资源，其主要作用是消除脑裂
+全部控制节点
+
+[root@controller1 ~]#  yum install pcs pacemaker corosync fence-agents-all resource-agents
+[root@controller1 ~]#  systemctl start pcsd.service
+[root@controller1 ~]#  systemctl enable pcsd.service
+pcsd是一款corosync和pacemaker命令行配置工具
+创建集群用户，所有节点执行
+[root@controller1 ~]# echo AMu9o50kMtk2DcO5jyhU3UMhM50= | passwd --stdin hacluster
+节点认证，然后创建集群，在任意节点操作即可
+[root@controller1 ~]# pcs cluster auth controller1 controller2 -u hacluster -p AMu9o50kMtk2DcO5jyhU3UMhM50= --force
+创建集群
+[root@controller1 ~]# pcs cluster setup --force --name openstack-cluster controller1 controller2 controller3
+启动集群，设置自启动，查看集群状态
+[root@controller1 ~]# pcs cluster start --all
+[root@controller1 ~]# pcs cluster enable --all
+[root@controller1 ~]# pcs status cluster
+Cluster Status:
+Stack: corosync
+Current DC: controller2 (version 1.1.19-8.el7_6.4-c3c624ea3d) - partition with quorum
+Last updated: Mon Mar  4 13:49:37 2019
+Last change: Mon Mar  4 13:49:23 2019 by hacluster via crmd on controller2
+2 nodes configured
+0 resources configured
+PCSD Status:
+  controller2: Online
+  controller1: Online
+[root@controller1 ~]# pcs status corosync
+Membership information
+----------------------
+    Nodeid      Votes Name
+         1          1 controller1 (local)
+         2          1 controller2
+[root@controller1 ~]#
+查看集群资源
+[root@controller1 ~]# pcs resource
+NO resources configured
+[root@controller1 ~]#
+或通过任意节点web访问：https://192.168.122.31:2224
+设置属性（任意节点）
+设置合适的输入处理历史记录及策略引擎生成的错误与警告，在troulbshoot时有用
+[root@controller1 ~]# pcs property set pe-warn-series-max=1000 pe-input-series-max=1000 pe-error-series-max=1000;
+默认定义某些pacemaker操作发生的事件间隔为15min，建议设置为5min或3min
+[root@controller1 ~]# pcs property set cluster-recheck-interval=5;
+corosync默认启用stonith，但stonith机制（通过ipmi或ssh关闭节点）并没有配置相应的stonith设备，此时pacemaker将拒绝启动任何资源；在此将stonith配置成
+false
+[root@controller1 ~]# pcs property set stonith-enabled=false
+默认当有半数以上节点在线时，集群认为自己拥有法定人数，是“合法”的，满足公式：total_nodes < 2 * active_nodes；当集群只有2个节点时，故障1个节点集群即非
+法，所谓的”双节点集群”就没有意义；在实际生产环境中，做2节点集群，无法仲裁时，可选择忽略；做3节点集群，可根据对集群节点的高可用阀值灵活设置
+[root@controller1 ~]# pcs property set no-quorum-policy=ignore
+[root@controller1 ~]# pcs property list
+Cluster Properties:
+cluster-infrastructure: corosync
+cluster-name: openstack-cluster
+cluster-recheck-interval: 5
+dc-version: 1.1.19-8.el7_6.4-c3c624ea3d
+have-watchdog: false
+no-quorum-policy: ignore
+pe-error-series-max: 1000
+pe-input-series-max: 1000
+pe-warn-series-max: 1000
+stonith-enabled: false
+[root@controller1 ~]#
+配置VIP
+[root@controller1 ~]# pcs resource create vip ocf:heartbeat:IPaddr2 ip=192.168.122.30 cidr_netmask=24 op monitor
+interval=30s;
+通过定义资源属性（standard:provider:type），定位”vip”资源对应的ra脚本位置；
+在任意控制节点设置vip（resource_id属性），命名即为“vip”；
+ocf（standard属性）：资源代理（resource agent）的一种，另有systemd，lsb，service等；
+heartbeat：资源脚本的提供者（provider属性），ocf规范允许多个供应商提供同一资源代理，大多数ocf规范提供的资源代理都使用heartbeat作为provider；
+IPaddr2：资源代理的名称（type属性），IPaddr2便是资源的type；centos系统中，符合ocf规范的ra脚本位于/usr/lib/ocf/resource.d/目录，目录下存放了全部的
+provider，每个provider目录下有多个type；
+op：表示Operations
+查看集群资源
+[root@controller1 ~]# pcs resource
+vip    (ocf::heartbeat:IPaddr2):       Started controller1
+[root@controller1 ~]# ip addr        #VIP已经配置到网卡上
+2: ens33: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc pfifo_fast state UP group default qlen 1000
+    link/ether 00:0c:29:74:44:63 brd ff:ff:ff:ff:ff:ff
+    inet 192.168.122.31/24 brd 192.168.122.255 scope global ens33
+       valid_lft forever preferred_lft forever
+3: ens38: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc pfifo_fast state UP group default qlen 1000
+    link/ether 00:0c:29:74:44:6d brd ff:ff:ff:ff:ff:ff
+
+    inet 192.168.122.16/24 brd 192.168.122.255 scope global ens38
+       valid_lft forever preferred_lft forever
+    inet 192.168.122.30/24 brd 192.168.122.255 scope global secondary ens38
+       valid_lft forever preferred_lft forever
+[root@controller1 ~]#
+所有节点，配置/etc/hosts文件，加入controller 对应VIP的解析
+[root@controller1 ~]# more /etc/hosts
+192.168.122.30 controller
+192.168.122.31 controller192.168.122.32 computer1
+192.168.122.33 OpenStack-block1
+192.168.122.34 OpenStack-object1
+192.168.122.35 OpenStack-object2
+通过web访问任意控制节点：https://192.168.122.31:2224
+虽然以cli的方式设置了集群，但web界面默认并不显示，需要手动添加集群；实际操作只需要添加已组建集群的任意节点
+B6、配置Haproxy
+安装配置（所有控制节点）
+[root@controller1 ~]# yum install haproxy -y
+[root@controller1 ~]# cp /etc/haproxy/haproxy.cfg{,.bak}
+[root@controller1 ~]# grep -Ev "^$|^#" /etc/haproxy/haproxy.cfg
+global
+    log         127.0.0.1 local2
+    chroot      /var/lib/haproxy
+    pidfile     /var/run/haproxy.pid
+    maxconn     4000
+    user        haproxy
+    group       haproxy
+    daemon
+    stats socket /var/lib/haproxy/stats
+defaults
+    log                     global
+    option                  redispatch
+    retries                 3
+    timeout http-request    10s
+    timeout queue           1m
+    timeout connect         10s
+    timeout client          1m
+    timeout server          1m
+    timeout check           10s
+    maxconn                 3000
+backend app
+    balance     roundrobin
+    server  app1 127.0.0.1:5001 check
+    server  app2 127.0.0.1:5002 check
+#haproxy监控页
+listen stats
+    bind 0.0.0.0:1080
+    mode http
+    stats enable
+    stats uri /
+    stats realm OpenStack\ Haproxy
+    stats auth admin:admin
+    stats refresh 30s
+    stats show-node
+    stats show-legends
+    stats hide-version
+#horizon服务
+listen dashboard_cluster
+    bind 192.168.122.30:80
+    balance source
+    option tcpka
+    option httpchk
+    option tcplog
+    server controller1 192.168.122.31:80 check inter 2000 rise 2 fall 5
+    server controller2 192.168.122.41:80 check inter 2000 rise 2 fall 5
+
+#mariadb服务
+listen galera_cluster
+    bind 192.168.122.30:3306
+    balance source
+    mode tcp
+    server controller1 192.168.122.31:3306 check inter 2000 rise 2 fall 5
+    server controller1 192.168.122.41:3306 check inter 2000 rise 2 fall 5
+#rabbirmq集群
+listen rabbitmq_cluster
+    bind 192.168.122.30:65673
+    mode tcp
+    option tcpka
+    balance roundrobin
+    timeout client 3h
+    timeout server 3h
+    option clitcpka
+    server controller1 192.168.122.31:5672 check inter 2000 rise 2 fall 5
+    server controller2 192.168.122.41:5672 check inter 2000 rise 2 fall 5
+#glance_api服务
+listen glance_api_cluster
+    bind 192.168.122.30:9292
+    balance source
+    option tcpka
+    option httpchk
+    option tcplog
+    server controller1 192.168.122.31:9292 check inter 2000 rise 2 fall 5
+    server controller2 192.168.122.41:9292 check inter 2000 rise 2 fall 5
+#glance_registry服务
+listen glance_registry_cluster
+    bind 192.168.122.30:9191
+…………
+#keystone_admin_internal_api服务
+listen keystone_admin_cluster
+    bind 192.168.122.30:35357
+…………
+#keystone_public_api服务
+listen keystone_public_cluster
+    bind 192.168.122.30:5000
+…………
+#兼容aws ec2-api
+listen nova_ec2_api_cluster
+    bind 192.168.122.30:8773
+…………
+#nova_compute_api服务
+listen nova_compute_api_cluster
+    bind 192.168.122.30:8774
+…………
+#nova_placement_cluster
+listen nova_placement_cluster
+    bind 192.168.122.30:8778
+…………
+#nova_metadata_api_cluster
+listen nova_metadata_api_cluster
+    bind 192.168.122.30:8775
+…………
+#nova_vncproxy_cluster
+listen nova_vncproxy_cluster
+    bind 192.168.122.30:6080
+…………
+#neutron_api_cluster
+listen neutron_api_cluster
+    bind 192.168.122.30:9696
+…………
+#cinder_api_cluster
+listen cinder_api_cluster
+    bind 192.168.122.30:8776
+…………
+编辑内核参数
+[root@controller1 ~]# more /etc/sysctl.conf
+net.ipv4.ip_nonlocal_bind = 1
+net.ipv4.ip_forward = 1
+[root@controller1 ~]# sysctl -p
+[root@controller1 ~]# scp /etc/haproxy/haproxy.cfg controller2oxy/haproxy.cfg
+开启日志：
+[root@controller1 ~]# cat /etc/haproxy/haproxy.cfg  
+global
+        log         127.0.0.1 local2                #这种配置方式，表示日志不是基
+于facility或priority:loglevel来收集，而是基于TCP的logserver来记录
+[root@controller1 ~]# vim /etc/rsyslog.conf
+启用UDPsyslog reception
+# Provides UDP syslog reception
+$ModLoad imtcp
+$InputTCPServerRun 514
+添加对应日志级别
+local7.*                                                /var/log/boot.log
+local2.*                                                /var/log/haproxy.log
+
+[root@controller1 ~]# service rsyslog restart
+[root@controller1 ~]# netstat -tulpn |grep 514
+udp        0      0 0.0.0.0:514             0.0.0.0:*                           28435/rsyslogd      
+udp6       0      0 :::514                  :::*                                28435/rsyslogd      
+[root@controller1 ~]# systemctl start haproxy.service
+[root@controller1 ~]# tail /var/log/haproxy.log
+Mar  7 13:11:14 localhost haproxy[28547]: Proxy main started.
+Mar  7 13:11:14 localhost haproxy[28547]: Proxy webservers started.
+[root@controller1 ~]#
+启动
+[root@controller1 ~]# systemctl enable haproxy
+[root@controller1 ~]# systemctl start haproxy
+登陆
+http://192.168.122.31:1080/
+默认密码admin/admin
+B7、设置pcs资源
+任意节点，添加资源lb-haproxy-clone
+[root@controller1 ~]# pcs resource create lb-haproxy systemd:haproxy --clone
+[root@controller1 ~]# pcs resource
+vip    (ocf::heartbeat:IPaddr2):       Started controller1
+Clone Set: lb-haproxy-clone [lb-haproxy]
+     Started: [ controller1 controller2 ]
+将HAProxy添加到群集并确保VIP只能在HAProxy处于活动状态的计算机上运行
+设置资源启动顺序，先vip再lb-haproxy-clone；
+[root@controller1 1~]# pcs constraint order start vip then lb-haproxy-clone kind=Optional
+官方建议设置vip运行在haproxy active的节点，通过绑定lb-haproxy-clone与vip服务，将两种资源约束在1个节点
+约束后，从资源角度看，其余暂时没有获得vip的节点的haproxy会被pcs关闭
+[root@controller1 ~]# pcs constraint colocation add lb-haproxy-clone with vip
+[root@controller1 ~]# pcs resource
+vip    (ocf::heartbeat:IPaddr2):       Started controller1
+Clone Set: lb-haproxy-clone [lb-haproxy]
+     Started: [ controller1 ]
+     Stopped: [ controller2 ]
+[root@controller1 ~]#
+C、配置Keystone集群服务
+所有控制节点，安装keystone服务
+[root@OpenStack-controller ~]# yum install -y openstack-keystone python-keystoneclient
+安装相应的辅助服务包
+[root@OpenStack-controller ~]# yum install -y httpd mod_wsgi
+这是一个辅助包，也一起装上
+[root@OpenStack-controller ~]# yum install -y openstack-utils
+[root@OpenStack-controller ~]# rpm -ql  openstack-utils      
+/usr/bin/openstack-config
+/usr/bin/openstack-service
+………………
+[root@OpenStack-controller ~]#
+配置数据库
+配置数据库，让keystone可以访问数据库
+[root@OpenStack-controller ~]# mysql -u root -p
+MariaDB [(none)]> create database keystone;
+MariaDB [(none)]> GRANT ALL PRIVILEGES ON keystone.* TO 'keystone'@'localhost' IDENTIFIED BY 'n1zeVdgwo8XcUp5eDYpIfZz';
+MariaDB [(none)]> GRANT ALL PRIVILEGES ON keystone.* TO 'keystone'@'192.168.100.%' IDENTIFIED BY 'n1zeVdgwo8XcUp5eDYpIfZz';    
+MariaDB [(none)]> flush privileges;
+MariaDB [(none)]> quit
+[root@OpenStack-controller ~]#
+OpenStack服务高可用部署，加粗部分为Keystone高可用部署
+在全部节点编辑配置文件
+[root@controller1 ~]# vim /etc/keystone/keystone.conf
+[cache]
+backend = oslo_cache.memcache_pool
+enabled = true
+memcache_servers = controller1:11211,controller2:11211
+[cache]
+backend = oslo_cache.memcache_pool
+enabled = true
+memcache_servers = controller1:11211,controller2:11211,controller3:11211
+[database]
+connection = mysql+pymysql://keystone:n1zeVdgwo8XcUp5eDYpIfZz@controller/keystone         #用户名：密码@主机名/数据库名，注意这里用的是
+controller，即VIP对应的主机名
+[token]
+provider = fernet
+初始化，同步数据库，在意节点操作
+[root@controller1 ~]# su -s /bin/sh -c "keystone-manage db_sync" keystone
+
+验证初始化情况：
+[root@controller1 ~]# mysql -h controller1 -ukeystone -pn1zeVdgwo8XcUp5eDYpIfZz -e "use keystone;show tables;"
++-----------------------------+
+| Tables_in_keystone          |
++-----------------------------+
+| access_token                |
+| application_credential      |
+………………
+初始化Fernet密钥存储数据库，在任意控制节点操作
+[root@controller1 ~]# keystone-manage fernet_setup --keystone-user keystone --keystone-group keystone  
+[root@controller1 ~]# keystone-manage credential_setup --keystone-user keystone --keystone-group keystone
+向其它管理节点同步密钥，并到其它管理节点，修改其属主、组
+[root@controller1 ~]# scp -r /etc/keystone/fernet-keys/ /etc/keystone/credential-keys/ controller2:/etc/keystone/
+[root@controller1 ~]# scp -r /etc/keystone/fernet-keys/ /etc/keystone/credential-keys/ controller3:/etc/keystone/
+[root@controller2 ~]# chown -R keystone:keystone /etc/keystone/credential-keys/
+[root@controller2 ~]# chown -R keystone:keystone /etc/keystone/fernet-keys/
+[root@controller3 ~]# chown -R keystone:keystone /etc/keystone/credential-keys/
+[root@controller3 ~]# chown -R keystone:keystone /etc/keystone/fernet-keys/
+配置httpd
+所有控制节点，需要将原来监听所有端口的服务，改成只监听主机IP的端口
+[root@controller1 ~]# vim /etc/httpd/conf/httpd.conf
+Listen 192.168.100.181:80            #这里改成对应主机的IP
+ServerName controller1                                #改成对应的主机名
+[root@controller1 ~]# ln -s /usr/share/keystone/wsgi-keystone.conf /etc/httpd/conf.d/
+[root@controller1 ~]# vim /etc/httpd/conf.d/wsgi-keystone.conf
+Listen 192.168.100.181:5000
+<VirtualHost 192.168.100.181:5000>
+………………
+认证引导，任意节点
+初始化admin用户与密码，创建3个API端点
+[root@controller1 ~]# keystone-manage bootstrap --bootstrap-password sJsygzJ6U4B/EM+9i5cmh7FreZs= --bootstrap-admin-url
+http://controller:5000/v3/ --bootstrap-internal-url http://controller:5000/v3/ --bootstrap-public-url http://controller:5000/v3/ --
+bootstrap-region-id RegionOne
+所有节点
+[root@controller1 ~]# systemctl start httpd.service
+[root@controller1 ~]# systemctl enable httpd.service
+配置管理账户
+[root@controller1 ~]# more /root/keystone.sh
+export OS_USERNAME=admin
+export OS_PASSWORD=sJsygzJ6U4B/EM+9i5cmh7FreZs=
+export OS_PROJECT_NAME=admin
+export OS_USER_DOMAIN_NAME=Default
+export OS_PROJECT_DOMAIN_NAME=Default
+export OS_AUTH_URL=http://controller:5000/v3
+export OS_IDENTITY_API_VERSION=3
+[root@controller1 ~]# scp keystone.sh controller2:/root
+[root@controller1 ~]# scp keystone.sh controller3:/root
+创建domain，project，user，role
+在刚才的引导认证中，已经创建一个domain
+[root@controller1 ~]# openstack domain list
++---------+---------+---------+--------------------+
+| ID      | Name    | Enabled | Description        |
++---------+---------+---------+--------------------+
+| default | Default | True    | The default domain |
++---------+---------+---------+--------------------+
+[root@controller1 ~]#
+创建一个名为service的Tenat（V3版又称为Project），用于后面将其它的服务都加入进来，便于管理
+[root@OpenStack-controller ~]# source /root/keystone.conf
+[root@OpenStack-controller ~]# openstack project create --domain default   --description "Service Project" service
+在所有节点，执行此命令，都能正常返回结果，说明keystone服务高可用配置完成
+[root@controller2 ~]# source keystone.sh
+[root@controller2 ~]# openstack user list
++----------------------------------+-------+
+| ID                               | Name  |
++----------------------------------+-------+
+| ab58b3e1e7354fe5aeb44c5674b81710 | demo  |
+| e4b323f8a22b4af7bc944a248cd7c3a8 | admin |
++----------------------------------+-------+
+[root@controller2 ~]#
+设置PCS资源
+在任意节点操作，添加资源 openstack-keystone-clone
+pcs实际控制的是各节点的system unit控制的httpd服务
+[root@controller1 ~]# pcs resource create openstack-keystone systemd:httpd --clone interleave=true
+[root@controller1 ~]# pcs resource
+vip    (ocf::heartbeat:IPaddr2):       Started controller1
+Clone Set: lb-haproxy-clone [lb-haproxy]
+     Started: [ controller1 ]
+     Stopped: [ controller2 controller3 ]
+Clone Set: openstack-keystone-clone [openstack-keystone]
+     Started: [ controller1 controller2 controller3 ]
+[root@controller1 ~]#
+D、配置Glance-api、Glance-registry集群服务
+
+在任意控制节点
+[root@controller1 ~]# mysql -u root -p
+MariaDB [(none)]> CREATE DATABASE glance;
+MariaDB [(none)]> GRANT ALL PRIVILEGES ON glance.* TO 'glance'@'localhost' IDENTIFIED BY 'khjkiIN3eysmVW2PYhA8FvgyQvq6';
+MariaDB [(none)]> GRANT ALL PRIVILEGES ON glance.* TO 'glance'@'192.168.100.%' IDENTIFIED BY 'khjkiIN3eysmVW2PYhA8FvgyQvq6';         
+MariaDB [(none)]> flush privileges ;
+MariaDB [(none)]> exit
+[root@controller1 ~]#
+任意控制节点操作
+在Keystone中创建glance用户
+[root@controller1 ~]# source keystone.sh
+[root@controller1 ~]# openstack user create --domain default --password-prompt glance
+将glance用户添加到admin角色中
+[root@controller1 ~]# openstack role add --project service --user glance admin
+创建glance服务实体，并创建3个API
+[root@controller1 ~]# openstack service create --name glance --description "OpenStack Image" image
+[root@controller1 ~]# openstack endpoint create --region RegionOne image public http://controller:9292
+[root@controller1 ~]# openstack endpoint create --region RegionOne image internal http://controller:9292
+[root@controller1 ~]# openstack endpoint create --region RegionOne image admin http://controller:9292
+全部控制节点，安装glance
+[root@controller1 ~]# yum install openstack-glance python-glance python-glanceclient -y
+[root@controller1 ~]# vim /etc/glance/glance-api.conf
+[DEFAULT]
+enable_v2_api = false
+bind_host = 192.168.100.181
+[database]
+connection = mysql+pymysql://glance:khjkiIN3eysmVW2PYhA8FvgyQvq6@controller/glance
+[glance_store]
+stores = file,http
+default_store = file
+filesystem_store_datadir = /var/lib/glance/images
+[keystone_authtoken]
+www_authenticate_uri = http://controller:5000
+auth_uri = http://controller:5000
+auth_url = http://controller:5000
+memcached_servers = controller1:11211,controller2:11211,controller3:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = glance
+password = zldRmo6wstHFaDYW+fz5dyUhNlrv
+[paste_deploy]
+flavor = keystone
+[root@controller1 ~]# vim /etc/glance/glance-registry.conf
+[DEFAULT]
+bind_host = 192.168.100.181
+[database]
+connection = mysql+pymysql://glance:khjkiIN3eysmVW2PYhA8FvgyQvq6@controller/glance
+[keystone_authtoken]
+auth_uri = http://controller:5000
+auth_url = http://controller:5000
+memcached_servers = controller1:11211,controller2:11211,controller3:11211
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = glance
+password = zldRmo6wstHFaDYW+fz5dyUhNlrv
+[paste_deploy]
+flavor = keystone
+任意控制节点，初始化同步glance数据库
+[root@controller1 ~]# su -s /bin/sh -c "glance-manage db_sync" glance
+所有节点，启动服务
+[root@controller1 ~]# systemctl start openstack-glance-api.service openstack-glance-registry.service
+[root@controller1 ~]# systemctl enable openstack-glance-api.service openstack-glance-registry.service
+验证
+[root@controller1 ~]#  wget http://download.cirros-cloud.net/0.3.6/cirros-0.3.6-x86_64-disk.img
+[root@controller1 ~]#  yum install qemu-img
+上传镜像
+[root@controller1 ~]# glance image-create --name=cirros-0.3.6-x86_64 --disk-format=qcow2 --container-format=bare  < /root/cirros-0.3.6-
+x86_64-disk.img
+[root@controller1 ~]# openstack image list
++--------------------------------------+---------------------+--------+
+| ID                                   | Name                | Status |
++--------------------------------------+---------------------+--------+
+| 9244ee7e-9012-407e-b54b-6a09250a47b1 | cirros-0.3.6-x86_64 | active |
++--------------------------------------+---------------------+--------+
+[root@controller1 ~]#
+设置PCS资源
+[root@controller1 ~]# pcs resource create openstack-glance-api systemd:openstack-glance-api --clone interleave=true
+[root@controller1 ~]# pcs resource create openstack-glance-registry systemd:openstack-glance-registry --clone interleave=true
+[root@controller1 ~]# pcs resource
+vip    (ocf::heartbeat:IPaddr2):       Started controller1
+Clone Set: lb-haproxy-clone [lb-haproxy]
+     Started: [ controller1 ]
+     Stopped: [ controller2 controller3 ]
+Clone Set: openstack-keystone-clone [openstack-keystone]
+     Started: [ controller1 controller2 controller3 ]
+Clone Set: openstack-glance-api-clone [openstack-glance-api]
+     Started: [ controller1 controller2 controller3 ]
+Clone Set: openstack-glance-registry-clone [openstack-glance-registry]
+     Started: [ controller1 controller2 controller3 ]
+[root@controller1 ~]#
+
+E、配置Nova控制节点集群
+任意控制节点，创建数据库：
+[root@controller1 ~]# mysql -u root -p
+MariaDB [(none)]> create database nova_api;
+MariaDB [(none)]> create database nova;
+MariaDB [(none)]> create database nova_cell0;
+MariaDB [(none)]> create database placement;
+MariaDB [(none)]> grant all privileges on nova_api.* to 'nova'@'localhost' identified by 'vf2F82BTjmEeLgiszoc7mH7EOLJa';
+MariaDB [(none)]> grant all privileges on nova_api.* to 'nova'@'192.168.100.%' identified by 'vf2F82BTjmEeLgiszoc7mH7EOLJa';  
+MariaDB [(none)]> grant all privileges on nova.* to 'nova'@'localhost' identified by 'vf2F82BTjmEeLgiszoc7mH7EOLJa';    
+MariaDB [(none)]> grant all privileges on nova.* to 'nova'@'192.168.100.%' identified by 'vf2F82BTjmEeLgiszoc7mH7EOLJa';
+MariaDB [(none)]> grant all privileges on nova_cell0.* to 'nova'@'localhost' identified by 'vf2F82BTjmEeLgiszoc7mH7EOLJa';  
+MariaDB [(none)]> grant all privileges on nova_cell0.* to 'nova'@'192.168.100.%' identified by 'vf2F82BTjmEeLgiszoc7mH7EOLJa';
+MariaDB [(none)]> grant all privileges on placement.* to 'placement'@'localhost' identified by 'vf2F82BTjmEeLgiszoc7mH7EOLJa';
+MariaDB [(none)]> grant all privileges on placement.* to 'placement'@'192.168.100.%' identified by 'vf2F82BTjmEeLgiszoc7mH7EOLJa';
+MariaDB [(none)]> flush privileges;
+MariaDB [(none)]> exitxit
+任意控制节点，创建Nova/placememt用户，加入到admin角色，并创建服务实例和endpoint
+[root@controller1 ~]# source keystone.sh
+[root@controller1 ~]# openstack user create --domain default --password-prompt nova
+[root@controller1 ~]# openstack role add --project service --user nova admin
+[root@controller1 ~]# openstack service create --name nova --description "OpenStack Compute" compute;
+[root@controller1 ~]# openstack endpoint create --region RegionOne compute public http://controller:8774/v2.1
+[root@controller1 ~]# openstack endpoint create --region RegionOne compute internal http://controller:8774/v2.1
+[root@controller1 ~]# openstack endpoint create --region RegionOne compute admin http://controller:8774/v2.1
+[root@controller1 ~]# openstack user create --domain default --password-prompt placement
+[root@controller1 ~]# openstack role add --project service --user placement admin
+[root@controller1 ~]# openstack service create --name placement --description "Placement API" placement;
+[root@controller1 ~]# openstack endpoint create --region RegionOne placement public http://controller:8778
+[root@controller1 ~]# openstack endpoint create --region RegionOne placement internal http://controller:8778
+[root@controller1 ~]# openstack endpoint create --region RegionOne placement admin http://controller:8778
+所有控制节点
+[root@controller1 ~]#  yum install openstack-nova-api openstack-nova-conductor openstack-nova-console openstack-nova-novncproxy openstack-
+nova-scheduler openstack-nova-placement-api
+[root@controller1 ~]# vim /etc/nova/nova.conf
+[DEFAULT]
+my_ip=192.168.100.181
+use_neutron=true
+firewall_driver=nova.virt.firewall.NoopFirewallDriver
+enabled_apis=osapi_compute,metadata
+osapi_compute_listen=$my_ip
+osapi_compute_listen_port=8774
+metadata_listen=$my_ip
+metadata_listen_port=8775
+transport_url=rabbit://openstack:m5RPnU06NNOrtH7fEBJsjTIXWns=@controller1:5672,controller2:5672,controller3:5672
+[api]
+auth_strategy=keystone
+[api_database]
+connection=mysql+pymysql://nova:vf2F82BTjmEeLgiszoc7mH7EOLJa@controller/nova_api
+[placement_database]       这里删除掉???
+connection=mysql+pymysql://placement:f5nSji1PGETPytYlHGOVyPbJbMK4@controller/placement
+[cache]
+backend=oslo_cache.memcache_pool
+enabled=true
+memcache_servers=controller1:11211,controller2:11211,controller3:11211
+[database]
+connection=mysql+pymysql://nova:vf2F82BTjmEeLgiszoc7mH7EOLJa@controller/nova
+[glance]
+api_servers=http://controller:9292
+[keystone_authtoken]
+auth_url=http://controller:5000/v3
+memcached_servers=controller1:11211,controller2:11211,controller3:11211
+auth_type=password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = nova
+password = niCMQ3lP2lgHoYgOoHSwXu
+[oslo_concurrency]
+lock_path=/var/lib/nova/tmp
+[placement]
+region_name= RegionOne
+project_domain_name= Default
+project_name=service
+auth_type=password
+user_domain_name=Default
+auth_url=http://controller:5000/v3
+username=placement
+password=GCypqVixtfnJOoJCwdeov9l5p
+[vnc]
+enabled=true
+server_listen=$my_ip
+
+server_proxyclient_address=$my_ip
+novncproxy_port=6080
+[root@controller1 ~]#
+[root@controller1 ~]# vim /etc/httpd/conf.d/00-nova-placement-api.conf
+Listen 192.168.100.181:8778                        #这里将监听端口，改为只监听本地
+<VirtualHost 192.168.100.181:8778>            #这里将监听端口，改为只监听本地
+…………
+………………                                        #最下面添加以下内容
+<Directory /usr/bin>
+   <IfVersion >= 2.4>
+      Require all granted
+   </IfVersion>
+   <IfVersion < 2.4>
+      Order allow,deny
+      Allow from all
+   </IfVersion>
+</Directory>
+[root@controller1 ~]# service httpd restart
+任意控制节点，初始化同步数据库
+同步过程中有异常，暂时不做处理，完成后再验证
+[root@controller1 ~]# su -s /bin/sh -c "nova-manage api_db sync" nova
+[root@controller1 ~]# su -s /bin/sh -c "nova-manage cell_v2 map_cell0" nova
+[root@controller1 ~]# su -s /bin/sh -c "nova-manage cell_v2 create_cell --name=cell1 --verbose" nova
+[root@controller1 ~]# su -s /bin/sh -c "nova-manage db sync" nova
+验证：查看各数据库
+[root@controller1 ~]# mysql -h controller1 -u nova -pnova_dbpass -e "use nova_api;show tables;"
+所有控制节点，启动服务，设置开机自启
+[root@controller1 ~]# systemctl start openstack-nova-api.service openstack-nova-consoleauth.service openstack-nova-scheduler.service
+openstack-nova-conductor.service openstack-nova-novncproxy.service
+[root@controller1 ~]# systemctl enable openstack-nova-api.service openstack-nova-consoleauth.service openstack-nova-scheduler.service
+openstack-nova-conductor.service openstack-nova-novncproxy.service
+验证：
+[root@controller1 ~]# source keystone.sh
+[root@controller1 ~]# openstack compute service list
++----+------------------+-------------+----------+---------+-------+----------------------------+
+| ID | Binary           | Host        | Zone     | Status  | State | Updated At                 |
++----+------------------+-------------+----------+---------+-------+----------------------------+
+| 15 | nova-consoleauth | controller1 | internal | enabled | up    | 2019-03-19T01:54:41.000000 |
+| 18 | nova-scheduler   | controller1 | internal | enabled | up    | 2019-03-19T01:54:41.000000 |
+| 24 | nova-conductor   | controller1 | internal | enabled | up    | 2019-03-19T01:54:41.000000 |
+| 45 | nova-consoleauth | controller2 | internal | enabled | up    | 2019-03-19T01:54:43.000000 |
+| 48 | nova-scheduler   | controller2 | internal | enabled | up    | 2019-03-19T01:54:43.000000 |
+| 60 | nova-conductor   | controller2 | internal | enabled | up    | 2019-03-19T01:54:44.000000 |
+| 73 | nova-consoleauth | controller3 | internal | enabled | up    | 2019-03-19T01:54:49.000000 |
+| 76 | nova-scheduler   | controller3 | internal | enabled | up    | 2019-03-19T01:54:49.000000 |
+| 94 | nova-conductor   | controller3 | internal | enabled | up    | 2019-03-19T01:54:50.000000 |
++----+------------------+-------------+----------+---------+-------+----------------------------+
+[root@controller1 ~]# openstack catalog list
++-----------+-----------+-----------------------------------------+
+| Name      | Type      | Endpoints                               |
++-----------+-----------+-----------------------------------------+
+| placement | placement | RegionOne                               |
+|           |           |   admin: http://controller:8778         |
+|           |           | RegionOne                               |
+|           |           |   public: http://controller:8778        |
+|           |           | RegionOne                               |
+|           |           |   internal: http://controller:8778      |
+|           |           |                                         |
+| nova      | compute   | RegionOne                               |
+|           |           |   public: http://controller:8774/v2.1   |
+|           |           | RegionOne                               |
+|           |           |   admin: http://controller:8774/v2.1    |
+|           |           | RegionOne                               |
+|           |           |   internal: http://controller:8774/v2.1 |
+检查cell与placement api运行状态
+[root@controller1 ~]# nova-status upgrade check
++--------------------------------------------------------------------+
+| Upgrade Check Results                                              |
++--------------------------------------------------------------------+
+| Check: Cells v2                                                    |
+| Result: Success                                                    |
+| Details: No host mappings or compute nodes were found. Remember to |
+|   run command 'nova-manage cell_v2 discover_hosts' when new        |
+|   compute hosts are deployed.                                      |
++--------------------------------------------------------------------+
+| Check: Placement API                                               |
+| Result: Success                                                    |
+| Details: None                                                      |
++--------------------------------------------------------------------+
+| Check: Resource Providers                                          |
+| Result: Success                                                    |
+| Details: There are no compute resource providers in the Placement  |
+|   service nor are there compute nodes in the database.             |
+|   Remember to configure new compute nodes to report into the       |
+|   Placement service. See                                           |
+|   https://docs.openstack.org/nova/latest/user/placement.html       |
+|   for more details.                                                |
++--------------------------------------------------------------------+
+| Check: Ironic Flavor Migration                                     |
+| Result: Success                                                    |
+| Details: None                                                      |
++--------------------------------------------------------------------+
+| Check: API Service Version                                         |
+
+| Result: Success                                                    |
+| Details: None                                                      |
++--------------------------------------------------------------------+
+| Check: Request Spec Migration                                      |
+| Result: Success                                                    |
+| Details: None                                                      |
++--------------------------------------------------------------------+
+| Check: Console Auths                                               |
+| Result: Success                                                    |
+| Details: None                                                      |
++--------------------------------------------------------------------+
+[root@controller1 ~]#
+设置PCS资源 
+添加资源 openstack-nova-api,openstack-nova-consoleauth,openstack-nova-scheduler,openstack-nova-conductor,openstack-
+nova-novncproxy
+[root@controller1 ~]# pcs resource create openstack-nova-api systemd:openstack-nova-api --clone interleave=true
+[root@controller1 ~]# pcs resource create openstack-nova-consoleauth systemd:openstack-nova-consoleauth --clone interleave=true
+[root@controller1 ~]# pcs resource create openstack-nova-scheduler systemd:openstack-nova-scheduler --clone interleave=true
+[root@controller1 ~]# pcs resource create openstack-nova-conductor systemd:openstack-nova-conductor --clone interleave=true
+[root@controller1 ~]# pcs resource create openstack-nova-novncproxy systemd:openstack-nova-novncproxy --clone interleave=true
+查看PCS资源
+[root@controller1 ~]# pcs resource
+vip    (ocf::heartbeat:IPaddr2):       Started controller3
+Clone Set: lb-haproxy-clone [lb-haproxy]
+     Started: [ controller3 ]
+     Stopped: [ controller1 controller2 ]
+Clone Set: openstack-keystone-clone [openstack-keystone]
+     Started: [ controller1 controller2 controller3 ]
+Clone Set: openstack-glance-api-clone [openstack-glance-api]
+     Started: [ controller1 controller2 controller3 ]
+Clone Set: openstack-glance-registry-clone [openstack-glance-registry]
+     Started: [ controller1 controller2 controller3 ]
+Clone Set: openstack-nova-api-clone [openstack-nova-api]
+     Started: [ controller1 controller2 controller3 ]
+Clone Set: openstack-nova-consoleauth-clone [openstack-nova-consoleauth]
+     Started: [ controller1 controller2 controller3 ]
+Clone Set: openstack-nova-scheduler-clone [openstack-nova-scheduler]
+     Started: [ controller1 controller2 controller3 ]
+Clone Set: openstack-nova-conductor-clone [openstack-nova-conductor]
+     Started: [ controller1 controller2 controller3 ]
+Clone Set: openstack-nova-novncproxy-clone [openstack-nova-novncproxy]
+     Started: [ controller1 controller2 controller3 ]
+[root@controller1 ~]#
+F、配置Neutron控制节点/网络节点
+任意控制节点，创建数据库和用户，并授权
+[root@controller1 ~]#  mysql -u root -pzgN2YCUbPTZvL0tatAoUf6jvJVY=
+MariaDB [(none)]> CREATE DATABASE neutron;
+MariaDB [(none)]> GRANT ALL PRIVILEGES ON neutron.* TO 'neutron'@'localhost' IDENTIFIED BY 'xPlcHlFehtGIwOSbEtwj2CuUmDc';
+MariaDB [(none)]> GRANT ALL PRIVILEGES ON neutron.* TO 'neutron'@'192.168.100.%' IDENTIFIED BY 'xPlcHlFehtGIwOSbEtwj2CuUmDc';         
+MariaDB [(none)]> flush privileges;
+MariaDB [(none)]> exit
+[root@controller1 ~]#
+任意控制节点，在Keystone中创建neutron用户，并添加到admin角色，并创建endpoint
+[root@controller1 ~]# source keystone.sh
+[root@controller1 ~]# openstack user create --domain default --password=DetFU+EOGVrd7FHDX4339KTuhWg neutron
+[root@controller1 ~]# openstack role add --project service --user neutron admin
+[root@controller1 ~]# openstack service create --name neutron --description "OpenStack Networking" network
+[root@controller1 ~]# openstack endpoint create --region RegionOne network public http://controller:9696
+[root@controller1 ~]# openstack endpoint create --region RegionOne network internal http://controller:9696
+[root@controller1 ~]# openstack endpoint create --region RegionOne network admin http://controller:9696
+所有控制节点，安装配置
+[root@controller1 ~]# yum install openstack-neutron openstack-neutron-ml2 openstack-neutron-linuxbridge python-neutronclient ebtables
+ipset -y
+[root@controller1 ~]# grep -Ev "^#|^$" /etc/neutron/neutron.conf
+[DEFAULT]
+bind_host = 192.168.100.181
+auth_strategy = keystone
+core_plugin = ml2
+service_plugins = router
+allow_overlapping_ips = True
+notify_nova_on_port_status_changes = true
+notify_nova_on_port_data_changes = true
+dhcp_agents_per_network = 3
+l3_ha = true
+# l3高可用，可以采用vrrp模式或者dvr模式；
+# vrrp模式下，在各网络节点（此处网络节点与控制节点混合部署）以vrrp的模式设置主备virtual router；mater故障时，virtual router不会迁移，而是将
+router对外服务的vip漂移到standby router上；
+# dvr模式下，三层的转发（L3 Forwarding）与nat功能都会被分布到计算节点上，即计算节点也有了网络节点的功能；但是，dvr依然不能消除集中式的virtual
+router，为了节省IPV4公网地址，仍将snat放在网络节点上提供；
+# vrrp模式与dvr模式不可同时使用
+# Neutron L3 Agent HA 之 虚拟路由冗余协议（VRRP）: http://www.cnblogs.com/sammyliu/p/4692081.html
+# Neutron 分布式虚拟路由（Neutron Distributed Virtual Routing）: http://www.cnblogs.com/sammyliu/p/4713562.html
+max_l3_agents_per_router = 3
+# 最多在几个l3 agent上创建ha router
+min_l3_agents_per_router = 2
+# 可创建ha router的最少正常运行的l3 agnet数量
+l3_ha_net_cidr = 169.254.192.0/18
+router_distributed = true
+# ”router_distributed “参数本身的含义是普通用户创建路由器时，是否默认创建dvr；此参数默认值为“false”，这里采用vrrp模式，可注释此参数
+# 虽然此参数在mitaka（含）版本后，可与l3_ha参数同时打开，但设置dvr模式还同时需要设置网络节点与计算节点的l3_agent.ini与ml2_conf.ini文件
+
+transport_url = rabbit://openstack:m5RPnU06NNOrtH7fEBJsjTIXWns=@controller1:5672,controller2:5672,controller3:5672
+[database]
+connection = mysql+pymysql://neutron:xPlcHlFehtGIwOSbEtwj2CuUmDc@controller/neutron
+[keystone_authtoken]
+auth_uri = http://controller:5000
+auth_url = http://controller:5000
+memcached_servers = controller1:11211,controller2:11211,controller3:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = neutron
+password = DetFU+EOGVrd7FHDX4339KTuhWg
+[nova]
+auth_url = http://controller:35357
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+region_name = RegionOne
+project_name = service
+username = nova
+password = niCMQ3lP2lgHoYgOoHSwXu
+[oslo_concurrency]
+lock_path = /var/lib/neutron/tmp
+[root@controller1 ~]#
+配置ML2插件
+ML2插件使用Linux桥接机制为实例构建第2层（桥接和交换）虚拟网络基础架构。
+[root@controller1 ~]# grep -Ev "^#|^$" /etc/neutron/plugins/ml2/ml2_conf.ini
+[ml2]
+type_drivers = flat,vlan,vxlan
+tenant_network_types = vlan,vxlan,flat
+mechanism_drivers = linuxbridge,l2population
+extension_drivers = port_security
+[ml2_type_flat]
+flat_networks = external
+[ml2_type_vlan]
+# 指定vlan网络类型的网络名称为”vlan”；如果不设置vlan id则表示不受限
+network_vlan_ranges = vlan:3001:3500
+[ml2_type_vxlan]
+vni_ranges = 10001:20000
+[securitygroup]
+enable_ipset = true
+[root@controller1 ~]#
+服务初始化，调用ml2_conf.ini中的配置，指向/etc/neutron/plugin.ini文件
+[root@controller1 ~]# ln -s /etc/neutron/plugins/ml2/ml2_conf.ini  /etc/neutron/plugin.ini
+配置linuxbridge代理
+[root@controller1 ~]# grep -Ev "^#|^$" /etc/neutron/plugins/ml2/linuxbridge_agent.ini  
+[linux_bridge]
+# 网络类型名称与物理网卡对应，这里flat external网络对应规划的eth1，vlan租户网络对应规划的eth3，在创建相应网络时采用的是网络名称而非网卡名称；
+# 需要明确的是物理网卡是本地有效，根据主机实际使用的网卡名确定；
+# 另有” bridge_mappings”参数对应网桥
+physical_interface_mappings = external:eth1,vlan:eth3
+[securitygroup]
+firewall_driver = neutron.agent.linux.iptables_firewall.IptablesFirewallDriver
+enable_security_group = true
+[vxlan]
+enable_vxlan = true
+# tunnel租户网络（vxlan）vtep端点，这里对应规划的eth2（的地址），根据节点做相应修改
+local_ip = 192.168.100.181
+l2_population = true
+[root@controller1 ~]#
+配置内核参数
+[root@controller1 ~]# vim /etc/sysctl.conf
+net.bridge.bridge-nf-call-iptables = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+[root@controller1 ~]# modprobe br_netfilter
+[root@controller1 ~]# sysctl -p
+编辑文件，让系统启动时自动加载模块（该文件已经存在，并且已经编辑好）
+[root@controller1 ~]# more /etc/sysconfig/modules/neutron-linuxbridge-agent.modules
+#!/bin/sh
+/sbin/modprobe -b bridge >/dev/null 2>&1
+/sbin/modprobe -b br_netfilter >/dev/null 2>&1
+exit 0
+[root@controller1 ~]#
+配置l3_geent.ini(self-networking)、chcp_agent.ini和metadata_agent.ini
+[root@controller1 ~]# vim /etc/neutron/l3_agent.ini
+[DEFAULT]
+interface_driver = linuxbridge
+[root@controller1 ~]# grep -Ev "^#|^$" /etc/neutron/dhcp_agent.ini
+[DEFAULT]
+interface_driver = linuxbridge
+dhcp_driver = neutron.agent.linux.dhcp.Dnsmasq
+enable_isolated_metadata = true
+[agent]
+[ovs]
+[root@controller1 ~]#
+
+[root@controller1 ~]# vim /etc/neutron/metadata_agent.ini
+[DEFAULT]
+nova_metadata_host = controller
+metadata_proxy_shared_secret = neutron_metadata_secret
+配置nova.conf，所有计算节点都要配置？
+[root@controller1 ~]# vim /etc/nova/nova.conf
+[neutron]
+url=http://controller:9696
+auth_url=http://controller:5000
+auth_type=password
+project_domain_name = default
+user_domain_name = default
+region_name = RegionOne
+project_name = service
+username = neutron
+password = DetFU+EOGVrd7FHDX4339KTuhWg
+service_metadata_proxy=true
+metadata_proxy_shared_secret = neutron_metadata_secret
+同步数据库，
+[root@controller1 ~]# su -s /bin/sh -c "neutron-db-manage --config-file /etc/neutron/neutron.conf --config-file
+/etc/neutron/plugins/ml2/ml2_conf.ini upgrade head" neutron
+验证，可以正常显示所有数据表即正常
+[root@controller1 ~]# mysql -h controller1 -u neutron -pneutron_dbpass -e "use neutron;show tables;"
+启动服务
+变更nova配置的，首先需要重启nova-api
+[root@controller1 ~]# systemctl restart openstack-nova-api.service
+[root@controller1 ~]#  systemctl start neutron-server.service
+[root@controller1 ~]# systemctl start neutron-linuxbridge-agent.service neutron-l3-agent.service  neutron-dhcp-agent.service  neutron-
+metadata-agent.service
+[root@controller1 ~]# systemctl enable neutron-linuxbridge-agent.service neutron-l3-agent.service  neutron-dhcp-agent.service  neutron-
+metadata-agent.service  neutron-server.service
+验证，可以正常查询到返回
+[root@controller1 ~]# openstack extension list --network
+[root@controller1 ~]# openstack network agent list
+设置PCS资源，任意控制节点
+[root@controller1 ~]# pcs resource create neutron-server systemd:neutron-server --clone interleave=true
+[root@controller1 ~]# pcs resource create neutron-linuxbridge-agent systemd:neutron-linuxbridge-agent --clone interleave=true
+[root@controller1 ~]# pcs resource create neutron-l3-agent systemd:neutron-l3-agent --clone interleave=true
+[root@controller1 ~]# pcs resource create neutron-dhcp-agent systemd:neutron-dhcp-agent --clone interleave=true
+[root@controller1 ~]# pcs resource create neutron-metadata-agent systemd:neutron-metadata-agent --clone interleave=true
+G、配置Dashboard集群
+[root@controller1 ~]# yum install openstack-dashboard -y
+[root@controller1 ~]# vim /etc/openstack-dashboard/local_settings
+38 ALLOWED_HOSTS = ['*', 'localhost']
+64 OPENSTACK_API_VERSIONS = {
+65 #    "data-processing": 1.1,
+66     "identity": 3,
+67     "image": 2,
+68     "volume": 2,
+69 #    "compute": 2,
+70 }
+75 OPENSTACK_KEYSTONE_MULTIDOMAIN_SUPPORT = True
+97 OPENSTACK_KEYSTONE_DEFAULT_DOMAIN = 'Default'
+154 CACHES = {
+155     'default': {
+156         'BACKEND': 'django.core.cache.backends.memcached.MemcachedCache',
+157         'LOCATION': 'controller1:11211,controller2:11211,controller3:1121
+    1',
+158     },
+159 }
+注释以下
+161 #CACHES = {
+162 #    'default': {
+163 #        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+164 #    },
+165 #}
+184 OPENSTACK_HOST = "controller"
+185 OPENSTACK_KEYSTONE_URL = "http://%s:5000/v3" % OPENSTACK_HOST
+186 OPENSTACK_KEYSTONE_DEFAULT_ROLE = "user"
+464 TIME_ZONE = "Asia/Shanghai"
+[root@controller1 ~]# vim /etc/httpd/conf.d/openstack-dashboard.conf
+第3行后新增一行
+WSGIApplicationGroup %{GLOBAL}
+全部节点
+[root@controller1 ~]# systemctl restart httpd.service memcached.service
+登陆http://192.168.100.100/dashboard
+域/用户名/密码：default/admin/admin_pass(密码为admin用户在Keystone中的密码)
+
+H、配置Cinder控制节点集群（集群中每台物理服务器都可以提供块存储，均配置cinder服务）
+任意控制节点，创建数据库，授权
+[root@controller1 ~]# mysql -u root -pzgN2YCUbPTZvL0tatAoUf6jvJVY=
+MariaDB [(none)]> CREATE DATABASE cinder;
+MariaDB [(none)]> GRANT ALL PRIVILEGES ON cinder.* TO 'cinder'@'localhost' IDENTIFIED BY 'qXUU6dFrRBQWS8Yq8Q2LnYwAejh';
+MariaDB [(none)]> GRANT ALL PRIVILEGES ON cinder.* TO 'cinder'@'192.168.100.%' IDENTIFIED BY 'qXUU6dFrRBQWS8Yq8Q2LnYwAejh';         
+MariaDB [(none)]> flush privileges;
+MariaDB [(none)]> exit
+任意控制节点 ，创建Cinder-API和endpoint（V2和V3两个版本都需要创建）
+[root@controller1 ~]# source keystone.sh
+[root@controller1 ~]# openstack user create --domain default --password=1uqNJkuxmFdjS8EpiuRsweNqOp8U cinder
+[root@controller1 ~]# openstack role add --project service --user cinder admin
+[root@controller1 ~]# openstack service create --name cinderv2 --description "OpenStack Block Storage" volumev2
+[root@controller1 ~]# openstack service create --name cinderv3 --description "OpenStack Block Storage" volumev3
+[root@controller1 ~]# openstack endpoint create --region RegionOne volumev2 public http://controller:8776/v2/%\(project_id\)s    
+[root@controller1 ~]# openstack endpoint create --region RegionOne volumev2 internal http://controller:8776/v2/%\(project_id\)s
+[root@controller1 ~]# openstack endpoint create --region RegionOne volumev2 admin http://controller:8776/v2/%\(project_id\)s   
+[root@controller1 ~]# openstack endpoint create --region RegionOne volumev3 public http://controller:8776/v3/%\(project_id\)s    
+[root@controller1 ~]# openstack endpoint create --region RegionOne volumev3 internal http://controller:8776/v3/%\(project_id\)s
+[root@controller1 ~]# openstack endpoint create --region RegionOne volumev3 admin http://controller:8776/v3/%\(project_id\)s   
+全部控制节点，安装配置
+[root@controller1 ~]# yum install openstack-cinder -y
+[root@controller1 ~]# grep -Ev "^$|^#" /etc/cinder/cinder.conf
+[DEFAULT]
+state_path = /var/lib/cinder
+my_ip = 192.168.100.181
+glance_api_servers = http://controller:9292
+auth_strategy = keystone
+osapi_volume_listen = $my_ip
+osapi_volume_listen_port = 8776
+log_dir = /var/log/cinder
+transport_url = rabbit://openstack:m5RPnU06NNOrtH7fEBJsjTIXWns=@controller1:5672,controller2:5672,controller3:5672
+[database]
+connection = mysql+pymysql://cinder:qXUU6dFrRBQWS8Yq8Q2LnYwAejh@controller/cinder
+[keystone_authtoken]
+www_authenticate_uri = http://controller:5000
+auth_url = http://controller:5000
+memcached_servers = controller1:11211,controller2:11211,controller3:11211
+auth_type = password
+project_domain_id = default
+user_domain_id = default
+project_name = service
+username = cinder
+password = 1uqNJkuxmFdjS8EpiuRsweNqOp8U
+[oslo_concurrency]
+lock_path = $state_path/tmp
+[root@controller1 ~]#
+全部控制节点 ，配置 NOVA.conf
+[root@controller1 ~]# vim /etc/nova/nova.conf
+[cinder]
+os_region_name=RegionOne
+任意节点 ，初始化，同步数据库
+[root@controller1 ~]# su -s /bin/sh -c "cinder-manage db sync" cinder
+验证，可以正常返回所有表即正常
+[root@controller1 ~]#  mysql -h controller -ucinder -pqXUU6dFrRBQWS8Yq8Q2LnYwAejh -e "use cinder;show tables;"
+所有节点，重启nova服务
+[root@controller1 ~]# systemctl restart openstack-nova-api.service
+[root@controller1 ~]# systemctl start openstack-cinder-api.service openstack-cinder-scheduler.service
+[root@controller1 ~]# systemctl enable openstack-cinder-api.service openstack-cinder-scheduler.service
+验证，正常返回即OK
+[root@controller1 ~]# openstack volume service list;
+
+任意控制节点，设置PCS资源 
+[root@controller1 ~]# pcs resource create openstack-cinder-api systemd:openstack-cinder-api --clone interleave=true
+[root@controller1 ~]# pcs resource create openstack-cinder-scheduler systemd:openstack-cinder-scheduler --clone interleave=true
+# cinder-api与cinder-scheduler以active/active模式运行；
+# openstack-nova-volume以active/passive模式运行
+I、配置Nova计算节点
+全部计算节点，安装Nova-compute
+[root@controller1 ~]# yum install python-openstackclient openstack-utils openstack-selinux -y
+[root@controller1 ~]# yum install openstack-nova-compute -y
+安装时报错Requires: qemu-kvm-rhev >= 2.10.0 ，解决方案--修改Yum源，添加以下
+[root@compute1 ~]# tail /etc/yum.repos.d/CentOS-Base.repo
+[centos-qemu-ev]
+name=CentOS-$releasever - QEMU EV
+baseurl=http://mirrors.aliyun.com/centos/7.6.1810/virt/x86_64/kvm-common/
+gpgcheck=0
+enabled=1
+[root@compute1 ~]#
+[root@compute1 ~]# grep -Ev "^#|^$" /etc/nova/nova.conf
+[DEFAULT]
+my_ip=192.168.100.184
+use_neutron=true
+firewall_driver=nova.virt.firewall.NoopFirewallDriver
+enabled_apis=osapi_compute,metadata
+transport_url=rabbit://openstack:m5RPnU06NNOrtH7fEBJsjTIXWns=@controller1:5672,controller2:5672,controller3:5672
+[api]
+auth_strategy=keystone
+[cinder]
+os_region_name=RegionOne
+auth_type=password
+project_domain_name= Default
+project_name=service
+auth_type=password
+auth_url=http://controller:5000/v3
+username=placement
+user_domain_name=Default
+password=GCypqVixtfnJOoJCwdeov9l5p
+region_name= RegionOne
+[glance]
+api_servers=http://controller:9292
+[keystone_authtoken]
+auth_uri=http://controller:5000
+auth_url=http://controller:5000/v3
+memcached_servers=controller1:11211,controller2:11211,controller3:11211
+auth_type=password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = nova
+password = niCMQ3lP2lgHoYgOoHSwXu
+[libvirt]
+virt_type=kvm
+[oslo_concurrency]
+lock_path=/var/lib/nova/tmp
+[placement]
+os_region_name=RegionOne
+auth_type=password
+auth_url=http://controller:5000/v3
+project_name=service
+project_domain_name=Default
+username=placement
+user_domain_name=Default
+password=GCypqVixtfnJOoJCwdeov9l5p
+[vnc]
+enabled=true
+server_listen=0.0.0.0
+server_proxyclient_address=$my_ip
+novncproxy_base_url=http://controller:6080/vnc_auto.html
+[root@compute1 ~]#
+[root@controller1 ~]# systemctl start libvirtd.service openstack-nova-compute.service
+[root@controller1 ~]# systemctl enable libvirtd.service openstack-nova-compute.service
+编辑配置文件 （计算节点与管理节点区别：计算节点不需要配置[api_database]、[database]、[placement_database]，其它不
+同部分如下，其余相同）
+[root@OpenStack-controller ~]# vim /etc/nova/nova.conf
+在该[DEFAULT]部分中，配置my_ip为当前节点的IP
+my_ip= 192.168.100.184
+在该[vnc]部分中，启用并配置远程控制台访问
+server_listen= 0.0.0.0
+增加以下一行配置，这一部分在管理节点中没有
+novncproxy_base_url=http://controller:6080/vnc_auto.html
+将计算节点添加到cell数据库
+
+[root@controller1 ~]# source keystone.sh
+确认数据库中包含主机
+[root@controller1 ~]# openstack compute service list --service nova-compute
++-----+--------------+-------------+------+---------+-------+----------------------------+
+|  ID | Binary       | Host        | Zone | Status  | State | Updated At                 |
++-----+--------------+-------------+------+---------+-------+----------------------------+
+| 117 | nova-compute | controller1 | nova | enabled | up    | 2019-03-19T09:42:52.000000 |
+| 120 | nova-compute | controller3 | nova | enabled | up    | 2019-03-19T09:42:54.000000 |
+| 123 | nova-compute | compute1    | nova | enabled | up    | 2019-03-19T09:42:53.000000 |
++-----+--------------+-------------+------+---------+-------+----------------------------+
+[root@controller1 ~]#
+手工发现计算节点
+[root@controller1 ~]# su -s /bin/sh -c "nova-manage cell_v2 discover_hosts --verbose" nova
+Found 2 cell mappings.
+Skipping cell0 since it does not contain hosts.
+Getting computes from cell 'cell1': d9216104-2e85-452f-9b3f-074c981d52f7
+Checking host mapping for compute host 'controller1': 4709a959-7a94-4b1c-a84c-c1d55d36e200
+Creating host mapping for compute host 'controller1': 4709a959-7a94-4b1c-a84c-c1d55d36e200
+Checking host mapping for compute host 'controller3': c0d2cb04-602f-4b6e-b4c3-2f6b7f0c5f27
+Creating host mapping for compute host 'controller3': c0d2cb04-602f-4b6e-b4c3-2f6b7f0c5f27
+Checking host mapping for compute host 'compute1': 9fb67b16-7299-4835-8eae-12a6a1f76cf1
+Creating host mapping for compute host 'compute1': 9fb67b16-7299-4835-8eae-12a6a1f76cf1
+Found 3 unmapped computes in cell: d9216104-2e85-452f-9b3f-074c981d52f7
+[root@controller1 ~]#
+自动发现主机，编辑配置文件
+[root@controller1 ~]# vim /etc/nova/nova.conf
+[scheduler]
+discover_hosts_in_cells_interval=300
+重启nova服务，
+[root@controller1 ~]# systemctl restart openstack-nova-api.service
+验证
+登陆dashboard，管理员-->计算-->虚拟机管理器
+如果已注册成功，在"虚拟机管理器"标签下可发现计算节点，并能展示出各计算节点的资源；如果未注册或注册失败，则"虚拟机管理器"标签下无主机。
+J、配置Neutron计算节点
+全部计算节点
+[root@controller1 ~]# yum install openstack-neutron-linuxbridge ebtables ipset -y
+与Neutron控制节点相比，蓝色表示计算节点新增配置，划线表示计算节点中不需要此配置
+[root@controller1 ~]# grep -Ev "^$|^#" /etc/neutron/neutron.conf
+[DEFAULT]
+state_path = /var/lib/neutron
+bind_host = 192.168.100.181
+auth_strategy = keystone
+core_plugin = ml2
+service_plugins = router
+allow_overlapping_ips = True
+notify_nova_on_port_status_changes = true
+notify_nova_on_port_data_changes = true
+dhcp_agents_per_network = 3
+router_distributed = true
+l3_ha = true
+max_l3_agents_per_router = 3
+min_l3_agents_per_router = 2
+l3_ha_net_cidr = 169.254.192.0/18
+transport_url = rabbit://openstack:m5RPnU06NNOrtH7fEBJsjTIXWns=@controller1:5672,controller2:5672,controller3:5672
+[database]
+connection = mysql+pymysql://neutron:xPlcHlFehtGIwOSbEtwj2CuUmDc@controller/neutron
+[keystone_authtoken]
+www_authenticate_uri = http://controller:5000
+auth_url = http://controller:5000
+memcached_servers = controller1:11211,controller2:11211,controller3:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = neutron
+password = DetFU+EOGVrd7FHDX4339KTuhWg
+[nova]
+auth_url = http://controller:5000
+auth_type = password
+project_domain_name = default
+
+user_domain_name = default
+region_name = RegionOne
+project_name = service
+username = nova
+password = DetFU+EOGVrd7FHDX4339KTuhWg
+[oslo_concurrency]
+lock_path = $state_path/lock
+[root@controller1 ~]#
+[root@controller1 ~]# vim /etc/neutron/plugins/ml2/linuxbridge_agent.ini
+[linux_bridge]
+# 网络类型名称与物理网卡对应，这里vlan租户网络对应规划的eth3；
+# 需要明确的是物理网卡是本地有效，需要根据主机实际使用的网卡名确定；
+# 另有”bridge_mappings”参数对应网桥
+physical_interface_mappings =vlan:eth3
+[securitygroup]
+firewall_driver = neutron.agent.linux.iptables_firewall.IptablesFirewallDriver
+[vxlan]
+enable_vxlan = true
+local_ip = 192.168.100.184
+l2_population = true
+配置内核参数
+[root@compute1 ~]# vim /etc/sysctl.conf
+net.bridge.bridge-nf-call-iptables = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+[root@compute1 ~]# vim /etc/sysctl.conf
+[root@compute1 ~]# sysctl -p   
+全部计算节点，只配置[neutron]字段即可
+[root@compute1 ~]# vim /etc/nova/nova.conf
+[neutron]
+url=http://controller:9696
+auth_url=http://controller:5000
+auth_type=password
+project_domain_name = default
+user_domain_name = default
+region_name = RegionOne
+project_name = service
+username = neutron
+password = DetFU+EOGVrd7FHDX4339KTuhWg
+service_metadata_proxy=true
+metadata_proxy_shared_secret = neutron_metadata_secret
+启动服务
+[root@compute1 ~]# systemctl restart openstack-nova-compute.service
+[root@compute1 ~]# systemctl restart neutron-linuxbridge-agent.service
+[root@compute1 ~]# systemctl enable neutron-linuxbridge-agent.service
+验证
+[root@controller1 ~]# source keystone.sh
+返回所有配置了linux-bridge的节点
+[root@controller1 ~]# openstack network agent list --agent-type linux-bridge
+状态为UP，Alive必须为  :-) 
++--------------------------------------+--------------------+-------------+-------------------+-------+-------+---------------------------
++
+| ID                                   | Agent Type         | Host        | Availability Zone | Alive | State |
+Binary                    |
++--------------------------------------+--------------------+-------------+-------------------+-------+-------+---------------------------
++
+| 5fb24e80-2ef9-4fe7-95fb-093c1bf96f14 | Linux bridge agent | controller3 | None              | :-)   | UP    | neutron-linuxbridge-agent
+|
+| 84e73bf4-c966-43e3-ab55-bf9900823363 | Linux bridge agent | compute1    | None              | :-)   | UP    | neutron-linuxbridge-agent
+|
+| d1f42265-2087-4851-bc06-92ab4dff075c | Linux bridge agent | controller1 | None              | :-)   | UP    | neutron-linuxbridge-agent
+|
+| de7fe005-8eac-42c2-9080-decdff467122 | Linux bridge agent | controller2 | None              | :-)   | UP    | neutron-linuxbridge-agent
+|
++--------------------------------------+--------------------+-------------+-------------------+-------+-------+---------------------------
++
+[root@controller1 ~]#
+https://www.cnblogs.com/netonline/p/9325394.html
+K、配置Cinder存储节点
+所有存储节点：
+[root@controller1 ~]#  yum install -y openstack-cinder targetcli python-keystone
+相比cinder控制节点，这里只是多了个参数enabled_backends = ceph
+[root@controller1 ~]#  grep -Ev "^$|^#" /etc/cinder/cinder.conf
+[DEFAULT]
+state_path = /var/lib/cinder
+my_ip = 192.168.100.184
+glance_api_servers = http://controller:9292
+auth_strategy = keystone
+enabled_backends = ceph
+transport_url = rabbit://openstack:m5RPnU06NNOrtH7fEBJsjTIXWns=@controller1:5672,controller2:5672,controller3:5672
+[database]
+connection = mysql+pymysql://cinder:qXUU6dFrRBQWS8Yq8Q2LnYwAejh@controller/cinder
+[keystone_authtoken]
+www_authenticate_uri = http://controller:5000
+auth_url = http://controller:5000
+memcached_servers = controller1:11211,controller2:11211,controller3:11211
+auth_type = password
+project_domain_id = default
+
+user_domain_id = default
+project_name = service
+username = cinder
+password = 1uqNJkuxmFdjS8EpiuRsweNqOp8U
+[oslo_concurrency]
+lock_path = $state_path/tmp
+[root@controller1 ~]#  systemctl enable openstack-cinder-volume.service target.service
+[root@controller1 ~]#  systemctl restart openstack-cinder-volume.service target.service
+验证
+[root@controller1 ~]# source keystone.sh
+# 此时后端存储服务为ceph，但ceph相关服务尚未启用并集成到cinder-volume，导致cinder-volume服务的状态也是”down”
+[root@controller1 ~]# openstack volume service list
++------------------+------------------+------+---------+-------+----------------------------+
+| Binary           | Host             | Zone | Status  | State | Updated At                 |
++------------------+------------------+------+---------+-------+----------------------------+
+| cinder-scheduler | controller1      | nova | enabled | up    | 2019-03-20T05:34:32.000000 |
+| cinder-scheduler | controller2      | nova | enabled | down  | 2019-03-20T05:29:06.000000 |
+| cinder-scheduler | controller3      | nova | enabled | up    | 2019-03-20T05:34:33.000000 |
+| cinder-volume    | compute1@ceph    | nova | enabled | down  | 2019-03-20T05:14:09.000000 |
+| cinder-volume    | controller1@ceph | nova | enabled | down  | 2019-03-20T05:24:29.000000 |
+| cinder-volume    | controller3@ceph | nova | enabled | down  | 2019-03-20T05:28:43.000000 |
++------------------+------------------+------+---------+-------+----------------------------+
+[root@controller1 ~]#
+L、配置分布式存储Ceph
+搭建CEPH文件系统
+在任意控制节点，创建POOL
+pg_number * 副本数 < 每个OSD的PG数 * OSD服务器总数
+[ceph@controller1 my-cluster]$ sudo ceph osd pool create volumes 165
+[ceph@controller1 my-cluster]$ sudo ceph osd pool create vms 165
+[ceph@controller1 my-cluster]$ sudo ceph osd pool create images 165
+[ceph@controller1 my-cluster]$ sudo ceph osd pool stats
+pool volumes id 3
+  nothing is going on
+pool vms id 4
+  nothing is going on
+pool images id 5
+  nothing is going on
+[ceph@controller1 my-cluster]$
+安装CEPH客户端
+glance-api服务所在节点需要安装python-rbd；
+[root@controller ~]# yum install python-rbd -y
+cinder-volume与nova-compute服务所在节点需要安装ceph-common；
+[root@controller1 ~]# yum install ceph-common -y
+授权设置
+# ceph默认启用cephx authentication（见ceph.conf），需要为nova/cinder与glance客户端创建新的用户并授权；
+# 可在管理节点上分别为运行cinder-volume与glance-api服务的节点创建client.glance与client.cinder用户并设置权限；
+# 针对pool设置权限，pool名对应创建的pool
+[root@controller1 ~]# su - ceph
+[ceph@controller1 ~]$ cd my-cluster/
+[ceph@controller1 my-cluster]$ sudo  ceph auth get-or-create client.cinder mon 'allow r' osd 'allow class-read object_prefix
+rbd_children, allow rwx pool=volumes, allow rwx pool=vms, allow rx pool=images'
+[ceph@controller1 my-cluster]$ sudo ceph auth get-or-create client.glance mon 'allow r' osd 'allow class-read object_prefix
+rbd_children, allow rwx pool=images'
+推送client.glance秘钥
+[ceph@controller1 my-cluster]$ sudo  ceph auth get-or-create client.glance |sudo  tee /etc/ceph/ceph.client.glance.keyring
+[ceph@controller1 my-cluster]$ sudo ceph auth get-or-create client.glance | ssh controller2 sudo tee /etc/ceph/ceph.client.glance.keyring
+[ceph@controller1 my-cluster]$ sudo ceph auth get-or-create client.glance | ssh controller3 sudo tee /etc/ceph/ceph.client.glance.keyring
+修改密钥的属主、组
+[ceph@controller1 my-cluster]$ sudo chown glance:glance /etc/ceph/ceph.client.glance.keyring
+[ceph@controller1 my-cluster]$ ssh controller2 sudo chown glance:glance /etc/ceph/ceph.client.glance.keyring      
+[ceph@controller1 my-cluster]$ ssh controller3 sudo chown glance:glance /etc/ceph/ceph.client.glance.keyring
+推送client.cinder秘钥(nova-volume)到所有存储节点
+所有计算节点
+[ceph@controller1 my-cluster]$ sudo ceph auth get-or-create client.cinder | ssh controller1 sudo tee /etc/ceph/ceph.client.cinder.keyring
+[ceph@controller1 my-cluster]$ sudo ceph auth get-or-create client.cinder | ssh controller2 sudo tee
+/etc/ceph/ceph.client.cinder.keyring
+[ceph@controller1 my-cluster]$ sudo ceph auth get-or-create client.cinder | ssh controller3 sudo tee /etc/ceph/ceph.client.cinder.keyring
+[ceph@controller1 my-cluster]$ sudo ceph auth get-or-create client.cinder | ssh compute1 sudo tee /etc/ceph/ceph.client.cinder.keyring
+修改密钥属主、组
+[ceph@controller1 my-cluster]$ ssh controller1 sudo  chown cinder:cinder /etc/ceph/ceph.client.cinder.keyring   
+[ceph@controller1 my-cluster]$ ssh controller2 sudo  chown cinder:cinder /etc/ceph/ceph.client.cinder.keyring             
+[ceph@controller1 my-cluster]$ ssh controller3 sudo  chown cinder:cinder /etc/ceph/ceph.client.cinder.keyring
+[ceph@controller1 my-cluster]$ ssh compute1 sudo chown cinder:cinder /etc/ceph/ceph.client.cinder.keyring
+
+推送client.cinder秘钥(nova-compute)
+这里nova-compute服务与nova-volume服务运行在相同节点，不必重复操作。
+libvirt秘钥 
+nova-compute所在节点需要将client.cinder用户的秘钥文件存储到libvirt中；当基于ceph后端的cinder卷被attach到虚拟机实例时，libvirt需要用到该秘钥以访
+问ceph集群；
+# 在管理节点向存储节点推送client.cinder秘钥文件，生成的文件是临时性的，将秘钥添加到libvirt后可删除
+[ceph@controller1 my-cluster]$ sudo ceph auth get-key client.cinder | sudo tee /etc/ceph/client.cinder.key
+[ceph@controller1 my-cluster]$ sudo ceph auth get-key client.cinder | ssh controller2 sudo tee /etc/ceph/client.cinder.key
+[ceph@controller1 my-cluster]$ sudo ceph auth get-key client.cinder | ssh controller3 sudo tee /etc/ceph/client.cinder.key
+[ceph@controller1 my-cluster]$ sudo ceph auth get-key client.cinder | ssh compute1 sudo tee /etc/ceph/client.cinder.key
+# 在计算（存储）节点将秘钥加入libvirt，以compute01节点为例；
+# 首先生成1个uuid，全部计算（存储）节点可共用此uuid（其他节点不用操作此步）；
+# uuid后续配置nova.conf文件时也会用到，请保持一致
+[ceph@controller1 my-cluster]$ uuidgen
+c981aaa5-2375-4757-a8fa-df2be67f28b6
+# 添加秘钥
+所有计算节点
+[ceph@controller1 my-cluster]$ more /etc/ceph/secret.xml
+<secret ephemeral='no' private='no'>
+  <uuid>c981aaa5-2375-4757-a8fa-df2be67f28b6</uuid>
+  <usage type='ceph'>
+    <name>client.cinder secret</name>
+  </usage>
+</secret>
+[ceph@controller1 my-cluster]$ virsh secret-define --file /etc/ceph/secret.xml
+Secret c981aaa5-2375-4757-a8fa-df2be67f28b6 created
+[ceph@controller1 my-cluster]$ virsh secret-set-value --secret c981aaa5-2375-4757-a8fa-df2be67f28b6  --base64 $(cat
+/etc/ceph/client.cinder.key)                  
+Secret value set
+[ceph@controller1 my-cluster]$
+M、Glance集成Ceph
+在运行glance-api的节点，编辑配置文件
+红色字体表示与之前配置不一样，其它字体一致
+[root@controller1 ~]# grep -Ev "^#|^$" /etc/glance/glance-api.conf
+[DEFAULT]
+show_image_direct_url = true
+bind_host = 192.168.100.181
+[database]
+connection = mysql+pymysql://glance:khjkiIN3eysmVW2PYhA8FvgyQvq6@controller/glance
+[glance_store]
+#stores = file,http        #注释原来的配置
+#default_store = file        #注释原来的配置
+#filesystem_store_datadir = /var/lib/glance/images        #注释原来的配置
+stores = rbd
+default_store = rbd
+rbd_store_chunk_size = 8
+rbd_store_pool = images
+rbd_store_user = glance
+rbd_store_ceph_conf = /etc/ceph/ceph.conf
+[keystone_authtoken]
+www_authenticate_uri = http://controller:5000
+auth_uri = http://controller:5000
+auth_url = http://controller:5000
+memcached_servers = controller1:11211,controller2:11211,controller3:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = glance
+password = zldRmo6wstHFaDYW+fz5dyUhNlrv
+[paste_deploy]
+flavor = keystone
+[root@controller1 ~]# systemctl restart openstack-glance-api.service
+[root@controller1 ~]# systemctl restart openstack-glance-registry.service
+上传镜像
+# 镜像上传后，默认地址为ceph集群（ID）的images pool下
+[root@controller1 ~]# source keystone.sh
+[root@controller1 ~]# openstack image create "cirros-qcow2"  --file ~/cirros-0.3.6-x86_64-disk.img --disk-format qcow2 --
+container-format bare  --public
++------------------+----------------------------------------------------------------------------------------------------------
+------------------------------------------------------------------------------------------------------------------------------
+--------------------------------------------------------------+
+| Field            |
+Value                                                                                                                                         
+| properties       | direct_url='rbd://6c4373ae-678e-418f-b8e6-2a6a38f93b58/images/65722c10-e01f-4819-8bb9-
+cb911a1cd073/snap', os_hash_algo='sha512',
+os_hash_value='defa5791135001cb4c1e51efbdc8a6de5bfab20d425abaaabc30f5c1a371000d83a89fb5a7064044d30cfc55721bdf9e122685cb6e08a7b89c56a9e4d98f95a
+os_hidden='False' |
+……………………………………
+                                                                                              |
++------------------+----------------------------------------------------------------------------------------------------------
+------------------------------------------------------------------------------------------------------------------------------
+--------------------------------------------------------------+
+[root@controller1 ~]# rbd ls images
+
+65722c10-e01f-4819-8bb9-cb911a1cd073
+[root@controller1 ~]#
+定义pool类型
+# images启用后，ceph集群状态变为：HEALTH_WARN
+[root@controller1 ~]# ceph -s
+  cluster:
+    id:     6c4373ae-678e-418f-b8e6-2a6a38f93b58
+    health: HEALTH_WARN
+…………………………
+# 使用”ceph health detail”，能给出解决办法；
+# 未定义pool池类型，可定义为'cephfs', 'rbd', 'rgw'等
+[root@controller1 ~]# ceph health detail
+HEALTH_WARN application not enabled on 1 pool(s)
+POOL_APP_NOT_ENABLED application not enabled on 1 pool(s)
+    application not enabled on pool 'images'
+    use 'ceph osd pool application enable <pool-name> <app-name>', where <app-name> is 'cephfs', 'rbd', 'rgw', or freeform for
+custom applications.
+[root@controller1 ~]# ceph osd pool application enable images rbd
+[root@controller1 ~]# ceph osd pool application enable volumes rbd
+[root@controller1 ~]# ceph osd pool application enable vms rbd    
+[root@controller1 ~]# ceph health detail                          
+HEALTH_OK
+[root@controller1 ~]#
+Cinder集成Ceph
+[root@controller1 ~]# vim /etc/cinder/cinder.conf
+[DEFAULT]
+enabled_backends = ceph
+[ceph]            #新增ceph配置段
+volume_driver = cinder.volume.drivers.rbd.RBDDriver
+rbd_pool = volumes
+rbd_ceph_conf = /etc/ceph/ceph.conf
+rbd_flatten_volume_from_snapshot = false
+rbd_max_clone_depth = 5
+rbd_store_chunk_size = 4
+rados_connect_timeout = -1
+glance_api_version = 2
+rbd_user = cinder
+rbd_secret_uuid = c981aaa5-2375-4757-a8fa-df2be67f28b6
+volume_backend_name = ceph
+重启服务
+[root@controller1 ~]# systemctl restart openstack-glance-api.service
+[root@controller1 ~]# systemctl restart openstack-glance-registry.service
+[root@controller1 ~]# systemctl restart openstack-cinder-volume.service target.service
+验证
+[root@controller1 ~]# source keystone.sh
+[root@controller1 ~]# openstack volume service list        #状态变成up
++------------------+------------------+------+---------+-------+----------------------------+
+| Binary           | Host             | Zone | Status  | State | Updated At                 |
++------------------+------------------+------+---------+-------+----------------------------+
+| cinder-scheduler | controller1      | nova | enabled | up    | 2019-03-26T06:36:46.000000 |
+| cinder-scheduler | controller2      | nova | enabled | up    | 2019-03-26T06:36:51.000000 |
+| cinder-scheduler | controller3      | nova | enabled | up    | 2019-03-26T06:36:53.000000 |
+| cinder-volume    | compute1@ceph    | nova | enabled | up    | 2019-03-26T06:36:49.000000 |
+| cinder-volume    | controller1@cept | nova | enabled | down  | 2019-03-20T05:20:46.000000 |
+| cinder-volume    | controller1@ceph | nova | enabled | up    | 2019-03-26T06:36:51.000000 |
+| cinder-volume    | controller3@ceph | nova | enabled | up    | 2019-03-26T06:36:44.000000 |
+| cinder-volume    | controller2@ceph | nova | enabled | up      | 2019-03-26T06:35:10.000000 |
++------------------+------------------+------+---------+-------+----------------------------+
+[root@controller1 ~]#
+生成VOLUME
+设置卷类型
+# 在控制节点为cinder的ceph后端存储创建对应的type，在配置多存储后端时可区分类型；
+# 可通过“cinder type-list”查看
+[root@controller1 ~]# cinder type-create ceph
++--------------------------------------+------+-------------+-----------+
+| ID                                   | Name | Description | Is_Public |
++--------------------------------------+------+-------------+-----------+
+| fbde2aed-91f0-45ea-86d4-c42de92a6ba5 | ceph | -           | True      |
++--------------------------------------+------+-------------+-----------+
+# 为ceph type设置扩展规格，键值” volume_backend_name”，value值”ceph”
+[root@controller1 ~]# cinder type-key ceph set volume_backend_name=ceph
+[root@controller1 ~]# cinder extra-specs-list
++--------------------------------------+------+---------------------------------+
+| ID                                   | Name | extra_specs                     |
++--------------------------------------+------+---------------------------------+
+| fbde2aed-91f0-45ea-86d4-c42de92a6ba5 | ceph | {'volume_backend_name': 'ceph'} |
++--------------------------------------+------+---------------------------------+
+[root@controller1 ~]#
+生成volume
+# 最后的数字”1”代表容量为1G
+
+[root@controller1 ~]# cinder create --volume-type ceph --name ceph-volume1 1
+检查集群的volume pool
+[root@controller1 ~]# openstack volume list
++--------------------------------------+--------------+-----------+------+-------------+
+| ID                                   | Name         | Status    | Size | Attached to |
++--------------------------------------+--------------+-----------+------+-------------+
+| 485c49fe-44aa-46ef-9375-5e82f711f9fb | ceph-volume1 | available |    1 |             |
++--------------------------------------+--------------+-----------+------+-------------+
+N、Nova集成Ceph
+# 如果需要从ceph rbd中启动虚拟机，必须将ceph配置为nova的临时后端；
+# 推荐在计算节点的配置文件中启用rbd cache功能；
+# 为了便于故障排查，配置admin socket参数，这样每个使用ceph rbd的虚拟机都有1个socket将有利于虚拟机性能分析与故障解决；
+[root@controller1 ~]# vim /etc/ceph/ceph.conf
+[client]
+rbd cache = true
+rbd cache writethrough until flush = true
+admin socket = /var/run/ceph/guests/$cluster-$type.$id.$pid.$cctid.asok
+log file = /var/log/qemu/qemu-guest-$pid.log
+rbd concurrent management ops = 20
+[client.cinder]
+keyring = /etc/ceph/ceph.client.cinder.keyring
+[root@controller1 ~]# mkdir -p /var/run/ceph/guests/ /var/log/qemu/
+[root@controller1 ~]# chown qemu:libvirt /var/run/ceph/guests/ /var/log/qemu/
+# 在全部计算节点配置nova后端使用ceph集群的vms池
+[root@controller1 ~]# vim /etc/nova/nova.conf
+[libvirt]
+images_type = rbd
+images_rbd_pool= vms
+images_rbd_ceph_conf = /etc/ceph/ceph.conf
+rbd_user=cinder
+rbd_secret_uuid=c981aaa5-2375-4757-a8fa-df2be67f28b6
+disk_cachemodes ="network=writeback"
+live_migration_flag="VIR_MIGRATE_UNDEFINE_SOURCE,VIR_MIGRATE_PEER2PEER,VIR_MIGRATE_LIVE,VIR_MIGRATE_PERSIST_DEST,VIR_MIGRATE_TUNNELLED"
+inject_password=false
+inject_key=false
+inject_partition=-2
+hw_disk_discard=unmap
+virt_type=kvm
+[root@controller1 ~]# systemctl restart libvirtd.service openstack-nova-compute.service
+全部计算节点，配置live-migration
+[root@controller1 ~]# vim /etc/libvirt/libvirtd.conf
+22 listen_tls = 0
+33 listen_tcp = 1
+45 tcp_port = "16509"
+55 listen_addr = "192.168.100.181"            # 取消注释，并修改监听端口
+158 auth_tcp = "none"
+[root@controller1 ~]#
+修改libvirtd配置
+[root@controller1 ~]# vim /etc/sysconfig/libvirtd
+9: LIBVIRTD_ARGS="--listen"
+重启服务
+[root@controller1 ~]# systemctl restart libvirtd.service openstack-nova-compute.service
+验证
+如果使用ceph提供的volume做启动盘，即虚拟机运行镜像文件存放在共享存储上，此时可以方便地进行live-migration。
+1、创建基于ceph存储的bootable存储卷
+# 当nova从rbd启动instance时，镜像格式必须是raw格式，否则虚拟机在启动时glance-api与cinder均会报错；
+ # 首先进行格式转换，将*.img文件转换为*.raw文件
+[root@controller1 ~]# qemu-img convert -f qcow2 -O raw cirros-0.3.6-x86_64-disk.img cirros-0.3.6-x86_64-disk.raw
+# 生成raw格式镜像
+[root@controller1 ~]# openstack image create "cirros-raw"  --file cirros-0.3.6-x86_64-disk.raw --disk-format raw --container-
+format bare --public
++------------------+------------------------------------------------------------------------------------------------------------------------------------------
+------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| Field            |
+Value                                                                                                                                                                                                      
++------------------+------------------------------------------------------------------------------------------------------------------------------------------
+------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| checksum         |
+6626132cd60ab57ac42ec7a6d5bc1d3c                                                                                                                                                       
+| container_format |
+bare                                                                                                                                                                                                       
+| created_at       | 2019-03-
+26T08:47:11Z                                                                                                                                                                                          
+
+| disk_format      |
+raw                                                                                                                                                                                                        
+| file             | /v2/images/ca7a6cd0-bfa7-4d4c-97c9-
+c736dfd7509a/file                                                                                                                                                                                    
+| id               | ca7a6cd0-bfa7-4d4c-97c9-
+c736dfd7509a                                                                                                                                                                                          
+| min_disk         | 0    
+# 使用新镜像创建bootable卷
+[root@controller1 ~]# cinder create --image-id ca7a6cd0-bfa7-4d4c-97c9-c736dfd7509a --volume-type ceph --name ceph-
+bootable1 2
+# 查看新创建的bootable卷
+[root@controller1 ~]# cinder list
++--------------------------------------+-----------+----------------+------+-------------+----------+-------------+
+| ID                                   | Status    | Name           | Size | Volume Type | Bootable | Attached to |
++--------------------------------------+-----------+----------------+------+-------------+----------+-------------+
+| 485c49fe-44aa-46ef-9375-5e82f711f9fb | available | ceph-volume1   | 1    | ceph        | false    |             |
+| 8171fb38-ef30-4d7a-bd07-f0e2b6e79a78 | available | ceph-bootable1 | 2    | ceph        | true     |             |
++--------------------------------------+-----------+----------------+------+-------------+----------+-------------+
+[root@controller1 ~]#
+# 从基于ceph后端的volumes新建实例；
+# “--boot-volume”指定具有”bootable”属性的卷，启动后，虚拟机运行在volumes卷
+创建内网
+[root@controller1 ~]# openstack network create Internal-Network
++---------------------------+--------------------------------------+
+| Field                     | Value                                |
++---------------------------+--------------------------------------+
+| admin_state_up            | UP                                   |
+| availability_zone_hints   |                                      |
+| availability_zones        |                                      |
+| created_at                | 2019-04-11T03:01:40Z                 |
+| description               |                                      |
+| dns_domain                | None                                 |
+| id                        | d1bba76d-d5f0-4823-b3a5-583e2dad0d25 |
+| ipv4_address_scope        | None                                 |
+| ipv6_address_scope        | None                                 |
+| is_default                | False                                |
+| is_vlan_transparent       | None                                 |
+| mtu                       | 1450                                 |
+| name                      | Internal-Network                     |
+| port_security_enabled     | True                                 |
+| project_id                | 47767f4b5ab1403798e39d168f49abce     |
+| provider:network_type     | vxlan                                |
+| provider:physical_network | None                                 |
+| provider:segmentation_id  | 6                                    |
+| qos_policy_id             | None                                 |
+| revision_number           | 1                                    |
+| router:external           | Internal                             |
+| segments                  | None                                 |
+| shared                    | False                                |
+| status                    | ACTIVE                               |
+| subnets                   |                                      |
+| tags                      |                                      |
+| updated_at                | 2019-04-11T03:01:40Z                 |
++---------------------------+--------------------------------------+
+[root@controller1 ~]# openstack subnet create --network Internal-Network  --dns-nameserver 114.114.114.114 --gateway 172.16.1.1 --subnet-
+range 172.16.1.0/24 sub-Internal
++-------------------+--------------------------------------+
+| Field             | Value                                |
++-------------------+--------------------------------------+
+| allocation_pools  | 172.16.1.2-172.16.1.254              |
+| cidr              | 172.16.1.0/24                        |
+| created_at        | 2019-04-11T03:01:50Z                 |
+| description       |                                      |
+| dns_nameservers   | 114.114.114.114                      |
+| enable_dhcp       | True                                 |
+| gateway_ip        | 172.16.1.1                           |
+| host_routes       |                                      |
+| id                | 96c8e52c-483b-4423-8a1c-2b58677405eb |
+| ip_version        | 4                                    |
+| ipv6_address_mode | None                                 |
+| ipv6_ra_mode      | None                                 |
+| name              | sub-Internal                         |
+| network_id        | d1bba76d-d5f0-4823-b3a5-583e2dad0d25 |
+| project_id        | 47767f4b5ab1403798e39d168f49abce     |
+| revision_number   | 0                                    |
+| segment_id        | None                                 |
+| service_types     |                                      |
+| subnetpool_id     | None                                 |
+| tags              |                                      |
+| updated_at        | 2019-04-11T03:01:50Z                 |
++-------------------+--------------------------------------+
+[root@controller1 ~]# openstack router create router
++-------------------------+--------------------------------------+
+| Field                   | Value                                |
++-------------------------+--------------------------------------+
+| admin_state_up          | UP                                   |
+| availability_zone_hints |                                      |
+| availability_zones      |                                      |
+| created_at              | 2019-04-11T03:01:59Z                 |
+| description             |                                      |
+| distributed             | False                                |
+
+| external_gateway_info   | None                                 |
+| flavor_id               | None                                 |
+| ha                      | False                                |
+| id                      | a29d1c76-9bbd-4682-abf6-c3af47f4c54e |
+| name                    | router                               |
+| project_id              | 47767f4b5ab1403798e39d168f49abce     |
+| revision_number         | 0                                    |
+| routes                  |                                      |
+| status                  | ACTIVE                               |
+| tags                    |                                      |
+| updated_at              | 2019-04-11T03:01:59Z                 |
++-------------------------+--------------------------------------+
+[root@controller1 ~]# openstack router add subnet router sub-Internal
+创建外网
+将外网与路由添加到一起
+[root@controller1 ~]# openstack network list
++--------------------------------------+------------------+--------------------------------------+
+| ID                                   | Name             | Subnets                              |
++--------------------------------------+------------------+--------------------------------------+
+| c18a0dea-0b9d-4492-9bee-a324bbb2976d | External-Network | ab628b92-a574-4ef7-ba7e-de3f4ccfd171 |
+| d1bba76d-d5f0-4823-b3a5-583e2dad0d25 | Internal-Network | 96c8e52c-483b-4423-8a1c-2b58677405eb |
++--------------------------------------+------------------+--------------------------------------+
+[root@controller1 ~]# openstack router set router --external-gateway External-Network
+

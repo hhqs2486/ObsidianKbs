@@ -1,0 +1,625 @@
+I l@ve RuBoard
+Chapter 5. File Formats
+ 
+Section 5.1.  Overview
+ 
+Section 5.2.  The xmllib Module
+ 
+Section 5.3.  The xml.parsers.expat Module
+ 
+Section 5.4.  The sgmllib Module
+ 
+Section 5.5.  The htmllib Module
+ 
+Section 5.6.  The htmlentitydefs Module
+ 
+Section 5.7.  The formatter Module
+ 
+Section 5.8.  The ConfigParser Module
+ 
+Section 5.9.  The netrc Module
+ 
+Section 5.10.  The shlex Module
+ 
+Section 5.11.  The zipfile Module
+ 
+Section 5.12.  The gzip Module
+ 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+5.1 Overview
+ 
+This chapter describes a number of modules that are used to parse different file formats.
+ 
+5.1.1 Markup Languages
+ 
+Python comes with extensive support for the Extensible Markup Language (XML) and Hypertext Markup Language
+(HTML) file formats. Python also provides basic support for Standard Generalized Markup Language (SGML). 
+All these formats share the same basic structure because both HTML and XML are derived from SGML. Each
+document contains a mix of start tags, end tags, plain text (also called character data), and entity references, as
+shown in the following:
+ <document name="sample.xml">
+    <header>This is a header</header>
+    <body>This is the body text.  The text can contain
+    plain text (&quot;character data&quot;), tags, and
+    entities.
+    </body>
+</document> 
+In the previous example, <document>, <header>, and <body> are start tags. For each start tag, there's a
+corresponding end tag that looks similar, but has a slash before the tag name. The start tag can also contain one or
+more attributes, like the name attribute in this example. 
+Everything between a start tag and its matching end tag is called an element. In the previous example, the document
+element contains two other elements: header and body.
+ 
+Finally, &quot; is a character entity. It is used to represent reserved characters in the text sections. In this case, it's an
+ampersand (&), which is used to start the entity itself. Other common entities include &lt; for "less than" (<), and &gt;
+for "greater than" (>).
+ 
+While XML, HTML, and SGML all share the same building blocks, there are important differences between them.
+In XML, all elements must have both start tags and end tags, and the tags must be properly nested (if they are, the
+document is said to be well-formed). In addition, XML is case-sensitive, so <document> and <Document> are two
+different element types.
+ 
+HTML, in contrast, is much more flexible. The HTML parser can often fill in missing tags; for example, if you open a
+new paragraph in HTML using the <P> tag without closing the previous paragraph, the parser automatically adds a
+</P> end tag. HTML is also case-insensitive. On the other hand, XML allows you to define your own elements,
+while HTML uses a fixed element set, as defined by the HTML specifications.
+ 
+SGML is even more flexible. In its full incarnation, you can use a custom declaration to define how to translate the
+source text into an element structure, and a document type description (DTD) to validate the structure and fill in
+missing tags. Technically, both HTML and XML are SGML applications; they both have their own SGML
+declaration, and HTML also has a standard DTD.
+ 
+Python comes with parsers for all markup flavors. While SGML is the most flexible of the formats, Python's sgmllib
+parser is actually pretty simple. It avoids most of the problems by only understanding enough of the SGML standard
+to be able to deal with HTML. It doesn't handle DTDs either; instead, you can customize the parser via subclassing.
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+5.2 The xmllib Module
+ 
+The xmlib module provides a simple XML parser, using regular expressions to pull the XML data apart, as shown in 
+Example 5-1. The parser does basic checks on the document, such as a check to see that there is only one top-level
+element and a check to see that all tags are balanced.
+ 
+You feed XML data to this parser piece by piece (as data arrives over a network, for example). The parser calls
+methods in itself for start tags, data sections, end tags, and entities, among other things.
+ 
+If you're only interested in a few tags, you can define special start_tag and end_tag methods, where tag is the tag
+name. The start functions are called with the attributes given as a dictionary.
+ 
+Example 5-1. Using the xmllib Module to Extract Information from an Element
+ 
+File: xmllib-example-1.py
+import xmllib
+class Parser(xmllib.XMLParser):
+    # get quotation number
+    def _ _init_ _(self, file=None):
+        xmllib.XMLParser._ _init_ _(self)
+        if file:
+            self.load(file)
+    def load(self, file):
+        while 1:
+            s = file.read(512)
+            if not s:
+                break
+            self.feed(s)
+        self.close()
+    def start_quotation(self, attrs):
+        print "id =>", attrs.get("id")
+        raise EOFError
+try:
+    c = Parser()
+    c.load(open("samples/sample.xml"))
+except EOFError:
+    pass
+id => 031 
+Example 5-2 contains a simple (and incomplete) rendering engine. The parser maintains an element stack (_ _tags),
+which it passes to the renderer, together with text fragments. The renderer looks up the current tag hierarchy in a
+style dictionary, and if it isn't already there, it creates a new style descriptor by combining bits and pieces from the
+stylesheet.
+ 
+Example 5-2. Using the xmllib Module
+ 
+File: xmllib-example-2.py
+import xmllib
+import string, sys
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+5.3 The xml.parsers.expat Module
+ 
+(Optional) The xml.parsers.expat module is an interface to James Clark's Expat XML parser. Example 5-3
+demonstrates this full-featured and fast parser, which is an excellent choice for production use.
+ 
+Example 5-3. Using the xml.parsers.expat Module
+ 
+File: xml-parsers-expat-example-1.py
+from xml.parsers import expat
+class Parser:
+    def _ _init_ _(self):
+        self._parser = expat.ParserCreate()
+        self._parser.StartElementHandler = self.start
+        self._parser.EndElementHandler = self.end
+        self._parser.CharacterDataHandler = self.data
+    def feed(self, data):
+        self._parser.Parse(data, 0)
+    def close(self):
+        self._parser.Parse("", 1) # end of data
+        del self._parser # get rid of circular references
+    def start(self, tag, attrs):
+        print "START", repr(tag), attrs
+    def end(self, tag):
+        print "END", repr(tag)
+    def data(self, data):
+        print "DATA", repr(data)
+p = Parser()
+p.feed("<tag>data</tag>")
+p.close()
+START u'tag' {}
+DATA u'data'
+END u'tag' 
+Note that the parser returns Unicode strings, even if you pass it ordinary text. By default, the parser interprets the
+source text as UTF-8 (as per the XML standard). To use other encodings, make sure the XML file contains an
+encoding directive. Example 5-4 shows how to read ISO Latin-1 text using xml.parsers.expat.
+ 
+Example 5-4. Using the xml.parsers.expat Module to Read ISO Latin-1 Text
+ 
+File: xml-parsers-expat-example-2.py
+from xml.parsers import expat
+class Parser:
+    def _ _init_ _(self):
+        self._parser = expat.ParserCreate()
+        self._parser.StartElementHandler = self.start
+        self._parser.EndElementHandler = self.end
+        self._parser.CharacterDataHandler = self.data
+def feed(self, data):
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+5.4 The sgmllib Module
+ 
+The sgmllib module, shown in Example 5-5, provides a basic SGML parser. It works pretty much the same as the
+xmllib parser, but is less restrictive (and less complete).
+ 
+Like in xmllib, this parser calls methods in itself to deal with things like start tags, data sections, end tags, and entities.
+If you're only interested in a few tags, you can define special start and end methods.
+ 
+Example 5-5. Using the sgmllib Module to Extract the Title Element
+ 
+File: sgmllib-example-1.py
+import sgmllib
+import string
+class FoundTitle(Exception):
+    pass
+class ExtractTitle(sgmllib.SGMLParser):
+    def _ _init_ _(self, verbose=0):
+        sgmllib.SGMLParser._ _init_ _(self, verbose)
+        self.title = self.data = None
+    def handle_data(self, data):
+        if self.data is not None:
+            self.data.append(data)
+    def start_title(self, attrs):
+        self.data = []
+    def end_title(self):
+        self.title = string.join(self.data, "")
+        raise FoundTitle # abort parsing!
+def extract(file):
+    # extract title from an HTML/SGML stream
+    p = ExtractTitle()
+    try:
+        while 1:
+            # read small chunks
+            s = file.read(512)
+            if not s:
+                break
+            p.feed(s)
+        p.close()
+    except FoundTitle:
+        return p.title
+    return None
+#
+# try it out
+print "html", "=>", extract(open("samples/sample.htm"))
+print "sgml", "=>", extract(open("samples/sample.sgm"))
+html => A Title.
+sgml => Quotations 
+To handle all tags, overload the unknown_starttag and unknown_endtag methods instead, as Example 5-6
+demonstrates.
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+5.5 The htmllib Module
+ 
+The htmlib module contains a tag-driven HTML parser, which sends data to a formatting object. Example 5-9 uses
+this module. For more examples on how to parse HTML files using this module, see the descriptions of the formatter
+module.
+ 
+Example 5-9. Using the htmllib Module
+ 
+File: htmllib-example-1.py
+import htmllib
+import formatter
+import string
+class Parser(htmllib.HTMLParser):
+    # return a dictionary mapping anchor texts to lists
+    # of associated hyperlinks
+    def _ _init_ _(self, verbose=0):
+        self.anchors = {}
+        f = formatter.NullFormatter()
+        htmllib.HTMLParser._ _init_ _(self, f, verbose)
+    def anchor_bgn(self, href, name, type):
+        self.save_bgn()
+        self.anchor = href
+    def anchor_end(self):
+        text = string.strip(self.save_end())
+        if self.anchor and text:
+            self.anchors[text] = self.anchors.get(text, []) + [self.anchor]
+file = open("samples/sample.htm")
+html = file.read()
+file.close()
+p = Parser()
+p.feed(html)
+p.close()
+for k, v in p.anchors.items():
+    print k, "=>", v
+print
+link => ['http://www.python.org'] 
+If you're only out to parse an HTML file and not render it to an output device, it's usually easier to use the sgmllib
+module instead.
+ 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+5.6 The htmlentitydefs Module
+ 
+The htmlentitydefs module contains a dictionary with many ISO Latin-1 character entities used by HTML. Its use is
+demonstrated in Example 5-10.
+ 
+Example 5-10. Using the htmlentitydefs Module
+ 
+File: htmlentitydefs-example-1.py
+import htmlentitydefs
+entities = htmlentitydefs.entitydefs
+for entity in "amp", "quot", "copy", "yen":
+    print entity, "=", entities[entity]
+amp = &
+quot = "
+copy = \302\251
+yen = \302\245 
+Example 5-11 shows how to combine regular expressions with this dictionary to translate entities in a string (the
+opposite of cgi.escape).
+ 
+Example 5-11. Using the htmlentitydefs Module to Translate Entities
+ 
+File: htmlentitydefs-example-2.py
+import htmlentitydefs
+import re
+import cgi
+pattern = re.compile("&(\w+?);")
+def descape_entity(m, defs=htmlentitydefs.entitydefs):
+    # callback: translate one entity to its ISO Latin value
+    try:
+        return defs[m.group(1)]
+    except KeyError:
+        return m.group(0) # use as is
+def descape(string):
+    return pattern.sub(descape_entity, string)
+print descape("&lt;spam&amp;eggs&gt;")
+print descape(cgi.escape("<spam&eggs>"))
+<spam&eggs>
+<spam&eggs> 
+Finally, Example 5-12 shows how to use translate reserved XML characters and ISO Latin-1 characters to an XML
+string. This is similar to cgi.escape, but it also replaces non-ASCII characters.
+ 
+Example 5-12. Escaping ISO Latin-1 Entities
+ 
+File: htmlentitydefs-example-3.py
+import htmlentitydefs
+import re, string
+# this pattern matches substrings of reserved and non-ASCII characters
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+5.7 The formatter Module
+ 
+The formatter module provides formatter classes that can be used together with the htmllib module.
+ 
+This module provides two class families, formatters and writers. Formatters convert a stream of tags and data strings
+from the HTML parser into an event stream suitable for an output device, and writers render that event stream on an
+output device. Example 5-13 demonstrates. 
+In most cases, you can use the AbstractFormatter class to do the formatting. It calls methods on the writer object,
+representing different kinds of formatting events. The AbstractWriter class simply prints a message for each method
+call. 
+Example 5-13. Using the formatter Module to Convert HTML to an Event Stream
+ 
+File: formatter-example-1.py
+import formatter
+import htmllib
+w = formatter.AbstractWriter()
+f = formatter.AbstractFormatter(w)
+file = open("samples/sample.htm")
+p = htmllib.HTMLParser(f)
+p.feed(file.read())
+p.close()
+file.close()
+send_paragraph(1)
+new_font(('h1', 0, 1, 0))
+send_flowing_data('A Chapter.')
+send_line_break()
+send_paragraph(1)
+new_font(None)
+send_flowing_data('Some text. Some more text. Some')
+send_flowing_data(' ')
+new_font((None, 1, None, None))
+send_flowing_data('emphasized')
+new_font(None)
+send_flowing_data(' text. A')
+send_flowing_data(' link')
+send_flowing_data('[1]')
+send_flowing_data('.' 
+In addition to the AbstractWriter class, the formatter module provides a NullWriter class, which ignores all events
+passed to it, and a DumbWriter class that converts the event stream to a plain text document, as shown in Example
+5-14.
+ 
+Example 5-14. Using the formatter Module to Convert HTML to Plain Text
+ 
+File: formatter-example-2.py
+import formatter
+import htmllib
+w = formatter.DumbWriter() # plain text
+f = formatter.AbstractFormatter(w)
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+5.8 The ConfigParser Module
+ 
+The ConfigParser module reads configuration files.
+ 
+The files should be written in a format similar to Windows INI files. The file contains one or more sections, separated
+by section names written in brackets. Each section can contain one or more configuration items.
+ 
+Here's the sample file used in Example 5-16:
+ [book]
+title: The Python Standard Library
+author: Fredrik Lundh
+email: fredrik@pythonware.com
+version: 2.0-001115
+[ematter]
+pages: 250
+[hardcopy]
+pages: 350 
+Example 5-16 uses the ConfigParser module to read the sample configuration file.
+ 
+Example 5-16. Using the ConfigParser Module
+ 
+File: configparser-example-1.py
+import ConfigParser
+import string
+config = ConfigParser.ConfigParser()
+config.read("samples/sample.ini")
+# print summary
+print
+print string.upper(config.get("book", "title"))
+print "by", config.get("book", "author"),
+print  "(" + config.get("book", "email") + ")"
+print
+print config.get("ematter", "pages"), "pages"
+print
+# dump entire config file
+for section in config.sections():
+    print section
+    for option in config.options(section):
+        print " ", option, "=", config.get(section, option)
+THE PYTHON STANDARD LIBRARY
+by Fredrik Lundh (fredrik@pythonware.com)
+250 pages
+book
+  title = The Python Standard Library
+  email = fredrik@pythonware.com
+  author = Fredrik Lundh
+  version = 2.0-001115
+  _ _name_ _ = book
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+5.9 The netrc Module
+ 
+The netrc module parses .netrc configuration files, as shown in Example 5-18. Such files are used to store FTP
+usernames and passwords in a user's home directory (don't forget to configure things so that the file can only be read
+by the user: "chmod 0600 ~/.netrc," in other words).
+ 
+Example 5-18. Using the netrc Module
+ 
+File: netrc-example-1.py
+import netrc
+# default is $HOME/.netrc
+info = netrc.netrc("samples/sample.netrc")
+login, account, password = info.authenticators("secret.fbi")
+print "login", "=>", repr(login)
+print "account", "=>", repr(account)
+print "password", "=>", repr(password)
+login => 'mulder'
+account => None
+password => 'trustno1' 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+5.10 The shlex Module
+ 
+The shlex module provides a simple lexer (also known as tokenizer) for languages based on the Unix shell syntax. Its
+use is demonstrated in Example 5-19.
+ 
+Example 5-19. Using the shlex Module
+ 
+File: shlex-example-1.py
+import shlex
+lexer = shlex.shlex(open("samples/sample.netrc", "r"))
+lexer.wordchars = lexer.wordchars + "._"
+while 1:
+    token = lexer.get_token()
+    if not token:
+        break
+    print repr(token)
+'machine'
+'secret.fbi'
+'login'
+'mulder'
+'password'
+'trustno1'
+'machine'
+'non.secret.fbi'
+'login'
+'scully'
+'password'
+'noway' 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+5.11 The zipfile Module
+ 
+(New in 2.0) The zipfile module allows you to read and write files in the popular ZIP archive format.
+ 
+5.11.1 Listing the Contents
+ 
+To list the contents of an existing archive, you can use the namelist and infolist methods used in Example 5-20. The
+former returns a list of filenames, and the latter returns a list of ZipInfo instances.
+ 
+Example 5-20. Using the zipfile Module to List Files in a ZIP File
+ 
+File: zipfile-example-1.py
+import zipfile
+file = zipfile.ZipFile("samples/sample.zip", "r")
+# list filenames
+for name in file.namelist():
+    print name,
+print
+# list file information
+for info in file.infolist():
+    print info.filename, info.date_time, info.file_size
+sample.txt sample.jpg
+sample.txt (1999, 9, 11, 20, 11, 8) 302
+sample.jpg (1999, 9, 18, 16, 9, 44) 4762 
+5.11.2 Reading Data from a ZIP File
+ 
+To read data from an archive, simply use the read method used in Example 5-21. It takes a filename as an argument
+and returns the data as a string.
+ 
+Example 5-21. Using the zipfile Module to Read Data from a ZIP File
+ 
+File: zipfile-example-2.py
+import zipfile
+file = zipfile.ZipFile("samples/sample.zip", "r")
+for name in file.namelist():
+    data = file.read(name)
+    print name, len(data), repr(data[:10])
+sample.txt 302 'We will pe'
+sample.jpg 4762 '\377\330\377\340\000\020JFIF' 
+5.11.3 Writing Data to a ZIP File
+ 
+Adding files to an archive is easy. Just pass the filename, and the name you want that file to have in the archive, to the
+write method.
+ 
+The script in Example 5-22 creates a ZIP file containing all files in the samples directory.
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+5.12 The gzip Module
+ 
+The gzip module allows you to read and write gzip-compressed files as if they were ordinary files, as shown in 
+Example 5-24.
+ 
+Example 5-24. Using the gzip Module to Read a Compressed File
+ 
+File: gzip-example-1.py
+import gzip
+file = gzip.GzipFile("samples/sample.gz")
+print file.read()
+Well it certainly looks as though we're in for
+a splendid afternoon's sport in this the 127th
+Upperclass Twit of the Year Show. 
+The standard implementation doesn't support the seek and tell methods. Example 5-25 shows how to add forward
+seeking.
+ 
+Example 5-25. Extending the gzip Module to Support seek/tell
+ 
+File: gzip-example-2.py
+import gzip
+class gzipFile(gzip.GzipFile):
+    # adds seek/tell support to GzipFile
+    offset = 0
+    def read(self, size=None):
+        data = gzip.GzipFile.read(self, size)
+        self.offset = self.offset + len(data)
+        return data
+    def seek(self, offset, whence=0):
+        # figure out new position (we can only seek forwards)
+        if whence == 0:
+            position = offset
+        elif whence == 1:
+            position = self.offset + offset
+        else:
+            raise IOError, "Illegal argument"
+        if position < self.offset:
+            raise IOError, "Cannot seek backwards"
+        # skip forward, in 16k blocks
+        while position > self.offset:
+            if not self.read(min(position - self.offset, 16384)):
+                break
+    def tell(self):
+        return self.offset
+#
+# try it
+file = gzipFile("samples/sample.gz")
+file.seek(80)
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot

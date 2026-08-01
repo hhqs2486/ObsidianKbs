@@ -1,0 +1,122 @@
+144 ff 第二篇 实战篇 
+第8 章 
+第一个TensorFlow 程序 
+理解TensorFlow 的运行方式对后面几章的具体实战非常重要。本章就用一个简单的例子来
+讲解TensorFlow 的运行方式。 
+8.1  TensorFlow 的运行方式 
+TensorFlow 的运行方式分如下4 步： 
+（1）加载数据及定义超参数； 
+（2）构建网络； 
+（3）训练模型； 
+（4）评估模型和进行预测。 
+下面我们以一个神经网络为例，讲解TensorFlow 的运行方式。在这个例子中，我们构造一
+个满足一元二次函数y = ax2+b 的原始数据，然后构建一个最简单的神经网络，仅包含一个输入
+层、一个隐藏层和一个输出层。通过TensorFlow 将隐藏层和输出层的weights 和biases 的值学
+习出来，看看随着训练次数的增加，损失值是不是不断在减小。
+8.1.1  生成及加载数据 
+首先来生成输入数据。我们假设最后要学习的方程为y = x2 − 0.5，我们来构造满足这个方
+程的一堆x 和y，同时加入一些不满足方程的噪声点。 
+import tensorflow as tf 
+import numpy as np 
+# 构造满足一元二次方程的函数 
+x_data = np.linspace(-1,1,300)[:, np.newaxis] # 为了使点更密一些，我们构建了300 个点，分
+布在-1 到1 区间，直接采用np 生成等差数列的方法，并将结果为300 个点的一维数组，转换为300×1 的二维数组 
+noise = np.random.normal(0, 0.05, x_data.shape) # 加入一些噪声点，使它与x_data 的维度
+
+第8 章 第一个TensorFlow 程序 ee 145 
+一致，并且拟合为均值为0、方差为0.05 的正态分布 
+y_data = np.square(x_data) - 0.5 + noise # y = x^2 – 0.5 + 噪声 
+接下来定义x 和y 的占位符来作为将要输入神经网络的变量： 
+xs = tf.placeholder(tf.float32, [None, 1]) 
+ys = tf.placeholder(tf.float32, [None, 1]) 
+8.1.2  构建网络模型 
+这里我们需要构建一个隐藏层和一个输出层。作为神经网络中的层，输入参数应该有4 个
+变量：输入数据、输入数据的维度、输出数据的维度和激活函数。每一层经过向量化（y = 
+weights×x + biases）的处理，并且经过激活函数的非线性化处理后，最终得到输出数据。 
+下面来定义隐藏层和输出层，示例代码如下：
+def add_layer(inputs, in_size, out_size, activation_function=None): 
+  # 构建权重：in_size×out_size 大小的矩阵 
+  weights = tf.Variable(tf.random_normal([in_size, out_size]))  
+  # 构建偏置：1×out_size 的矩阵 
+ biases = tf.Variable(tf.zeros([1, out_size]) + 0.1)  
+  # 矩阵相乘 
+  Wx_plus_b = tf.matmul(inputs, weights) + biases  
+  if activation_function is None: 
+    outputs = Wx_plus_b 
+  else: 
+    outputs = activation_function(Wx_plus_b) 
+return outputs # 得到输出数据 
+# 构建隐藏层，假设隐藏层有10 个神经元 
+h1 = add_layer(xs, 1, 20, activation_function=tf.nn.relu) 
+# 构建输出层，假设输出层和输入层一样，有1 个神经元 
+prediction = add_layer(h1, 20, 1, activation_function=None) 
+接下来需要构建损失函数：计算输出层的预测值和真实值间的误差，对二者差的平方求和
+再取平均，得到损失函数。运用梯度下降法，以0.1 的效率最小化损失： 
+# 计算预测值和真实值间的误差 
+loss = tf.reduce_mean(tf.reduce_sum(tf.square(ys - prediction), 
+reduction_indices=[1])) 
+train_step = tf.train.GradientDescentOptimizer(0.1).minimize(loss) 
+8.1.3  训练模型 
+我们让TensorFlow 训练1000 次，每50 次输出训练的损失值： 
+init = tf.global_variables_initializer() # 初始化所有变量 
+sess = tf.Session() 
+
+146 ff 第二篇 实战篇 
+sess.run(init) 
+for i in range(1000): # 训练1000 次 
+  sess.run(train_step, feed_dict={xs: x_data, ys: y_data}) 
+  if i % 50 == 0: # 每50 次打印出一次损失值 
+    print(sess.run(loss, feed_dict={xs: x_data, ys: y_data})) 
+输出结果如下，在打印出的20 次结果中，可以看出损失值是趋于变小的： 
+4.62726 
+0.00609592 
+0.00468114 
+0.00430631 
+0.004184 
+0.0041371 
+0.00411622 
+0.0040998 
+0.00408824 
+0.00407396 
+0.00405857 
+0.00404454 
+0.00403032 
+0.00401612 
+0.00399823 
+0.00397677 
+0.00396069 
+0.0039459 
+0.00392994 
+0.00391947 
+以上就是最简单的利用TensorFlow 的神经网络训练一个模型的过程，目标就是要训练出权重
+值来使模型拟合y = x2 − 0.5 的系数1 和−0.5，通过损失值越来越小，可以看出训练参数越来越逼近
+目标结果。按照标准的步骤，接下来应该评估模型，就是把学习出来的系数weights、biase 进行前
+向传播后和真值y = x2 − 0.5 的结果系数进行比较，根据相近程度计算准确率。这里省略了评估过程。 
+在第9 章将进行对MNIST 数据集在各种神经网络上的训练。 
+8.2  超参数的设定 
+所谓超参数（hyper-parameters），就是指机器学习模型里的框架参数。与权重参数不同的是，
+它是需要手动设定、不断试错的。
+学习率（learning rate）是一个最常设定的超参数。学习率设置得越大，训练时间越短，速
+度越快；而学习率设置得越小，训练得准确度越高。那么，如何确定一个比较好的学习率呢？
+只能通过实验的方法。例如，先设置0.01，观察损失值的变化，然后尝试0.001、0.0001，最终
+确定一个比较合适的学习率。
+
+第8 章 第一个TensorFlow 程序 ee 147 
+我们也可以设置可变的学习率。那么，怎样才算是准确率不再提高，应该停止训练了呢？例如，
+在训练过程中记录最佳的准确率，在连续n 轮（epoch）没达到最佳的准确率时，便可以认为准确率
+不再提高，就可以停止训练，称为“early stopping”，这个策略叫作 “no-improvement-in-n”规则（例
+如，我们设置连续10 轮准确率不再变动，就认为不再提高）。此时，让学习率减半；下一次
+满足时，再让学习率减半。这样，在逐渐解决最优解时，我们的学习率越来越小，准确度就
+越来越高。
+mini-batch 大小是另一个最常设定的超参数。每批大小决定了权重的更新规则。例如，大
+小为32 时，就是把32 个样本的梯度全部计算完，然后求平均值，去更新权重。批次越大训练
+的速度越快，可以利用矩阵、线性代数库来加速，但是权重更新频率略低。批次越小训练的速
+度就慢。那么，如何选择批次大小呢？也需要结合机器的硬件性能以及数据集的大小来设定。
+正则项系数（regularization parameter，λ）是另一个常用的超参数。但是，设定没有太多可
+遵循的规则，一般凭经验。一般来说，如果在较复杂的网络发现出现了明显的过拟合（在训练
+数据准确率很高但测试数据准确率反而下降），可以考虑增加此项。初学者可以一开始设置为0，
+然后确定好一个比较好的学习率后，再给λ一个值，随后根据准确率再进行精细调整。
+ 8.3  小结 
+本章主要介绍了如何用TensorFlow 构建一个神经网络。构建神经网络主要分为4 个步骤：
+构造数据、构建网络、训练模型、评估及预测模型。此外，还介绍了一些超参数设定的经验和
+技巧。

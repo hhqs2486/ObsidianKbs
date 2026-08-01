@@ -1,0 +1,146 @@
+22. 初始化容器
+上节课我们学习了容器的健康检查的两个探针： liveness probe （存活探针）和 readiness
+probe （可读性探针）的使⽤⽅法，我们说在这两个探针是可以影响容器的⽣命周期的，包括我们之
+前提到的容器的两个钩⼦函数 PostStart 和 PreStop 。我们今天要给⼤家介绍的是 Init
+Container （初始化容器）。
+ Init Container 就是⽤来做初始化⼯作的容器，可以是⼀个或者多个，如果有多个的话，这些容器会
+按定义的顺序依次执⾏，只有所有的 Init Container 执⾏完后，主容器才会被启动。我们知道⼀
+个 Pod ⾥⾯的所有容器是共享数据卷和⽹络命名空间的，所以 Init Container ⾥⾯产⽣的数据可以
+被主容器使⽤到的。
+是不是感觉 Init Container 和之前的钩⼦函数有点类似啊，只是是在容器执⾏前来做⼀些⼯作，是
+吧？从直观的⻆度看上去的话，初始化容器的确有点像 PreStart ，但是钩⼦函数和我们的 Init
+Container 是处在不同的阶段的，我们可以通过下⾯的图来了解下： 
+从上⾯这张图我们可以直观的看到 PostStart 和 PreStop 包括 liveness 和 readiness 是属于主容器
+的⽣命周期范围内的，⽽ Init Container 是独⽴于主容器之外的，当然他们都属于 Pod 的⽣命周期
+范畴之内的，现在我们应该明⽩ Init Container 和钩⼦函数之类的区别了吧。
+初始化容器
+134
+
+另外我们可以看到上⾯我们的 Pod 右边还有⼀个 infra 的容器，这是⼀个什么容器呢？我们可以在集
+群环境中去查看下⼈任意⼀个 Pod 对应的运⾏的 Docker 容器，我们可以发现每⼀个 Pod 下⾯都包含
+了⼀个 pause-amd64 的镜像，这个就是我们的 infra 镜像，我们知道 Pod 下⾯的所有容器是共享同⼀
+个⽹络命名空间的，这个镜像就是来做这个事情的，所以每⼀个 Pod 当中都会包含⼀个这个镜像。
+很多同学最开始 Pod 启动不起来就是因为这个 infra 镜像没有被拉下来，因为默认该镜像是需要
+到⾕歌服务器上拉取的，所以需要提前拉取到节点上⾯。
+我们说 Init Container 主要是来做初始化容器⼯作的，那么他有哪些应⽤场景呢？
+等待其他模块Ready：这个可以⽤来解决服务之间的依赖问题，⽐如我们有⼀个 Web 服务，该服
+务⼜依赖于另外⼀个数据库服务，但是在我们启动这个 Web 服务的时候我们并不能保证依赖的这
+个数据库服务就已经启动起来了，所以可能会出现⼀段时间内 Web 服务连接数据库异常。要解决
+这个问题的话我们就可以在 Web 服务的 Pod 中使⽤⼀个 InitContainer，在这个初始化容器中去
+检查数据库是否已经准备好了，准备好了过后初始化容器就结束退出，然后我们的主容器 Web 服
+务被启动起来，这个时候去连接数据库就不会有问题了。
+做初始化配置：⽐如集群⾥检测所有已经存在的成员节点，为主容器准备好集群的配置信息，这
+样主容器起来后就能⽤这个配置信息加⼊集群。
+其它场景：如将 pod 注册到⼀个中央数据库、配置中⼼等。
+我们先来给⼤家演示下服务依赖的场景下初始化容器的使⽤⽅法，如下 Pod 的定义⽅法
+apiVersion: v1
+kind: Pod
+metadata:
+  name: init-pod1
+  labels:
+    app: init
+spec:
+  containers:
+  - name: init-container
+    image: busybox
+    command: ['sh', '-c', 'echo The app is running! && sleep 3600']
+  initContainers:
+  - name: init-myservice
+    image: busybox
+    command: ['sh', '-c', 'until nslookup myservice; do echo waiting for myservice; sleep 
+2; done;']
+  - name: init-mydb
+    image: busybox
+    command: ['sh', '-c', 'until nslookup mydb; do echo waiting for mydb; sleep 2; done;']
+ Service 的对应 YAML 内容：
+kind: Service
+apiVersion: v1
+metadata:
+  name: myservice
+spec:
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 6376
+初始化容器
+135
+
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: mydb
+spec:
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 6377
+我们可以先创建上⾯的 Pod ，然后查看下 Pod 的状态，然后再创建下⾯的 Service ，对⽐下前后状
+态。
+我们在 Pod 启动过程中，初始化容器会按顺序在⽹络和数据卷初始化之后启动。每个容器必须在下⼀
+个容器启动之前成功退出。如果由于运⾏时或失败退出，导致容器启动失败，它会根
+据 Pod 的 restartPolicy 指定的策略进⾏重试。 然⽽，如果 Pod 的 restartPolicy 设置为 Always，
+Init 容器失败时会使⽤ RestartPolicy 策略。
+在所有的初始化容器没有成功之前， Pod 将不会变成  Ready 状态。正在初始化中的 Pod 处
+于 Pending 状态，但应该会将条件 Initializing 设置为 true。
+接下来我们再来尝试创建⼀个做初始化配置⼯作的 Pod ：
+apiVersion: v1
+kind: Pod
+metadata:
+  name: init-demo
+spec:
+  containers:
+  - name: nginx
+    image: nginx
+    ports:
+    - containerPort: 80
+    volumeMounts:
+    - name: workdir
+      mountPath: /usr/share/nginx/html
+  initContainers:
+  - name: install
+    image: busybox
+    command:
+    - wget
+    - "-O"
+    - "/work-dir/index.html"
+    - http://www.baidu.com
+    volumeMounts:
+    - name: workdir
+      mountPath: "/work-dir"
+  volumes:
+  - name: workdir
+    emptyDir: {}
+初始化容器
+136
+
+我们可以看到这⾥⼜出现了 volumes ， spec.volumes 指的是 Pod 中的
+卷， spec.containers.volumeMounts ，是将指定的卷 mount 到容器指定的位置，相当于docker⾥⾯
+的 -v 宿主机⽬录：容器⽬录 ，我们前⾯⽤到过 hostPath ，我们这⾥使⽤的是 emptyDir{} ，这个就相
+当于⼀个共享卷，是⼀个临时的⽬录，⽣命周期等同于 Pod 的⽣命周期。
+初始化容器执⾏完，会下载⼀个 html ⽂件映射到emptyDir{}，⽽主容器也是和 spec.volumes ⾥的
+emptyDir{} 进⾏映射，所以 nginx容器的 /usr/share/nginx/html`⽬录下会映射 index.html ⽂件。
+我们来创建下该 Pod ，然后验证nginx容器是否运⾏:
+$ kubectl get pod init-demo
+输出显示了nginx容器正在运⾏：
+NAME      READY     STATUS    RESTARTS   AGE
+nginx     1/1       Running   0          43m
+在 init-demo 容器⾥的 nginx 容器打开⼀个 shell：
+$ kubectl exec -it init-demo -- /bin/bash
+在Shell⾥，直接查看下 index.html 的内容：
+root@nginx:~# cat /usr/share/nginx/html/index.html
+如果我们看到有百度相关的信息那么证明我们上⾯的初始化的⼯作就完成了。
+这就是我们初始化容器的使⽤⽅法，到这⾥我们就把 Pod 的整个⽣命周期当中的⼏个主要阶段讲完
+了，第⼀个是容器的两个钩⼦函数： PostStart 和 PreStop ，还有就是容器健康检查的两个探
+针： liveness probe 和 readiness probe ，以及这节课的 Init Container 。下节课开始我们来讲解
+⼀些常⽤的控制器和 Pod 的结合。 ```
+点击查看本⽂视频
+扫描下⾯的⼆维码(或微信搜索 k8s技术圈 )关注我们的微信公众帐号，在微信公众帐号中回复 加群 即
+可加⼊到我们的 kubernetes 讨论群⾥⾯共同学习。
+初始化容器
+137
+
+k8s技术圈⼆维码
+Copyright © qikqiak.com 2018 all right reserved，powered by GitbookUpdated: 2019-03-12 13:01:20
+初始化容器
+138

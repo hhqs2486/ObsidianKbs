@@ -1,0 +1,837 @@
+Mesos - 优秀的集群资源调度平台
+Mesos 项目是源自 UC Berkeley 的对集群资源进行抽象和管理的开源项目，类似于操作系统
+内核，用户可以使用它很容易地实现分布式应用的自动化调度。
+同时，Mesos 自身也很好地结合和主持了 Docker 等相关容器技术，基于 Mesos 已有的大量
+应用框架，可以实现用户应用的快速上线。
+本章将介绍 Mesos 项目的安装、使用、配置以及核心的原理知识。
+Mesos - 优秀的集群资源调度平台
+267
+
+简介
+Mesos 最初由 UC Berkeley 的 AMP 实验室于 2009 年发起，遵循 Apache 协议，目前已经成
+立了 Mesosphere 公司进行运营。Mesos 可以将整个数据中心的资源（包括 CPU、内存、存
+储、网络等）进行抽象和调度，使得多个应用同时运行在集群中分享资源，并无需关心资源
+的物理分布情况。
+如果把数据中心中的集群资源看做一台服务器，那么 Mesos 要做的事情，其实就是今天操作
+系统内核的职责：抽象资源 + 调度任务。Mesos 项目是 Mesosphere 公司 Datacenter
+Operating System (DCOS) 产品的核心部件。
+Mesos 项目主要由 C++ 语言编写，项目官方地址为 http://mesos.apache.org，代码仍在快速
+演化中，已经发布了正式版 1.0.0 版本。
+Mesos 拥有许多引人注目的特性，包括：
+支持数万个节点的大规模场景（Apple、Twitter、eBay 等公司实践）；
+支持多种应用框架，包括 Marathon、Singularity、Aurora 等；
+支持 HA（基于 ZooKeeper 实现）；
+支持 Docker、LXC 等容器机制进行任务隔离；
+提供了多个流行语言的 API，包括 Python、Java、C++ 等；
+自带了简洁易用的 WebUI，方便用户直接进行操作。
+值得注意的是，Mesos 自身只是一个资源抽象的平台，要使用它往往需要结合运行其上的分
+布式应用（在 Mesos 中被称作框架，framework），比如 Hadoop、Spark 等可以进行分布式
+计算的大数据处理应用；比如 Marathon 可以实现 PaaS，快速部署应用并自动保持运行；比
+如 ElasticSearch 可以索引海量数据，提供灵活的整合和查询能力……
+大部分时候，用户只需要跟这些框架打交道即可，完全无需关心底下的资源调度情况，因为
+Mesos 已经自动帮你实现了。这大大方便了上层应用的开发和运维。
+当然，用户也可以基于 Mesos 打造自己的分布式应用框架。
+Mesos 简介
+268
+
+Mesos 安装与使用
+以 Mesos 结合 Marathon 应用框架为例，来看下如何快速搭建一套 Mesos 平台。
+Marathon 是可以跟 Mesos 一起协作的一个 framework，基于 Scala 实现，可以实现保持应
+用的持续运行。
+另外，Mesos 默认利用 ZooKeeper 来进行多个主节点之间的选举，以及从节点发现主节点的
+过程。一般在生产环境中，需要启动多个 Mesos master 服务（推荐 3 或 5 个），并且推荐
+使用 supervisord 等进程管理器来自动保持服务的运行。
+ZooKeeper 是一个分布式集群中信息同步的工具，通过自动在多个节点中选举  leader ，保
+障多个节点之间的某些信息保持一致性。
+安装
+安装主要需要 mesos、zookeeper 和 marathon 三个软件包。
+Mesos 也采用了经典的主-从结构，一般包括若干主节点和大量从节点。其中，mesos master
+服务和 zookeeper 需要部署到所有的主节点，mesos slave 服务需要部署到所有从节点。
+marathon 可以部署到主节点。
+安装可以通过源码编译、软件源或者 Docker 镜像方式进行，下面分别进行介绍。
+源码编译
+源码编译方式可以保障获取到最新版本，但编译过程比较费时间。
+首先，从 apache.org 开源网站下载最新的源码。
+$ git clone https://git-wip-us.apache.org/repos/asf/mesos.git
+其中，主要代码在  src  目录下，应用框架代码在  frameworks  目录下，文档在  docs  目录
+下， include  中包括了跟 Mesos 打交道使用的一些 API 定义头文件。
+安装依赖，主要包括 Java 运行环境、Linux 上的自动编译环境等。
+$ sudo apt-get update
+$ sudo apt-get install -y openjdk-8-jdk autoconf libtool \
+build-essential python-dev python-boto libcurl4-nss-dev \
+libsasl2-dev maven libapr1-dev libsvn-dev
+安装与使用
+269
+
+后面就是常规 C++ 项目的方法，configure 之后利用 Makefile 进行编译和安装。
+$ cd mesos
+$ ./bootstrap
+$ mkdir build
+$ cd build && ../configure --with-network-isolator
+$ make
+$ make check && sudo make install
+软件源安装
+通过软件源方式进行安装相对会省时间，但往往不是最新版本。
+这里以 Ubuntu 系统为例，首先添加软件源地址。
+$ sudo apt-key adv --keyserver keyserver.ubuntu.com --recv E56151BF
+$ DISTRO=$(lsb_release -is | tr '[:upper:]' '[:lower:]')
+$ CODENAME=$(lsb_release -cs)
+$ echo "deb http://repos.mesosphere.io/${DISTRO} ${CODENAME} main" | \
+sudo tee /etc/apt/sources.list.d/mesosphere.list
+刷新本地软件仓库信息并安装 zookeeper、mesos、marathon 三个软件包。
+$ sudo apt-get -y update && sudo apt-get -y install zookeeper mesos marathon
+注意，Marathon 最新版本需要 jdk 1.8+ 的支持。如果系统中有多个 Java 版本，需要检查配
+置默认的 JDK 版本符合要求。
+$ sudo update-alternatives --config java
+安装 Mesos 成功后，会在  /usr/sbin/  下面发现  mesos-master  和  mesos-slave  两个二进制
+文件，分别对应主节点上需要运行的管理服务和从节点上需要运行的任务服务。
+用户可以手动运行二进制文件启动服务，也可以通过  service  命令来方便进行管理。
+例如，在主节点上重启 Mesos 管理服务：
+$ sudo service mesos-master restart
+通过  service  命令来管理，实际上是通过调用  /usr/bin/mesos-init-wrapper  脚本文件进行
+处理。
+基于 Docker
+安装与使用
+270
+
+需要如下三个镜像。
+ZooKeeper：https://registry.hub.docker.com/u/garland/zookeeper/
+Mesos：https://registry.hub.docker.com/u/garland/mesosphere-docker-mesos-master/
+Marathon：https://registry.hub.docker.com/u/garland/mesosphere-docker-marathon/
+其中 mesos-master 镜像在后面将分别作为 master 和 slave 角色进行使用。
+首先，拉取三个镜像。
+$ docker pull garland/zookeeper
+$ docker pull garland/mesosphere-docker-mesos-master
+$ docker pull garland/mesosphere-docker-marathon
+导出主节点机器的地址到环境变量。
+$ HOST_IP=10.0.0.2
+在主节点上启动 Zookeepr 容器。
+docker run -d \
+-p 2181:2181 \
+-p 2888:2888 \
+-p 3888:3888 \
+garland/zookeeper
+在主节点上启动 Mesos Master 服务容器。
+docker run --net="host" \
+-p 5050:5050 \
+-e "MESOS_HOSTNAME=${HOST_IP}" \
+-e "MESOS_IP=${HOST_IP}" \
+-e "MESOS_ZK=zk://${HOST_IP}:2181/mesos" \
+-e "MESOS_PORT=5050" \
+-e "MESOS_LOG_DIR=/var/log/mesos" \
+-e "MESOS_QUORUM=1" \
+-e "MESOS_REGISTRY=in_memory" \
+-e "MESOS_WORK_DIR=/var/lib/mesos" \
+-d \
+garland/mesosphere-docker-mesos-master
+在主节点上启动 Marathon。
+安装与使用
+271
+
+docker run \
+-d \
+-p 8080:8080 \
+garland/mesosphere-docker-marathon --master zk://${HOST_IP}:2181/mesos --zk zk://${HOS
+T_IP}:2181/marathon
+在从节点上启动 Mesos slave 容器。
+docker run -d \
+--name mesos_slave_1 \
+--entrypoint="mesos-slave" \
+-e "MESOS_MASTER=zk://${HOST_IP}:2181/mesos" \
+-e "MESOS_LOG_DIR=/var/log/mesos" \
+-e "MESOS_LOGGING_LEVEL=INFO" \
+garland/mesosphere-docker-mesos-master:latest
+接下来，可以通过访问本地 8080 端口来使用 Marathon 启动任务了。
+配置说明
+下面以本地通过软件源方式安装为例，解释如何修改各个配置文件。
+ZooKeepr
+ZooKeepr 是一个分布式应用的协调工具，用来管理多个主节点的选举和冗余，监听在 2181
+端口。推荐至少布置三个主节点来被 ZooKeeper 维护。
+配置文件默认都在  /etc/zookeeper/conf/  目录下。比较关键的配置文件有两个： myid  和
+ zoo.cfg 。
+myid 文件会记录加入 ZooKeeper 集群的节点的序号（1-255之
+间）。 /var/lib/zookeeper/myid  文件其实也是软连接到了该文件。
+比如配置某节点序号为 1，则需要在该节点上执行：
+$ echo 1 | sudo dd of=/etc/zookeeper/conf/myid
+节点序号在 ZooKeeper 集群中必须唯一，不能出现多个拥有相同序号的节点。
+另外，需要修改 zoo.cfg 文件，该文件是主配置文件，主要需要添加上加入 ZooKeeper 集群
+的机器的序号和对应监听地址。
+例如，现在 ZooKeeper 集群中有三个节点，地址分别为
+ 10.0.0.2 、 10.0.0.3 、 10.0.0.4 ，序号分别配置为  2 、 3 、 4 。
+安装与使用
+272
+
+则配置如下的三行：
+server.2=10.0.0.2:2888:3888
+server.3=10.0.0.3:2888:3888
+server.4=10.0.0.4:2888:3888
+其中第一个端口 2888 负责从节点连接到主节点的；第二个端口 3888 则负责主节点进行选举
+时候通信。
+也可以用主机名形式，则需要各个节点  /etc/hosts  文件中都记录地址到主机名对应的映射
+关系。
+完成配置后，启动 ZooKeeper 服务。
+$ sudo service zookeeper start
+Mesos
+Mesos 的默认配置目录有三个：
+/etc/mesos/：主节点和从节点都会读取的配置文件，最关键的是 zk 文件存放主节点的信
+息；
+/etc/mesos-master/：只有主节点会读取的配置，等价于启动 mesos-master 命令时候的
+默认选项；
+/etc/mesos-slave/：只有从节点会读取的配置，等价于启动 mesos-master 命令时候的默
+认选项。
+最关键的是需要在所有节点上修改  /etc/mesos/zk ，写入主节点集群的 ZooKeeper 地址列
+表，例如：
+zk://10.0.0.2:2181,10.0.0.3:2181,10.0.0.4:2181/mesos
+此外， /etc/default/mesos 、 /etc/default/mesos-master 、 /etc/default/mesos-slave  这三
+个文件中可以存放一些环境变量定义，Mesos 服务启动之前，会将这些环境变量导入进来作
+为启动参数。格式为  MESOS_OPTION_NAME 。
+下面分别说明在主节点和从节点上的配置。
+主节点
+一般只需要关注  /etc/mesos-master/  目录下的文件。默认情况下目录下为空。
+该目录下文件命名和内容需要跟 mesos-master 支持的命令行选项一一对应。可以通过
+ mesos-master --help  命令查看支持的选项。
+安装与使用
+273
+
+例如某个文件  key  中内容为  value ，则在 mesos-master 服务启动的时候，会自动添加参
+数  --key=value  给二进制命令。
+例如，mesos-master 服务默认监听在 loopback 端口，即  127.0.0.1:5050 ，我们需要修改主
+节点监听的地址，则可以创建 /etc/mesos-master/ip 文件，在其中写入主节点监听的外部地
+址。
+为了正常启动 mesos-master 服务，还需要指定  work_dir  参数(表示应用框架的工作目录)的
+值，可以通过创建 /etc/mesos-master/work_dir 文件，在其中写入目录，例如
+ /var/lib/mesos 。工作目录下会生成一个  replicated_log  目录，会存有各种同步状态的持久
+化信息。
+以及指定 quorum 参数的值，该参数用来表示 ZooKeeper 集群中要求最少参加表决的节点数
+目。一般设置为比 ZooKeeper 集群中节点个数的半数多一些（比如三个节点的话，可以配置
+为  2 ）。
+此外，要修改 Mesos 集群的名称，可以创建  /etc/mesos-master/cluster  文件，在其中写入
+集群的别名，例如  MesosCluster 。
+总结下，建议在  /etc/mesos-master  目录下，配置至少四个参数文
+件： ip 、 quorum 、 work_dir 、 cluster 。
+修改配置之后，需要启动服务即可生效。
+$ sudo service mesos-master start
+更多选项可以参考后面的配置项解析章节。
+主节点服务启动后，则可以在从节点上启动 mesos-slave 服务来加入主节点的管理。
+从节点
+一般只需要关注  /etc/mesos-slave/  目录下的文件。默认情况下目录下为空。
+文件命名和内容也是跟主节点类似，对应二进制文件支持的命令行参数。
+建议在从节点上，创建  /etc/mesos-slave/ip  文件，在其中写入跟主节点通信的地址。
+修改配置之后，也需要重新启动服务。
+$ sudo service mesos-slave start
+更多选项可以参考后面的配置项解析章节。
+Marathon
+安装与使用
+274
+
+Marathon 作为 Mesos 的一个应用框架，配置要更为简单，必需的配置项有  --master  和  --
+zk 。
+安装完成后，会在 /usr/bin 下多一个 marathon shell 脚本，为启动 marathon 时候执行的命
+令。
+配置目录为  /etc/marathon/conf （需要手动创建），此外默认配置文件在
+ /etc/default/marathon 。
+我们手动创建配置目录，并添加配置项（文件命名和内容跟 Mesos 风格一致），让
+Marathon 能连接到已创建的 Mesos 集群中。
+$ sudo mkdir -p /etc/marathon/conf
+$ sudo cp /etc/mesos/zk /etc/marathon/conf/master
+同时，让 Marathon 也将自身的状态信息保存到 ZooKeeper 中。创建  /etc/marathon/conf/zk 
+文件，添加 ZooKeeper 地址和路径。
+zk://10.0.0.2:2181,10.0.0.2:2181,10.0.0.2:2181/marathon
+启动 marathon 服务。
+$ sudo service marathon start
+访问 Mesos 图形界面
+Mesos 自带了 Web 图形界面，可以方便用户查看集群状态。
+用户在 Mesos 主节点服务和从节点服务都启动后，可以通过浏览器访问主节点 5050 端口，
+看到类似如下界面，已经有两个 slave 节点加入了。
+安装与使用
+275
+
+图 1.22.2.1 - mesos 界面查看加入的 slave 节点
+通过 Slaves 标签页能看到加入集群的从节点的信息。
+如果没有启动 Marathon 服务，在 Frameworks 标签页下将看不到任何内容。
+访问 Marathon 图形界面
+Marathon 服务启动成功后，在 Mesos 的 web 界面的 Frameworks 标签页下面将能看到名称
+为 marathon 的框架出现。
+同时可以通过浏览器访问 8080 端口，看到 Marathon 自己的管理界面。
+图 1.22.2.2 - marathon 图形管理界面
+安装与使用
+276
+
+此时，可以通过界面或者 REST API 来创建一个应用，Marathon 会保持该应用的持续运行。
+图 1.22.2.3 - marathon 查看任务支持的参数
+通过界面方式可以看到各任务支持的参数（包括资源、命令、环境变量、健康检查等），同
+时可以很容易地修改任务运行实例数进行扩展，非常适合进行测试。
+如果要更自动化地使用 Marathon，则需要通过它的 REST API 进行操作。
+一般的，启动新任务需要先创建一个定义模板（JSON 格式），然后发到指定的 API。
+例如，示例任务 basic-0 的定义模板为：
+{
+    "id": "basic-0",
+    "cmd": "while [ true ] ; do echo 'Hello Marathon' ; sleep 5 ; done",
+    "cpus": 0.1,
+    "mem": 10.0,
+    "instances": 1
+}
+安装与使用
+277
+
+该任务申请资源为 0.1 个单核 CPU 资源和 10 MB 的内存资源，具体命令为每隔五秒钟用
+shell 打印一句  Hello Marathon 。
+可以通过如下命令发出 basic-0 任务到 Marathon 框架，框架会分配任务到某个满足条件的从
+节点上，成功会返回一个 json 对象，描述任务的详细信息。
+$ curl -X POST http://marathon_host:8080/v2/apps -d @basic-0.json -H "Content-type: ap
+plication/json"
+{"id":"/basic-0","cmd":"while [ true ] ; do echo 'Hello Marathon' ; sleep 5 ; done","a
+rgs":null,"user":null,"env":{},"instances":1,"cpus":0.1,"mem":10,"disk":0,"executor":""
+,"constraints":[],"uris":[],"storeUrls":[],"ports":[0],"requirePorts":false,"backoffSe
+conds":1,"backoffFactor":1.15,"maxLaunchDelaySeconds":3600,"container":null,"healthChe
+cks":[],"dependencies":[],"upgradeStrategy":{"minimumHealthCapacity":1,"maximumOverCap
+acity":1},"labels":{},"acceptedResourceRoles":null,"version":"2015-12-28T05:33:05.805Z"
+,"tasksStaged":0,"tasksRunning":0,"tasksHealthy":0,"tasksUnhealthy":0,"deployments":[{
+"id":"3ec3fbd5-11e4-479f-bd17-813d33e43e0c"}],"tasks":[]}%
+Marathon 的更多 REST API 可以参考本地自带的文档： http://marathon_host:8080/api-
+console/index.html 。
+此时，如果运行任务的从节点出现故障，任务会自动在其它可用的从节点上启动。
+此外，目前也已经支持基于 Docker 容器的任务。需要先在 Mesos slave 节点上为 slave 服务
+配置  --containerizers=docker,mesos  参数。
+例如如下面的示例任务：
+安装与使用
+278
+
+{
+  "id": "basic-3",
+  "cmd": "python3 -m http.server 8080",
+  "cpus": 0.5,
+  "mem": 32.0,
+  "container": {
+      "type": "DOCKER",
+      "volumes": [],
+      "docker": {
+        "image": "python:3",
+        "network": "BRIDGE",
+        "portMappings": [
+          {
+            "containerPort": 8080,
+            "hostPort": 31000,
+            "servicePort": 0,
+            "protocol": "tcp"
+          }
+        ],
+        "privileged": false,
+        "parameters": [],
+        "forcePullImage": true
+      }
+  }
+}
+该任务启动一个  python:3  容器，执行  python3 -m http.server 8080  命令，作为一个简单的
+web 服务，实际端口会映射到宿主机的 31000 端口。
+注意区分 hostPort 和 servicePort，前者代表任务映射到的本地可用端口（可用范围由 Mesos
+slave 汇报，默认为 31000 ~ 32000）；后者作为服务管理的端口，可以被用作一些服务发行
+机制使用进行转发，在整个 Marathon 集群中是唯一的。
+任务执行后，也可以在对应 slave 节点上通过 Docker 命令查看容器运行情况，容器将以
+ mesos-SLAVE_ID  开头。
+$ docker ps
+CONTAINER ID        IMAGE               COMMAND                  CREATED             S
+TATUS              PORTS                     NAMES
+1226b4ec8d7d        python:3            "/bin/sh -c 'python3 "   3 days ago          U
+p 3 days           0.0.0.0:10000->8080/tcp   mesos-06db0fba-49dc-4d28-ad87-6c2d5a02086
+6-S10.b581149e-2c43-46a2-b652-1a0bc10204b3
+安装与使用
+279
+
+原理与架构
+首先，再次需要强调 Mesos 自身只是一个资源调度框架，并非一整套完整的应用管理平台，
+所以只有 Mesos 自己是不能干活的。但是基于 Mesos，可以比较容易地为各种应用管理框架
+或者中间件平台（作为 Mesos 的应用）提供分布式运行能力；同时多个框架也可以同时运行
+在一个 Mesos 集群中，提高整体的资源使用效率。
+Mesos 对自己定位范围的划分，使得它要完成的任务很明确，其它任务框架也可以很容易的
+与它进行整合。
+架构
+下面这张基本架构图来自 Mesos 官方。
+图 1.22.3.1 - mesos 的基本架构
+可以看出，Mesos 采用了经典的主-从（master-slave）架构，其中主节点（管理节点）可以
+使用 zookeeper 来做 HA。
+原理与架构
+280
+
+Mesos master 服务将运行在主节点上，Mesos slave 服务则需要运行在各个计算任务节点
+上。
+负责完成具体任务的应用框架们，跟 Mesos master 进行交互，来申请资源。
+基本单元
+Mesos 中有三个基本的组件：管理服务（master）、任务服务（slave）以及应用框架
+（framework）。
+管理服务 - master
+跟大部分分布式系统中类似，主节点起到管理作用，将看到全局的信息，负责不同应用框架
+之间的资源调度和逻辑控制。应用框架需要注册到管理服务上才能被使用。
+用户和应用需要通过主节点提供的 API 来获取集群状态和操作集群资源。
+任务服务 - slave
+负责汇报本从节点上的资源状态（空闲资源、运行状态等等）给主节点，并负责隔离本地资
+源来执行主节点分配的具体任务。
+隔离机制目前包括各种容器机制，包括 LXC、Docker 等。
+应用框架 - framework
+应用框架是实际干活的，包括两个主要组件：
+调度器（scheduler）：注册到主节点，等待分配资源；
+执行器（executor）：在从节点上执行框架指定的任务（框架也可以使用 Mesos 自带的
+执行器，包括 shell 脚本执行器和 Docker 执行器）。
+应用框架可以分两种：一种是对资源的需求是会扩展的（比如 Hadoop、Spark 等），申请后
+还可能调整；一种是对资源需求大小是固定的（MPI 等），一次申请即可。
+调度
+对于一个资源调度框架来说，最核心的就是调度机制，怎么能快速高效地完成对某个应用框
+架资源的分配，是核心竞争力所在。最理想情况下（大部分时候都无法实现），最好是能猜
+到应用们的实际需求，实现最大化的资源使用率。
+Mesos 为了实现尽量优化的调度，采取了两层（two-layer）的调度算法。
+原理与架构
+281
+
+算法基本过程
+调度的基本思路很简单，master 先全局调度一大块资源给某个 framework，framework 自己
+再实现内部的细粒度调度，决定哪个任务用多少资源。两层调度简化了 Mesos master 自身的
+调度过程，通过将复杂的细粒度调度交由 framework 实现，避免了 Mesos master 成为性能
+瓶颈。
+调度机制支持插件机制来实现不同的策略。默认是 Dominant Resource Fairness（DRF）。
+注：DRF 算法细节可以参考论文《Dominant Resource Fairness: Fair Allocation of Multiple
+Resource Types》。其核心思想是对不同类型资源的多个请求，计算请求的主资源类型，然
+后根据主资源进行公平分配。
+调度过程
+调度通过 offer 发送的方式进行交互。一个 offer 是一组资源，例如  <1 CPU, 2 GB Mem> 。
+基本调度过程如下：
+首先，slave 节点会周期性汇报自己可用的资源给 master；
+某个时候，master 收到应用框架发来的资源请求，根据调度策略，计算出来一个资源
+offer 给 framework；
+framework 收到 offer 后可以决定要不要，如果接受的话，返回一个描述，说明自己希望
+如何使用和分配这些资源来运行某些任务（可以说明只希望使用部分资源，则多出来的
+会被 master 收回）；
+最后，master 则根据 framework 答复的具体分配情况发送给 slave，以使用 framework
+的 executor 来按照分配的资源策略执行任务。
+具体给出一个例子，某从节点向主节点汇报自己有  <4 CPU, 8 GB Mem>  的空闲资源，同时，
+主节点看到某个应用框架请求  <3 CPU, 6 GB Mem> ，就创建一个 offer  <slave#1, 4 CPU, 8 GB
+Mem>  把满足的资源发给应用框架。应用框架（的调度器）收到 offer 后觉得可以接受，就回
+复主节点，并告诉主节点希望运行两个任务：一个占用  <1 CPU, 2 GB Mem> ，一个占用 一个
+占用  <2 CPU, 4 GB Mem> 。主节点收到任务信息后分配任务到从节点上进行运行（实际上是应
+用框架的执行器来负责执行任务）。任务运行结束后资源可以被释放出来。
+剩余的资源还可以继续分配给其他应用框架或任务。
+应用框架在收到 offer 后，如果 offer 不满足自己的偏好（例如希望继续使用上次的 slave 节
+点），则可以选择拒绝 offer，等待 master 发送新的 offer 过来。另外，可以通过过滤器机制
+来加快资源的分配过程。
+过滤器
+原理与架构
+282
+
+framework 可以通过过滤器机制告诉 master 它的资源偏好，比如希望分配过来的 offer 有哪
+个资源，或者至少有多少资源等。
+过滤器可以避免某些应用资源长期分配不到所需要的资源的情况，加速整个资源分配的交互
+过程。
+回收机制
+为了避免某些任务长期占用集群中资源，Mesos 也支持回收机制。
+主节点可以定期回收计算节点上的任务所占用的资源，可以动态调整长期任务和短期任务的
+分布。
+HA
+从架构上看，最为核心的节点是 master 节点。除了使用 ZooKeeper 来解决单点失效问题之
+外，Mesos 的 master 节点自身还提供了很高的鲁棒性。
+Mesos master 节点在重启后，可以动态通过 slave 和 framework 发来的消息重建内部状态，
+虽然可能导致一定的时延，但这避免了传统控制节点对数据库的依赖。
+当然，为了减少 master 节点的负载过大，在集群中 slave 节点数目较多的时候，要避免把各
+种通知的周期配置的过短。实践中，可以通过部署多个 Mesos 集群来保持单个集群的规模不
+要过大。
+原理与架构
+283
+
+Mesos 配置项解析
+Mesos 支持在运行时通过命令行参数形式提供的配置项。如果是通过系统服务方式启动，也
+支持以配置文件或环境变量方式给出。当然，实际上最终是提取为命令行参数传递给启动命
+令。
+Mesos 的配置项分为三种类型：通用项（master 和 slave 都支持），只有 master 支持的，
+以及只有 slave 支持的。
+Mesos 配置项比较多，下面对一些重点配置进行描述。少数为必备项，意味着必须给出配置
+值；另外一些是可选配置，自己带有默认值。
+通用项
+通用项数量不多，主要涉及到服务绑定地址和日志信息等，包括：
+ --advertise_ip=VALUE  可以通过该地址访问到服务，比如应用框架访问到 master 节点；
+ --advertise_port=VALUE  可以通过该端口访问到服务；
+ --external_log_file=VALUE  指定存储日志的外部文件，可通过 Web 界面查看；
+ --firewall_rules=VALUE  endpoint 防火墙规则， VALUE  可以是 JSON 格式或者存有
+JSON 格式的文件路径；
+ --ip=VALUE  服务绑定到的IP 地址，用来监听外面过来的请求；
+ --log_dir=VALUE  日志文件路径，如果为空（默认值）则不存储日志到本地；
+ --logbufsecs=VALUE  buffer 多少秒的日志，然后写入本地；
+ --logging_level=VALUE  日志记录的最低级别；
+ --port=VALUE  绑定监听的端口，master 默认是 5050，slave 默认是 5051。
+master 专属配置项
+这些配置项是针对主节点上的 Mesos master 服务的，围绕高可用、注册信息、对应用框架的
+资源管理等。用户应该根据本地主节点资源情况来合理的配置这些选项。
+用户可以通过  mesos-master --help  命令来获取所有支持的配置项信息。
+必须指定的配置项有三个：
+ --quorum=VALUE  必备项，使用基于 replicated-Log 的注册表（即利用 ZooKeeper 实现
+HA）时，参与投票时的最少节点个数；
+ --work_dir=VALUE  必备项，注册表持久化信息存储位置；
+ --zk=VALUE  如果主节点为 HA 模式，此为必备项，指定 ZooKeepr 的服务地址，支持多
+个地址，之间用逗号隔离，例如
+ zk://username:password@host1:port1,host2:port2,.../path 。还可以为存有路径信息的文
+Mesos 配置项解析
+284
+
+件路径。
+可选的配置项有：
+ --acls=VALUE  ACL 规则或所在文件；
+ --allocation_interval=VALUE  执行 allocation 的间隔，默认为 1sec；
+ --allocator=VALUE  分配机制，默认为 HierarchicalDRF；
+ --[no-]authenticate  是否允许非认证过的 framework 注册；
+ --[no-]authenticate_slaves  是否允许非认证过的 slaves 注册；
+ --authenticators=VALUE  对 framework 或 salves 进行认证时的实现机制；
+ --cluster=VALUE  集群别名，显示在 Web 界面上供用户识别的；
+ --credentials=VALUE  存储加密后凭证的文件的路径；
+ --external_log_file=VALUE  采用外部的日志文件；
+ --framework_sorter=VALUE  给定 framework 之间的资源分配策略；
+ --hooks=VALUE  master 中安装的 hook 模块；
+ --hostname=VALUE  master 节点使用的主机名，不配置则从系统中获取；
+ --[no-]log_auto_initialize  是否自动初始化注册表需要的 replicated 日志；
+ --modules=VALUE  要加载的模块，支持文件路径或者 JSON；
+ --offer_timeout=VALUE  offer 撤销的超时；
+ --rate_limits=VALUE  framework 的速率限制，即 query per second (qps)；
+ --recovery_slave_removal_limit=VALUE  限制注册表恢复后可以移除或停止的 slave 数
+目，超出后 master 会失败，默认是 100%；
+ --slave_removal_rate_limit=VALUE slave  没有完成健康度检查时候被移除的速率上限，
+例如 1/10mins 代表每十分钟最多有一个；
+ --registry=VALUE  注册表信息的持久化策略，默认为  replicated_log  存放本地，还可
+以为  in_memory  放在内存中；
+ --registry_fetch_timeout=VALUE  访问注册表失败超时；
+ --registry_store_timeout=VALUE  存储注册表失败超时；
+ --[no-]registry_strict  是否按照注册表中持久化信息执行操作，默认为 false；
+ --roles=VALUE  集群中 framework 可以所属的分配角色；
+ --[no-]root_submissions  root 是否可以提交 framework，默认为 true；
+ --slave_reregister_timeout=VALUE  新的 lead master 节点选举出来后，多久之内所有的
+slave 需要注册，超时的 salve 将被移除并关闭，默认为 10mins；
+ --user_sorter=VALUE  在用户之间分配资源的策略，默认为 drf；
+ --webui_dir=VALUE  webui 实现的文件目录所在，默认为
+ /usr/local/share/mesos/webui ；
+ --weights=VALUE  各个角色的权重；
+ --whitelist=VALUE  文件路径，包括发送 offer 的 slave 名单，默认为 None；
+ --zk_session_timeout=VALUE  session 超时，默认为 10secs；
+ --max_executors_per_slave=VALUE  配置了  --with-network-isolator  时可用，限制每个
+slave 同时执行任务个数。
+Mesos 配置项解析
+285
+
+下面给出一个由三个节点组成的 master 集群典型配置，工作目录指定为  /tmp/mesos ，集群
+名称为  mesos_cluster 。
+mesos-master \
+--zk=zk://10.0.0.2:2181,10.0.0.3:2181,10.0.0.4:2181/mesos \
+--quorum=2 \
+--work_dir=/tmp/mesos \
+--cluster=mesos_cluster
+slave 专属配置项
+slave 节点支持的配置项是最多的，因为它所完成的事情也最复杂。这些配置项既包括跟主节
+点打交道的一些参数，也包括对本地资源的配置，包括隔离机制、本地任务的资源限制等。
+用户可以通过  mesos-slave --help  命令来获取所有支持的配置项信息。
+必备项就一个：
+ --master=VALUE  必备项，master 所在地址，或对应 ZooKeeper 服务地址，或文件路
+径，可以是列表。
+以下为可选配置项：
+ --attributes=VALUE  机器属性；
+ --authenticatee=VALUE  跟 master 进行认证时候的认证机制；
+ --[no-]cgroups_enable_cfs  采用 CFS 进行带宽限制时候对 CPU 资源进行限制，默认为
+false；
+ --cgroups_hierarchy=VALUE  cgroups 的目录根位置，默认为  /sys/fs/cgroup ；
+ --[no-]cgroups_limit_swap  限制内存和 swap，默认为 false，只限制内存；
+ --cgroups_root=VALUE  根 cgroups 的名称，默认为 mesos；
+ --container_disk_watch_interval=VALUE  为容器进行硬盘配额查询的时间间隔；
+ --containerizer_path=VALUE  采用外部隔离机制（ --isolation=external ）时候，外部容
+器机制执行文件路径；
+ --containerizers=VALUE  可用的容器实现机制，包括 mesos、external、docker；
+ --credential=VALUE  加密后凭证，或者所在文件路径；
+ --default_container_image=VALUE  采用外部容器机制时，任务缺省使用的镜像；
+ --default_container_info=VALUE  容器信息的缺省值；
+ --default_role=VALUE  资源缺省分配的角色；
+ --disk_watch_interval=VALUE  硬盘使用情况的周期性检查间隔，默认为 1mins；
+ --docker=VALUE  docker 执行文件的路径；
+ --docker_remove_delay=VALUE  删除容器之前的等待时间，默认为 6hrs；
+ --[no-]docker_kill_orphans  清除孤儿容器，默认为 true；
+ --docker_sock=VALUE  docker sock 地址，默认为  /var/run/docker.sock ；
+Mesos 配置项解析
+286
+
+ --docker_mesos_image=VALUE  运行 slave 的 docker 镜像，如果被配置，docker 会假定
+slave 运行在一个 docker 容器里；
+ --docker_sandbox_directory=VALUE  sandbox 映射到容器里的哪个路径；
+ --docker_stop_timeout=VALUE  停止实例后等待多久执行 kill 操作，默认为 0secs；
+ --[no-]enforce_container_disk_quota  是否启用容器配额限制，默认为 false；
+ --executor_registration_timeout=VALUE  执行应用最多可以等多久再注册到 slave，否则
+停止它，默认为 1mins；
+ --executor_shutdown_grace_period=VALUE  执行应用停止后，等待多久，默认为 5secs；
+ --external_log_file=VALUE  外部日志文件；
+ --fetcher_cache_size=VALUE  fetcher 的 cache 大小，默认为 2 GB；
+ --fetcher_cache_dir=VALUE  fetcher cache 文件存放目录，默认为 /tmp/mesos/fetch；
+ --frameworks_home=VALUE  执行应用前添加的相对路径，默认为空；
+ --gc_delay=VALUE  多久清理一次执行应用目录，默认为 1weeks；
+ --gc_disk_headroom=VALUE  调整计算最大执行应用目录年龄的硬盘留空量，默认为 0.1；
+ --hadoop_home=VALUE  hadoop 安装目录，默认为空，会自动查找 HADOOP_HOME 或者
+从系统路径中查找；
+ --hooks=VALUE  安装在 master 中的 hook 模块列表；
+ --hostname=VALUE  slave 节点使用的主机名；
+ --isolation=VALUE  隔离机制，例如  posix/cpu,posix/mem （默认）或者
+ cgroups/cpu,cgroups/mem 、 external  等；
+ --launcher_dir=VALUE  mesos 可执行文件的路径，默认为  /usr/local/lib/mesos ；
+ --image_providers=VALUE  支持的容器镜像机制，例如 'APPC,DOCKER'；
+ --oversubscribed_resources_interval=VALUE  slave 节点定期汇报超配资源状态的周期；
+ --modules=VALUE  要加载的模块，支持文件路径或者 JSON；
+ --perf_duration=VALUE  perf 采样时长，必须小于 perf_interval，默认为 10secs；
+ --perf_events=VALUE  perf 采样的事件；
+ --perf_interval=VALUE  perf 采样的时间间隔；
+ --qos_controller=VALUE  超配机制中保障 QoS 的控制器名；
+ --qos_correction_interval_min=VALUE  Qos 控制器纠正超配资源的最小间隔，默认为
+0secs；
+ --recover=VALUE  回复后是否重连旧的执行应用，reconnect（默认值）是重连，cleanup
+清除旧的执行器并退出；
+ --recovery_timeout=VALUE  slave 恢复时的超时，太久则所有相关的执行应用将自行退
+出，默认为 15mins；
+ --registration_backoff_factor=VALUE  跟 master 进行注册时候的重试时间间隔算法的因
+子，默认为 1secs，采用随机指数算法，最长 1mins；
+ --resource_monitoring_interval=VALUE  周期性监测执行应用资源使用情况的间隔，默认
+为 1secs；
+ --resources=VALUE  每个 slave 可用的资源，比如主机端口默认为 [31000, 32000]；
+ --[no-]revocable_cpu_low_priority  运行在可撤销 CPU 上容器将拥有较低优先级，默认
+Mesos 配置项解析
+287
+
+为 true。
+ --slave_subsystems=VALUE  slave 运行在哪些 cgroup 子系统中，包括 memory，cpuacct
+等，缺省为空；
+ --[no-]strict  是否认为所有错误都不可忽略，默认为 true；
+ --[no-]switch_user  用提交任务的用户身份来运行，默认为 true；
+ --work_dir=VALUE  framework 的工作目录，默认为 /tmp/mesos。
+下面这些选项需要配置  --with-network-isolator  一起使用（编译时需要启用  --with-
+network-isolator  参数）。
+ --ephemeral_ports_per_container=VALUE  分配给一个容器的临时端口的最大数目，需要为
+2 的整数幂（默认为 1024）；
+ --eth0_name=VALUE  public 网络的接口名称，如果不指定，根据主机路由进行猜测；
+ --lo_name=VALUE  loopback 网卡名称；
+ --egress_rate_limit_per_container=VALUE  每个容器的输出流量限制速率限制（采用
+fq_codel 算法来限速），单位是字节每秒；
+ --[no-]-egress_unique_flow_per_container  是否把不同容器的流量当作彼此不同的流，
+避免彼此影响（默认为 false）；
+ --[no-]network_enable_socket_statistics  是否采集每个容器的 socket 统计信息，默认
+为 false。
+下面给出一个典型的 slave 配置，容器为 Docker，监听在  10.0.0.10  地址；节点上限制 16
+个 CPU、64 GB 内存，容器的非临时端口范围指定为 [31000-32000]，临时端口范围指定为
+[32768-57344]；每个容器临时端口最多为 512 个，并且外出流量限速为 50 MB/s。
+mesos-slave \
+--master=zk://10.0.0.2:2181,10.0.0.3:2181,10.0.0.4:2181/mesos \
+--containerizers=docker \
+--ip=10.0.0.10 \
+--isolation=cgroups/cpu,cgroups/mem,network/port_mapping \
+--resources=cpus:16;mem:64000;ports:[31000-32000];ephemeral_ports:[32768-57344] \
+--ephemeral_ports_per_container=512 \
+--egress_rate_limit_per_container=50000KB \
+--egress_unique_flow_per_container
+为了避免主机分配的临时端口跟我们指定的临时端口范围冲突，需要在主机节点上进行配
+置。
+$ echo "57345 61000" > /proc/sys/net/ipv4/ip_local_port_range
+注：非临时端口是 Mesos 分配给框架，绑定到任务使用的，端口号往往有明确意义；临时端
+口是系统分配的，往往不太关心具体端口号。
+Mesos 配置项解析
+288
+
+Mesos 配置项解析
+289
+
+日志与监控
+Mesos 自身提供了强大的日志和监控功能，某些应用框架也提供了针对框架中任务的监控能
+力。通过这些接口，用户可以实时获知集群的各种状态。
+日志配置
+日志文件默认在  /var/log/mesos  目录下，根据日志等级带有不同后缀。
+用户可以通过日志来调试使用中碰到的问题。
+一般的，推荐使用  --log_dir  选项来指定日志存放路径，并通过日志分析引擎来进行监控。
+监控
+Mesos 提供了方便的监控接口，供用户查看集群中各个节点的状态。
+主节点
+通过  http://MASTER_NODE:5050/metrics/snapshot  地址可以获取到 Mesos 主节点的各种状态统
+计信息，包括资源（CPU、硬盘、内存）使用、系统状态、从节点、应用框架、任务状态
+等。
+例如查看主节点  10.0.0.2  的状态信息，并用 jq 来解析返回的 json 对象。
+日志与监控
+290
+
+$ curl -s http://10.0.0.2:5050/metrics/snapshot |jq .
+{
+  "system/mem_total_bytes": 4144713728,
+  "system/mem_free_bytes": 153071616,
+  "system/load_5min": 0.37,
+  "system/load_1min": 0.6,
+  "system/load_15min": 0.29,
+  "system/cpus_total": 4,
+  "registrar/state_store_ms/p9999": 45.4096616192,
+  "registrar/state_store_ms/p999": 45.399272192,
+  "registrar/state_store_ms/p99": 45.29537792,
+  "registrar/state_store_ms/p95": 44.8336256,
+  "registrar/state_store_ms/p90": 44.2564352,
+  "registrar/state_store_ms/p50": 34.362368,
+  ...
+  "master/recovery_slave_removals": 1,
+  "master/slave_registrations": 0,
+  "master/slave_removals": 0,
+  "master/slave_removals/reason_registered": 0,
+  "master/slave_removals/reason_unhealthy": 0,
+  "master/slave_removals/reason_unregistered": 0,
+  "master/slave_reregistrations": 2,
+  "master/slave_shutdowns_canceled": 0,
+  "master/slave_shutdowns_completed": 1,
+  "master/slave_shutdowns_scheduled": 1
+}
+从节点
+通过  http://SLAVE_NODE:5051/metrics/snapshot  地址可以获取到 Mesos 从节点的各种状态统
+计信息，包括资源、系统状态、各种消息状态等。
+例如查看从节点  10.0.0.10  的状态信息。
+日志与监控
+291
+
+$ curl -s http://10.0.0.10:5051/metrics/snapshot |jq .
+{
+  "system/mem_total_bytes": 16827785216,
+  "system/mem_free_bytes": 3377315840,
+  "system/load_5min": 0.11,
+  "system/load_1min": 0.16,
+  "system/load_15min": 0.13,
+  "system/cpus_total": 8,
+  "slave/valid_status_updates": 11,
+  "slave/valid_framework_messages": 0,
+  "slave/uptime_secs": 954125.458927872,
+  "slave/tasks_starting": 0,
+  "slave/tasks_staging": 0,
+  "slave/tasks_running": 1,
+  "slave/tasks_lost": 0,
+  "slave/tasks_killed": 2,
+  "slave/tasks_finished": 0,
+  "slave/executors_preempted": 0,
+  "slave/executor_directory_max_allowed_age_secs": 403050.709525191,
+  "slave/disk_used": 0,
+  "slave/disk_total": 88929,
+  "slave/disk_revocable_used": 0,
+  "slave/disk_revocable_total": 0,
+  "slave/disk_revocable_percent": 0,
+  "slave/disk_percent": 0,
+  "containerizer/mesos/container_destroy_errors": 0,
+  "slave/container_launch_errors": 6,
+  "slave/cpus_percent": 0.025,
+  "slave/cpus_revocable_percent": 0,
+  "slave/cpus_revocable_total": 0,
+  "slave/cpus_revocable_used": 0,
+  "slave/cpus_total": 8,
+  "slave/cpus_used": 0.2,
+  "slave/executors_registering": 0,
+  "slave/executors_running": 1,
+  "slave/executors_terminated": 8,
+  "slave/executors_terminating": 0,
+  "slave/frameworks_active": 1,
+  "slave/invalid_framework_messages": 0,
+  "slave/invalid_status_updates": 0,
+  "slave/mem_percent": 0.00279552715654952,
+  "slave/mem_revocable_percent": 0,
+  "slave/mem_revocable_total": 0,
+  "slave/mem_revocable_used": 0,
+  "slave/mem_total": 15024,
+  "slave/mem_used": 42,
+  "slave/recovery_errors": 0,
+  "slave/registered": 1,
+  "slave/tasks_failed": 6
+}
+日志与监控
+292
+
+另外，通过  http://MASTER_NODE:5050/monitor/statistics.json  地址可以看到该从节点上容器
+网络相关的统计数据，包括进出流量、丢包数、队列情况等。获取方法同上，在此不再演
+示。
+日志与监控
+293
+
+常见应用框架
+应用框架是实际干活的，可以理解为 Mesos 之上跑的  应用 。应用框架注册到 Mesos master
+服务上即可使用。
+用户大部分时候，只需要跟应用框架打交道。因此，选择合适的应用框架十分关键。
+Mesos 目前支持的应用框架分为四大类：长期运行任务（以及 PaaS）、大数据处理、批量
+调度、数据存储。
+随着 Mesos 自身的发展，越来越多的框架开始支持 Mesos，下面总结了目前常用的一些框
+架。
+长期运行的服务
+Aurora
+项目维护地址在 http://aurora.incubator.apache.org。
+利用 mesos 调度安排的任务，保证任务一直在运行。
+提供 REST 接口，客户端和 webUI（8081 端口）
+Marathon
+项目维护地址在 https://github.com/mesosphere/marathon。
+一个私有 PaaS 平台，保证运行的应用不被中断。
+如果任务停止了，会自动重启一个新的相同任务。
+支持任务为任意 bash 命令，以及容器。
+提供 REST 接口，客户端和 webUI（8080 端口）
+Singularity
+项目维护地址在 https://github.com/HubSpot/Singularity。
+一个私有 PaaS 平台。
+调度器，运行长期的任务和一次性任务。
+提供 REST 接口，客户端和 webUI（7099、8080 端口），支持容器。
+常见应用框架
+294
+
+大数据处理
+Cray Chapel
+项目维护地址在 https://github.com/nqn/mesos-chapel。
+支持 Chapel 并行编程语言的运行框架。
+Dpark
+项目维护地址在 https://github.com/douban/dpark。
+Spark 的 Python 实现。
+Hadoop
+项目维护地址在 https://github.com/mesos/hadoop。
+经典的 map-reduce 模型的实现。
+Spark
+项目维护地址在 http://spark.incubator.apache.org。
+跟 Hadoop 类似，但处理迭代类型任务会更好的使用内存做中间状态缓存，速度要快一些。
+Storm
+项目维护地址在 https://github.com/mesosphere/storm-mesos。
+分布式流计算，可以实时处理数据流。
+批量调度
+Chronos
+项目维护地址在 https://github.com/airbnb/chronos。
+Cron 的分布式实现，负责任务调度，支持容错。
+Jenkins
+项目维护地址在 https://github.com/jenkinsci/mesos-plugin。
+常见应用框架
+295
+
+大名鼎鼎的 CI 引擎。使用 mesos-jenkins 插件，可以将 jenkins 的任务被 Mesos 集群来动态
+调度执行。
+JobServer
+项目维护地址在 http://www.grandlogic.com/content/html_docs/jobserver.html。
+基于 Java 的调度任务和数据处理引擎。
+GoDocker
+项目维护地址在 https://bitbucket.org/osallou/go-docker。
+基于 Docker 容器的集群维护工具。提供用户接口，除了支持 Mesos，还支持 Kubernetes、
+Swarm 等。
+数据存储
+Cassandra
+项目维护地址在 https://github.com/mesosphere/cassandra-mesos。
+高性能的分布式数据库。可扩展性很好，支持高可用。
+ElasticSearch
+项目维护地址在 https://github.com/mesosphere/elasticsearch-mesos。
+功能十分强大的分布式数据搜索引擎。
+一方面通过分布式集群实现可靠的数据库，一方面提供灵活的 API，对数据进行整合和分析。
+ElasticSearch + LogStash + Kibana 目前合成为 ELK 工具栈。
+Hypertable
+项目维护地址在 https://code.google.com/p/hypertable。
+高性能的分布式数据库，支持结构化或者非结构化的数据存储。
+Tachyon
+项目维护地址在 http://tachyon-project.org/。
+内存为中心的分布式存储系统，利用内存访问的高速提供高性能。
+常见应用框架
+296
+
+常见应用框架
+297
+
+本章小结
+本章讲解了 Mesos 的安装使用、基本原理和架构，以及支持 Mesos 的重要应用框架。
+Mesos 最初设计为资源调度器，然而其灵活的设计和对上层框架的优秀支持，使得它可以很
+好的支持大规模的分布式应用场景。结合 Docker，Mesos 可以很容易部署一套私有的容器
+云。
+除了核心功能之外，Mesos 在设计上有许多值得借鉴之处，比如它清晰的定位、简洁的架
+构、细致的参数、高度容错的可靠，还有对限速、监控等的支持等。
+Mesos 作为一套成熟的开源项目，可以很好的被应用和集成到生产环境中。但它的定位集中
+在资源调度，往往需要结合应用框架或二次开发。
+本章小结
+298

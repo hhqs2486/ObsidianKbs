@@ -1,0 +1,207 @@
+84 第4 章使用逻辑回归预测IPO 市场 
+•模型评估。
+•特征的重要性。
+4.1 IPO 市场 
+在我们开始建模之前，先讨论一下什么是IPO（或首次公开募股），以及关于这个市场，
+研究的结果能告诉我们些什么。之后，我们将讨论一些可以应用的策略。
+4.1.1 什么是IPO 
+首次公开募股是一家私人公司成为上市公司的过程。公开发行为公司募集资金，并让
+公众通过购买其股票，获得投资该公司的机会。
+虽然具体实施有些不同，但在典型的发行过程中，一家公司会列出一家或多家承销其
+发行的投资银行。这意味着那些银行向公司保证，在发行当天他们将购买所有以IPO 价格
+提供的股份。当然，承销的银行不打算自己保留全部的股份。在发行公司的帮助下，他们
+去做所谓的路演，吸引机构客户的兴趣。这些客户可以预订股份，表示他们有意在IPO 当
+天购买股票。这是一个非约束性合同，因为发行的价格直到IPO 的当天才最终确定。然后，
+承销商将根据客户们所表达的感兴趣程度，设定发行的价格。
+从我们的角度来看，非常有趣的地方在于：研究表明IPO 一直被系统性地低估。有许
+多理论解释为什么会发生这种情况，以及为什么低估的范围会随着时间而变化，不过可以
+肯定的是，研究已经显示出每年有“数十亿美元留在桌子上”。
+在IPO 中，“留在桌子上的钱”是指股票的发行价和第一天收盘价之间的差价。 
+在我们继续之前，还应该谈一谈发行价和开盘价之间的区别。虽然偶然的情况下你可
+以通过经纪人的交易，以发行价获得IPO，但作为一个普通的公众，你基本上不得不以开
+盘价（通常更高）来购买IPO。我们将在这个假设下构建模型。 
+4.1.2 近期IPO 市场表现 
+现在来看看IPO 市场的表现。我们将从IPOScoop.com 拉取数据。这是一项为即将
+到
+来
+的
+IPO
+提
+供
+评
+级
+的
+服
+务
+。
+请
+访
+问
+https://www.iposcoop.com/scoop-track-record-from-2000-to-present
+/并单击页面底部的按钮，下载一个电子表格。我们将其加载到pandas，并使用Jupyter 记
+事本运行一些可视化。
+
+4.1 IPO 市场 85 
+首先，进行整个章节都需要的导入环节。然后，我们会像下面这样拉取数据。
+importnumpy as np 
+import pandas as pd 
+importmatplotlib.pyplot as plt 
+from patsy import dmatrix 
+fromsklearn.ensemble import RandomForestClassifier 
+fromsklearn import linear_model 
+%matplotlib inline  
+ipos = pd.read_csv(r'/Users/alexcombs/Downloads/ipo_data.csv', 
+encoding='latin-1')  
+ipos 
+上述代码生成图4-1 的输出。 
+图4-1 
+这里我们可以看到，对于每个IPO 都有一些不少的信息：发行日期、发行者、发行价
+格、开盘价格以及价格的变化。让我们先按照年份来探索表现的数据。
+我们首先需要进行一些清理工作，以正确地格式化所有的列。这里将去掉美元和百分
+比符号。
+ipos = ipos.applymap(lambda x: x if not '$' in str(x) else 
+x.replace('$',''))
+ipos = ipos.applymap(lambda x: x if not '%' in str(x) else 
+x.replace('%',''))
+ipos 
+上述代码生成图4-2 的输出。 
+
+86 第4 章使用逻辑回归预测IPO 市场 
+图4-2 
+接下来，我们将修正所有列的数据类型。目前它们都是对象，但是对于即将执行的聚
+合和其他操作而言，我们需要数值类型。使用下面这行代码来查看列的数据类型。
+ipos.info() 
+上述代码生成图4-3 的输出。 
+图4-3 
+在我们的数据中有一些'N/C'的值，首先需要将其替换。之后就可以更改数据类型了。
+ipos.replace('N/C',0, inplace=True)  
+ipos['Date'] = pd.to_datetime(ipos['Date'])  
+ipos['Offer Price'] = ipos['Offer Price'].astype('float')  
+ipos['Opening Price'] = ipos['Opening Price'].astype('float')  
+ipos['1st Day Close'] = ipos['1st Day Close'].astype('float')  
+ipos['1st Day % Px Chng '] = ipos['1st Day % Px Chng '].astype('float') 
+ipos['$ Chg Close'] = ipos['$ Chg Close'].astype('float')  
+ipos['$ Chg Opening'] = ipos['$ Chg Opening'].astype('float')  
+ipos['Star Ratings'] = ipos['Star Ratings'].astype('int') 
+
+4.1 IPO 市场 87 
+请注意，这会抛出一个错误，如图4-4 所示。 
+图4-4 
+这意味着我们的日期中有一个格式是不正确的。基于上述的堆栈跟踪信息发现问题，
+然后修复它。
+ipos[ipos['Date']=='11/120'] 
+发现这个错误后，我们将观察图4-5 的输出。 
+图4-5 
+正确的日期应该是11/20/2012，因此我们将对其设置正确的值并重新运行前面的数据
+类型修订。之后，一切都可以顺利进行。
+ipos.loc[1660, 'Date'] = '2012-11-20' 
+ipos['Date'] = pd.to_datetime(ipos['Date'])  
+ipos['Offer Price'] = ipos['Offer Price'].astype('float')  
+ipos['Opening Price'] = ipos['Opening Price'].astype('float') 
+ipos['1st Day Close'] = ipos['1st Day Close'].astype('float') 
+ipos['1st Day % Px Chng '] = ipos['1st Day % Px Chng']  
+.astype('float')  
+ipos['$ Chg Close'] = ipos['$ Chg Close'].astype('float')  
+ipos['$ Chg Opening'] = ipos['$ Chg Opening'].astype('float') 
+ipos['Star Ratings'] = ipos['Star Ratings'].astype('int')  
+ipos.info() 
+上述代码生成图4-6 的输出。 
+
+88 第4 章使用逻辑回归预测IPO 市场 
+图4-6 
+现在，终于可以开始我们的探索了。这里从第一天的平均收益百分比开始。
+ipos.groupby(ipos['Date'].dt.year)['1st Day % Px Chng ']\ 
+.mean().plot(kind='bar', figsize=(15,10), color='k', title='1st Day Mean 
+IPO Percentage Change') 
+上述代码生成图4-7 的输出。 
+图4-7 
+这里都是近年来一些正向的百分比。让我们现在来看看与平均值相比较，中位数的表
+
+4.1 IPO 市场 89 
+现又是如何。
+ipos.groupby(ipos['Date'].dt.year)['1st Day % Px Chng ']\ 
+.median().plot(kind='bar', figsize=(15,10), color='k', title='1st Day 
+Median IPO Percentage Change') 
+上述代码生成图4-8 的输出。 
+图4-8 
+通过平均值和中位数的对比，我们可以清楚地看到，一些较大的异常值造成了回报分
+布的偏斜。让我们来仔细观察一下。
+ ipos['1st Day % Px Chng '].describe() 
+上述代码生成图4-9 的输出。 
+图4-9 
+
+90 第4 章使用逻辑回归预测IPO 市场 
+现在我们还可以将其绘制成图。
+ipos['1st Day % Px Chng '].hist(figsize=(15,7), bins=100, color='grey') 
+上述代码生成图4-10 的输出。 
+图4-10 
+从图4-10，我们可以看到大多数回报集中在零附近，但有个长尾一直拖到右侧，那里
+有一些真正的全垒打
+①
+①译者注：这里形容非常成功的发行。
+发行价。 
+我们已经看过第一天的百分比变化，就是从发行价到当天收盘价的差距，但正如我前
+面所指出的，很少有机会能够以发行价买入。既然如此，现在让我们来看看开盘价到收盘
+价的收益率。它有助于我们理解这个问题：所有的收益都是给了那些拿到发行价的人，还
+是说在第一天人们仍然有机会冲入并获得超高的回报？
+为了回答这个问题，我们首先创建两个新的列。
+ipos['$ Chg Open to Close'] = ipos['$ Chg Close'] - ipos['$ Chg Opening'] 
+ipos['% Chg Open to Close'] = (ipos['$ Chg Open to Close']/ipos['Opening 
+Price']) * 100 
+上面的代码生成图4-11 的输出。 
+
+4.1 IPO 市场 91 
+图4-11 
+接下来，我们将生成统计信息。
+ipos['% Chg Open to Close'].describe() 
+上面的代码生成图4-12 的输出。 
+图4-12 
+即刻，这些数据看起来就令人怀疑了。虽然首次公开募股有可能在开盘后下跌，但是
+跌幅几乎达到99%，似乎是不太现实的。经过一番调查，我们发现好像两个表现最差的发
+行者实际上是不好的数据点。当处理现实世界的数据时，往往情况就是如此，所以我们将
+更正这些并重新生成数据。
+ipos.loc[440, '$ Chg Opening'] = .09  
+ipos.loc[1264, '$ Chg Opening'] = .01  
+ipos.loc[1264, 'Opening Price'] = 11.26 
+ipos['$ Chg Open to Close'] = ipos['$ Chg Close'] - ipos['$ Chg Opening'] 
+ipos['% Chg Open to Close'] = (ipos['$ Chg Open to Close']/ipos['Opening 
+Price']) * 100 
+ ipos['% Chg Open to Close'].describe() 
+上述代码生成图4-13 的输出。 
+
+92 第4 章使用逻辑回归预测IPO 市场 
+图4-13 
+这次损失下降到40％，看起来仍然让人觉得怀疑，不过仔细观察之后，发现它是Zillow
+的IPO。Zillow 开盘炒得异常火热，但在收盘前很快就跌到了地板上。这告诉我们，坏数
+据点似乎已经被清理完毕了。
+现在将继续前进，希望我们已清除了大部分的错误。
+ipos['% Chg Open to Close'].hist(figsize=(15,7), bins=100, color='grey') 
+上述代码生成图4-14 的输出。 
+图4-14 
+最后，我们可以看到开盘价到收盘价变化的分布形状，和发行价到收盘价变化的分布相
+比，有着明显的差异。平均值和中位值都有显著的下降，而且紧贴着原点右侧的条形看上
+去有一个健康的梯度，而原点左侧的条形似乎也按照比例进行了增长
+①
+①译者注：之所以作者认为这样的分布更健康，是因为它更符合常见的正态分布假设。
+。注意，右边的长
+
+4.1 IPO 市场 93 
+尾没有之前那么明显了，但仍然是值得注意的，所以还有一丝希望。
+4.1.3 基本的IPO 策略 
+现在我们对市场有了一些感觉，这里来探讨几项策略。如果我们以其开盘价购买每个
+IPO 股票，然后在收盘时卖出，那么最终收益如何？我们看一下2015 年迄今的数据。 
+ipos[ipos['Date']>='2015-01-01']['$ Chg Open to Close'].describe() 
+上述代码生成图4-15 的输出。 
+图4-15 
+ipos[ipos['Date']>='2015-01-01']['$ Chg Open to Close'].sum() 
+上述代码生成图4-16 的输出。 
+让我们拆分一下盈利的交易和亏损的交易。
+ipos[(ipos['Date']>='2015-01-01')&(ipos['$ Chg Open to Close']>0)]['$ Chg 
+Open to Close'].describe() 
+上述代码生成图4-17 的输出
+①。 
+图4-17 
+ipos[(ipos['Date']>='2015-01-01')&(ipos['$ Chg Open to Close']<0)]['$ Chg 
+Open to Close'].describe() 
+①译者注：该图中的max 和图4-15 中的max 应该一致，应该是笔误。
+图4-16 

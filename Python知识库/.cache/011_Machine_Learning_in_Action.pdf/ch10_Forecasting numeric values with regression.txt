@@ -1,0 +1,2207 @@
+Part 2
+Forecasting numeric
+ values with regression
+This part of the book, chapters 8 and 9, covers regression. Regression is a
+continuation of supervised learning from chapters 1 through 7. Recall that
+supervised learning is machine learning when we have a target variable, or some-
+thing we want to predict. The difference between regression and classification is
+that in regression our target variable is numeric and continuous. 
+ Chapter 8 covers an introduction to linear regression, locally weighted linear
+regression, and shrinkage methods. Chapter 9 takes some ideas from tree build-
+ing in chapter 3 and applies these to regression to create tree-based regression.
+
+
+153
+Predicting numeric
+ values: regression
+The previous chapters focused on classification that predicts only nominal values
+for the target variable. With the tools in this chapter you’ll be able to start predict-
+ing target values that are continuous. You may be asking yourself, “What can I
+do with these tools?” “Just about anything” would be my answer. Companies may
+use this for boring things such as sales forecasts or forecasting manufacturing
+defects. One creative example I’ve seen recently is predicting the probability of
+celebrity divorce.
+ In this chapter, we’ll first discuss linear regression, where it comes from, and how
+to do it in Python. We’ll next look at a technique for locally smoothing our estimates
+to better fit the data. We’ll explore shrinkage and a technique for getting a regression
+This chapter covers
+■
+Linear regression
+■
+Locally weighted linear regression
+■
+Ridge regression and stagewise linear regression
+■
+Predicting the age of an abalone and an antique 
+selling price
+
+154
+CHAPTER 8
+Predicting numeric values: regression
+estimate in “poorly formulated” problems. We’ll explore the theoretical notions of bias
+and variance. Finally, we’ll put all of these techniques to use in forecasting the age of
+abalone and the future selling price of antique toys. To get the data on the antique toys,
+we’ll first use Python to do some screen scraping. It’s an action-packed chapter. 
+8.1
+Finding best-fit lines with linear regression
+Our goal when using regression is to predict a numeric target value. One way to do
+this is to write out an equation for the target value with respect to the inputs. For
+example, assume you’re trying to forecast the horsepower of your sister’s boyfriend’s
+automobile. One possible equation is
+HorsePower = 0.0015*annualSalary - 0.99*hoursListeningToPublicRadio
+This is known as a regression equation. The values 0.0015 and -0.99 are known as regres-
+sion weights. The process of finding these regression weights is called regression. Once
+you’ve found the regression weights, forecasting new values given a set of inputs is
+easy. All you have to do is multiply the inputs by the regression weights and add them
+together to get a forecast.
+ When we talk about regression, we often mean linear regression, so the terms
+regression and linear regression are used interchangeably in this chapter. Linear regres-
+sion means you can add up the inputs multiplied by some constants to get the output.
+There’s another type of regression called nonlinear regression in which this isn’t true;
+the output may be a function of the inputs multiplied together. For example, our
+horsepower equation written as
+HorsePower = 0.0015*annualSalary/hoursListeningToPublicRadio 
+is an example of a nonlinear regression. We won’t deal with nonlinear regression in
+this chapter.    
+Linear regression
+Pros: Easy to interpret results, computationally inexpensive
+Cons: Poorly models nonlinear data
+Works with: Numeric values, nominal values
+General approach to regression
+1. Collect: Any method.
+2. Prepare: We’ll need numeric values for regression. Nominal values should be
+mapped to binary values.
+3. Analyze: It’s helpful to visualized 2D plots. Also, we can visualize the regression
+weights if we apply shrinkage methods.
+
+155
+Finding best-fit lines with linear regression
+How can we go from a bunch of data to our regression equation? Our input data is in
+the matrix X, and our regression weights in the vector w. For a given piece of data X1
+our predicted value is given by y1 = XT
+1w. We have the Xs and ys, but how can we find
+the ws? One way is to find the ws that minimize the error. We define error as the differ-
+ence between predicted y and the actual y. Using just the error will allow positive and
+negative values to cancel out, so we use the squared error. 
+ We can write this as
+We can also write this in matrix notation as (y-Xw)T(y-Xw). If we take the derivative of
+this with respect to w, we’ll get XT(y-Xw). We can set this to zero and solve for w to get
+the following equation:
+The little symbol on top of the w tells us that this is the best solution we can come up
+with for w at the moment. The value we have for w is based on the data we have and
+may not perfectly describe the data, so we use a “hat” to describe our best estimate
+given the data. 
+(continued)
+4. Train: Find the regression weights.
+5. Test: We can measure the R2, or correlation of the predicted value and data, to
+measure the success of our models. 
+6. Use: With regression, we can forecast a numeric value for a number of inputs.
+This is an improvement over classification because we’re predicting a continu-
+ous value rather than a discrete category.
+The origins of regression
+What we know today as regression was invented by the cousin of Charles Darwin,
+Francis Galton. Galton did his first regression in 1877 to estimate the size of pea
+seeds based on the size of their parents’ seeds. Galton performed regression on a
+number of things, including the heights of humans. He noticed that if parents were
+above average in height, their children also tended to be above average but not as
+much as their parents. The heights of children were regressing toward a mean val-
+ue. Galton noticed this behavior in a number of things he studied, and so the tech-
+nique is called regression, despite the English word having no relationship to
+predicting numeric values.†
+† Ian Ayres, Super Crunchers (Bantam Books, 2008), 24.
+yi
+xi
+Tw
+–
+
+
+2
+i
+1
+=
+m
+
+wˆ
+XTX
+
+
+1
+– XTy
+=
+
+156
+CHAPTER 8
+Predicting numeric values: regression
+Something else to note about the equation is that it uses XTX-1, which is a matrix
+inverse. This equation will work provided the matrix inverse exists. The matrix inverse
+may not exist, and we’ll need to check for this when putting this into code. 
+ Solving this problem is one of the most common applications of statistics, and
+there are a number of ways to do it other than the matrix method. By using the matrix
+method with NumPy, we can write a few lines and get an answer. This method is also
+known as OLS, which stands for “ordinary least squares.” 
+ To see this in action, look at the plot in figure 8.1. We’d like to see how to create a
+best-fit line for this data. 
+ The code in the following listing will allow you to create a best-fit line for the data
+in figure 8.1. Open a text editor and create a new file called regression.py, and then
+add the following code. 
+from numpy import *
+def loadDataSet(fileName): 
+    numFeat = len(open(fileName).readline().split('\t')) - 1 
+    dataMat = []; labelMat = []
+    fr = open(fileName)
+    for line in fr.readlines():
+        lineArr =[]
+        curLine = line.strip().split('\t')
+        for i in range(numFeat):
+Listing 8.1
+Standard regression function and data-importing functions
+Figure 8.1
+Example data from file ex0.txt
+
+157
+Finding best-fit lines with linear regression
+            lineArr.append(float(curLine[i]))
+        dataMat.append(lineArr)
+        labelMat.append(float(curLine[-1]))
+    return dataMat,labelMat
+def standRegres(xArr,yArr):
+    xMat = mat(xArr); yMat = mat(yArr).T
+    xTx = xMat.T*xMat
+    if linalg.det(xTx) == 0.0:
+        print "This matrix is singular, cannot do inverse"
+        return
+    ws = xTx.I * (xMat.T*yMat)
+    return ws
+The first function, loadDataSet(), is the same as loadDataSet() from chapter 7. This
+function opens a text file with tab-delimited values and assumes the last value is the
+target value. The second function, standRegres(), is the function that computes the
+best-fit line. You first load the x and y arrays and then convert them into matrices.
+Next you compute XTX and then test if its determinate is zero. If the determinate
+is zero, then you’ll get an error when you try to compute the inverse. NumPy has a lin-
+ear algebra library called linalg, which has a number of useful functions; you can call
+linalg.det() to compute the determinate. If the determinate is nonzero, you com-
+pute the ws and return them. If you didn’t check to see if the determinate was zero
+before attempting to compute the inverse, you’d get an error. NumPy’s linear algebra
+library also has a function for solving for unknown matrices, with which you could
+have written ws = xTx.I * (xMat.T*yMat) as ws = linalg.solve(xTx,xMat.T*yMatT).
+ Let’s see this in action. Using loadDataSet(), you can import the data into two
+arrays, one for the X values and one for Y values. The Y values are our target values
+similar to our class labels in all of the classification algorithms. 
+>>> import regression
+>>> from numpy import *
+>>> xArr,yArr=regression.loadDataSet('ex0.txt')
+Let’s look at the first two pieces of data: 
+>>> xArr[0:2]
+[[1.0, 0.067732000000000001], [1.0, 0.42781000000000002]]
+The first value is always a 1.0. This is our X0 value, and we assume it’s a 1.0 to account
+for a constant offset. The second value, X1, is our value in the plot. 
+ Now let’s see standRegres() in action: 
+>>> ws = regression.standRegres(xArr,yArr)
+>>> ws
+matrix([[ 3.00774324],
+        [ 1.69532264]])
+The variable ws is now our weights, which we multiply by our constant tern, and the
+second one we multiply by our input variable X1. Because we’re assuming X0=1, we’ll
+get y=ws[0]+ws[1]*X1. We also want to call this predicted y something other than the
+actual data, so this is called yHat. Let’s compute yHat with our new ws: 
+
+158
+CHAPTER 8
+Predicting numeric values: regression
+>>> xMat=mat(xArr) 
+>>> yMat=mat(yArr)
+>>> yHat = xMat*ws
+Now we can plot this to see a plot of our data and our best-fit line: 
+>>> import matplotlib.pyplot as plt
+>>> fig = plt.figure()
+>>> ax = fig.add_subplot(111)
+>>> ax.scatter(xMat[:,1].flatten().A[0], yMat.T[:,0].flatten().A[0]) 
+    <matplotlib.collections.CircleCollection object at 0x04ED9D30>
+These commands create the figure and plot the original data. To plot the best-fit line
+we’ve calculated, we need to plot yHat. Pyplot will have a problem if the points on our
+line are out of order, so we first sort the points in ascending order:
+>>> xCopy=xMat.copy()
+>>> xCopy.sort(0)
+>>> yHat=xCopy*ws
+>>> ax.plot(xCopy[:,1],yHat)
+[<matplotlib.lines.Line2D object at 0x0343F570>]
+>>> plt.show()
+You should see a plot similar to the one in figure 8.2. 
+ You can make a model of almost any dataset, but how good is the model? Consider
+for a moment the two plots in figure 8.3. If you do a linear regression on both of the
+plots, you’ll get the exact same results. The plots are obviously not the same, but how
+can you measure the difference? One way you can calculate how well the predicted
+value, yHat, matches our actual data, y, is with the correlation between the two series. 
+Figure 8.2
+Data from ex0.txt with a best-fit line fitted to the data
+
+159
+Finding best-fit lines with linear regression
+In Python the NumPy library comes with a command to generate the correlation coef-
+ficients. You can calculate the correlation between the estimate output and the actual
+outputs by the command corrcoef(yEstimate,yActual. Let’s try this out on the data
+points from the previous example.
+ First, you need to get an estimate, as we did at the beginning of the example:
+>>> yHat = xMat*ws
+Now you can look at the correlation coefficients. You need to transpose yMat so that
+you have both of the vectors as row vectors: 
+>>> corrcoef(yHat.T, yMat)
+array([[ 1.        ,  0.98647356],
+       [ 0.98647356,  1.        ]])
+This gives you the correlation between all possible pairs; elements on the diagonal
+are 1.0 because the correlation between yMat and yMat is perfect. The correlation
+between yHat and yMat is 0.98. 
+ The best-fit line does a great job of modeling the data as if it were a straight line.
+But it looks like the data has some other patterns we may want to take advantage of.
+How can we take advantage of these patterns? One way is to locally adjust our forecast
+based on the data. We’ll discuss such an approach next. 
+Figure 8.3
+Two sets of data, which both give the same regression weights of 0,2.0. The 
+top plot has a correlation coefficient of 0.58, whereas the bottom plot has a correlation 
+coefficient of 0.99.
+
+160
+CHAPTER 8
+Predicting numeric values: regression
+8.2
+Locally weighted linear regression 
+One problem with linear regression is that it tends to underfit the data. It gives us the
+lowest mean-squared error for unbiased estimators. With the model underfit, we
+aren’t getting the best predictions. There are a number of ways to reduce this mean-
+squared error by adding some bias into our estimator. 
+ One way to reduce the mean-squared error is a technique known as locally weighted
+linear regression (LWLR). In LWLR we give a weight to data points near our data point
+of interest; then we compute a least-squares regression similar to section 8.1. This type
+of regression uses the dataset each time a calculation is needed, similar to kNN. The
+solution is now given by 
+where W is a matrix that’s used to weight the data points. 
+LWLR uses a kernel something like the kernels demonstrated in support vector
+machines to weight nearby points more heavily than other points. You can use any ker-
+nel you like. The most common kernel to use is a Gaussian. The kernel assigns a
+weight given by
+This builds the weight matrix W, which has only diagonal elements. The closer the data
+point x is to the other points, the larger w(i,i) will be. There also is a user-defined
+constant k that will determine how much to weight nearby points. This is the only
+parameter that we have to worry about with LWLR. You can see how different values of
+k change the weights matrix in figure 8.4.
+wˆ
+XTWX
+
+
+1
+– XTWy
+=
+w i,i
+
+
+exp
+x i
+x
+–
+2k
+–
+2
+---------------------
+
+
+
+
+
+
+=
+Figure 8.4
+Plot showing 
+the original data in the top 
+frame and the weights ap-
+plied to each piece of data 
+(if we were forecasting the 
+value of x=0.5.) The sec-
+ond frame shows that with 
+k=0.5, most of the data is 
+included, whereas the bot-
+tom frame shows that if 
+k=0.01, only a few local 
+points will be included in 
+the regression.
+
+161
+Locally weighted linear regression 
+To see this in action, open your text editor and add the code from the following listing
+to regression.py.
+def lwlr(testPoint,xArr,yArr,k=1.0):
+    xMat = mat(xArr); yMat = mat(yArr).T
+    m = shape(xMat)[0]
+    weights = mat(eye((m)))                      
+    for j in range(m):
+        diffMat = testPoint - xMat[j,:]               
+        weights[j,j] = exp(diffMat*diffMat.T/(-2.0*k**2))
+    xTx = xMat.T * (weights * xMat)
+    if linalg.det(xTx) == 0.0:
+        print "This matrix is singular, cannot do inverse"
+        return
+    ws = xTx.I * (xMat.T * (weights * yMat))
+    return testPoint * ws
+def lwlrTest(testArr,xArr,yArr,k=1.0):
+    m = shape(testArr)[0]
+    yHat = zeros(m)
+    for i in range(m):
+        yHat[i] = lwlr(testArr[i],xArr,yArr,k)
+    return yHat
+The code in listing 8.2 is used to generate a yHat estimate for any point in the x space.
+The function lwlr() creates matrices from the input data similar to the code in list-
+ing 8.1; then it creates a diagonal weights matrix called weights. B The weights matrix
+is a square matrix with as many elements as data points. This assigns one weight to each
+data point. The function next iterates over all of the data points and computes a value,
+which decays exponentially as you move away from the testPoint. C The input k con-
+trols how quickly the decay happens. After you’ve populated the weights matrix, you can
+find an estimate for testPoint similar to standRegres(). 
+ The other function in listing 8.2 is lwlrTest(), which will call lwlr() for every
+point in the dataset. This is helpful for evaluating the size of k. 
+ Let’s see this in action. After you’ve entered the code from listing 8.2 into regres-
+sion.py, save it and type the following in the Python shell:
+>>> reload(regression)
+<module 'regression' from 'regression.py'>
+If you need to reload the dataset, you can type in
+>>> xArr,yArr=regression.loadDataSet('ex0.txt')
+You can estimate a single point with the following:
+>>> yArr[0]
+3.1765129999999999
+>>> regression.lwlr(xArr[0],xArr,yArr,1.0)
+matrix([[ 3.12204471]])
+>>> regression.lwlr(xArr[0],xArr,yArr,0.001)
+matrix([[ 3.20175729]])
+Listing 8.2
+Locally weighted linear regression function 
+Create diagonal 
+matrix
+B
+Populate weights 
+with exponentially 
+decaying values
+C
+
+162
+CHAPTER 8
+Predicting numeric values: regression
+To get an estimate for all the points in our dataset, you can use lwlrTest(): 
+>>> yHat = regression.lwlrTest(xArr, xArr, yArr,0.003)
+You can inspect yHat, so now let’s plot these estimates with the original values. Plot
+needs the data to be sorted, so let’s sort xArr: 
+xMat=mat(xArr)
+>>> srtInd = xMat[:,1].argsort(0)
+>>> xSort=xMat[srtInd][:,0,:]
+Now you can plot this with Matplotlib:
+>>> import matplotlib.pyplot as plt
+>>> fig = plt.figure()
+>>> ax = fig.add_subplot(111)
+>>> ax.plot(xSort[:,1],yHat[srtInd])
+[<matplotlib.lines.Line2D object at 0x03639550>]
+>>> ax.scatter(xMat[:,1].flatten().A[0], mat(yArr).T.flatten().A[0] , s=2, 
+c='red')
+<matplotlib.collections.PathCollection object at 0x03859110>
+>>> plt.show()
+You should see something similar to the plot in the bottom frame of figure 8.5. Fig-
+ure 8.5 has plots for three different values of k. With k=1.0, the weights are so large
+that they appear to weight all the data equally, and you have the same best-fit line as
+using standard regression. Using k=0.01 does a much better job of capturing the
+underlying pattern in the data. The bottom frame in figure 8.5 has k=0.003. This is
+too noisy and fits the line closely to the data. The bottom panel is an example of
+overfitting, whereas the top panel is an example of underfitting. You’ll see how to
+quantitatively measure overfitting and underfitting in the next section. 
+Figure 8.5
+Plot showing locally weighted lin-
+ear regression with three smoothing values. 
+The top frame has a smoothing value of k=1.0, 
+the middle frame has k=0.01, and the bottom 
+frame has k=0.003. The top value of k is no 
+better than least squares. The middle value cap-
+tures some of the underlying data pattern. The 
+bottom frame fits the best-fit line to noise in the 
+data and results in overfitting.
+
+163
+Example: predicting the age of an abalone
+One problem with locally weighted linear regression is that it involves numerous com-
+putations. You have to use the entire dataset to make one estimate. Figure 8.5 demon-
+strated that using k=0.01 gave you a good estimate of the data. If you look at the
+weights for k=0.01 in figure 8.4, you’ll see that they’re near 0 in for most of the data
+points. You could save a lot of computing time by avoiding these calculations. 
+ Now that you’ve seen two methods of finding best-fit lines, let’s put it to use pre-
+dicting the age of an abalone. 
+8.3
+Example: predicting the age of an abalone
+Let’s see our regression example in action on some real live data. In the data folder
+there is some data from the UCI data repository describing the age of a shellfish
+called abalone. The year is known by counting the number of layers in the shell of
+the abalone. 
+ Add the following code to regression.py: 
+def rssError(yArr,yHatArr): 
+    return ((yArr-yHatArr)**2).sum()
+>>> abX,abY=regression.loadDataSet('abalone.txt')
+>>> yHat01=regression.lwlrTest(abX[0:99],abX[0:99],abY[0:99],0.1)
+>>> yHat1=regression.lwlrTest(abX[0:99],abX[0:99],abY[0:99],1)
+>>> yHat10=regression.lwlrTest(abX[0:99],abX[0:99],abY[0:99],10)
+The function rssError() will give us a single number describing the error of our
+estimate: 
+>>> regression.rssError(abY[0:99],yHat01.T)
+56.842594430533545
+>>> regression.rssError(abY[0:99],yHat1.T)
+429.89056187006685
+>>> regression.rssError(abY[0:99],yHat10.T)
+549.11817088257692
+Using a smaller kernel will give us a lower error, so why don’t we use the smallest
+kernel all the time? Using the smallest kernel will overfit our data. This may or may
+not give us the best results on new data. Let’s see how well these predictions work on
+new data: 
+>>> yHat01=regression.lwlrTest(abX[100:199],abX[0:99],abY[0:99],0.1)
+>>> regression.rssError(abY[100:199],yHat01.T)
+25619.926899338669
+>>> yHat1=regression.lwlrTest(abX[100:199],abX[0:99],abY[0:99],1)
+>>> regression.rssError(abY[100:199],yHat1.T)
+573.5261441895808
+>>> yHat10=regression.lwlrTest(abX[100:199],abX[0:99],abY[0:99],10)
+>>> regression.rssError(abY[100:199],yHat10.T)
+517.57119053830979
+Did you see that? This is our test error, and the smallest value of the test error
+occurred with a kernel size of 10. The kernel size of 10 gave us the largest training
+error. Let’s see how these errors compare to our simple linear regression:
+
+164
+CHAPTER 8
+Predicting numeric values: regression
+>>> ws = regression.standRegres(abX[0:99],abY[0:99])
+>>> yHat=mat(abX[100:199])*ws
+>>> regression.rssError(abY[100:199],yHat.T.A)
+518.63631532450131
+Simple linear regression did almost as well as the locally weighted linear regression.
+This demonstration illustrates one fact, and that is that in order to choose the best
+model you have to see how the model does on unknown data. Is 10 the best kernel
+size? Perhaps, but to get a better estimate you should do the previous test 10 times
+with 10 different samples of data and compare the results.
+ This example showed how one method—locally weighted linear regression—can
+be used to build a model that may be better at forecasting than regular regression.
+The problem with locally weighted linear regression is that you need to “carry
+around” the dataset. You need to have the training data available to make predictions.
+We’ll now explore a second class of methods for improving forecasting accuracy.
+These methods have some added benefits, as you’ll soon see. 
+8.4
+Shrinking coefficients to understand our data
+What if we have more features than data points? Can we still make a prediction using
+linear regression and the methods we’ve seen already? Then answer is no, not using
+the methods we’ve seen already. The reason for this is that when we try to compute
+(XTX)-1 we’ll get an error. 
+ If we have more features than data points (n>m), we say that our data matrix X isn’t
+full rank. When the data isn’t full rank, we’ll have a difficult time computing the
+inverse. 
+ To solve this problem, statisticians introduced the concept of ridge regression, which
+is the first of two shrinkage methods we’ll look at in this section. We’ll then discuss the
+lasso, which is better but difficult to compute. We’ll finally examine a second shrink-
+age method called forward stagewise regression, which is an easy way to approximate
+the lasso. 
+8.4.1
+Ridge regression 
+Ridge regression adds an additional matrix I to the matrix XTX so that it’s non-singular,
+and we can take the inverse of the whole thing: XTX + I. The matrix I is an mxm identity
+matrix where there are 1s in the diagonal elements and 0s elsewhere. The symbol  is
+a user-defined scalar value, which we’ll discuss shortly. The formula for estimating our
+coefficients is now
+Ridge regression was originally developed to deal with the problem of having more
+features than data points. But it can also be used to add bias into our estimations, giv-
+ing us a better estimate. We can use the  value to impose a maximum value on the
+sum of all our ws. By imposing this penalty, we can decrease unimportant parameters.
+This decreasing is known as shrinkage in statistics. 
+wˆ
+XTX
+I
++
+
+
+1
+– XTy
+=
+
+165
+Shrinking coefficients to understand our data
+Shrinkage methods allow us to throw out unimportant parameters so that we can get a
+better feel and human understanding of the data. Additionally, shrinkage can give us
+a better prediction value than linear regression. 
+ We choose  to minimize prediction error. This is similar to other parameter-
+selection methods we used in the chapters on classification. We take some of our
+data, set it aside for testing, and then use the remaining data to determine the ws.
+We then test this model against our test data and measure its performance. This is
+repeated with different  values until we find a  that minimizes prediction error. 
+ Let’s see this in action. First, open regression.py and add the code from the follow-
+ing listing.
+def ridgeRegres(xMat,yMat,lam=0.2):
+    xTx = xMat.T*xMat
+    denom = xTx + eye(shape(xMat)[1])*lam
+    if linalg.det(denom) == 0.0:
+        print "This matrix is singular, cannot do inverse"
+        return
+    ws = denom.I * (xMat.T*yMat)
+    return ws
+def ridgeTest(xArr,yArr):
+    xMat = mat(xArr); yMat=mat(yArr).T
+    yMean = mean(yMat,0)
+    yMat = yMat - yMean                       
+    xMeans = mean(xMat,0)                         
+    xVar = var(xMat,0)                        
+    xMat = (xMat - xMeans)/xVar               
+    numTestPts = 30
+    wMat = zeros((numTestPts,shape(xMat)[1]))
+    for i in range(numTestPts):
+        ws = ridgeRegres(xMat,yMat,exp(i-10))
+        wMat[i,:]=ws.T
+    return wMat
+The code in listing 8.3 contains two functions: one to calculate weights, ridgeRegres(),
+and one to test this over a number of lambda values, ridgeTest(). 
+ The first function, ridgeRegres(), implements ridge regression for any given
+value of lambda. If no value is given, lambda defaults to 0.2. Lambda is a reserved key-
+word in Python, so you use the variable lam instead. You first construct the matrix XTX.
+Next, you add on the ridge term multiplied by our scalar lam. The identity matrix is
+created by the NumPy function eye(). Ridge regression should work on datasets that
+Listing 8.3
+Ridge regression 
+What is the ridge in ridge regression?
+Ridge regression uses the identity matrix multiplied by some constant . If you look
+at I (the identity matrix), you’ll see that there are 1s across the diagonal and 0s
+elsewhere. This ridge of 1s in a plane of 0s gives you the ridge in ridge regression.
+Normalization 
+code
+B
+
+166
+CHAPTER 8
+Predicting numeric values: regression
+would give an error with regular regression, so you shouldn’t need to check to see if
+the determinant is zero, right? Someone could enter 0 for lambda and you’d have a
+problem, so you put in a check. If the matrix isn’t singular, the last thing the code
+does is calculate the weights and return them. 
+ To use ridge regression and all shrinkage methods, you need to first normalize your
+features. If you read chapter 2, you’ll remember that we normalized our data to give each
+feature equal importance regardless of the units it was measured in. The second func-
+tion in listing 8.3, ridgeTest(), shows an example of how to normalize the data. This
+is done by subtracting off the mean from each feature and dividing by the variance. B
+ After the regularization is done, you call ridgeRegres() with 30 different lambda
+values. The values vary exponentially so that you can see how very small values of
+lambda and very large values impact your results. The weights are packed into a
+matrix and returned. 
+ Let’s see this in action on our abalone dataset. 
+>>> reload(regression)
+>>> abX,abY=regression.loadDataSet('abalone.txt')
+>>> ridgeWeights=regression.ridgeTest(abX,abY)
+We now have the weights for 30 different values of lambda. Let’s see what these look
+like. To plot them out, enter the following commands in your Python shell: 
+>>> import matplotlib.pyplot as plt
+>>> fig = plt.figure()
+>>> ax = fig.add_subplot(111)
+>>> ax.plot(ridgeWeights)
+>>> plt.show()
+You should see a plot similar to figure 8.6. In figure 8.6 you can see the regression
+coefficients plotted versus log(). On the very left where  is the smallest, you have
+Figure 8.6
+Regression co-
+efficient values while using 
+ridge regression. For very 
+small values of  the coef-
+ficients are the same as 
+regular regression, where-
+as for very large values of 
+the regression coefficients 
+shrink to 0. Somewhere in 
+between these two ex-
+tremes, you can find values 
+that allow you to make bet-
+ter predictions.
+
+167
+Shrinking coefficients to understand our data
+the full values of our coefficients, which are the same as linear regression. On the
+right side, the coefficients are all zero. Somewhere in the middle, you have some coef-
+ficient values that will give you better prediction results. To find satisfactory answers,
+you’d need to do cross-validation testing. A plot, shown in figure 8.6, also tells you
+which variables are most descriptive in predicting your output, by the magnitude of
+these coefficients. 
+ There are other shrinkage methods such as the lasso, LAR, PCA regression,1 and
+subset selection. These methods can be used to improve prediction accuracy and
+improve your ability to interpret regression coefficients similarly to ridge regression.
+We’ll now talk about a method called the lasso. 
+8.4.2
+The lasso
+It can be shown that the equation for ridge regression is the same as our regular least-
+squares regression and imposing the following constraint:
+This means that the sum of the squares of all our weights has to be less than or equal
+to . When two or more of the features are correlated, we may have a very large posi-
+tive weight and a very large negative weight using regular least-squares regression. By
+using ridge regression we’re avoiding this problem because the weights are subject to
+the previous constraint. 
+ Similar to ridge regression, there’s another shrinkage technique called the lasso.
+The lasso imposes a different constraint on the weights: 
+The only difference is that we’re taking the absolute value instead of the square of all
+the weights. Using a slightly different constraint will give us different results. If  is
+small enough, some of the weights are forced to be exactly 0, which makes it easier to
+understand our data. The mathematical difference of the constraints may seem trivial,
+but it makes things a lot harder to solve. To solve this we now need a quadratic pro-
+gramming algorithm. Instead of using the quadratic solver, I’ll introduce an easier
+method for getting results similar to the lasso. This is called forward stagewise regression.
+8.4.3
+Forward stagewise regression
+There’s an easier algorithm than the lasso that gives close results: stagewise linear
+regression. This algorithm is a greedy algorithm in that at each step it makes the
+decision that will reduce the error the most at that step. Initially, all the weights are
+1 Trevor Hastie, Robert Tibshirani, and Jerome Friedman, The Elements of Statistical Learning: Data Mining, Infer-
+ence, and Prediction, 2nd ed. (Springer, 2009).
+wk
+2
+
+
+k
+1
+=
+n
+
+wk
+
+
+k
+1
+=
+n
+
+
+168
+CHAPTER 8
+Predicting numeric values: regression
+set to 0. The decision that’s made at each step is increasing or decreasing a weight
+by some small amount. 
+ Pseudo-code would look like this:
+Regularize the data to have 0 mean and unit variance
+For every iteration:
+    Set lowestError to + 
+    For every feature:
+        For increasing and decreasing:
+             Change one coefficient to get a new W
+             Calculate the Error with new W
+             If the Error is lower than lowestError: set Wbest to the current W
+       Update set W to Wbest
+To see this in action, open regression.py and add the code from the following listing.
+def stageWise(xArr,yArr,eps=0.01,numIt=100):
+    xMat = mat(xArr); yMat=mat(yArr).T
+    yMean = mean(yMat,0)
+    yMat = yMat - yMean     
+    xMat = regularize(xMat)
+    m,n=shape(xMat)
+    ws = zeros((n,1)); wsTest = ws.copy(); wsMax = ws.copy()
+    for i in range(numIt):
+        print ws.T
+        lowestError = inf; 
+        for j in range(n):
+            for sign in [-1,1]:
+                wsTest = ws.copy()
+                wsTest[j] += eps*sign
+                yTest = xMat*wsTest
+                rssE = rssError(yMat.A,yTest.A)
+                if rssE < lowestError:
+                    lowestError = rssE
+                    wsMax = wsTest
+        ws = wsMax.copy()
+        returnMat[i,:]=ws.T
+    return returnMat
+The function stageWise() in listing 8.4 is a demonstration of the stagewise linear
+regression algorithm, which approaches the lasso solution but is much easier to
+compute. The function takes the following inputs: our input data, xArr; and the vari-
+able we’re forecasting, yArr. Additionally there are two parameters. One is eps, the
+step size to take at each iteration, and the second is numIt, which is the number
+of iterations. 
+ You start off by converting the input data into matrices and normalizing the fea-
+tures to 0 mean and unit variance. You next make a vector, ws, to hold our w values,
+and you create two copies for use in the greedy optimization. Next, you loop over the
+Listing 8.4
+Forward stagewise linear regression 
+
+169
+Shrinking coefficients to understand our data
+optimization procedure numIt times. In each of these iterations you print out the w
+vector so you have some idea what’s going on inside. 
+ The greedy optimization is two for loops that loop over all the possible features
+and see how the error changes if you increase or decrease that feature. The error is
+measured by the squared error, which is calculated by the rssError() function given
+earlier. You initially set this error to +  and then compare all the errors. The value giv-
+ing the lowest error is chosen. You then repeat this procedure. 
+ Let’s see this in action. After you’ve entered the code from listing 8.4 into regres-
+sion.py, save it and type the following in your Python shell:
+>>> reload(regression)
+<module 'regression' from 'regression.pyc'>
+>>> xArr,yArr=regression.loadDataSet('abalone.txt')
+>>> regression.stageWise(xArr,yArr,0.01,200)
+[[ 0.  0.  0.  0.  0.  0.  0.  0.]]
+[[ 0.    0.    0.    0.01  0.    0.    0.    0.  ]]
+[[ 0.    0.    0.    0.02  0.    0.    0.    0.  ]]
+                                .
+                                .
+[[ 0.04  0.    0.09  0.03  0.31 -0.64  0.    0.36]]
+[[ 0.05  0.    0.09  0.03  0.31 -0.64  0.    0.36]]
+[[ 0.04  0.    0.09  0.03  0.31 -0.64  0.    0.36]]
+One thing to notice is that w1 and w6 are exactly 0. This means they don’t contribute
+anything to the result. These variables are probably not needed. With the eps variable
+set to 0.01, after some time the coefficients will all saturate and oscillate between cer-
+tain values because the step size is too large. Here you can see that the first weight is
+oscillating between 0.04 and 0.005. 
+ Let’s try again with a smaller step size and many more steps: 
+>>> regression.stageWise(xArr,yArr,0.001,5000)
+[[ 0.  0.  0.  0.  0.  0.  0.  0.]]
+[[ 0.     0.     0.     0.001  0.     0.     0.     0.   ]]
+[[ 0.     0.     0.     0.002  0.     0.     0.     0.   ]]
+                                  .
+                                  .
+[[ 0.044 -0.011  0.12   0.022  2.023 -0.963 -0.105  0.187]]
+[[ 0.043 -0.011  0.12   0.022  2.023 -0.963 -0.105  0.187]]
+[[ 0.044 -0.011  0.12   0.022  2.023 -0.963 -0.105  0.187]]
+Let’s compare these answers to the least-squares weights. You can get the least-squares
+weights by typing in the following:
+>>> xMat=mat(xArr)
+>>> yMat=mat(yArr).T
+>>> xMat=regression.regularize(xMat)
+>>> yM = mean(yMat,0)
+>>> yMat = yMat - yM
+>>> weights=regression.standRegres(xMat,yMat.T)
+>>> weights.T
+matrix([[ 0.0430442 , -0.02274163,  0.13214087,  0.02075182,  2.22403814,
+         -0.99895312, -0.11725427,  0.16622915]])
+
+170
+CHAPTER 8
+Predicting numeric values: regression
+You can see after 5,000 iterations that the results from the stagewise linear regression
+algorithm are close to the results using regular least squares. Results from 1,000 itera-
+tions with an epsilon value of 0.005 are shown in figure 8.7.
+ The practical benefit of the stagewise linear regression algorithm isn’t that you can
+make these cool plots like the one in figure 8.7. The benefit is this algorithm allows
+you to better understand your models and build better models. When building a
+model, you’d want to run this algorithm and find out which features are important.
+You may choose to stop collecting data for unimportant features. Ultimately, you’d
+want to build many models with w values from the algorithm and after every 100 itera-
+tions test these. To test these models, you’d do something like tenfold cross validation
+and choose the model that minimizes error. 
+ When we apply a shrinkage method such as stagewise linear regression or ridge
+regression, we say we’re adding bias to our model. At the same time, we’re reducing
+the model variance. The next section will explain the relationship and how these
+affect our results. 
+8.5
+The bias/variance tradeoff
+Anytime you have a difference between your model and your measurements, you have
+an error. When thinking about “noise” or error in our model, you have to consider
+the sources. You could be trying to simplify a complex process. This will create so-
+called noise or errors between your model and your measurements so that you won’t
+be able to understand the true process that’s generating your data. This will also cause
+Figure 8.7
+Coefficient values from the abalone dataset versus iteration of the 
+stagewise linear regression algorithm. Stagewise linear regression gives values 
+close to the lasso values with a much simpler algorithm.
+
+171
+The bias/variance tradeoff
+differences. There could also be noise or problems with your measurement process.
+Let me show you an example. In sections 8.1 and 8.2, we played around with some
+two-dimensional data. This data was loaded from a file. To tell you the truth, I gener-
+ated the data. The equation I used to generate the data was
+y = 3.0 + 1.7x + 0.1sin(30x)+0.06N(0,1), 
+where N(0,1) is a normal distribution with 0 mean and unit variance. We were trying
+to model this with a straight line. The best we could do with this type of model was to
+get the 3.0 + 1.7x part, and we’d still have an error of 0.1sin(30x)+0.06N(0,1). We
+came close to this in section 8.1. In sections 8.2 and 8.3, we used locally weighted lin-
+ear regression to capture the underlying structure. That structure was hard to under-
+stand, so we used different amounts of local weights to find a solution that gave us the
+smallest test error. 
+ A plot of training and test error is shown in figure 8.8. The top curve is the test
+error, and the bottom curve is training error. If you remember from section 8.3, as we
+decreased the size of the kernel, our training error got smaller. This corresponds to
+starting on the left side of figure 8.8 and then moving to the right as the kernel
+becomes smaller. 
+Figure 8.8
+The bias variance tradeoff illustrated with test error and training error. 
+The training error is the top curve, which has a minimum in the middle of the plot. In 
+order to create the best forecasts, we should adjust our model complexity where the 
+test error is at a minimum.
+
+172
+CHAPTER 8
+Predicting numeric values: regression
+It’s popular to think of our errors as a sum of three components: bias, error, and ran-
+dom noise. In sections 8.2 and 8.3, we were adding variance to our model by adding
+an increasingly smaller kernel. 
+ In section 8.4, when we applied our shrinkage methods, some of the coefficients
+became small and some became zero. This is an example of adding bias to our model.
+By shrinking some of our components to exactly zero, we were reducing the complex-
+ity of our model. We had eight features. When we eliminated two of them, our model
+was easier for a human to understand, but it could give us smaller prediction error
+also. The left side of figure 8.8 shows our coefficients taking on very small values. The
+right side of the figure shows our coefficients totally unconstrained. 
+ Variance is something we can measure. If we took a random sample of our abalone
+data, say, 100 points, and generated a linear model, we’d have a set of weights. Say we
+took another set of random points and generated another linear model. Comparing
+the amount that the weights change will tell us the variance in our model. This con-
+cept of a bias and variance tradeoff is popular in machine learning and will come up
+again and again. 
+ Now let’s see if we can put some of these ideas to use. We’ll next examine some
+data from a real-world auction site and experiment with some regression methods.
+You’ll see the bias/variance trade-off in action as we find the best ridge regression
+model for our data.
+8.6
+Example: forecasting the price of LEGO sets
+Are you familiar with the LEGO brand of toys? If not, LEGO makes construction toys that
+are composed of many small plastic blocks of varying size. Because of the high quality
+of the parts, the blocks hold together without any adhesives. Beyond being a simple toy,
+LEGO sets are popular with many adults. Usually the blocks are sold as sets, which
+include all the pieces to make something specific such as a boat, castle, or famous build-
+ing. LEGO makes a number of amazing sets varying from 10s of pieces to 5,000 pieces. 
+ A LEGO set will typically be available for a few years and then will be discontinued.
+After the sets are discontinued, they continue to be traded by collectors. My friend
+Dangler would like to predict how much LEGO sets will sell for. We’ll help him by
+building a model using the regression techniques in this chapter. 
+Example: using regression to predict the price of a LEGO set
+1. Collect: Collect from Google Shopping API.
+2. Prepare: Extract price data from the returned JSON.
+3. Analyze: Visually inspect the data.
+4. Train: We’ll build different models with stagewise linear regression and straight-
+forward linear regression.
+5. Test: We’ll use cross validation to test the different models to see which one per-
+forms the best.
+6. Use: The resulting model will be the object of this exercise.
+
+173
+Example: forecasting the price of LEGO sets
+In this example we’ll get some data on the prices for different datasets. Then, we’ll
+build a regression model with that data. The first thing we need to figure out is how
+we can get the data. 
+8.6.1
+Collect: using the Google shopping API
+The wonderful people at Google have provided us with an API for retrieving prices
+via the Search API for Shopping. Before you can use the API, you’ll need to sign up
+for a Google account and then visit the Google API console to enable this Shopping
+API. Now you can make HTTP requests and get back information about available
+products in JSON form. Python comes with a module for parsing JSON, so all you
+have to do is sort through the returned JSON for the information you want. You can
+read more about the API and what is returned with the Shopping API at http://
+code.google.com/apis/shopping/search/v1/getting_started.html.
+ Open regression.py and add the code from the following listing to implement
+code to retrieve this information.
+from time import sleep
+import json
+import urllib2
+def searchForSet(retX, retY, setNum, yr, numPce, origPrc):
+    sleep(10)
+    myAPIstr = 'get from code.google.com'
+    searchURL = 'https://www.googleapis.com/shopping/search/v1/public/
+products?\
+      key=%s&country=US&q=lego+%d&alt=json' % (myAPIstr, setNum)
+    pg = urllib2.urlopen(searchURL)
+    retDict = json.loads(pg.read())
+    for i in range(len(retDict['items'])):
+        try:
+            currItem = retDict['items'][i]
+            if currItem['product']['condition'] == 'new':
+                newFlag = 1
+            else: newFlag = 0
+            listOfInv = currItem['product']['inventories']
+            for item in listOfInv:
+                sellingPrice = item['price']
+                if  sellingPrice > origPrc * 0.5:     
+                    print "%d\t%d\t%d\t%f\t%f" %\
+                      (yr,numPce,newFlag,origPrc, sellingPrice)
+                    retX.append([yr, numPce, newFlag, origPrc])
+                    retY.append(sellingPrice)
+        except: print 'problem with item %d' % i
+def setDataCollect(retX, retY):
+    searchForSet(retX, retY, 8288, 2006, 800, 49.99)
+    searchForSet(retX, retY, 10030, 2002, 3096, 269.99)
+    searchForSet(retX, retY, 10179, 2007, 5195, 499.99)
+    searchForSet(retX, retY, 10181, 2007, 3428, 199.99)
+    searchForSet(retX, retY, 10189, 2008, 5922, 299.99)
+    searchForSet(retX, retY, 10196, 2009, 3263, 249.99)
+Listing 8.5
+Shopping information retrieval function
+Filter out 
+fractional sets
+B
+
+174
+CHAPTER 8
+Predicting numeric values: regression
+The first function in listing 8.5 is searchForSet(), which will call the Google Shop-
+ping API and extract the correct data. You need to import a few modules:
+time.sleep(), json, and urllib2. But first you sleep for 10 seconds, which is just a
+precaution to prevent making too many API calls too quickly. Next, you format the
+search URL with your API key and the set you’re looking for. This is opened and
+parsed with the json.loads() method. Now you have a dictionary. All you have to do
+is find the price and the condition. 
+ Part of the returned results is an array of items. You’ll iterate over these items,
+extracting whether the item is new or not and the listed price. The LEGO sets are com-
+posed of many small pieces, and sometimes a used set will be missing some pieces.
+Sellers will offer fragments of a set. These fragments are sometimes returned with the
+search results, so you need a way to filter these out. You could look for common terms
+in the description or employ naïve Bayes. I’ve instead chosen a simple heuristic: if a
+set is selling for less than half of its original price, it’s probably a fractional set. B
+These sets are ignored. Successfully parsed sets are printed to the screen and
+appended to the lists retX and retY.
+ The final function in listing 8.5 is setDataCollect(), which calls searchForSet()
+multiple times. The additional arguments to searchForSet() are relevant data col-
+lected from www.brickset.com that pass through to the output file. 
+ Let’s see this in action. After you’ve added the code from listing 8.5, save regres-
+sion.py and enter the following commands in your Python shell:
+>>> lgX = []; lgY = []
+>>> regression.setDataCollect(lgX, lgY)
+2006    800     1       49.990000       549.990000
+2006    800     1       49.990000       759.050000
+2006    800     1       49.990000       316.990000
+2002    3096    1       269.990000      499.990000
+2002    3096    1       269.990000      289.990000
+                          .
+                          .
+2009    3263    0       249.990000      524.990000
+2009    3263    1       249.990000      672.000000
+2009    3263    1       249.990000      580.000000
+Inspect lgX and lgY to make sure they’re not empty. We’re next going to use the data
+to build a regression equation that will forecast the selling price of antique LEGO sets.
+8.6.2
+Train: building a model 
+Now that we’ve collected some real data from the internet, we’d like to use it to build
+a model. The model can be used to make predictions. It can also be used to give us a
+better understanding of the forces driving the data. Let’s see how to do this with Python. 
+ First, you should add in a 1 for X0. To do this, you create a matrix of all 1s: 
+>>> shape(lgX)
+(58, 4)
+>>> lgX1=mat(ones((58,5)))
+
+175
+Example: forecasting the price of LEGO sets
+Next, copy over our data to the first through fifth columns: 
+>>> lgX1[:,1:5]=mat(lgX)
+Check to make sure that data was copied over correctly: 
+>>> lgX[0]
+[2006.0, 800.0, 0.0, 49.990000000000002]
+>>> lgX1[0]
+matrix([[  1.00000000e+00,   2.00600000e+03,   8.00000000e+02,
+           0.00000000e+00,   4.99900000e+01]])
+The data is the same, but now it has a 1 in the 0th feature. Finally, let’s compute a
+regression for this dataset:
+>>> ws=regression.standRegres(lgX1,lgY)
+>>> ws
+matrix([[  5.53199701e+04],
+        [ -2.75928219e+01],
+        [ -2.68392234e-02],
+        [ -1.12208481e+01],
+        [  2.57604055e+00]])
+Check out the results, to see if this works: 
+>>> lgX1[0]*ws
+matrix([[ 76.07418853]])
+>>> lgX1[-1]*ws
+matrix([[ 431.17797672]])
+>>> lgX1[43]*ws
+matrix([[ 516.20733105]])
+The regression works. Now let’s look at the model it constructed. The model says the
+price of a set will be 
+$55319.97-27.59*Year-0.00268*NumPieces-11.22*NewOrUsed+2.57*original price
+The predictions were pretty good, but the model isn’t satisfactory. It may fit the data,
+but it doesn’t seem to make sense. It seems that sets with more pieces will sell for less,
+and there’s a penalty for a set being new. 
+ Let’s try this again but with one of our shrinkage methods, say ridge regression.
+Earlier you saw how to shrink coefficients, but now you’ll see how to determine the
+best coefficients. Open regression.py and insert the following code:
+def crossValidation(xArr,yArr,numVal=10):
+    m = len(yArr)                           
+    indexList = range(m)
+    errorMat = zeros((numVal,30))
+    for i in range(numVal):
+        trainX=[]; trainY=[]            
+        testX = []; testY = []             
+        random.shuffle(indexList)
+        for j in range(m):
+Listing 8.6
+Cross-validation testing with ridge regression
+Create training and 
+test containers
+B
+
+176
+CHAPTER 8
+Predicting numeric values: regression
+            if j < m*0.9: 
+                trainX.append(xArr[indexList[j]])     
+                trainY.append(yArr[indexList[j]])            
+            else:                                     
+                testX.append(xArr[indexList[j]])      
+                testY.append(yArr[indexList[j]])      
+        wMat = ridgeTest(trainX,trainY)    
+        for k in range(30):
+            matTestX = mat(testX); matTrainX=mat(trainX) 
+            meanTrain = mean(matTrainX,0)                   
+            varTrain = var(matTrainX,0)                  
+            matTestX = (matTestX-meanTrain)/varTrain 
+            yEst = matTestX * mat(wMat[k,:]).T + mean(trainY)
+            errorMat[i,k]=rssError(yEst.T.A,array(testY))
+    meanErrors = mean(errorMat,0)
+    minMean = float(min(meanErrors))
+    bestWeights = wMat[nonzero(meanErrors==minMean)]
+    xMat = mat(xArr); yMat=mat(yArr).T
+    meanX = mean(xMat,0); varX = var(xMat,0)
+    unReg = bestWeights/varX                                 
+    print "the best model from Ridge Regression is:\n",unReg
+    print "with constant term: ",\                           
+          -1*sum(multiply(meanX,unReg)) + mean(yMat)         
+The function crossValidation() in listing 8.6 takes three arguments; the first two,
+lgX and lgY, are assumed to be lists of the X and Y values of a dataset in question. The
+third argument, crossValidation(), takes the number of cross validations to run. If
+no value is entered, it will default to 10. Both lgX and lgY are assumed to have the
+same length. The crossValidation() function starts by measuring the number of
+data points, m. This will be used to split the data into two sets: one test set and one
+training set. B The split between training and test sets will be done with 90% going to
+the training set and 10% going to the test set. You first create containers for the train-
+ing and test sets. C Next, you create a list and randomly shuffle the elements of that
+list using the NumPy random.shuffle() function. You’ll use this to randomly select a
+set of data points for the training or test set. 
+ Once you’ve randomly shuffled the data points, you create a new matrix, wMat, to
+store all of the coefficients from ridge regression. If you recall from section 8.4.1,
+ridgeTest() uses 30 different values of  to create 30 different weights. You next loop
+over all 30 sets of weights and test them using the test set created earlier. Ridge regres-
+sion assumes that the data has been normalized, so you have to normalize your test
+data with the same parameters used to normalize the training data. D The error for
+each of these is calculated using the rssError() function and stored in wMat. 
+ After all of the cross validations have been done, errorMat has a number of error esti-
+mates for the different  values used in ridgeTest(). The average of all these error
+estimates is calculated. You next want to display the weights and compare them to the
+least-squares solution obtained by standRegres(). The problem with comparing the
+weights is that ridge regression uses regularized values whereas standRegres() doesn’t.
+To have a direct comparison you need to undo the regularization. The regularization
+is undone and the values are displayed. E
+Split data 
+into test and 
+training sets
+C
+Regularize test 
+with training 
+params
+D
+Undo 
+regularization
+E
+
+177
+Summary
+ To see all of this in action, enter the code from listing 8.6, save regression.py, and
+type in the following: 
+>>> regression.crossValidation(lgX,lgY,10)
+The best model from Ridge Regression is:
+[[ -2.96472902e+01 -1.34476433e-03 -3.38454756e+01  2.44420117e+00]]
+with constant term: 59389.2069537
+Let’s compare this to the regular least-squares solution. The price is given by 
+$59389.21-29.64*Year-0.00134*NumPieces-33.85*NewOrUsed+2.44*original price. 
+This isn’t wildly different from the least-squares solution. What you were looking for
+was a model that was easier to interpret. You didn’t get that. In order to get that, you
+need to look at how the regularized coefficients change as you apply the shrinkage. To
+do that, type in the following: 
+>>> regression.ridgeTest(lgX,lgY)
+array([[ -1.45288906e+02,  -8.39360442e+03,  -3.28682450e+00,
+   4.42362406e+04],
+[ -1.46649725e+02,  -1.89952152e+03,  -2.80638599e+00,
+          4.27891633e+04], 
+                                     .
+                                     .
+[ -4.91045279e-06,   5.01149871e-08,   2.40728171e-05,
+   8.14042912e-07]])
+These are the regularized coefficients for different levels of shrinkage. Looking at the
+first line, you can see that the magnitude of the fourth term is 5 times larger than the
+second term, which is 57 times larger than the first term. You get the idea. These
+results tell you that if you had to choose one feature to predict the future, you should
+choose the fourth feature, which is the original price. If you had to choose two fea-
+tures, you should choose the fourth and the second terms. 
+ This sort of analysis allows you to digest a large amount of data. It may not seem
+critical when you have only 4 features, but if you have 100 or more features, it will be
+more important to understand which features are critical and which aren’t. 
+8.7
+Summary
+Regression is the process of predicting a target value similar to classification. The dif-
+ference between regression and classification is that the variable forecasted in regres-
+sion is continuous, whereas it’s discrete in classification. Regression is one of the most
+useful tools in statistics. Minimizing the sum-of-squares error is used to find the best
+weights for the input features in a regression equation. Regression can be done on
+any set of data provided that for an input matrix X, you can compute the inverse of
+XTX. Just because you can compute a regression equation for a set of data doesn’t
+mean that the results are very good. One test of how “good” or significant the results
+are is the correlation between the predicted values yHat and the original data y. 
+ When you have more features than data points, you can’t compute the inverse of
+XTX. If you have more data points than features, you still may not be able to compute
+
+178
+CHAPTER 8
+Predicting numeric values: regression
+XTX if the features are highly correlated. Ridge regression is a regression method that
+allows you to compute regression coefficients despite being unable to compute the
+inverse of XTX. 
+ Ridge regression is an example of a shrinkage method. Shrinkage methods impose
+a constraint on the size of the regression coefficients. Another shrinkage method
+that’s powerful is the lasso. The lasso is difficult to compute, but stagewise linear
+regression is easy to compute and gives results close to those of the lasso. 
+ Shrinkage methods can also be viewed as adding bias to a model and reducing the
+variance. The bias/variance tradeoff is a powerful concept in understanding how
+altering a model impacts the success of a model. 
+ The methods explored in this chapter are powerful. Sometimes our data will have
+complex interactions, perhaps nonlinear interactions that will be difficult to model
+with linear models. The next chapter explores a few techniques that use trees to cre-
+ate forecasts for our data. 
+
+179
+Tree-based regression
+The linear regression methods we looked at in chapter 8 contain some powerful
+methods. These methods create a model that needs to work for all of the data
+points (locally weighted linear regression is the exception). When the data has
+many features that interact in complicated ways, building a global model can be dif-
+ficult if not foolish. We know there are many nonlinearities in real life. How can we
+expect to model everything with a global linear model? 
+ One way to build a model for our data is to subdivide the data into sections that
+can be modeled easily. These partitions can then be modeled with linear regression
+techniques from chapter 8. If we first partition the data and the results don’t fit a
+linear model, then we can partition the partitions. Trees and recursion are useful
+tools for this sort of portioning. 
+ We’ll first examine a new algorithm for building trees, called CART. CART is an
+acronym for Classification And Regression Trees. It can be applied to regression or
+classification, so this is a valuable tool to learn. Next, we’ll build and plot the trees
+This chapter covers
+■The CART algorithm
+■Regression and model trees
+■Tree-pruning algorithms
+■Building a GUI in Python
+
+180
+CHAPTER 9
+Tree-based regression
+in Python. We’ll make the code flexible enough that it can be used for multiple prob-
+lems. We’ll next apply the CART algorithm to create regression trees. We’ll explore a
+technique called tree pruning, which helps to prevent overfitting our trees to our
+data. Next, we’ll explore a more advanced algorithm called model trees. In a model
+tree, we build a linear model at each leaf node instead of using mean values as in
+regression trees. The algorithms to build these trees have a few adjustable parameters,
+so we’ll next see how to create a GUI in Python with the Tkinter module. Finally, we’ll
+use this GUI to explore the impact of various tree-building parameters. 
+9.1
+Locally modeling complex data 
+In chapter 3, we used decision trees for classification. Decision trees work by successively
+splitting the data into smaller segments until all of the target variables are the same or
+until the dataset can no longer be split. Decision trees are a type of greedy algorithm that
+makes the best choice at a given time without concern for global optimality.
+ The algorithm we used to construct trees in chapter 3 was ID3. ID3 chooses the best
+feature on which to split the data and then splits the data into all possible values that
+the feature can take. If a feature can take on four possible values, then there will be a
+four-way split. After the data is split on a given feature, that feature is consumed or
+removed from future splitting opportunities. There is some argument that this type of
+splitting separates the data too quickly. Another way to split the data is to do binary
+splits. If a piece of data has a feature equal to the desired split value, then it will go
+down the left side of the tree; otherwise, it will go down the right. 
+ The ID3 algorithm had another limitation: it couldn’t directly handle continuous
+features. Continuous features can be handled in ID3 if they’re first made into dis-
+crete features. This quantization destroys some of the inherent information in a con-
+tinuous variable. Using binary splits allows us to easily adapt our tree-building
+algorithm to handle continuous features. To handle continuous variables, we choose
+a feature; values greater than the desired value go on the left side of the tree and all
+the other values go on the right side. Binary splits also save time during the tree con-
+struction, but this is a moot point because we usually build the tree offline and time
+isn’t a huge concern.
+CART is a well-known and well-documented tree-building algorithm that makes
+binary splits and handles continuous variables. CART can handle regression with a sim-
+ple modification. In chapter 3, we used the Shannon entropy as our measure of how
+Tree-based regression
+Pros: Fits complex, nonlinear data
+Cons: Difficult to interpret results
+Works with: Numeric values, nominal values
+
+181
+Building trees with continuous and discrete features
+unorganized the sets were. If we replace the Shannon entropy with some other mea-
+sure, we can use a tree-building algorithm for regression. 
+ We’ll first build the CART algorithm with regression trees in mind. Regression trees
+are similar to trees used for classification but with the leaves representing a numeric
+value rather than a discrete one. 
+With an idea of how to approach the problem, we can start writing some code. In the
+next section we’ll discuss the best way to build a tree with the CART algorithm in
+Python. 
+9.2
+Building trees with continuous and discrete features
+As we build a tree, we’ll need to have a way of storing the different types of data mak-
+ing up the tree. We’re going to use a dictionary for our tree data structure, similar to
+chapter 3. The dictionary will have the following four items: 
+■
+Feature —A symbol representing the feature split on for this tree.
+■
+Value—The value of the feature used to split.
+■
+Right—The right subtree; this could also be a single value if the algorithm
+decides we don’t need another split. 
+■
+Left—The left subtree similar to the right subtree. 
+This is a little different from the structure we used in chapter 3. In chapter 3, we had a
+dictionary to store every split. The dictionary could contain two or more values. In the
+CART algorithm, only binary splits are allowed, so we can fix our tree data structure.
+The tree will have a right key and a left key that will store either another branch or a
+value. The dictionary will also have two more keys: feature and value. These will tell us
+what feature of our data to split on and the value of that feature to make the split. You
+could also create this data structure using object-oriented programming patterns.
+You’d create the tree node in Python using the following code: 
+General approach to tree-based regression
+1. Collect: Any method.
+2. Prepare: Numeric values are needed. If you have nominal values, it’s a good idea
+to map them into binary values.
+3. Analyze: We’ll visualize the data in two-dimensional plots and generate trees as
+dictionaries. 
+4. Train: The majority of the time will be spent building trees with models at the leaf
+nodes.
+5. Test: We’ll use the R2 value with test data to determine the quality of our models. 
+6. Use: We’ll use our trees to make forecasts. We can do almost anything with
+these results. 
+
+182
+CHAPTER 9
+Tree-based regression
+class treeNode():
+    def __init__(self, feat, val, right, left):
+        featureToSplitOn = feat
+        valueOfSplit = val
+        rightBranch = right
+        leftBranch = left
+When working with a less-flexible language like C++, you’d probably want to imple-
+ment your trees using object-oriented patterns. Python is flexible enough that you can
+use dictionaries as your tree data structure and write less code than if you used a spe-
+cific class. Python isn’t strongly typed, so our branches can contain other trees,
+numeric values, or vectors, as you’ll see later. 
+ We’re going to create two types of trees. The first type is called a regression tree, and
+it contains a single value for each leaf of the tree. We’ll create this type in section 9.4.
+The second type of tree we’ll create is called a model tree, and it has a linear equation at
+each leaf node. We’ll create that in section 9.5. We’ll try to reuse as much code as pos-
+sible when creating the two types of trees. Let’s start by making some tree-building
+code that can be used for either type of tree. 
+ Pseudo-code for createTree() would look like this:
+Find the best feature to split on:
+    If we can’t split the data, this node becomes a leaf node
+    Make a binary split of the data
+    Call createTree() on the right split of the data
+    Call createTree() on the left split of the data
+Open your favorite text editor and create a file called regTrees.py; then add the fol-
+lowing code. 
+from numpy import *
+def loadDataSet(fileName):
+    dataMat = []               
+    fr = open(fileName)
+    for line in fr.readlines():
+        curLine = line.strip().split('\t')
+        fltLine = map(float,curLine)          
+        dataMat.append(fltLine)
+    return dataMat
+def binSplitDataSet(dataSet, feature, value):
+    mat0 = dataSet[nonzero(dataSet[:,feature] > value)[0],:][0]
+    mat1 = dataSet[nonzero(dataSet[:,feature] <= value)[0],:][0]
+    return mat0,mat1
+def createTree(dataSet, leafType=regLeaf, errType=regErr, ops=(1,4)):
+    feat, val = chooseBestSplit(dataSet, leafType, errType, ops)
+    if feat == None: return val                    
+    retTree = {}
+    retTree['spInd'] = feat
+Listing 9.1
+CART tree-building code
+Map everything 
+to float()
+B
+Return leaf value if 
+stopping condition met
+C
+
+183
+Building trees with continuous and discrete features
+    retTree['spVal'] = val
+    lSet, rSet = binSplitDataSet(dataSet, feat, val)
+    retTree['left'] = createTree(lSet, leafType, errType, ops)
+    retTree['right'] = createTree(rSet, leafType, errType, ops)
+    return retTree  
+Listing 9.1 contains three functions. The first one, loadDataSet(), is similar to the pre-
+vious versions of this function from other chapters. In previous chapters you broke the
+target variable off into its own list, but here you’ll keep the data together. This function
+takes a file with tab-delimited values and breaks each line into a list of floats. B
+ The second function in listing 9.1 is binSplitDataSet(). This takes three argu-
+ments: a dataset, a feature on which to split, and a value for that feature. The function
+returns two sets. The two sets are created using array filtering for the given feature
+and value. 
+ The last function in listing 9.1 is createTree(), which builds a tree. There are four
+arguments to createTree(): a dataset on which to build the tree and three optional
+arguments. The three optional arguments tell the function which type of tree to create.
+The argument leafType is the function used to create a leaf. The argument errType is
+a function used for measuring the error on the dataset. The last argument, ops, is a tuple
+of parameters for creating a tree. 
+ The function createTree() is a recursive function that first attempts to split the
+dataset into two parts. The split is determined by the function chooseBestSplit(),
+which we haven’t written yet. If chooseBestSplit() hits a stopping condition, it will
+return None and the value for a model type C. In the case of regression trees, this model
+is a constant value; in the case of model trees, this model is a linear equation. You’ll see
+how these stopping conditions work later. If a stopping condition isn’t hit, then you cre-
+ate a new dictionary and split the dataset into two portions. The function createTree()
+gets recursively called on the two splits. 
+ The code in listing 9.1 is straightforward enough. You can’t see createTree() in
+action until we write chooseBestSplit(), but you can test out the other two func-
+tions. After you’ve entered the code from listing 9.1 into regTrees.py, save it and type
+in the following:
+>>> import regTrees
+>>> testMat=mat(eye(4))
+>>> testMat
+matrix([[ 1.,  0.,  0.,  0.],
+        [ 0.,  1.,  0.,  0.],
+        [ 0.,  0.,  1.,  0.],
+        [ 0.,  0.,  0.,  1.]])
+You’ve created a simple matrix. Now let’s split it by the value in a given column. 
+>>> mat0,mat1=regTrees.binSplitDataSet(testMat,1,0.5)
+>>> mat0
+matrix([[ 0.,  1.,  0.,  0.]])
+>>> mat1
+matrix([[ 1.,  0.,  0.,  0.],
+      [ 0.,  0.,  1.,  0.],
+        [ 0.,  0.,  0.,  1.]])
+
+184
+CHAPTER 9
+Tree-based regression
+Entertaining isn’t it? To see this do some more exciting stuff, let’s fill out the
+chooseBestSplit() function for the case of regression trees. By filling out
+chooseBestSplit() with code specific to regression, we’ll be able to use the CART
+code from listing 9.1 to build regression trees. In the next section, we’ll finish this
+function and build regression trees. 
+9.3
+Using CART for regression
+In order to model the complex interactions of our data, we’ve decided to use trees to
+partition the data. How should we split up the partitions? How will we know when
+we’ve split up the data enough? The answer depends on how we’re modeling the final
+values. The regression tree method breaks up data using a tree with constant values
+on the leaf nodes. This strategy assumes that the complex interactions of the data can
+be summarized by the tree. 
+ In order to construct a tree of piecewise constant values, we need to be able to
+measure the consistency of data. In chapter 3, when we used trees for classification, we
+measured the disorder of the values at a given node. How can we measure the disor-
+der of continuous values? Measuring this disorder for a set of data is quite easy. We
+first calculate the mean value of a set and then find how much each piece of data devi-
+ates from this mean value. In order to treat positive and negative deviations equally,
+we need to get the magnitude of the deviation from the mean. We can get this magni-
+tude with the absolute value or the squared value. I’ve described something
+commonly done in statistics, and that’s calculating the variance. The only difference is
+the variance is the mean squared error and we want the total error. We can get this
+total squared error by multiplying the variance of a dataset by the number of elements
+in a dataset.
+ With this error rule and the tree-building algorithm from the previous section, we
+can now write code to construct a regression tree from a dataset. 
+9.3.1
+Building the tree
+In order to build a regression tree, we need to create a few pieces of code to get
+createTree() from listing 9.1 to work. The first thing we need is a function,
+chooseBestSplit(), that given an error metric will find the best binary split for our
+data. The function chooseBestSplit() also needs to know when to stop splitting
+given our error metric and a dataset. When chooseBestSplit() does decide to stop
+splitting, we need to generate a leaf node. So chooseBestSplit()does only two
+things: split a dataset by the best possible split and generate a leaf node for a dataset. 
+ If you noticed in listing 9.1, chooseBestSplit() has three arguments in addition
+to the data set. They’re the leafType, errType, and ops. The leafType argument is a
+reference to a function that we use to create the leaf node. The errType argument is a
+reference to a function that will be used to calculate the squared deviation from the
+mean described earlier. Finally, ops is a tuple of user-defined parameters to help with
+tree building. 
+
+185
+Using CART for regression
+ The function chooseBestSplit() is the most involved; this function finds the best
+place to split the dataset. It looks over every feature and every value to find the thresh-
+old that minimizes error. Pseudo-code would look like this:
+For every feature:
+    For every unique value:
+        Split the dataset it two
+        Measure the error of the two splits
+        If the error is less than bestError ➞ set bestSplit to this split and update bestError
+Return bestSplit feature and threshold
+To create the code for these three functions, open regTrees.py and enter the code
+from the following listing. 
+def regLeaf(dataSet):
+    return mean(dataSet[:,-1])
+def regErr(dataSet):
+    return var(dataSet[:,-1]) * shape(dataSet)[0]
+def chooseBestSplit(dataSet, leafType=regLeaf, errType=regErr, ops=(1,4)):
+    tolS = ops[0]; tolN = ops[1]
+    if len(set(dataSet[:,-1].T.tolist()[0])) == 1:
+        return None, leafType(dataSet)                    
+    m,n = shape(dataSet)
+    S = errType(dataSet)
+    bestS = inf; bestIndex = 0; bestValue = 0
+    for featIndex in range(n-1):
+        for splitVal in set(dataSet[:,featIndex]):
+            mat0, mat1 = binSplitDataSet(dataSet, featIndex, splitVal)
+            if (shape(mat0)[0] < tolN) or (shape(mat1)[0] < tolN): continue
+            newS = errType(mat0) + errType(mat1)
+            if newS < bestS: 
+                bestIndex = featIndex
+                bestValue = splitVal
+                bestS = newS
+    if (S - bestS) < tolS:                   
+        return None, leafType(dataSet)                    
+    mat0, mat1 = binSplitDataSet(dataSet, bestIndex, bestValue) 
+    if (shape(mat0)[0] < tolN) or (shape(mat1)[0] < tolN):
+        return None, leafType(dataSet)                      
+    return bestIndex,bestValue
+The first function in listing 9.2 is regLeaf(), which generates the model for a leaf
+node. When chooseBestSplit() decides that you no longer should split the data, it
+will call regLeaf() to get a model for the leaf. The model in a regression tree is the
+mean value of the target variables. 
+ The second function in listing 9.2 is our error estimate, regErr(). This function
+returns the squared error of the target variables in a given dataset. You could have first
+calculated the mean, then calculated the deviation, and then squared it, but it’s easier
+Listing 9.2
+Regression tree split function
+Exit if all values 
+are equal
+B
+Exit if low error 
+reduction
+C
+Exit if split 
+creates small 
+dataset
+D
+
+186
+CHAPTER 9
+Tree-based regression
+to call var(), which calculates the mean squared error. You want the total squared
+error, not the mean, so you can get it by multiplying by the number of instances in
+a dataset. 
+ The last function in listing 9.2 is chooseBestSplit(), which is the real workhorse
+of the classification tree. The job of this function is to find the best way to do a binary
+split on the data. If a “good” binary split can’t be found, then this function returns
+None and tells createTree() to generate a leaf node. The value of the leaf node is also
+returned with None. There are three conditions that will generate a leaf node instead
+of split in chooseBestSplit(); you’ll see them shortly. If a “good” split is found, the
+feature number and value of the split are returned. 
+ The function chooseBestSplit() starts out by assigning the values of ops to tolS
+and tolN. These two values are user-defined settings that tell the function when to quit
+creating new splits. The variable tolS is a tolerance on the error reduction, and tolN
+is the minimum data instances to include in a split. The next thing chooseBestSplit()
+does is check the number of unique values by creating a set from all the target variables.
+If this set is length 1, then you don’t need to try to split the set and you can return. B
+Next, chooseBestSplit() measures the size of the dataset and measures the error on
+the existing dataset. This error S will be checked against new values of the error to see
+if splitting reduces the error. You’ll see this shortly. 
+ A few variables that will be used to find the best split are created and initialized. You
+next iterate over all the possible features and all the possible values of those features to
+find the best split. The best split is determined by the lowest error of the sets after the
+split. If splitting the dataset improves the error by only a small amount, you choose not
+to split and create a leaf node. C Another test you perform is to check the size of the
+two splits. If this is less than our user-defined parameter tolN, you choose not to split
+and return a leaf node. Finally, if none of these early exit conditions have been met,
+you return the feature on which to split and the value to perform the split. D
+9.3.2
+Executing the code 
+Let’s see this in action on some data. Consider the data plotted in figure 9.1. We’ll
+generate a regression tree from this data. 
+ After you’ve entered the code from listing 9.2 into regTrees.py, save it and enter
+the following commands in your Python shell:
+>>>reload(regTrees)
+<module 'regTrees' from 'regTrees.pyc'>
+>>> from numpy import *
+The data from figure 9.1 is stored in a file called ex00.txt. 
+>>> myDat=regTrees.loadDataSet('ex00.txt')
+>>> myMat = mat(myDat)
+>>> regTrees.createTree(myMat)
+{'spInd': 0, 'spVal': matrix([[ 0.48813]]), 
+'right': -0.044650285714285733, 
+'left': 1.018096767241379}
+Now let’s try this out on some data with more splits. Consider the data in figure 9.2. 
+
+187
+Using CART for regression
+Figure 9.1
+Simple dataset for evaluating regression trees with the CART algorithm
+Figure 9.2
+Piecewise constant data for testing regression trees
+
+188
+CHAPTER 9
+Tree-based regression
+The data used to construct figure 9.2 is stored in a tab-delimited text file called ex0.txt.
+To build a tree from this data, enter the following commands in your Python shell: 
+>>> myDat1=regTrees.loadDataSet('ex0.txt')
+>>> myMat1=mat(myDat1)
+>>> regTrees.createTree(myMat1)
+{'spInd': 1, 'spVal': matrix([[ 0.39435]]), 'right': {'spInd': 1, 'spVal': 
+matrix([[ 0.197834]]), 'right': -0.023838155555555553, 'left': 
+1.0289583666666664}, 'left': {'spInd': 1, 'spVal': matrix([[ 0.582002]]), 
+'right': 1.9800350714285717, 'left': {'spInd': 1, 'spVal': matrix([[ 
+0.797583]]), 'right': 2.9836209534883724, 'left': 3.9871632000000004}}}
+Check the tree data structure to make sure that there are five leaf nodes. Try out the
+regression trees on some more complex data and see what happens. 
+ Now that we’re able to build regression trees, we need to find a way to check if
+we’ve been doing something wrong. We’ll next examine tree pruning, which modifies
+our decision trees so that we can make better predictions. 
+9.4
+Tree pruning
+Trees with too many nodes are an example of a model overfit to the data. How do we
+know when we’re overfitting? In the previous chapters we used some form of cross-
+validation with a test set to find out when we’re overfitting. Decision trees are no
+different. This section will talk about ways around this and ways to combat overfitting
+our data.  
+ The procedure of reducing the complexity of a decision tree to avoid overfitting is
+known as pruning. You’ve done pruning already. By using the early stopping condi-
+tions in chooseBestSplit(), you were employing prepruning. Another form of prun-
+ing involves a test set and a training set. This is known as postpruning, and we’ll
+investigate its effectiveness in this section, but first let’s discuss some of the drawbacks
+of prepruning. 
+9.4.1
+Prepruning 
+The results for these two simple experiments in the previous section were satisfactory,
+but there was something going on behind the scenes. The trees built are sensitive to
+the settings we used for tolS and tolN. For other values of our data we may not get
+such a nice answer as we did in the last section. To see what I mean, enter the follow-
+ing command in your Python shell: 
+>>> regTrees.createTree(myMat,ops=(0,1))
+This creates a much bigger tree than the two-leaf tree in the previous section. It cre-
+ates a leaf node for every instance in the dataset. 
+ Consider for a second the plot in figure 9.3. This plot looks similar to the one in
+figure 9.1. If you look more closely at the y-axis, you’ll see that figure 9.3 has 100x the
+magnitude as figure 9.1. That shouldn’t be a problem, right? Well, let’s try to build a
+
+189
+Tree pruning
+tree using this data. The data is stored in a text file called ex2.txt. To create a tree,
+enter the following commands in your Python shell. 
+>>> myDat2=regTrees.loadDataSet('ex2.txt')
+>>> myMat2=mat(myDat2)
+>>> regTrees.createTree(myMat2)
+{'spInd': 0, 'spVal': matrix([[ 0.499171]]), 'right': {'spInd': 0, 
+'spVal': matrix([[ 0.457563]]), 'right': -3.6244789069767438, 
+'left': 7.9699461249999999}, 'l
+.
+.
+0, 'spVal': matrix([[ 0.958512]]), 'right': 112.42895575000001, 
+'left': 105.248
+2350000001}}}}
+What do you notice? The tree we built from figure 9.1 had only two leaf nodes. This
+tree has a lot more. The problem is that one of our stopping conditions, tolS, is sensi-
+tive to the magnitude of the errors. If we mess around with the options and square the
+error tolerance, perhaps we can get a tree with two leaves: 
+>>> regTrees.createTree(myMat2,ops=(10000,4))
+{'spInd': 0, 'spVal': matrix([[ 0.499171]]), 'right': -2.6377193297872341,
+ 'left': 101.35815937735855}
+We shouldn’t have to mess around with the stopping conditions to give us the tree
+we’re looking for. In fact, we’re often not sure what we’re looking for. That’s what
+machine learning is all about. The machine is supposed to tell us the big picture. 
+Figure 9.3
+Simple piecewise constant data from figure 9.1 with magnitude enhanced 100x
+
+190
+CHAPTER 9
+Tree-based regression
+ The next section will discuss postpruning, which uses a test set to prune the tree.
+This is a more idealistic method of pruning because it doesn’t use any user-defined
+parameters. 
+9.4.2
+Postpruning
+The method we’ll use will first split our data into a test set and a training set. First,
+you’ll build the tree with the setting that will give you the largest, most complex tree
+you can handle. You’ll next descend the tree until you reach a node with only leaves.
+You’ll test the leaves against data from a test set and measure if merging the leaves
+would give you less error on the test set. If merging the nodes will reduce the error on
+the test set, you’ll merge the nodes. 
+ Pseudo-code for prune() would look like this:
+Split the test data for the given tree:
+    If the either split is a tree: call prune on that split
+    Calculate the error associated with merging two leaf nodes
+    Calculate the error without merging
+    If merging results in lower error then merge the leaf nodes
+To see this in action, open regTrees.py and enter the code from the following listing. 
+def isTree(obj):
+    return (type(obj).__name__=='dict')
+def getMean(tree):
+    if isTree(tree['right']): tree['right'] = getMean(tree['right'])
+    if isTree(tree['left']): tree['left'] = getMean(tree['left'])
+    return (tree['left']+tree['right'])/2.0
+def prune(tree, testData):
+    if shape(testData)[0] == 0: return getMean(tree)  
+    if (isTree(tree['right']) or isTree(tree['left'])):
+        lSet, rSet = binSplitDataSet(testData, tree['spInd'],
+                     tree['spVal'])
+    if isTree(tree['left']): tree['left'] = prune(tree['left'], lSet)
+    if isTree(tree['right']): tree['right'] =  prune(tree['right'], rSet)
+    if not isTree(tree['left']) and not isTree(tree['right']):
+        lSet, rSet = binSplitDataSet(testData, tree['spInd'],
+                     tree['spVal'])
+        errorNoMerge = sum(power(lSet[:,-1] - tree['left'],2)) +\
+            sum(power(rSet[:,-1] - tree['right'],2))
+        treeMean = (tree['left']+tree['right'])/2.0
+        errorMerge = sum(power(testData[:,-1] - treeMean,2))
+        if errorMerge < errorNoMerge: 
+            print "merging"
+            return treeMean
+        else: return tree
+    else: return tree
+Listing 9.3
+Regression tree-pruning functions 
+Collapse tree if 
+no test data
+B
+
+191
+Tree pruning
+Listing 9.3 contains three functions: isTree(), getMean(), and prune(). The function
+isTree() tests if a variable is a tree. It returns a Boolean type. You can use this to find
+out when you’ve found a branch with only leaf nodes. 
+ The function getMean() is a recursive function that descends a tree until it hits
+only leaf nodes. When it finds two leaf nodes, it takes the average of these two nodes.
+This function collapses a tree. You’ll see where this is needed in prune(). 
+ The main function in listing 9.3 is prune(), which takes two inputs: a tree to prune
+and testData to use for pruning the tree. The first thing you do in prune() is check
+to see if the test data is empty B. The function prune() gets called recursively and
+splits the data based on the tree. Our tree is generated with a different set of data
+from our test data, and there will be instances where the test data doesn’t contain val-
+ues in the same range as the original dataset. In this case, what should you do? Is the
+data overfit, in which case it would get pruned, or is the model correct and no prun-
+ing would be done? We’ll assume it’s overfit and prune the tree. 
+ Next, you test to see if either branch is a tree. If so, you attempt to prune it by call-
+ing prune on that branch. After you’ve attempted to prune the left and right
+branches, you test to see if they’re still trees. If the two branches aren’t trees, then they
+can be merged. You split the data and measure the error. If the error from merging
+the two branches is less than the error from not merging, you merge the branches. If
+there’s no measurable benefit to merging, you return the original tree. 
+ Let’s set this in action. After you’ve entered the code from listing 9.3 into
+regTrees.py, save it and enter the following commands in your Python shell:
+>>> reload(regTrees)
+<module 'regTrees' from 'regTrees.pyc'>
+To create the largest possible tree, type in the following:
+>>> myTree=regTrees.createTree(myMat2, ops=(0,1))
+To load the test data, type in the following: 
+>>> myDatTest=regTrees.loadDataSet('ex2test.txt')
+>>> myMat2Test=mat(myDatTest)
+To prune the tree, enter the following:
+>>> regTrees.prune(myTree, myMat2Test)
+merging
+merging
+merging
+                                   .
+                                   .
+merging
+{'spInd': 0, 'spVal': matrix([[ 0.499171]]), 'right': {'spInd': 0, 'spVal':
+                                   .
+                                   .
+01, 'left': {'spInd': 0, 'spVal': matrix([[ 0.960398]]), 'right': 123.559747, 
+'left': 112.386764}}}, 'left': 92.523991499999994}}}}
+
+192
+CHAPTER 9
+Tree-based regression
+A large number of nodes were pruned off the tree, but it wasn’t reduced to two nodes
+as we had hoped. It turns out that postpruning isn’t as effective as prepruning. You
+can employ both to give the best possible model. 
+ In the next section we’ll reuse a lot of the tree-building code to create a new type
+of tree. This tree will still have binary splits, but the leaf nodes will contain linear mod-
+els of the data instead of constant values. 
+9.5
+Model trees 
+An alternative to modeling the data as a simple constant value at each leaf node is to
+model it as a piecewise linear model at each leaf node. Piecewise linear means that you
+have a model that consists of multiple linear segments. If you aren’t clear, you’ll see
+what it means in a second. Consider for a moment the data plotted in figure 9.4. Do
+you think it would be better to model this dataset as a bunch of constant values or as
+two straight lines? I say two straight lines. I’d make one line from 0.0 to 0.3 and one
+line from 0.3 to 1.0; we’d then have two linear models. This is called piecewise linear
+because a piece of our dataset is modeled by one linear model (0.0 to 0.3) and
+another piece (0.3 to 1.0) is modeled by a second linear model.
+ One of the advantages of decision trees over other machine learning algorithms is
+that humans can understand the results. Two straight lines are easier to interpret than
+a big tree of constant values. The interpretability of model trees is one reason why
+you’d choose them over regression trees. The second reason is higher accuracy. 
+Figure 9.4
+Piecewise linear data to test model tree-creation functions
+
+193
+Model trees 
+With a simple change, we can use the functions written earlier to generate linear mod-
+els at the leaf nodes instead of constant values. We’ll use the tree-generating algorithm
+to break up the data into segments that can easily be represented by a linear model.
+The most important part of the algorithm is the error measurement. 
+ The tree-generating code is already there. But we need to write some code to
+determine the error of a proposed split. Do you remember when we were writing
+createTree() there were two arguments that we never changed? We made those
+arguments instead of hard coding them for regression trees so that we could change
+those arguments for a model tree and reuse the code for model trees. 
+ How do we measure the error and determine the best split? We can’t use the same
+error we used in the regression tree. For a given dataset, we first fit a linear model to
+the data, and then we measure how much the actual target values differ from values
+forecasted by our linear model. This error is then squared and summed. Let’s write
+some code to implement this. Open regTrees.py and add in the following code:
+def linearSolve(dataSet):
+    m,n = shape(dataSet)
+    X = mat(ones((m,n))); Y = mat(ones((m,1)))     
+    X[:,1:n] = dataSet[:,0:n-1]; Y = dataSet[:,-1]        
+    xTx = X.T*X 
+    if linalg.det(xTx) == 0.0:
+        raise NameError('This matrix is singular, cannot do inverse,\n\
+        try increasing the second value of ops')
+    ws = xTx.I * (X.T * Y)
+    return ws,X,Y
+def modelLeaf(dataSet):
+    ws,X,Y = linearSolve(dataSet)
+    return ws
+def modelErr(dataSet):
+    ws,X,Y = linearSolve(dataSet)
+    yHat = X * ws
+    return sum(power(Y - yHat, 2))
+The first function in listing 9.4 is called linearSolve(), which is used by the other
+two functions. This formats the dataset into the target variable Y and the indepen-
+dent variable X B. X and Y are used to perform a simple linear regression as you did
+in chapter 8. In this function, you also raise an exception if the inverse of the matrix
+can’t be determined. 
+ The next function, modelLeaf(), is used to generate a model for a leaf node once
+you’ve determined to no longer split the data. This function is similar to regLeaf()
+from listing 9.2. All this does is call linearSolve() on the dataset and return the
+regression coefficients: ws. 
+ The final function, modelErr(), computes the error for a given dataset. This is
+used in chooseBestSplit() to determine which split to take. This will be used in
+Listing 9.4
+Leaf-generation function for model trees
+Format data 
+in X and Y
+B
+
+194
+CHAPTER 9
+Tree-based regression
+place of the regErr() from listing 9.2. This calls linearSolve() on the dataset and
+computes the squared error of yHat and Y. 
+ That’s all the code you need to write to create a model tree using the functions
+from listings 9.1 and 9.2. To see this in action, save regTrees.py and enter the follow-
+ing into your Python shell:
+>>> reload(regTrees)
+<module 'regTrees' from 'regTrees.pyc'>
+The data from figure 9.4 is stored in a tab-delimited text file called exp2.txt. 
+>>> myMat2 = mat(regTrees.loadDataSet('exp2.txt'))
+Now to use createTree() with our model tree functions, you enter the functions as
+arguments to createTree(): 
+>>> regTrees.createTree(myMat2, regTrees.modelLeaf, regTrees.modelErr,
+ (1,10))
+{'spInd': 0, 'spVal': matrix([[ 0.285477]]), 'right': matrix([[
+ 3.46877936], [ 1.18521743]]), 'left': matrix([[  1.69855694e-03],
+       [  1.19647739e+01]])}
+The code created two models, one for the values less than 0.285477 and one for val-
+ues greater. The data in figure 9.4 was generated with a split value at 0.3. The linear
+models 
+given 
+by 
+the 
+createTree() 
+function 
+are 
+y=3.468+1.1852x 
+and
+y=0.0016985+11.96477x. These are close to the actual values I used to generate the
+data in figure 9.4. The actual models used were y=3.5+1.0x and y=0+12x with Gauss-
+ian noise added. The data from figure 9.4 along with the generated linear models is
+plotted in figure 9.5.
+Figure 9.5
+Results 
+of model tree algo-
+rithm applied to the 
+dataset in figure 9.4
+
+195
+Example: comparing tree methods to standard regression
+Which is better, model tree, regression tree, or one of the models from chapter 8? By
+looking at the correlation coefficient, sometimes called the R2 value, you can get an
+objective answer. You can calculate the correlation coefficients in NumPy by the com-
+mand corrcoef(yHat,y, rowvar=0), where yHat is the predicted values and y is the
+actual values of the target variable. 
+ You’ll now see an example where we compare the results from the previous chap-
+ter using standard linear regression to the methods in this chapter using tree-based
+methods. We’ll compare the results using corrcoef() to see which one is the best. 
+9.6
+Example: comparing tree methods to standard regression
+Now that you can create model trees and regression trees and do regular regression,
+let’s test them to see which one is the best. We’re going to first write a few quick func-
+tions to give us a forecast for any given input once we have a tree. Next, we’re going to
+use this to calculate the test error for three different regression models. We’ll test
+these models on some data relating a person’s intelligence with the number of speeds
+on their bicycle. 
+ The data is nonlinear and can’t be easily modeled by a global linear model from
+chapter 8. Also, the data used in this example is purely fictional. 
+ First, let’s write some functions to give us a value, for a given input and a given tree.
+Open regTrees.py and enter the code from the following listing.
+def regTreeEval(model, inDat):
+    return float(model)
+def modelTreeEval(model, inDat):
+    n = shape(inDat)[1]
+    X = mat(ones((1,n+1)))
+    X[:,1:n+1]=inDat
+    return float(X*model)
+def treeForeCast(tree, inData, modelEval=regTreeEval):
+    if not isTree(tree): return modelEval(tree, inData)
+    if inData[tree['spInd']] > tree['spVal']:
+        if isTree(tree['left']): 
+               return treeForeCast(tree['left'], inData , modelEval)
+        else: 
+            return modelEval(tree['left'], inData)
+    else:
+        if isTree(tree['right']): 
+               return treeForeCast(tree['right'], inData , modelEval)
+        else: 
+            return modelEval(tree['right'], inData)
+def createForeCast(tree, testData, modelEval=regTreeEval):
+    m=len(testData)
+    yHat = mat((m,1))
+    for i in range(m):
+        yHat[i,0] = treeForeCast(tree, mat(testData[i]), modelEval)
+    return yHat
+Listing 9.5
+Code to create a forecast with tree-based regression
+
+196
+CHAPTER 9
+Tree-based regression
+The function treeForeCast() takes a single data point or row vector and will return a
+single floating-point value. This gives one forecast for one data point, for a given tree.
+You have to tell treeForeCast() what type of tree you’re using so that it can use the
+proper model at the leaf. The argument modelEval is a reference to a function used to
+evaluate the data at a leaf node. The function treeForeCast()follows the tree based on
+the input data until a leaf node is hit. When a leaf node is hit, it calls modelEval() on
+the input data. The default value for modelEval() is regTreeEval().
+ To evaluate a regression tree leaf node, you call regTreeEval(), which returns the
+value at the leaf node. To evaluate a model tree node, you call modelTreeEval(). The
+function modelTreeEval() reformats the input data to account for the 0th order term
+and then calculates the forecasted value and returns it. regTreeEval() has two inputs
+even though only one is used because it needs to have the same function signature
+as modelTreeEval().
+ Finally, the function createForeCast() calls treeForeCast() multiple times. This
+function is useful when you want to evaluate a test set, because it returns a vector of
+forecasted values. You’ll see this in action in a moment. 
+ Now consider the dataset in figure 9.6. I plotted data collected for various bicycle rid-
+ers, relating their IQ to the number of speeds on their bicycle. We’re going to build mul-
+tiple models for this dataset and then test them against a test set. You can find this data
+in the file bikeSpeedVsIq_train.txt and find a test set in the file bikeSpeedVsIq_test.txt.
+Figure 9.6
+Data relating the number of speeds on a person’s bicycle to their intelli-
+gence quotient; this data will be used to test tree-based regression against standard 
+linear regression.
+
+197
+Example: comparing tree methods to standard regression
+We’re going to build three models for the data in figure 9.6. First, save the code from
+listing 9.5 in regTrees.py and enter the following in your Python shell: 
+>>>reload(regTrees)
+Next, you need to build a tree for the data: 
+>>> trainMat=mat(regTrees.loadDataSet('bikeSpeedVsIq_train.txt'))
+>>> testMat=mat(regTrees.loadDataSet('bikeSpeedVsIq_test.txt'))
+>>> myTree=regTrees.createTree(trainMat, ops=(1,20))
+>>> yHat = regTrees.createForeCast(myTree, testMat[:,0])
+>>> corrcoef(yHat, testMat[:,1],rowvar=0)[0,1]
+0.96408523182221306
+Now try it with a model tree with the same settings, but you’ll make a model tree
+instead of a regression tree: 
+>>> myTree=regTrees.createTree(trainMat, regTrees.modelLeaf, 
+    regTrees.modelErr,(1,20))
+>>> yHat = regTrees.createForeCast(myTree, testMat[:,0], 
+    regTrees.modelTreeEval)
+>>> corrcoef(yHat, testMat[:,1],rowvar=0)[0,1]
+0.9760412191380623
+Remember, for these R2 values, the closer to 1.0 the better, so the model tree did bet-
+ter than the regression tree. Now let’s see it for a standard linear regression. You don’t
+need to import any code from chapter 8; you have a linear equation solver already
+written in linearSolve(): 
+>>> ws,X,Y=regTrees.linearSolve(trainMat)
+>>> ws
+matrix([[ 37.58916794],
+    [  6.18978355]])
+To get the yHat values, you can loop over the test data:
+>>> for i in range(shape(testMat)[0]):
+...     yHat[i]=testMat[i,0]*ws[1,0]+ws[0,0]
+...
+Finally, you check the R2 value:
+>>> corrcoef(yHat, testMat[:,1],rowvar=0)[0,1]
+0.94346842356747584
+The R2 value is lower than the other two methods, so we’ve shown that the trees do a
+better job at predicting complex data than a simple linear model. I’m sure you’re not
+surprised, but I wanted to show you how to qualitatively compare the different regres-
+sion models. 
+ We’ll now explore a framework for building graphical user interfaces in Python.
+You can use this GUI to explore different regression tools. 
+
+198
+CHAPTER 9
+Tree-based regression
+9.7
+Using Tkinter to create a GUI in Python
+Machine learning gives us some powerful tools to extract information from poorly
+understood data. Being able to present this information to people in an easily under-
+stood manner is important. In addition, if you can give people the ability to interact
+with the data and algorithms, you’ll have an easier time explaining things. If all you do
+is generate static plots and output numbers to the Python shell, you’re going to have a
+harder time communicating your results. If you can write some code that allows peo-
+ple to explore the data, on their own terms, without instruction, you’ll have much less
+explaining to do. One way to help present the data and give people a way to interact
+with it is to build a GUI, or graphical user interface, as shown in figure 9.7.   
+Example: building a GUI to tune a regression tree
+1. Collect: Text file provided.
+2. Prepare: We need to parse the file with Python, and get numeric values.
+3. Analyze: We’ll build a GUI with Tkinter to display the model and the data. 
+4. Train: We’ll train a regression tree and a model tree and display the models with
+the data. 
+5. Test: No testing will be done.
+6. Use: The GUI will allow people to play with different settings for prepruning and
+to choose different types of models to use.
+Figure 9.7
+Default 
+treeExplore GUI, showing a 
+regression tree and the input 
+data with settings tolN=10
+and tolS=1.0
+
+199
+Using Tkinter to create a GUI in Python
+In this final section, we’re going to look at how to build a GUI in Python. You’ll first
+see how to use an existing module called Tkinter to build a GUI. Next, you’ll see how
+to interface Tkinter with the library we’ve been using for making plots. We’ll create a
+GUI to give people the ability to explore regression trees and model trees. 
+9.7.1
+Building a GUI in Tkinter
+There are a number of GUI frameworks for Python. Tkinter is one framework that’s
+easy to work with and comes with the standard Python build. Tkinter works on Win-
+dows, Mac OS, and most Linux builds. 
+ Let’s get started with the overly simple Hello World example. In your Python shell,
+type in the following commands:
+>>> from Tkinter import *
+>>> root = Tk()
+At this point, a small window will appear, or something is wrong. To fill out this win-
+dow with our text, enter the following commands:
+>>> myLabel = Label(root, text="Hello World")
+>>> myLabel.grid()
+Now your text box should display the text you entered. That was pretty easy, wasn’t it? 
+ To be complete, you should add the following line:
+>>> root.mainloop()
+This kicks off the event loop, which handles mouse clicks, keystrokes, and redrawing,
+among other things. 
+ A GUI in Tkinter is made up of widgets. Widgets are things like text boxes, buttons,
+labels, and check buttons. The label we made, myLabel, is the only widget in our
+overly simple Hello World example. When we called the .grid() method of myLabel,
+we were telling the geometry manager where to put myLabel. There are a few differ-
+ent geometry managers in Tkinter. grid puts widgets in a two-dimensional table. You
+can specify the row and column of each widget. Here we didn’t specify any row or col-
+umns, and myLabel defaulted to row 0, column 0. 
+ Let’s put together the widgets for our tree explorer. Create a new Python file called
+treeExplore.py. Enter the code from the following listing. 
+from numpy import *
+from Tkinter import *
+import regTrees
+def reDraw(tolS,tolN):
+    pass
+def drawNewTree():
+    pass
+Listing 9.6
+TkInter widgets used to build tree explorer GUI
+
+200
+CHAPTER 9
+Tree-based regression
+root=Tk()
+Label(root, text="Plot Place Holder").grid(row=0, columnspan=3)
+Label(root, text="tolN").grid(row=1, column=0)
+tolNentry = Entry(root)
+tolNentry.grid(row=1, column=1)
+tolNentry.insert(0,'10')
+Label(root, text="tolS").grid(row=2, column=0)
+tolSentry = Entry(root)
+tolSentry.grid(row=2, column=1)
+tolSentry.insert(0,'1.0')
+Button(root, text="ReDraw", command=drawNewTree).grid(row=1, column=2,\
+                                                 rowspan=3)
+chkBtnVar = IntVar()
+chkBtn = Checkbutton(root, text="Model Tree", variable = chkBtnVar)
+chkBtn.grid(row=3, column=0, columnspan=2)
+reDraw.rawDat = mat(regTrees.loadDataSet('sine.txt'))
+reDraw.testDat = arange(min(reDraw.rawDat[:,0]),\
+                      max(reDraw.rawDat[:,0]),0.01)
+reDraw(1.0, 10)
+root.mainloop()
+The code in listing 9.6 sets up the proper Tkinter modules and arranges them using
+the grid geometry manager. Two placeholder functions are included also. These will
+be filled out later. The format of this code is the same as our simple example of how
+we first created a root widget of type Tk and then inserted a label. You can see how
+we use the grid() method, with the row and column settings. You can also specify
+columnspan and rowspan to tell the geometry manager to allow a widget to span more
+than one row or column. There are other settings you can use as well. 
+ New widgets that you haven’t seen yet are Entry, Checkbutton, and IntVar. The
+Entry widget is a text box where a single line of text can be entered. Checkbutton and
+IntVar are self-explanatory. In order to read the state of Checkbutton, you need to
+create a variable, which is why you have IntVar. 
+ At the end, you initialize some global variables associated with reDraw(); you’ll use
+these later. I didn’t include an exit or quit button. I think if people want to quit, they
+can close the window. Adding an extra close button is redundant. If you want to add
+one, you can insert the following code:
+Button(root, text='Quit',fg="black", command=root.quit).grid(row=1, 
+column=2)
+If you save the code in listing 9.6 and execute it, you
+should see something similar to figure 9.8. 
+ Now that we have the GUI working the way we
+want it to, let’s make it create plots. We’re going to
+plot out a dataset and on the same chart plot out fore-
+casted values from our tree-based regression meth-
+ods. You’ll see how to do this in the next subsection.
+Figure 9.8
+Our tree explorer using 
+various TkInter widgets
+
+201
+Using Tkinter to create a GUI in Python
+9.7.2
+Interfacing Matplotlib and Tkinter
+We’ve made many plots in this book with Matplotlib. How can we put one of those plots
+in our GUI? To do this, I’m going to introduce the concept of a backend, and then we’ll
+alter the Matplotlib backend (only in our GUI) to display in the Tkinter GUI. 
+ The creators of Matplotlib have a frontend, which is the user-facing code such as
+the plot() and scatter() methods. They’ve also created a backend, which interfaces
+the plot with many different applications. You could alter the backend to have your
+plots displayed in PNG, PDF, SVG, and so on. We’re going to set our backend to TkAgg.
+Agg is a C++ library to make raster images from a figure. TkAgg allows us to use Agg
+with our selected GUI framework, Tk. TkAgg allows Agg to render on a canvas. We can
+place a canvas in our Tk GUI and arrange it with .grid(). 
+ Let’s replace the Plot Place Holder label with our canvas. Delete the Plot Place
+Holder label and add in the following code:
+reDraw.f = Figure(figsize=(5,4), dpi=100)
+reDraw.canvas = FigureCanvasTkAgg(reDraw.f, master=root)
+reDraw.canvas.show()
+reDraw.canvas.get_tk_widget().grid(row=0, columnspan=3)
+This code creates a Matplotlib figure and assigns it to the global variable reDraw.f. It
+next creates a canvas widget, similar to the other widgets. 
+ We can now connect this canvas with our tree-creating functions. To see this in
+action, open treeExplore.py and add the following code. Remember that we previ-
+ously made stubs for reDraw() and drawTree(), so make sure that you don’t have two
+copies of the same function. 
+import matplotlib
+matplotlib.use('TkAgg')
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
+def reDraw(tolS,tolN):
+    reDraw.f.clf()        
+    reDraw.a = reDraw.f.add_subplot(111)
+    if chkBtnVar.get():                           
+        if tolN < 2: tolN = 2
+        myTree=regTrees.createTree(reDraw.rawDat, regTrees.modelLeaf,\
+                                   regTrees.modelErr, (tolS,tolN))
+        yHat = regTrees.createForeCast(myTree, reDraw.testDat, \
+                                       regTrees.modelTreeEval)
+    else:
+        myTree=regTrees.createTree(reDraw.rawDat, ops=(tolS,tolN))
+        yHat = regTrees.createForeCast(myTree, reDraw.testDat)
+    reDraw.a.scatter(reDraw.rawDat[:,0], reDraw.rawDat[:,1], s=5) 
+    reDraw.a.plot(reDraw.testDat, yHat, linewidth=2.0) 
+    reDraw.canvas.show()
+def getInputs():
+Listing 9.7
+Code for Integrating Matplotlib and TkInter
+See if check box 
+has been selected
+B
+
+202
+CHAPTER 9
+Tree-based regression
+    try: tolN = int(tolNentry.get())
+    except: 
+        tolN = 10 
+        print "enter Integer for tolN"
+        tolNentry.delete(0, END)            
+        tolNentry.insert(0,'10')                  
+    try: tolS = float(tolSentry.get())
+    except: 
+        tolS = 1.0 
+        print "enter Float for tolS"
+        tolSentry.delete(0, END)
+        tolSentry.insert(0,'1.0')
+    return tolN,tolS
+def drawNewTree():
+    tolN,tolS = getInputs()
+    reDraw(tolS,tolN)
+The first thing you do in listing 9.7 is import Matplotlib and set the backend to TkAgg.
+There are two more import statements that glue together TkAgg and a Matplotlib figure. 
+ We should first talk about drawNewTree(). If you recall from listing 9.6, this is the
+function that gets called when someone clicks the button labeled ReDraw. This func-
+tion does two things: first, it calls getInputs(), which gets values from the entry
+boxes. Next, it calls reDraw() with the values from the entry boxes, and a beautiful
+plot is made. We’ll discuss each of those functions in turn. 
+ The function getInputs() tries to figure out what the user entered, without crash-
+ing the program. We’re expecting a float for tolS and an integer for tolN. To get the
+text a user entered, you call the .get() method on the Entry widget. Form validation
+can consume a lot of your time when GUI programming, but it’s important to have a
+successful user experience. You use the try:, except: pattern here. If Python can
+interpret the text as an integer, you use that integer. If it can’t recognize it, you print
+an error, clear the entry box, and restore the default value. B You follow a similar pro-
+cedure for tolS, and the values are returned. 
+ The function reDraw() is where the tree drawing takes place. This function assumes
+that the input values are valid. The first thing that’s done is to clear the previous figure,
+so you don’t have two plots on top of each other. When the function is cleared, the sub-
+plot is deleted, so you need to add a new one. Next, you see whether the check box has
+been checked. C Depending on the state of the check box, you build a model tree or
+a regression tree with the tolS and tolN settings. After the tree is built, you create fore-
+casted values from our testDat, which are evenly spaced points in the same range as
+our data. Finally, the actual data and the forecasted values are plotted. I plotted the
+actual data with scatter() and the forecasted values with plot(). The scatter()
+method creates discrete points and the plot() method creates a continuous line. 
+ Let’s see how this works. Save treeExplore.py and execute it. If you’re writing code
+in an IDE, you can execute it with a run command. From the command line, you can
+execute it with python treeExplore.py. You should see something like figure 9.7 at
+the beginning of this section. 
+Clear error and 
+replace with default
+C
+
+203
+Summary
+The GUI in figure 9.7 has all of the widgets from figure 9.8 with the placeholder label
+replaced with a Matplotlib plot. The default value shows a regression tree with eight
+leaf nodes. Let’s try out the model tree. Click the Model Tree text box and click the
+ReDraw button. You should see something similar to figure 9.9. 
+ You should try treeExplore with different values. The dataset has 200 points. See
+what happens when you set tolN to 150. To build the biggest tree possible, remember
+that we set tolN to 1 and tolS to 0. Try that and see what happens.
+9.8
+Summary
+Oftentimes your data contains complex interactions that lead to nonlinear relation-
+ships between the input data and the target variables. One method to model these
+complex relationships is to use a tree to break up the predicted value into piecewise
+constant segments or piecewise linear segments. A tree structure modeling the data
+with piecewise constant segments is known as a regression tree. When the models are
+linear regression equations, the tree is known as a model tree. 
+ The CART algorithm builds binary trees and can handle discrete as well as continu-
+ous split values. Model trees and regression trees can be built with the CART algorithm
+as long as you use the right error measurements. When building a tree, there’s a ten-
+dency for the tree-building algorithm to build the tree too closely to the data, result-
+ing in an overfit model. An overfit tree is often more complex that it needs to be. To
+make the tree less complex, a process of pruning is applied to the tree. Two methods
+of pruning are prepruning, which prunes the tree as it’s being built, and postpruning,
+Figure 9.9
+The 
+treeExplore GUI building a 
+model tree over the same data 
+and same settings as figure 9.7. 
+The model tree does a better job 
+of forecasting the data than the 
+regression tree.
+
+204
+CHAPTER 9
+Tree-based regression
+which prunes the tree after it’s built. Prepruning is more effective but requires user-
+defined parameters.
+ Tkinter is a GUI toolkit for Python. It’s not the only one, but it’s the most com-
+monly used. Tkinter allows you to build widgets and arrange those widgets. You can
+make a special widget for Tkinter that allows you to display Matplotlib plots. The inte-
+gration of Matplotlib and Tkinter allows you to build powerful GUIs where people can
+explore machine learning algorithms in a more natural way.
+ This is our last chapter on regression. I hope you won’t miss it. I may. We’ll now
+leave behind the security of supervised learning and head to the unknown waters of
+unsupervised learning. In regression and classification (supervised learning), we had
+a target variable. This isn’t the case in unsupervised learning, as you’ll see shortly. The
+next chapter is on k-means clustering. 

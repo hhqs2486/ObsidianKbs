@@ -1,0 +1,169 @@
+22.获取域名 ssl 证书过期时间
+ 
+用于 zabbix 告警
+23.发送今天的天气预报以及未来的天气趋势图
+ 
+            del esxi_host[machine_ip]['vm_host']
+            obj = models.EsxiHost.objects.create(**esxi_host_dict)
+            obj.save()
+            for host_info in virtual_host:
+                host_info['management_host_id'] = obj.id
+                obj2 = models.virtualHost.objects.create(**host_info)
+                obj2.save()
+import re
+import sys
+import time
+import subprocess
+from datetime import datetime
+from io import StringIO
+def main(domain):
+    f = StringIO()
+    comm = f"curl -Ivs https://{domain} --connect-timeout 10"
+    result = subprocess.getstatusoutput(comm)
+    f.write(result[1])
+    try:
+        m = re.search('start date: (.*?)\n.*?expire date: (.*?)\n.*?common name: 
+(.*?)\n.*?issuer: CN=(.*?)\n', f.getvalue(), re.S)
+        start_date = m.group(1)
+        expire_date = m.group(2)
+        common_name = m.group(3)
+        issuer = m.group(4)
+    except Exception as e:
+        return 999999999
+    # time 字符串转时间数组
+    start_date = time.strptime(start_date, "%b %d %H:%M:%S %Y GMT")
+    start_date_st = time.strftime("%Y-%m-%d %H:%M:%S", start_date)
+    # datetime 字符串转时间数组
+    expire_date = datetime.strptime(expire_date, "%b %d %H:%M:%S %Y GMT")
+    expire_date_st = datetime.strftime(expire_date,"%Y-%m-%d %H:%M:%S")
+    # 剩余天数
+    remaining = (expire_date-datetime.now()).days
+    return remaining 
+if __name__ == "__main__":
+    domain = sys.argv[1] 
+    remaining_days = main(domain)
+    print(remaining_days)
+
+此脚本用于给老婆大人发送今天的天气预报以及未来的天气趋势图，现在微信把网页端禁止了，没法发
+送到微信了，我是通过企业微信进行通知的，需要把你老婆大人拉到企业微信，无兴趣的小伙伴跳过即
+可。
+    # -*- coding: utf-8 -*-
+    import requests
+    import json
+    import datetime
+    def weather(city):
+        url = "http://wthrcdn.etouch.cn/weather_mini?city=%s" % city
+        try:
+            data = requests.get(url).json()['data']
+            city = data['city']
+            ganmao = data['ganmao']
+            today_weather = data['forecast'][0]
+            res = "老婆今天是{}\n今天天气概况\n城市: {:<10}\n时间: {:<10}\n高温: {:
+<10}\n低温: {:<10}\n风力: {:<10}\n风向: {:<10}\n天气: {:<10}\n\n稍后会发送近期温度趋势
+图，请注意查看。\
+            ".format(
+                ganmao,
+                city,
+                datetime.datetime.now().strftime('%Y-%m-%d'),
+                today_weather['high'].split()[1],
+
+                today_weather['low'].split()[1],
+                today_weather['fengli'].split('[')[2].split(']')[0],
+                today_weather['fengxiang'],today_weather['type'],
+            )
+            return {"source_data": data, "res": res}
+        except Exception as e:
+            return str(e)
+    ```
+    + 获取天气预报趋势图
+    ```python
+    # -*- coding: utf-8 -*-
+    import matplotlib.pyplot as plt
+    import re
+    import datetime
+    def Future_weather_states(forecast, save_path, day_num=5):
+        '''
+        展示未来的天气预报趋势图
+        :param forecast: 天气预报预测的数据
+        :param day_num: 未来几天
+        :return: 趋势图
+        '''
+        future_forecast = forecast
+        dict={}
+        for i in range(day_num):
+            data = []
+            date = future_forecast[i]["date"]
+            date = int(re.findall("\d+",date)[0])
+            data.append(int(re.findall("\d+", future_forecast[i]["high"])[0]))
+            data.append(int(re.findall("\d+", future_forecast[i]["low"])[0]))
+            data.append(future_forecast[i]["type"])
+            dict[date] = data
+        data_list = sorted(dict.items())
+        date=[]
+        high_temperature = []
+        low_temperature = []
+        for each in data_list:
+            date.append(each[0])
+            high_temperature.append(each[1][0])
+            low_temperature.append(each[1][1])
+            fig = plt.plot(date,high_temperature,"r",date,low_temperature,"b")
+        current_date = datetime.datetime.now().strftime('%Y-%m')
+        plt.rcParams['font.sans-serif'] = ['SimHei']
+        plt.rcParams['axes.unicode_minus'] = False
+        plt.xlabel(current_date)
+        plt.ylabel("℃")
+        plt.legend(["高温", "低温"])
+        plt.xticks(date)
+        plt.title("最近几天温度变化趋势")
+        plt.savefig(save_path)
+    ```
+
+    + 发送到企业微信
+    ```python
+    # -*- coding: utf-8 -*-
+    import requests
+    import json
+    class DLF:
+        def __init__(self, corpid, corpsecret):
+            self.url = "https://qyapi.weixin.qq.com/cgi-bin"
+            self.corpid = corpid
+            self.corpsecret = corpsecret
+            self._token = self._get_token()
+        def _get_token(self):
+            '''
+            获取企业微信API接口的access_token
+            :return:
+            '''
+            token_url = self.url + "/gettoken?corpid=%s&corpsecret=%s" %
+(self.corpid, self.corpsecret)
+            try:
+                res = requests.get(token_url).json()
+                token = res['access_token']
+                return token
+            except Exception as e:
+                return str(e)
+        def _get_media_id(self, file_obj):
+            get_media_url = self.url + "/media/upload?access_token=
+{}&type=file".format(self._token)
+            data = {"media": file_obj}
+            try:
+                res = requests.post(url=get_media_url, files=data)
+                media_id = res.json()['media_id']
+                return media_id
+            except Exception as e:
+                return str(e)
+        def send_text(self, agentid, content, touser=None, toparty=None):
+            send_msg_url = self.url + "/message/send?access_token=%s" % 
+(self._token)
+            send_data = {
+                "touser": touser,
+                "toparty": toparty,
+                "msgtype": "text",
+                "agentid": agentid,
+                "text": {
+                    "content": content
+                }
+            }
+            try:
+                res = requests.post(send_msg_url, data=json.dumps(send_data))
+            except Exception as e:

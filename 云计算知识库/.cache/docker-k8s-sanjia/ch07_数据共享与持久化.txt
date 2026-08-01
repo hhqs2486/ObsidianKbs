@@ -1,0 +1,127 @@
+6. 数据共享与持久化
+这⼀节介绍如何在 Docker 内部以及容器之间管理数据，在容器中管理数据主要有两种⽅式：
+数据卷（Data Volumes）
+挂载主机⽬录 (Bind mounts)
+数据卷
+ 数据卷 是⼀个可供⼀个或多个容器使⽤的特殊⽬录，它绕过 UFS ，可以提供很多有⽤的特性：
+数据卷 可以在容器之间共享和重⽤
+对 数据卷 的修改会⽴⻢⽣效
+对 数据卷 的更新，不会影响镜像
+数据卷 默认会⼀直存在，即使容器被删除
+注意：数据卷 的使⽤，类似于 Linux 下对⽬录或⽂件进⾏ mount，镜像中的被指定为挂载点的⽬
+录中的⽂件会隐藏掉，能显示看的是挂载的 数据卷。
+选择 -v 还是 -–mount 参数： Docker 新⽤户应该选择 --mount 参数，经验丰富的 Docker 使⽤者对 -
+v 或者  --volume 已经很熟悉了，但是推荐使⽤ --mount 参数。
+创建⼀个数据卷：
+$ docker volume create my-vol
+查看所有的 数据卷：
+$ docker volume ls
+local               my-vol
+在主机⾥使⽤以下命令可以查看指定 数据卷 的信息
+$ docker volume inspect my-vol
+[
+    {
+        "Driver": "local",
+        "Labels": {},
+        "Mountpoint": "/var/lib/docker/volumes/my-vol/_data",
+        "Name": "my-vol",
+        "Options": {},
+        "Scope": "local"
+    }
+]
+数据共享与持久化
+38
+
+启动⼀个挂载数据卷的容器：在⽤ docker run 命令的时候，使⽤ --mount 标记来将 数据卷 挂载到容
+器⾥。在⼀次 docker run 中可以挂载多个 数据卷。下⾯创建⼀个名为 web 的容器，并加载⼀个 数据
+卷 到容器的 /webapp ⽬录。
+$ docker run -d -P \
+    --name web \
+    # -v my-vol:/wepapp \
+    --mount source=my-vol,target=/webapp \
+    training/webapp \
+    python app.py
+查看数据卷的具体信息：在主机⾥使⽤以下命令可以查看 web 容器的信息
+$ docker inspect web
+...
+"Mounts": [
+    {
+        "Type": "volume",
+        "Name": "my-vol",
+        "Source": "/var/lib/docker/volumes/my-vol/_data",
+        "Destination": "/app",
+        "Driver": "local",
+        "Mode": "",
+        "RW": true,
+        "Propagation": ""
+    }
+],
+...
+删除数据卷：
+$ docker volume rm my-vol
+数据卷 是被设计⽤来持久化数据的，它的⽣命周期独⽴于容器，Docker 不会在容器被删除后⾃动删除
+数据卷，并且也不存在垃圾回收这样的机制来处理没有任何容器引⽤的 数据卷。如果需要在删除容器
+的同时移除数据卷。可以在删除容器的时候使⽤ docker rm -v 这个命令。 ⽆主的数据卷可能会占据
+很多空间，要清理请使⽤以下命令
+$ docker volume prune
+挂载主机⽬录
+选择 -v 还是 -–mount 参数： Docker 新⽤户应该选择 --mount 参数，经验丰富的 Docker 使⽤者对 -v
+或者 --volume 已经很熟悉了，但是推荐使⽤ --mount 参数。
+挂载⼀个主机⽬录作为数据卷：使⽤  --mount  标记可以指定挂载⼀个本地主机的⽬录到容器中去。
+$ docker run -d -P \
+    --name web \
+    # -v /src/webapp:/opt/webapp \
+数据共享与持久化
+39
+
+    --mount type=bind,source=/src/webapp,target=/opt/webapp \
+    training/webapp \
+    python app.py
+上⾯的命令加载主机的 /src/webapp ⽬录到容器的 /opt/webapp⽬录。这个功能在进⾏测试的时候⼗分
+⽅便，⽐如⽤户可以放置⼀些程序到本地⽬录中，来查看容器是否正常⼯作。本地⽬录的路径必须是
+绝对路径，以前使⽤ -v 参数时如果本地⽬录不存在 Docker 会⾃动为你创建⼀个⽂件夹，现在使⽤ --
+mount 参数时如果本地⽬录不存在，Docker 会报错。
+Docker 挂载主机⽬录的默认权限是 读写，⽤户也可以通过增加 readonly 指定为 只读。
+$ docker run -d -P \
+    --name web \
+    # -v /src/webapp:/opt/webapp:ro \
+    --mount type=bind,source=/src/webapp,target=/opt/webapp,readonly \
+    training/webapp \
+    python app.py
+加了 readonly 之后，就挂载为 只读 了。如果你在容器内 /opt/webapp ⽬录新建⽂件，会显示如下错
+误:
+/opt/webapp # touch new.txt
+touch: new.txt: Read-only file system
+查看数据卷的具体信息：在主机⾥使⽤以下命令可以查看 web 容器的信息
+$ docker inspect web
+...
+"Mounts": [
+    {
+        "Type": "bind",
+        "Source": "/src/webapp",
+        "Destination": "/opt/webapp",
+        "Mode": "",
+        "RW": true,
+        "Propagation": "rprivate"
+    }
+],
+挂载⼀个本地主机⽂件作为数据卷： --mount 标记也可以从主机挂载单个⽂件到容器中
+$ docker run --rm -it \
+   # -v $HOME/.bash_history:/root/.bash_history \
+   --mount type=bind,source=$HOME/.bash_history,target=/root/.bash_history \
+   ubuntu:17.10 \
+   bash
+root@2affd44b4667:/# history
+1  ls
+2  diskutil list
+数据共享与持久化
+40
+
+这样就可以记录在容器输⼊过的命令了。
+点击查看本⽂视频
+扫描下⾯的⼆维码(或微信搜索 k8s技术圈 )关注我们的微信公众帐号，在微信公众帐号中回复 加群 即
+可加⼊到我们的 kubernetes 讨论群⾥⾯共同学习。
+k8s技术圈⼆维码
+Copyright © qikqiak.com 2018 all right reserved，powered by GitbookUpdated: 2019-03-12 12:59:36
+数据共享与持久化
+41

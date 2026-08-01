@@ -1,0 +1,122 @@
+144 第10 章  大规模文本挖掘 
+•
+Hadoopy。
+•
+Pydoop。
+•
+Dumbo。
+•
+mrjob。
+提示： 
+如果想查看一份更详细的目前Hadoop 上可供选择的
+Python 库列表，读者可以参阅下面这篇文章： 
+http://blog.cloudera.com/blog/2013/01/a-guide- 
+topython-frameworks-for-hadoop/。 
+10.2  Hadoop 上的NLTK 
+之前已经从一个库的角度对NLTK 进行了充分的讨论，并介绍了它的一些最常用的函
+数。目前，NLTK 已经可以解决许多NLP 问题，这其中有许多都是高度可并行化的方案。
+这也是为什么要试着在Hadoop 上使用NLTK 的原因。 
+在Hadoop 上，运行NLTK 的最佳途径就是将其安装在集群的所有节点上。这实现起
+来并不困难。有几种方式都可以做到这一点，例如可以将资源文件以流参数的形式发送。
+但通常都选择下面的第一个选项。
+10.2.1  用户定义函数（UDF） 
+在Hadoop 上运行NLTK 的方法有很多，下面讨论一个实例，来看看它是如何用NLTK
+来实现一个Hive UDF，以便完成并行式的标识化处理。 
+这个用例的操作可以分成以下步骤。
+1．这里选择了一个只包含两列数据的小型数据集，然后在Hive 中创建与之相对于的
+相同数据模式
+①： 
+ID 
+内容
+UA0001 
+"I tried calling you. The service was not up to the mark" 
+UA0002 
+"Can you please update my phone no" 
+UA0003 
+"Really bad experience" 
+UA0004 
+"I am looking for an iPhone" 
+①译者注：由于原文针对的是英文环境，所以这里的例句就不翻译了，下同。
+
+10.2  Hadoop 上的NLTK 145 
+2．现在，在Hive 中创建相同的数据模式，该操作的Hive 脚本如下：  
+Hive script 
+CREATE TABLE $InputTableName ( 
+ID String, 
+Content String 
+) 
+ROW FORMAT DELIMITED 
+FIELDS TERMINATED BY '\t'; 
+3．数据模式建构完成之后，下一步要做的就是针对每一个独立列中的内容进行类似于
+标识化的处理。所以，现在就会想在$ outTable 中设置另一个具有相同模式的列，并为其添
+加相应的标识列：
+Hive script 
+CREATE TABLE $OutTableName ( 
+ID String, 
+Content String, 
+Tokens String 
+) 
+4．现在模式方面的准备已经完成了，接下来要用Python 来编写UDF，以逐行读取上
+面的数据表，并对其执行tokenize()方法。这一过程与第3 章中所做的事情非常类似。这是
+一个与第3 章中所有示例都很类似的函数。而且，如果你现在还想获得其POS 标签、词形
+还原以及某HTML 标记的话，只需要相应地修改一下这个UDF 即可。下面就来看看UDF
+是如何查找相关标识的：
+>>> import sys 
+>>> import datetime 
+>>> import pickle 
+>>> import nltk 
+>>> nltk.download('punkt') 
+>>> for line in sys.stdin: 
+>>>     line = line.strip() 
+>>>     print>>sys.stderr, line 
+>>>     id, content= line.split('\t') 
+>>>     print>>sys.stderr,tok.tokenize(content) 
+>>>     tokens =nltk.word_tokenize(concat_all_text) 
+>>>     print '\t'.join([id,content,tokens]) 
+5．接下来，命名一下这个UDF，如nltk_scoring.py。 
+6．现在，用TRANSFORM 函数来执行Hive 的insert 查询，以便将上面的UDF 应用
+
+146 第10 章  大规模文本挖掘 
+到给定的内容中，将新列标记化并转储其标识：
+Hive script 
+add FILE nltk_scoring.py; 
+add FILE english.pickle; #Adding file to DistributedCache 
+INSERT OVERWRITE TABLE $OutTableName 
+SELECT 
+TRANSFORM (id, content) 
+    USING 'PYTHONPATH nltk_scoring.py' 
+    AS (id string, content string, tokens string ) 
+FROM $InputTablename; 
+7．如果你在上述过程中遇到了下面这样的错误信息，就说明NLTK 机器数据组件没有
+被正确安装：
+raiseLookupError(resource_not_found) 
+LookupError: 
+****************************************************************** 
+**** 
+  Resource u'tokenizers/punkt/english.pickle' not found. Please 
+  use the NLTK Downloader to obtain the resource: >>> 
+  nltk.download() 
+  Searched in: 
+    - '/home/nltk_data' 
+    - '/usr/share/nltk_data' 
+    - '/usr/local/share/nltk_data' 
+    - '/usr/lib/nltk_data' 
+    - '/usr/local/lib/nltk_data' 
+8．如果该Hive 作业能够被成功运行，就会得到一张名为OutTableName 的表，具体如下： 
+ID 
+内容
+UA0001 
+"I tried calling you, The service was 
+not up to the mark" 
+[" I", " tried", "calling", "you", "The", "service" "was", 
+"not", "up", "to", "the", "mark"] 
+UA0002 
+"Can you please update my phone no" ["Can", "you", "please" "update", " my", "phone" "no"] 
+UA0003 
+"Really bad experience" 
+["Really"," bad" "experience"] 
+UA0004 
+"I am looking for an iphone" 
+["I", "am", "looking", "for", "an", "iPhone"] 
+10.2.2  Python 的流操作 
+下面来试试第二个选项：Python 流。根据现有的Hadoop 流来编写自己的mapper 和

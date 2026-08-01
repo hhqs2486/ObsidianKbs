@@ -1,0 +1,456 @@
+56. Grafana 的安装使⽤
+前⾯的课程中我们使⽤ Prometheus 采集了 Kubernetes 集群中的⼀些监控数据指标，我们也尝试使
+⽤ promQL 语句查询出了⼀些数据，并且在 Prometheus 的 Dashboard 中进⾏了展示，但是明显可以
+感觉到 Prometheus 的图表功能相对较弱，所以⼀般情况下我们会⼀个第三⽅的⼯具来展示这些数
+据，今天我们要和⼤家使⽤到的就是 grafana 。
+安装
+grafana 是⼀个可视化⾯板，有着⾮常漂亮的图表和布局展示，功能⻬全的度量仪表盘和图形编辑器，
+⽀持 Graphite、zabbix、InfluxDB、Prometheus、OpenTSDB、Elasticsearch 等作为数据源，⽐
+Prometheus ⾃带的图表展示功能强⼤太多，更加灵活，有丰富的插件，功能更加强⼤。
+接下来我们就来直接安装，同样的，我们将 grafana 安装到 Kubernetes 集群中，第⼀步同样是去查看
+grafana 的 docker 镜像的介绍，我们可以在 dockerhub 上去搜索，也可以在官⽹去查看相关资料，镜
+像地址如下：https://hub.docker.com/r/grafana/grafana/，我们可以看到介绍中运⾏ grafana 容器的命
+令⾮常简单：
+$ docker run -d --name=grafana -p 3000:3000 grafana/grafana
+但是还有⼀个需要注意的是 Changelog 中 v5.1.0 版本的更新介绍：
+Major restructuring of the container
+Usage of chown removed
+File permissions incompatibility with previous versions
+user id changed from 104 to 472
+group id changed from 107 to 472
+Runs as the grafana user by default (instead of root)
+All default volumes removed
+特别需要注意第3条，userid 和 groupid 都有所变化，所以我们在运⾏的容器的时候需要注意这个变
+化。现在我们将这个容器转化成 Kubernetes 中的 Pod：(grafana-deploy.yaml)
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: kube-ops
+  labels:
+    app: grafana
+spec:
+  revisionHistoryLimit: 10
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+Grafana 的安装使⽤
+377
+
+      containers:
+      - name: grafana
+        image: grafana/grafana:5.3.4
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 3000
+          name: grafana
+        env:
+        - name: GF_SECURITY_ADMIN_USER
+          value: admin
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          value: admin321
+        readinessProbe:
+          failureThreshold: 10
+          httpGet:
+            path: /api/health
+            port: 3000
+            scheme: HTTP
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 30
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /api/health
+            port: 3000
+            scheme: HTTP
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        resources:
+          limits:
+            cpu: 100m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 256Mi
+        volumeMounts:
+        - mountPath: /var/lib/grafana
+          subPath: grafana
+          name: storage
+      securityContext:
+        fsGroup: 472
+        runAsUser: 472
+      volumes:
+      - name: storage
+        persistentVolumeClaim:
+          claimName: grafana
+我们使⽤了最新的镜像 grafana/grafana:5.3.4 ，然后添加了监控检查、资源声明，另外两个⽐较重
+要的环境变量 GF_SECURITY_ADMIN_USER 和 GF_SECURITY_ADMIN_PASSWORD ，⽤来配置 grafana 的管理员
+⽤户和密码的，由于 grafana 将 dashboard、插件这些数据保存在 /var/lib/grafana 这个⽬录下⾯
+的，所以我们这⾥如果需要做数据持久化的话，就需要针对这个⽬录进⾏ volume 挂载声明，其他的和
+我们之前的 Deployment 没什么区别，由于上⾯我们刚刚提到的 Changelog 中 grafana 的 userid 和
+groupid 有所变化，所以我们这⾥需要增加⼀个 securityContext 的声明来进⾏声明。
+Grafana 的安装使⽤
+378
+
+当然如果要使⽤⼀个 pvc 对象来持久化数据，我们就需要添加⼀个可⽤的 pv 供 pvc 绑定使⽤：
+（grafana-volume.yaml）
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: grafana
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+  - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Recycle
+  nfs:
+    server: 10.151.30.57
+    path: /data/k8s
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana
+  namespace: kube-ops
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+最后，我们需要对外暴露 grafana 这个服务，所以我们需要⼀个对应的 Service 对象，当然⽤
+NodePort 或者再建⽴⼀个 ingress 对象都是可⾏的：(grafana-svc.yaml)
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: kube-ops
+  labels:
+    app: grafana
+spec:
+  type: NodePort
+  ports:
+    - port: 3000
+  selector:
+    app: grafana
+现在我们直接创建上⾯的这些资源对象：
+$ kubectl create -f grafana-volume.yaml
+persistentvolume "grafana" created
+persistentvolumeclaim "grafana" created
+$ kubectl create -f grafana-deploy.yaml
+deployment.extensions "grafana" created
+$ kubectl create -f grafana-svc.yaml
+service "grafana" created
+Grafana 的安装使⽤
+379
+
+创建完成后，我们可以查看 grafana 对应的 Pod 是否正常：
+$ kubectl get pods -n kube-ops
+NAME                          READY     STATUS             RESTARTS   AGE
+grafana-5f7b965b55-wxvvk      0/1       CrashLoopBackOff   1          22s
+我们可以看到这⾥的状态是 CrashLoopBackOff ，并没有正常启动，我们查看下这个 Pod 的⽇志：
+$ kubectl logs -f grafana-5f7b965b55-wxvvk -n kube-ops
+GF_PATHS_DATA='/var/lib/grafana' is not writable.
+You may have issues with file permissions, more information here: http://docs.grafana.org/
+installation/docker/#migration-from-a-previous-version-of-the-docker-container-to-5-1-or-l
+ater
+mkdir: cannot create directory '/var/lib/grafana/plugins': Permission denied
+上⾯的错误是在 5.1 版本之后才会出现的，当然你也可以使⽤之前的版本来规避这个问题。
+可以看到是⽇志中错误很明显就是 /var/lib/grafana ⽬录的权限问题，这还是因为5.1版本后 groupid
+更改了引起的问题，我们这⾥增加了 securityContext ，但是我们将⽬录 /var/lib/grafana 挂载到
+pvc 这边后⽬录的拥有者并不是上⾯的 grafana(472)这个⽤户了，所以我们需要更改下这个⽬录的所
+属⽤户，这个时候我们可以利⽤⼀个 Job 任务去更改下该⽬录的所属⽤户：（grafana-chown-
+job.yaml）
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: grafana-chown
+  namespace: kube-ops
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: grafana-chown
+        command: ["chown", "-R", "472:472", "/var/lib/grafana"]
+        image: busybox
+        imagePullPolicy: IfNotPresent
+        volumeMounts:
+        - name: storage
+          subPath: grafana
+          mountPath: /var/lib/grafana
+      volumes:
+      - name: storage
+        persistentVolumeClaim:
+          claimName: grafana
+上⾯我们利⽤⼀个 busybox 镜像将 /var/lib/grafana ⽬录更改成了 472 这个 user 和 group，不过还
+需要注意的是下⾯的 volumeMounts 和 volumes 需要和上⾯的 Deployment 对应上。
+现在我们删除之前创建的 Deployment 对象，重新创建：
+$ kubectl delete -f grafana-deploy.yaml
+deployment.extensions "grafana" deleted
+Grafana 的安装使⽤
+380
+
+$ kubectl create -f grafana-deploy.yaml
+deployment.extensions "grafana" created
+$ kubectl create -f grafana-chown-job.yaml
+job.batch "grafana-chown" created
+重新执⾏完成后，可以查看下上⾯的创建的资源对象是否正确了：
+$ kubectl get pod -n kube-ops
+NAME                          READY     STATUS      RESTARTS   AGE
+grafana-79477fbb7c-2mb84      1/1       Running     0          2m
+grafana-chown-k8zt7           0/1       Completed   0          2m
+我们可以看到有⼀个状态为 Completed 的 Pod，这就是上⾯我们⽤来更改 grafana ⽬录权限的 Pod，
+是⼀个 Job 任务，所以执⾏成功后就退出了，状态变成了 Completed ，⽽上⾯的 grafana 的 Pod 也已
+经是 Running 状态了，可以查看下该 Pod 的⽇志确认下：
+$ kubectl logs -f grafana-79477fbb7c-2mb84 -n kube-ops
+t=2018-11-14T19:57:31+0000 lvl=info msg="Starting Grafana" logger=server version=5.3.4 com
+mit=69630b9 compiled=2018-11-13T12:19:12+0000
+......
+logger=settings var="GF_SECURITY_ADMIN_USER=admin"
+t=2018-11-14T19:57:31+0000 lvl=info msg="Config overridden from Environment variable"
+......
+t=2018-11-14T19:57:32+0000 lvl=info msg="Initializing Stream Manager"
+t=2018-11-14T19:57:32+0000 lvl=info msg="HTTP Server Listen" logger=http.server address=0.
+0.0.0:3000 protocol=http subUrl= socket=
+看到上⾯的⽇志信息就证明我们的 grafana 的 Pod 已经正常启动起来了。这个时候我们可以查看
+Service 对象：
+$ kubectl get svc -n kube-ops
+NAME         TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)                          AG
+E
+grafana      NodePort    10.97.46.27     <none>        3000:30105/TCP                   1h
+Grafana 的安装使⽤
+381
+
+现在我们就可以在浏览器中使⽤ http://<
+30105> 来访问 grafana 这个服务了： 
+由于上⾯我们配置了管理员的，所以第⼀次打开的时候会跳转到登录界⾯，然后就可以⽤上⾯我们配
+置的两个环境变量的值来进⾏登录了，登录完成后就可以进⼊到下⾯ Grafana 的⾸⻚： 
+配置
+Grafana 的安装使⽤
+382
+
+在上⾯的⾸⻚中我们可以看到已经安装了 Grafana，接下来点击 Add data source 进⼊添加数据源界
+⾯。
+数据源
+我们这个地⽅配置的数据源是 Prometheus，所以选择这个 Type 即可，给改数据源添加⼀个 name：
+prometheus-ds，最主要的是下⾯ HTTP 区域是配置数据源的访问模式。
+访问模式是⽤来控制如何处理对数据源的请求的：
+服务器(Server)访问模式（默认）：所有请求都将从浏览器发送到 Grafana 后端的服务器，后者⼜
+将请求转发到数据源，通过这种⽅式可以避免⼀些跨域问题，其实就是在 Grafana 后端做了⼀次
+转发，需要从Grafana 后端服务器访问该 URL。
+浏览器(Browser)访问模式：所有请求都将从浏览器直接发送到数据源，但是有可能会有⼀些跨域
+的限制，使⽤此访问模式，需要从浏览器直接访问该 URL。
+由于我们这个地⽅ Prometheus 通过 NodePort 的⽅式的对外暴露的服务，所以我们这个地⽅是不是可
+以使⽤浏览器访问模式直接访问 Prometheus 的外⽹地址，但是这种⽅式显然不是最好的，相当于⾛
+的是外⽹，⽽我们这⾥ Prometheus 和 Grafana 都处于 kube-ops 这同⼀个 namespace 下⾯，是不是
+在集群内部直接通过 DNS 的形式就可以访问了，⽽且还都是⾛的内⽹流量，所以我们这⾥⽤服务器访
+问模式显然更好，数据源地址： http://prometheus:9090 （因为在同⼀个 namespace 下⾯所以直接
+⽤ Service 名也可以），然后其他的配置信息就根据实际情况了，⽐如 Auth 认证，我们这⾥没有，所
+以跳过即可，点击最下⽅的 Save & Test 提示成功证明我们的数据源配置正确：
+Grafana 的安装使⽤
+383
+
+grafana datasource
+数据源添加完成后，就可以来添加 Dashboard 了。
+Dashboard
+Grafana 的安装使⽤
+384
+
+我们可以将上⾯编号 162 的 dashboard 下载到本地，然后这⾥重新上传即可，也可以在上⾯的⽂本框
+中直接输⼊ 162 编号回⻋即可，导⼊这个 dashboard： 
+Grafana 的安装使⽤
+385
+
+需要注意的是在执⾏上⾯的 import 之前要记得选择我们的 prometheus-ds 这个名字的数据源，执
+⾏ import 操作，就可以进⼊到 dashboard ⻚⾯： 
+我们可以看到 dashboard ⻚⾯上出现了很多漂亮的图表，但是看上去数据不正常，这是因为这个
+dashboard ⾥⾯需要的数据指标名称和我们 Prometheus ⾥⾯采集到的数据指标不⼀致造成的，⽐
+如，第⼀个 Cluster memory usage(集群内存使⽤情况) ，我们可以点击标题 -> Edit，进⼊编辑这个图表
+的编辑⻚⾯： 
+Grafana 的安装使⽤
+386
+
+进⼊编辑⻚⾯我们就可以看到这个图表的查询语句：
+(sum(node_memory_MemTotal) - sum(node_memory_MemFree+node_memory_Buffers+node_memory_Cache
+d) ) / sum(node_memory_MemTotal) * 100
+grafana dashboard edit2
+这就是我们之前在 Prometheus ⾥⾯查询的 promQL 语句，我们可以将上⾯的查询语句复制到
+Prometheus 的 Graph ⻚⾯进⾏查询，其实可以预想到是没有对应的数据的，因为我们
+⽤ node_exporter 采集到的数据指标不是 node_memory_MemTotal 关键字，⽽
+是 node_memory_MemTotal_bytes ，将上⾯的 promQL 语句做相应的更改：
+(sum(node_memory_MemTotal_bytes) - sum(node_memory_MemFree_bytes + node_memory_Buffers_byt
+es+node_memory_Cached_bytes)) / sum(node_memory_MemTotal_bytes) * 100
+Grafana 的安装使⽤
+387
+
+这个语句的意思就是 (整个集群的内存-(整个集群剩余的内存以及Buffer和Cached))/整个集群的内存 ，简单来
+说就是总的集群内存使⽤百分⽐。将上⾯ grafana 的 promQL 语句替换掉，就可以看到图表正常了： 
+同样的，我们可以更改后⾯的 CPU 和 FileSystem 的使⽤率： 
+同样下⾯的 Pod CPU Usage ⽤来展示 Pod CPU 的使⽤情况，对应的 promQL 语句如下，根据
+pod_name 来进⾏统计：
+sum by (pod_name)(rate(container_cpu_usage_seconds_total{image!="", pod_name!=""}[1m]))
+按照上⾯的⽅法替换 grafana 中的 dashboard 图表中的查询语句： 
+Grafana 的安装使⽤
+388
+
+其他的也按照我们的实际需求重新编辑下就可以，下图是最终整个 dashboard 的效果图： 
+最后要记得保存这个 dashboard，下⾯的链接是我修改后的 dashboard json ⽂件地址，你可以直接下
+载下来导⼊到 grafana 当中，当然你也可以根据实际情况进⾏相应的更改：k8s-cluster-grafana-
+dashboard.json。
+除此之外，我们也可以前往 grafana dashboard 的⻚⾯去搜索其他的关于 Kubernetes 的监控⻚⾯，地
+址：https://grafana.com/dashboards，⽐如id 为747和741的这两个 dashboard。
+插件
+上⾯是我们最常⽤的 grafana 当中的 dashboard 的功能的使⽤，然后我们也可以来进⾏⼀些其他的系
+统管理，⽐如添加⽤户，为⽤户添加权限等等，我们也可以安装⼀些其他插件，⽐如 grafana 就有⼀
+个专⻔针对 Kubernetes 集群监控的插件：grafana-kubernetes-app
+要安装这个插件，需要到 grafana 的 Pod ⾥⾯去执⾏安装命令：
+$ kubectl get pods -n kube-ops
+NAME                          READY     STATUS      RESTARTS   AGE
+grafana-79477fbb7c-v4prs      1/1       Running     0          23m
+$ kubectl exec -it grafana-79477fbb7c-v4prs /bin/bash -n kube-ops
+Grafana 的安装使⽤
+389
+
+grafana@grafana-79477fbb7c-v4prs:/usr/share/grafana$ grafana-cli plugins install grafana-k
+ubernetes-app
+installing grafana-kubernetes-app @ 1.0.1
+from url: https://grafana.com/api/plugins/grafana-kubernetes-app/versions/1.0.1/download
+into: /var/lib/grafana/plugins
+✔ Installed grafana-kubernetes-app successfully
+Restart grafana after installing plugins . <service grafana-server restart>
+grafana@grafana-79477fbb7c-v4prs:/usr/share/grafana$
+安装完成后需要重启 grafana 才会⽣效，我们这⾥直接删除 Pod，重建即可，然后回到 grafana ⻚⾯
+中，切换到 plugins ⻚⾯可以发现下⾯多了⼀个 Kubernetes 的插件，点击进来启⽤即可，然后点
+击 Next up 旁边的链接配置集群 
+这⾥我们可以添加⼀个新的 Kubernetes 集群，这⾥需要填写集群的访问地
+址： https://kubernetes.default ，然后⽐较重要的是集群访问的证书，勾选上 TLS Client
+Auth 和 With CA Cert 这两项。 
+Grafana 的安装使⽤
+390
+
+集群访问的证书⽂件，⽤我们访问集群的 kubectl 的配置⽂件中的证书信息(~/.kube/config)即可，其中
+属性 certificate-authority-data 、 client-certificate-data 、 client-key-data 就对应这 CA 证
+书、Client 证书、Client 私钥，不过 config ⽂件⾥⾯的内容是 base64 编码过后的，所以我们这⾥填写
+的时候要做 base64 解码。
+另外需要将解码过后的 \n 换成换⾏符，不然认证会失败。
+配置完成后，可以直接点击 Deploy (实际上前⾯的课程中我们都已经部署过相关的资源了)，然后点
+击 Save ，就可以获取到集群的监控资源信息了。
+Grafana 的安装使⽤
+391
+
+grafana k8s plugins
+Grafana 的安装使⽤
+392
+
+可以看到上⾯展示了整个集群的状态，可以查看上⾯的⼀些 Dashboard: 
+报警
+grafana 4 版本以上就⽀持了报警功能，这使得我们利⽤ grafana 作为监控⾯板更为完整，因为报警是
+监控系统中必不可少的环节，grafana ⽀持很多种形式的报警功能，⽐如 email、钉钉、slack、
+webhook 等等，我们这⾥来测试下 email 和 钉钉。
+Grafana 的安装使⽤
+393
+
+email 报警
+要启⽤ email 报警需要在启动配置⽂件中 /etc/grafana/grafan.ini 开启 SMTP 服务，我们这⾥同样
+利⽤⼀个 ConfigMap 资源对象挂载到 grafana Pod 中：（grafana-cm.yaml）
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-config
+  namespace: kube-ops
+data:
+  grafana.ini: |
+    [server]
+    root_url = http://<你grafana的url地址>
+    [smtp]
+    enabled = true
+    host = smtp.163.com:25
+    user = ych_1024@163.com
+    password = <邮箱密码>
+    skip_verify = true
+    from_address = ych_1024@163.com
+    [alerting]
+    enabled = true
+    execute_alerts = true
+上⾯配置了我的 163 邮箱，开启报警功能，当然我们还得将这个 ConfigMap ⽂件挂载到 Pod 中去：
+  volumeMounts:
+  - mountPath: "/etc/grafana"
+    name: config
+volumes:
+- name: config
+  configMap:
+    name: grafana-config
+创建 ConfigMap 对象，更新 Deployment：
+$ kubectl create -f grafana-cm.yaml
+$ kubectl apply -f grafana-deploy.yaml
+更新完成后，在 grafana 的 webui 中 Alert ⻚⾯测试邮件报警：
+Grafana 的安装使⽤
+394
+
+grafana email alert
+发送测试后，正常情况下就可以收到测试报警邮件：
+Grafana 的安装使⽤
+395
+
+grafana alert email
+钉钉报警
+上⾯我们也说了 grafana 也是⽀持钉钉报警的，在钉钉群⾥⾯添加群机器⼈，选择最后的⾃定义机器
+⼈：
+Grafana 的安装使⽤
+396
+
+grafana add dingtalk robot
+添加完成后可以得到⼀个 webhook 的地址，然后将这个 webhook 地址添加到上⾯ grafana webui 的
+报警测试⻚⾯进⾏测试，就可以在钉钉群⾥⾯收到报警测试信息了：
+grafana dingtalk alert
+Grafana 的安装使⽤
+397
+
+配置
+⽬前只有 Graph ⽀持报警功能，所以我们选择 Graph 相关图表，点击编辑，进⼊ Graph 编辑⻚⾯可
+以看到有⼀个 Alert 模块，切换过来创建报警：
+grafana graph alert
+然后配置相关参数：
+1、Alert 名称，可以⾃定义。
+2、执⾏的频率，这⾥我选择每60s检测⼀次。
+3、判断标准，默认是 avg，这⾥是下拉框，⾃⼰按需求选择。
+4、query（A,5m,now），字⺟A代表选择的metrics 中设置的 sql，也可以选择其它在 metrics中设
+置的，但这⾥是单选。 5m 代表从现在起往之前的五分钟，即 5m 之前的那个点为时间的起始
+点， now 为时间的结束点，此外这⾥可以⾃⼰⼿动输⼊时间。
+5、设置的预警临界点，这⾥⼿动输⼊，和6是同样功能，6可以⼿动移动，两种操作是等同的。
+然后需要设置报警发送信息，点击侧边的 Notifications :
+Grafana 的安装使⽤
+398
+
+grafana graph notify
+其中 Send to 就是前⾯我们配置过的发送邮件和钉钉的报警频道的名称。
+配置完成后需要保存下这个 graph，否则发送报警可能会失败，然后点击 Alert 区域的 Test Rule 可以
+来测试报警规则，然后邮件和钉钉正常来说就可以收到报警信息了。
+邮件报警信息：
+Grafana 的安装使⽤
+399
+
+grafana test rule email
+钉钉报警信息：
+grafana test rule dingtalk
+Grafana 的安装使⽤
+400
+
+到这⾥就完成了使⽤ grafana 来展示 Kubernetes 集群的监控图表信息以及报警配置，但是我们明显可
+以感觉到 grafana 的优势在于图表的展示，报警功能有点弱，所以⼀般来说，在⽣产环境我们不会直
+接使⽤ grafana 的报警功能，更多的是使⽤功能更加强⼤的  AlertManager ，下节课我们再来和⼤家
+介绍了。
+点击查看本⽂视频
+扫描下⾯的⼆维码(或微信搜索 k8s技术圈 )关注我们的微信公众帐号，在微信公众帐号中回复 加群 即
+可加⼊到我们的 kubernetes 讨论群⾥⾯共同学习。
+k8s技术圈⼆维码
+Copyright © qikqiak.com 2018 all right reserved，powered by GitbookUpdated: 2019-04-24 15:32:07
+Grafana 的安装使⽤
+401

@@ -1,0 +1,1548 @@
+CHAPTER 10
+Time Series
+Time series data is an important form of structured data in many different fields, such
+as finance, economics, ecology, neuroscience, or physics. Anything that is observed or
+measured at many points in time forms a time series. Many time series are fixed fre-
+quency, which is to say that data points occur at regular intervals according to some
+rule, such as every 15 seconds, every 5 minutes, or once per month. Time series can
+also be irregular without a fixed unit or time or offset between units. How you mark
+and refer to time series data depends on the application and you may have one of the
+following:
+• Timestamps, specific instants in time
+• Fixed periods, such as the month January 2007 or the full year 2010
+• Intervals of time, indicated by a start and end timestamp. Periods can be thought
+of as special cases of intervals
+• Experiment or elapsed time; each timestamp is a measure of time relative to a
+particular start time. For example, the diameter of a cookie baking each second
+since being placed in the oven
+In this chapter, I am mainly concerned with time series in the first 3 categories, though
+many of the techniques can be applied to experimental time series where the index may
+be an integer or floating point number indicating elapsed time from the start of the
+experiment. The simplest and most widely used kind of time series are those indexed
+by timestamp.
+pandas provides a standard set of time series tools and data algorithms. With this, you
+can efficiently work with very large time series and easily slice and dice, aggregate, and
+resample irregular and fixed frequency time series. As you might guess, many of these
+tools are especially useful for financial and economics applications, but you could cer-
+tainly use them to analyze server log data, too.
+289
+
+Some of the features and code, in particular period logic, presented in
+this chapter were derived from the now defunct scikits.timeseries li-
+brary.
+Date and Time Data Types and Tools
+The Python standard library includes data types for date and time data, as well as
+calendar-related functionality. The datetime, time, and calendar modules are the main
+places to start. The datetime.datetime type, or simply datetime, is widely used:
+In [317]: from datetime import datetime
+In [318]: now = datetime.now()
+In [319]: now
+Out[319]: datetime.datetime(2012, 8, 4, 17, 9, 21, 832092)
+In [320]: now.year, now.month, now.day
+Out[320]: (2012, 8, 4)
+datetime stores both the date and time down to the microsecond. datetime.time
+delta represents the temporal difference between two datetime objects:
+In [321]: delta = datetime(2011, 1, 7) - datetime(2008, 6, 24, 8, 15)
+In [322]: delta
+Out[322]: datetime.timedelta(926, 56700)
+In [323]: delta.days        In [324]: delta.seconds
+Out[323]: 926               Out[324]: 56700
+You can add (or subtract) a timedelta or multiple thereof to a datetime object to yield
+a new shifted object:
+In [325]: from datetime import timedelta
+In [326]: start = datetime(2011, 1, 7)
+In [327]: start + timedelta(12)
+Out[327]: datetime.datetime(2011, 1, 19, 0, 0)
+In [328]: start - 2 * timedelta(12)
+Out[328]: datetime.datetime(2010, 12, 14, 0, 0)
+The data types in the datetime module are summarized in Table 10-1. While this chap-
+ter is mainly concerned with the data types in pandas and higher level time series ma-
+nipulation, you will undoubtedly encounter the datetime-based types in many other
+places in Python the wild.
+290 | Chapter 10: Time Series
+
+Table 10-1. Types in datetime module
+Type
+Description
+date
+Store calendar date (year, month, day) using the Gregorian calendar.
+time
+Store time of day as hours, minutes, seconds, and microseconds
+datetime
+Stores both date and time
+timedelta
+Represents the difference between two datetime values (as days, seconds, and micro-
+seconds)
+Converting between string and datetime
+datetime objects and pandas Timestamp objects, which I’ll introduce later, can be for-
+matted as strings using str or the strftime method, passing a format specification:
+In [329]: stamp = datetime(2011, 1, 3)
+In [330]: str(stamp)                   In [331]: stamp.strftime('%Y-%m-%d')
+Out[330]: '2011-01-03 00:00:00'        Out[331]: '2011-01-03'
+See Table 10-2 for a complete list of the format codes. These same format codes can be
+used to convert strings to dates using datetime.strptime:
+In [332]: value = '2011-01-03'
+In [333]: datetime.strptime(value, '%Y-%m-%d')
+Out[333]: datetime.datetime(2011, 1, 3, 0, 0)
+In [334]: datestrs = ['7/6/2011', '8/6/2011']
+In [335]: [datetime.strptime(x, '%m/%d/%Y') for x in datestrs]
+Out[335]: [datetime.datetime(2011, 7, 6, 0, 0), datetime.datetime(2011, 8, 6, 0, 0)]
+datetime.strptime is the best way to parse a date with a known format. However, it
+can be a bit annoying to have to write a format spec each time, especially for common
+date formats. In this case, you can use the parser.parse method in the third party 
+dateutil package:
+In [336]: from dateutil.parser import parse
+In [337]: parse('2011-01-03')
+Out[337]: datetime.datetime(2011, 1, 3, 0, 0)
+dateutil is capable of parsing almost any human-intelligible date representation:
+In [338]: parse('Jan 31, 1997 10:45 PM')
+Out[338]: datetime.datetime(1997, 1, 31, 22, 45)
+In international locales, day appearing before month is very common, so you can pass
+dayfirst=True to indicate this:
+In [339]: parse('6/12/2011', dayfirst=True)
+Out[339]: datetime.datetime(2011, 12, 6, 0, 0)
+Date and Time Data Types and Tools | 291
+
+pandas is generally oriented toward working with arrays of dates, whether used as an
+axis index or a column in a DataFrame. The to_datetime method parses many different
+kinds of date representations. Standard date formats like ISO8601 can be parsed very
+quickly.
+In [340]: datestrs
+Out[340]: ['7/6/2011', '8/6/2011']
+In [341]: pd.to_datetime(datestrs)
+Out[341]: 
+<class 'pandas.tseries.index.DatetimeIndex'>
+[2011-07-06 00:00:00, 2011-08-06 00:00:00]
+Length: 2, Freq: None, Timezone: None
+It also handles values that should be considered missing (None, empty string, etc.):
+In [342]: idx = pd.to_datetime(datestrs + [None])
+In [343]: idx
+Out[343]: 
+<class 'pandas.tseries.index.DatetimeIndex'>
+[2011-07-06 00:00:00, ..., NaT]
+Length: 3, Freq: None, Timezone: None
+In [344]: idx[2]
+Out[344]: NaT
+In [345]: pd.isnull(idx)
+Out[345]: array([False, False, True], dtype=bool)
+NaT (Not a Time) is pandas’s NA value for timestamp data.
+dateutil.parser is a useful, but not perfect tool. Notably, it will recog-
+nize some strings as dates that you might prefer that it didn’t, like
+'42' will be parsed as the year 2042 with today’s calendar date.
+Table 10-2. Datetime format specification (ISO C89 compatible)
+Type
+Description
+%Y
+4-digit year
+%y
+2-digit year
+%m
+2-digit month [01, 12]
+%d
+2-digit day [01, 31]
+%H
+Hour (24-hour clock) [00, 23]
+%I
+Hour (12-hour clock) [01, 12]
+%M
+2-digit minute [00, 59]
+%S
+Second [00, 61] (seconds 60, 61 account for leap seconds)
+%w
+Weekday as integer [0 (Sunday), 6]
+292 | Chapter 10: Time Series
+
+Type
+Description
+%U
+Week number of the year [00, 53]. Sunday is considered the first day of the week, and days before the first
+Sunday of the year are “week 0”.
+%W
+Week number of the year [00, 53]. Monday is considered the first day of the week, and days before the first
+Monday of the year are “week 0”.
+%z
+UTC time zone offset as +HHMM or -HHMM, empty if time zone naive
+%F
+Shortcut for %Y-%m-%d, for example 2012-4-18
+%D
+Shortcut for %m/%d/%y, for example 04/18/12
+datetime objects also have a number of locale-specific formatting options for systems
+in other countries or languages. For example, the abbreviated month names will be
+different on German or French systems compared with English systems. 
+Table 10-3. Locale-specific date formatting
+Type
+Description
+%a
+Abbreviated weekday name
+%A
+Full weekday name
+%b
+Abbreviated month name
+%B
+Full month name
+%c
+Full date and time, for example ‘Tue 01 May 2012 04:20:57 PM’
+%p
+Locale equivalent of AM or PM
+%x
+Locale-appropriate formatted date; e.g. in US May 1, 2012 yields ’05/01/2012’
+%X
+Locale-appropriate time, e.g. ’04:24:12 PM’
+Time Series Basics
+The most basic kind of time series object in pandas is a Series indexed by timestamps,
+which is often represented external to pandas as Python strings or datetime objects:
+In [346]: from datetime import datetime
+In [347]: dates = [datetime(2011, 1, 2), datetime(2011, 1, 5), datetime(2011, 1, 7),
+   .....:          datetime(2011, 1, 8), datetime(2011, 1, 10), datetime(2011, 1, 12)]
+In [348]: ts = Series(np.random.randn(6), index=dates)
+In [349]: ts
+Out[349]: 
+2011-01-02    0.690002
+2011-01-05    1.001543
+2011-01-07   -0.503087
+2011-01-08   -0.622274
+Time Series Basics | 293
+
+2011-01-10   -0.921169
+2011-01-12   -0.726213
+Under the hood, these datetime objects have been put in a DatetimeIndex, and the
+variable ts is now of type TimeSeries:
+In [350]: type(ts)
+Out[350]: pandas.core.series.TimeSeries
+In [351]: ts.index
+Out[351]: 
+<class 'pandas.tseries.index.DatetimeIndex'>
+[2011-01-02 00:00:00, ..., 2011-01-12 00:00:00]
+Length: 6, Freq: None, Timezone: None
+It’s not necessary to use the TimeSeries constructor explicitly; when
+creating a Series with a DatetimeIndex, pandas knows that the object is
+a time series.
+Like other Series, arithmetic operations between differently-indexed time series auto-
+matically align on the dates:
+In [352]: ts + ts[::2]
+Out[352]: 
+2011-01-02    1.380004
+2011-01-05         NaN
+2011-01-07   -1.006175
+2011-01-08         NaN
+2011-01-10   -1.842337
+2011-01-12         NaN
+pandas stores timestamps using NumPy’s datetime64 data type at the nanosecond res-
+olution:
+In [353]: ts.index.dtype
+Out[353]: dtype('datetime64[ns]')
+Scalar values from a DatetimeIndex are pandas Timestamp objects
+In [354]: stamp = ts.index[0]
+In [355]: stamp
+Out[355]: <Timestamp: 2011-01-02 00:00:00>
+A Timestamp can be substituted anywhere you would use a datetime object. Addition-
+ally, it can store frequency information (if any) and understands how to do time zone
+conversions and other kinds of manipulations. More on both of these things later.
+Indexing, Selection, Subsetting
+TimeSeries is a subclass of Series and thus behaves in the same way with regard to
+indexing and selecting data based on label:
+294 | Chapter 10: Time Series
+
+In [356]: stamp = ts.index[2]
+In [357]: ts[stamp]
+Out[357]: -0.50308739136034464
+As a convenience, you can also pass a string that is interpretable as a date:
+In [358]: ts['1/10/2011']             In [359]: ts['20110110']      
+Out[358]: -0.92116860801301081        Out[359]: -0.92116860801301081
+For longer time series, a year or only a year and month can be passed to easily select
+slices of data:
+In [360]: longer_ts = Series(np.random.randn(1000),
+   .....:                    index=pd.date_range('1/1/2000', periods=1000))
+In [361]: longer_ts
+Out[361]: 
+2000-01-01    0.222896
+2000-01-02    0.051316
+2000-01-03   -1.157719
+2000-01-04    0.816707
+...
+2002-09-23   -0.395813
+2002-09-24   -0.180737
+2002-09-25    1.337508
+2002-09-26   -0.416584
+Freq: D, Length: 1000
+In [362]: longer_ts['2001']        In [363]: longer_ts['2001-05']
+Out[362]:                          Out[363]:                     
+2001-01-01   -1.499503             2001-05-01    1.662014        
+2001-01-02    0.545154             2001-05-02   -1.189203        
+2001-01-03    0.400823             2001-05-03    0.093597        
+2001-01-04   -1.946230             2001-05-04   -0.539164        
+...                                ...                           
+2001-12-28   -1.568139             2001-05-28   -0.683066        
+2001-12-29   -0.900887             2001-05-29   -0.950313        
+2001-12-30    0.652346             2001-05-30    0.400710        
+2001-12-31    0.871600             2001-05-31   -0.126072        
+Freq: D, Length: 365               Freq: D, Length: 31
+Slicing with dates works just like with a regular Series:
+In [364]: ts[datetime(2011, 1, 7):]
+Out[364]: 
+2011-01-07   -0.503087
+2011-01-08   -0.622274
+2011-01-10   -0.921169
+2011-01-12   -0.726213
+Because most time series data is ordered chronologically, you can slice with timestamps
+not contained in a time series to perform a range query:
+In [365]: ts                  In [366]: ts['1/6/2011':'1/11/2011']
+Out[365]:                     Out[366]:                           
+2011-01-02    0.690002        2011-01-07   -0.503087              
+Time Series Basics | 295
+
+2011-01-05    1.001543        2011-01-08   -0.622274              
+2011-01-07   -0.503087        2011-01-10   -0.921169              
+2011-01-08   -0.622274                                            
+2011-01-10   -0.921169                                            
+2011-01-12   -0.726213
+As before you can pass either a string date, datetime, or Timestamp. Remember that
+slicing in this manner produces views on the source time series just like slicing NumPy
+arrays. There is an equivalent instance method truncate which slices a TimeSeries be-
+tween two dates:
+In [367]: ts.truncate(after='1/9/2011')
+Out[367]: 
+2011-01-02    0.690002
+2011-01-05    1.001543
+2011-01-07   -0.503087
+2011-01-08   -0.622274
+All of the above holds true for DataFrame as well, indexing on its rows:
+In [368]: dates = pd.date_range('1/1/2000', periods=100, freq='W-WED')
+In [369]: long_df = DataFrame(np.random.randn(100, 4),
+   .....:                     index=dates,
+   .....:                     columns=['Colorado', 'Texas', 'New York', 'Ohio'])
+In [370]: long_df.ix['5-2001']
+Out[370]: 
+            Colorado     Texas  New York      Ohio
+2001-05-02  0.943479 -0.349366  0.530412 -0.508724
+2001-05-09  0.230643 -0.065569 -0.248717 -0.587136
+2001-05-16 -1.022324  1.060661  0.954768 -0.511824
+2001-05-23 -1.387680  0.767902 -1.164490  1.527070
+2001-05-30  0.287542  0.715359 -0.345805  0.470886
+Time Series with Duplicate Indices
+In some applications, there may be multiple data observations falling on a particular
+timestamp. Here is an example:
+In [371]: dates = pd.DatetimeIndex(['1/1/2000', '1/2/2000', '1/2/2000', '1/2/2000',
+   .....:                           '1/3/2000'])
+In [372]: dup_ts = Series(np.arange(5), index=dates)
+In [373]: dup_ts
+Out[373]: 
+2000-01-01    0
+2000-01-02    1
+2000-01-02    2
+2000-01-02    3
+2000-01-03    4
+We can tell that the index is not unique by checking its is_unique property:
+296 | Chapter 10: Time Series
+
+In [374]: dup_ts.index.is_unique
+Out[374]: False
+Indexing into this time series will now either produce scalar values or slices depending
+on whether a timestamp is duplicated:
+In [375]: dup_ts['1/3/2000']  # not duplicated
+Out[375]: 4
+In [376]: dup_ts['1/2/2000']  # duplicated
+Out[376]: 
+2000-01-02    1
+2000-01-02    2
+2000-01-02    3
+Suppose you wanted to aggregate the data having non-unique timestamps. One way
+to do this is to use groupby and pass level=0 (the only level of indexing!):
+In [377]: grouped = dup_ts.groupby(level=0)
+In [378]: grouped.mean()      In [379]: grouped.count()
+Out[378]:                     Out[379]:                
+2000-01-01    0               2000-01-01    1          
+2000-01-02    2               2000-01-02    3          
+2000-01-03    4               2000-01-03    1
+Date Ranges, Frequencies, and Shifting
+Generic time series in pandas are assumed to be irregular; that is, they have no fixed
+frequency. For many applications this is sufficient. However, it’s often desirable to work
+relative to a fixed frequency, such as daily, monthly, or every 15 minutes, even if that
+means introducing missing values into a time series. Fortunately pandas has a full suite
+of standard time series frequencies and tools for resampling, inferring frequencies, and
+generating fixed frequency date ranges. For example, in the example time series, con-
+verting it to be fixed daily frequency can be accomplished by calling resample:
+In [380]: ts                  In [381]: ts.resample('D')
+Out[380]:                     Out[381]:                 
+2011-01-02    0.690002        2011-01-02    0.690002    
+2011-01-05    1.001543        2011-01-03         NaN    
+2011-01-07   -0.503087        2011-01-04         NaN    
+2011-01-08   -0.622274        2011-01-05    1.001543    
+2011-01-10   -0.921169        2011-01-06         NaN    
+2011-01-12   -0.726213        2011-01-07   -0.503087    
+                              2011-01-08   -0.622274    
+                              2011-01-09         NaN    
+                              2011-01-10   -0.921169    
+                              2011-01-11         NaN    
+                              2011-01-12   -0.726213    
+                              Freq: D
+Conversion between frequencies or resampling is a big enough topic to have its own
+section later. Here I’ll show you how to use the base frequencies and multiples thereof.
+Date Ranges, Frequencies, and Shifting | 297
+
+Generating Date Ranges
+While I used it previously without explanation, you may have guessed that pan
+das.date_range is responsible for generating a DatetimeIndex with an indicated length
+according to a particular frequency:
+In [382]: index = pd.date_range('4/1/2012', '6/1/2012')
+In [383]: index
+Out[383]: 
+<class 'pandas.tseries.index.DatetimeIndex'>
+[2012-04-01 00:00:00, ..., 2012-06-01 00:00:00]
+Length: 62, Freq: D, Timezone: None
+By default, date_range generates daily timestamps. If you pass only a start or end date,
+you must pass a number of periods to generate:
+In [384]: pd.date_range(start='4/1/2012', periods=20)
+Out[384]: 
+<class 'pandas.tseries.index.DatetimeIndex'>
+[2012-04-01 00:00:00, ..., 2012-04-20 00:00:00]
+Length: 20, Freq: D, Timezone: None
+In [385]: pd.date_range(end='6/1/2012', periods=20)
+Out[385]: 
+<class 'pandas.tseries.index.DatetimeIndex'>
+[2012-05-13 00:00:00, ..., 2012-06-01 00:00:00]
+Length: 20, Freq: D, Timezone: None
+The start and end dates define strict boundaries for the generated date index. For ex-
+ample, if you wanted a date index containing the last business day of each month, you
+would pass the 'BM' frequency (business end of month) and only dates falling on or
+inside the date interval will be included:
+In [386]: pd.date_range('1/1/2000', '12/1/2000', freq='BM')
+Out[386]: 
+<class 'pandas.tseries.index.DatetimeIndex'>
+[2000-01-31 00:00:00, ..., 2000-11-30 00:00:00]
+Length: 11, Freq: BM, Timezone: None
+date_range by default preserves the time (if any) of the start or end timestamp:
+In [387]: pd.date_range('5/2/2012 12:56:31', periods=5)
+Out[387]: 
+<class 'pandas.tseries.index.DatetimeIndex'>
+[2012-05-02 12:56:31, ..., 2012-05-06 12:56:31]
+Length: 5, Freq: D, Timezone: None
+Sometimes you will have start or end dates with time information but want to generate
+a set of timestamps normalized to midnight as a convention. To do this, there is a
+normalize option:
+In [388]: pd.date_range('5/2/2012 12:56:31', periods=5, normalize=True)
+Out[388]: 
+<class 'pandas.tseries.index.DatetimeIndex'>
+298 | Chapter 10: Time Series
+
+[2012-05-02 00:00:00, ..., 2012-05-06 00:00:00]
+Length: 5, Freq: D, Timezone: None
+Frequencies and Date Offsets
+Frequencies in pandas are composed of a base frequency and a multiplier. Base fre-
+quencies are typically referred to by a string alias, like 'M' for monthly or 'H' for hourly.
+For each base frequency, there is an object defined generally referred to as a date off-
+set. For example, hourly frequency can be represented with the Hour class:
+In [389]: from pandas.tseries.offsets import Hour, Minute
+In [390]: hour = Hour()
+In [391]: hour
+Out[391]: <1 Hour>
+You can define a multiple of an offset by passing an integer:
+In [392]: four_hours = Hour(4)
+In [393]: four_hours
+Out[393]: <4 Hours>
+In most applications, you would never need to explicitly create one of these objects,
+instead using a string alias like 'H' or '4H'. Putting an integer before the base frequency
+creates a multiple:
+In [394]: pd.date_range('1/1/2000', '1/3/2000 23:59', freq='4h')
+Out[394]: 
+<class 'pandas.tseries.index.DatetimeIndex'>
+[2000-01-01 00:00:00, ..., 2000-01-03 20:00:00]
+Length: 18, Freq: 4H, Timezone: None
+Many offsets can be combined together by addition:
+In [395]: Hour(2) + Minute(30)
+Out[395]: <150 Minutes>
+Similarly, you can pass frequency strings like '2h30min' which will effectively be parsed
+to the same expression:
+In [396]: pd.date_range('1/1/2000', periods=10, freq='1h30min')
+Out[396]: 
+<class 'pandas.tseries.index.DatetimeIndex'>
+[2000-01-01 00:00:00, ..., 2000-01-01 13:30:00]
+Length: 10, Freq: 90T, Timezone: None
+Some frequencies describe points in time that are not evenly spaced. For example,
+'M' (calendar month end) and 'BM' (last business/weekday of month) depend on the
+number of days in a month and, in the latter case, whether the month ends on a weekend
+or not. For lack of a better term, I call these anchored offsets.
+See Table 10-4 for a listing of frequency codes and date offset classes available in pandas.
+Date Ranges, Frequencies, and Shifting | 299
+
+Users can define their own custom frequency classes to provide date
+logic not available in pandas, though the full details of that are outside
+the scope of this book.
+Table 10-4. Base Time Series Frequencies
+Alias
+Offset Type
+Description
+D
+Day
+Calendar daily
+B
+BusinessDay
+Business daily
+H
+Hour
+Hourly
+T or min
+Minute
+Minutely
+S
+Second
+Secondly
+L or ms
+Milli
+Millisecond (1/1000th of 1 second)
+U
+Micro
+Microsecond (1/1000000th of 1 second)
+M
+MonthEnd
+Last calendar day of month
+BM
+BusinessMonthEnd
+Last business day (weekday) of month
+MS
+MonthBegin
+First calendar day of month
+BMS
+BusinessMonthBegin
+First weekday of month
+W-MON, W-TUE, ...
+Week
+Weekly on given day of week: MON, TUE, WED, THU, FRI, SAT,
+or SUN.
+WOM-1MON, WOM-2MON, ...
+WeekOfMonth
+Generate weekly dates in the first, second, third, or fourth week
+of the month. For example, WOM-3FRI for the 3rd Friday of
+each month.
+Q-JAN, Q-FEB, ...
+QuarterEnd
+Quarterly dates anchored on last calendar day of each month,
+for year ending in indicated month: JAN, FEB, MAR, APR, MAY,
+JUN, JUL, AUG, SEP, OCT, NOV, or DEC.
+BQ-JAN, BQ-FEB, ...
+BusinessQuarterEnd
+Quarterly dates anchored on last weekday day of each month,
+for year ending in indicated month
+QS-JAN, QS-FEB, ...
+QuarterBegin
+Quarterly dates anchored on first calendar day of each month,
+for year ending in indicated month
+BQS-JAN, BQS-FEB, ...
+BusinessQuarterBegin
+Quarterly dates anchored on first weekday day of each month,
+for year ending in indicated month
+A-JAN, A-FEB, ...
+YearEnd
+Annual dates anchored on last calendar day of given month:
+JAN, FEB, MAR, APR, MAY, JUN, JUL, AUG, SEP, OCT, NOV, or DEC.
+BA-JAN, BA-FEB, ...
+BusinessYearEnd
+Annual dates anchored on last weekday of given month
+AS-JAN, AS-FEB, ...
+YearBegin
+Annual dates anchored on first day of given month
+BAS-JAN, BAS-FEB, ...
+BusinessYearBegin
+Annual dates anchored on first weekday of given month
+300 | Chapter 10: Time Series
+
+Week of month dates
+One useful frequency class is “week of month”, starting with WOM. This enables you to
+get dates like the third Friday of each month:
+In [397]: rng = pd.date_range('1/1/2012', '9/1/2012', freq='WOM-3FRI')
+In [398]: list(rng)
+Out[398]: 
+[<Timestamp: 2012-01-20 00:00:00>,
+ <Timestamp: 2012-02-17 00:00:00>,
+ <Timestamp: 2012-03-16 00:00:00>,
+ <Timestamp: 2012-04-20 00:00:00>,
+ <Timestamp: 2012-05-18 00:00:00>,
+ <Timestamp: 2012-06-15 00:00:00>,
+ <Timestamp: 2012-07-20 00:00:00>,
+ <Timestamp: 2012-08-17 00:00:00>]
+Traders of US equity options will recognize these dates as the standard dates of monthly
+expiry.
+Shifting (Leading and Lagging) Data
+“Shifting” refers to moving data backward and forward through time. Both Series and
+DataFrame have a shift method for doing naive shifts forward or backward, leaving
+the index unmodified:
+In [399]: ts = Series(np.random.randn(4),
+   .....:             index=pd.date_range('1/1/2000', periods=4, freq='M'))
+In [400]: ts                In [401]: ts.shift(2)       In [402]: ts.shift(-2)
+Out[400]:                   Out[401]:                   Out[402]:             
+2000-01-31    0.575283      2000-01-31         NaN      2000-01-31    1.814582
+2000-02-29    0.304205      2000-02-29         NaN      2000-02-29    1.634858
+2000-03-31    1.814582      2000-03-31    0.575283      2000-03-31         NaN
+2000-04-30    1.634858      2000-04-30    0.304205      2000-04-30         NaN
+Freq: M                     Freq: M                     Freq: M
+A common use of shift is computing percent changes in a time series or multiple time
+series as DataFrame columns. This is expressed as
+ts / ts.shift(1) - 1
+Because naive shifts leave the index unmodified, some data is discarded. Thus if the
+frequency is known, it can be passed to shift to advance the timestamps instead of
+simply the data:
+In [403]: ts.shift(2, freq='M')
+Out[403]: 
+2000-03-31    0.575283
+2000-04-30    0.304205
+2000-05-31    1.814582
+2000-06-30    1.634858
+Freq: M
+Date Ranges, Frequencies, and Shifting | 301
+
+Other frequencies can be passed, too, giving you a lot of flexibility in how to lead and
+lag the data:
+In [404]: ts.shift(3, freq='D')        In [405]: ts.shift(1, freq='3D')
+Out[404]:                              Out[405]:                       
+2000-02-03    0.575283                 2000-02-03    0.575283          
+2000-03-03    0.304205                 2000-03-03    0.304205          
+2000-04-03    1.814582                 2000-04-03    1.814582          
+2000-05-03    1.634858                 2000-05-03    1.634858          
+                                                                       
+In [406]: ts.shift(1, freq='90T')
+Out[406]: 
+2000-01-31 01:30:00    0.575283
+2000-02-29 01:30:00    0.304205
+2000-03-31 01:30:00    1.814582
+2000-04-30 01:30:00    1.634858
+Shifting dates with offsets
+The pandas date offsets can also be used with datetime or Timestamp objects:
+In [407]: from pandas.tseries.offsets import Day, MonthEnd
+In [408]: now = datetime(2011, 11, 17)
+In [409]: now + 3 * Day()
+Out[409]: datetime.datetime(2011, 11, 20, 0, 0)
+If you add an anchored offset like MonthEnd, the first increment will roll forward a date
+to the next date according to the frequency rule:
+In [410]: now + MonthEnd()
+Out[410]: datetime.datetime(2011, 11, 30, 0, 0)
+In [411]: now + MonthEnd(2)
+Out[411]: datetime.datetime(2011, 12, 31, 0, 0)
+Anchored offsets can explicitly “roll” dates forward or backward using their rollfor
+ward and rollback methods, respectively:
+In [412]: offset = MonthEnd()
+In [413]: offset.rollforward(now)
+Out[413]: datetime.datetime(2011, 11, 30, 0, 0)
+In [414]: offset.rollback(now)
+Out[414]: datetime.datetime(2011, 10, 31, 0, 0)
+A clever use of date offsets is to use these methods with groupby:
+In [415]: ts = Series(np.random.randn(20),
+   .....:             index=pd.date_range('1/15/2000', periods=20, freq='4d'))
+In [416]: ts.groupby(offset.rollforward).mean()
+Out[416]: 
+2000-01-31   -0.448874
+302 | Chapter 10: Time Series
+
+2000-02-29   -0.683663
+2000-03-31    0.251920
+Of course, an easier and faster way to do this is using resample (much more on this later):
+In [417]: ts.resample('M', how='mean')
+Out[417]: 
+2000-01-31   -0.448874
+2000-02-29   -0.683663
+2000-03-31    0.251920
+Freq: M
+Time Zone Handling
+Working with time zones is generally considered one of the most unpleasant parts of
+time series manipulation. In particular, daylight savings time (DST) transitions are a
+common source of complication. As such, many time series users choose to work with
+time series in coordinated universal time or UTC, which is the successor to Greenwich
+Mean Time and is the current international standard. Time zones are expressed as
+offsets from UTC; for example, New York is four hours behind UTC during daylight
+savings time and 5 hours the rest of the year.
+In Python, time zone information comes from the 3rd party pytz library, which exposes
+the Olson database, a compilation of world time zone information. This is especially
+important for historical data because the DST transition dates (and even UTC offsets)
+have been changed numerous times depending on the whims of local governments. In
+the United States,the DST transition times have been changed many times since 1900!
+For detailed information about pytz library, you’ll need to look at that library’s docu-
+mentation. As far as this book is concerned, pandas wraps pytz’s functionality so you
+can ignore its API outside of the time zone names. Time zone names can be found
+interactively and in the docs:
+In [418]: import pytz
+In [419]: pytz.common_timezones[-5:]
+Out[419]: ['US/Eastern', 'US/Hawaii', 'US/Mountain', 'US/Pacific', 'UTC']
+To get a time zone object from pytz, use pytz.timezone:
+In [420]: tz = pytz.timezone('US/Eastern')
+In [421]: tz
+Out[421]: <DstTzInfo 'US/Eastern' EST-1 day, 19:00:00 STD>
+Methods in pandas will accept either time zone names or these objects. I recommend
+just using the names.
+Time Zone Handling | 303
+
+Localization and Conversion
+By default, time series in pandas are time zone naive. Consider the following time series:
+rng = pd.date_range('3/9/2012 9:30', periods=6, freq='D')
+ts = Series(np.random.randn(len(rng)), index=rng)
+The index’s tz field is None:
+In [423]: print(ts.index.tz)
+None
+Date ranges can be generated with a time zone set:
+In [424]: pd.date_range('3/9/2012 9:30', periods=10, freq='D', tz='UTC')
+Out[424]: 
+<class 'pandas.tseries.index.DatetimeIndex'>
+[2012-03-09 09:30:00, ..., 2012-03-18 09:30:00]
+Length: 10, Freq: D, Timezone: UTC
+Conversion from naive to localized is handled by the tz_localize method:
+In [425]: ts_utc = ts.tz_localize('UTC')
+In [426]: ts_utc
+Out[426]: 
+2012-03-09 09:30:00+00:00    0.414615
+2012-03-10 09:30:00+00:00    0.427185
+2012-03-11 09:30:00+00:00    1.172557
+2012-03-12 09:30:00+00:00   -0.351572
+2012-03-13 09:30:00+00:00    1.454593
+2012-03-14 09:30:00+00:00    2.043319
+Freq: D
+In [427]: ts_utc.index
+Out[427]: 
+<class 'pandas.tseries.index.DatetimeIndex'>
+[2012-03-09 09:30:00, ..., 2012-03-14 09:30:00]
+Length: 6, Freq: D, Timezone: UTC
+Once a time series has been localized to a particular time zone, it can be converted to
+another time zone using tz_convert:
+In [428]: ts_utc.tz_convert('US/Eastern')
+Out[428]: 
+2012-03-09 04:30:00-05:00    0.414615
+2012-03-10 04:30:00-05:00    0.427185
+2012-03-11 05:30:00-04:00    1.172557
+2012-03-12 05:30:00-04:00   -0.351572
+2012-03-13 05:30:00-04:00    1.454593
+2012-03-14 05:30:00-04:00    2.043319
+Freq: D
+In the case of the above time series, which straddles a DST transition in the US/Eastern
+time zone, we could localize to EST and convert to, say, UTC or Berlin time:
+In [429]: ts_eastern = ts.tz_localize('US/Eastern')
+304 | Chapter 10: Time Series
+
+In [430]: ts_eastern.tz_convert('UTC')
+Out[430]: 
+2012-03-09 14:30:00+00:00    0.414615
+2012-03-10 14:30:00+00:00    0.427185
+2012-03-11 13:30:00+00:00    1.172557
+2012-03-12 13:30:00+00:00   -0.351572
+2012-03-13 13:30:00+00:00    1.454593
+2012-03-14 13:30:00+00:00    2.043319
+Freq: D
+In [431]: ts_eastern.tz_convert('Europe/Berlin')
+Out[431]: 
+2012-03-09 15:30:00+01:00    0.414615
+2012-03-10 15:30:00+01:00    0.427185
+2012-03-11 14:30:00+01:00    1.172557
+2012-03-12 14:30:00+01:00   -0.351572
+2012-03-13 14:30:00+01:00    1.454593
+2012-03-14 14:30:00+01:00    2.043319
+Freq: D
+tz_localize and tz_convert are also instance methods on DatetimeIndex:
+In [432]: ts.index.tz_localize('Asia/Shanghai')
+Out[432]: 
+<class 'pandas.tseries.index.DatetimeIndex'>
+[2012-03-09 09:30:00, ..., 2012-03-14 09:30:00]
+Length: 6, Freq: D, Timezone: Asia/Shanghai
+Localizing naive timestamps also checks for ambiguous or non-existent
+times around daylight savings time transitions.
+Operations with Time Zone−aware Timestamp Objects
+Similar to time series and date ranges, individual Timestamp objects similarly can be
+localized from naive to time zone-aware and converted from one time zone to another:
+In [433]: stamp = pd.Timestamp('2011-03-12 04:00')
+In [434]: stamp_utc = stamp.tz_localize('utc')
+In [435]: stamp_utc.tz_convert('US/Eastern')
+Out[435]: <Timestamp: 2011-03-11 23:00:00-0500 EST, tz=US/Eastern>
+You can also pass a time zone when creating the Timestamp:
+In [436]: stamp_moscow = pd.Timestamp('2011-03-12 04:00', tz='Europe/Moscow')
+In [437]: stamp_moscow
+Out[437]: <Timestamp: 2011-03-12 04:00:00+0300 MSK, tz=Europe/Moscow>
+Time zone-aware Timestamp objects internally store a UTC timestamp value as nano-
+seconds since the UNIX epoch (January 1, 1970); this UTC value is invariant between
+time zone conversions:
+Time Zone Handling | 305
+
+In [438]: stamp_utc.value
+Out[438]: 1299902400000000000
+In [439]: stamp_utc.tz_convert('US/Eastern').value
+Out[439]: 1299902400000000000
+When performing time arithmetic using pandas’s DateOffset objects, daylight savings
+time transitions are respected where possible:
+# 30 minutes before DST transition
+In [440]: from pandas.tseries.offsets import Hour
+In [441]: stamp = pd.Timestamp('2012-03-12 01:30', tz='US/Eastern')
+In [442]: stamp
+Out[442]: <Timestamp: 2012-03-12 01:30:00-0400 EDT, tz=US/Eastern>
+In [443]: stamp + Hour()
+Out[443]: <Timestamp: 2012-03-12 02:30:00-0400 EDT, tz=US/Eastern>
+# 90 minutes before DST transition
+In [444]: stamp = pd.Timestamp('2012-11-04 00:30', tz='US/Eastern')
+In [445]: stamp
+Out[445]: <Timestamp: 2012-11-04 00:30:00-0400 EDT, tz=US/Eastern>
+In [446]: stamp + 2 * Hour()
+Out[446]: <Timestamp: 2012-11-04 01:30:00-0500 EST, tz=US/Eastern>
+Operations between Different Time Zones
+If two time series with different time zones are combined, the result will be UTC. Since
+the timestamps are stored under the hood in UTC, this is a straightforward operation
+and requires no conversion to happen:
+In [447]: rng = pd.date_range('3/7/2012 9:30', periods=10, freq='B')
+In [448]: ts = Series(np.random.randn(len(rng)), index=rng)
+In [449]: ts
+Out[449]: 
+2012-03-07 09:30:00   -1.749309
+2012-03-08 09:30:00   -0.387235
+2012-03-09 09:30:00   -0.208074
+2012-03-12 09:30:00   -1.221957
+2012-03-13 09:30:00   -0.067460
+2012-03-14 09:30:00    0.229005
+2012-03-15 09:30:00   -0.576234
+2012-03-16 09:30:00    0.816895
+2012-03-19 09:30:00   -0.772192
+2012-03-20 09:30:00   -1.333576
+Freq: B
+In [450]: ts1 = ts[:7].tz_localize('Europe/London')
+306 | Chapter 10: Time Series
+
+In [451]: ts2 = ts1[2:].tz_convert('Europe/Moscow')
+In [452]: result = ts1 + ts2
+In [453]: result.index
+Out[453]: 
+<class 'pandas.tseries.index.DatetimeIndex'>
+[2012-03-07 09:30:00, ..., 2012-03-15 09:30:00]
+Length: 7, Freq: B, Timezone: UTC
+Periods and Period Arithmetic
+Periods represent time spans, like days, months, quarters, or years. The Period class
+represents this data type, requiring a string or integer and a frequency from the above
+table:
+In [454]: p = pd.Period(2007, freq='A-DEC')
+In [455]: p
+Out[455]: Period('2007', 'A-DEC')
+In this case, the Period object represents the full timespan from January 1, 2007 to
+December 31, 2007, inclusive. Conveniently, adding and subtracting integers from pe-
+riods has the effect of shifting by their frequency:
+In [456]: p + 5                          In [457]: p - 2                  
+Out[456]: Period('2012', 'A-DEC')        Out[457]: Period('2005', 'A-DEC')
+If two periods have the same frequency, their difference is the number of units between
+them:
+In [458]: pd.Period('2014', freq='A-DEC') - p
+Out[458]: 7
+Regular ranges of periods can be constructed using the period_range function:
+In [459]: rng = pd.period_range('1/1/2000', '6/30/2000', freq='M')
+In [460]: rng
+Out[460]: 
+<class 'pandas.tseries.period.PeriodIndex'>
+freq: M
+[2000-01, ..., 2000-06]
+length: 6
+The PeriodIndex class stores a sequence of periods and can serve as an axis index in
+any pandas data structure:
+In [461]: Series(np.random.randn(6), index=rng)
+Out[461]: 
+2000-01   -0.309119
+2000-02    0.028558
+2000-03    1.129605
+2000-04   -0.374173
+2000-05   -0.011401
+Periods and Period Arithmetic | 307
+
+2000-06    0.272924
+Freq: M
+If you have an array of strings, you can also appeal to the PeriodIndex class itself:
+In [462]: values = ['2001Q3', '2002Q2', '2003Q1']
+In [463]: index = pd.PeriodIndex(values, freq='Q-DEC')
+In [464]: index
+Out[464]: 
+<class 'pandas.tseries.period.PeriodIndex'>
+freq: Q-DEC
+[2001Q3, ..., 2003Q1]
+length: 3
+Period Frequency Conversion
+Periods and PeriodIndex objects can be converted to another frequency using their 
+asfreq method. As an example, suppose we had an annual period and wanted to convert
+it into a monthly period either at the start or end of the year. This is fairly straightfor-
+ward:
+In [465]: p = pd.Period('2007', freq='A-DEC')
+In [466]: p.asfreq('M', how='start')      In [467]: p.asfreq('M', how='end')
+Out[466]: Period('2007-01', 'M')         Out[467]: Period('2007-12', 'M')
+You can think of Period('2007', 'A-DEC') as being a cursor pointing to a span of time,
+subdivided by monthly periods. See Figure 10-1 for an illustration of this. For a fiscal
+year ending on a month other than December, the monthly subperiods belonging are
+different:
+In [468]: p = pd.Period('2007', freq='A-JUN')
+In [469]: p.asfreq('M', 'start')       In [470]: p.asfreq('M', 'end')   
+Out[469]: Period('2006-07', 'M')      Out[470]: Period('2007-07', 'M')
+When converting from high to low frequency, the superperiod will be determined de-
+pending on where the subperiod “belongs”. For example, in A-JUN frequency, the month
+Aug-2007 is actually part of the 2008 period:
+In [471]: p = pd.Period('2007-08', 'M')
+In [472]: p.asfreq('A-JUN')
+Out[472]: Period('2008', 'A-JUN')
+Whole PeriodIndex objects or TimeSeries can be similarly converted with the same
+semantics:
+In [473]: rng = pd.period_range('2006', '2009', freq='A-DEC')
+In [474]: ts = Series(np.random.randn(len(rng)), index=rng)
+In [475]: ts
+308 | Chapter 10: Time Series
+
+Out[475]: 
+2006   -0.601544
+2007    0.574265
+2008   -0.194115
+2009    0.202225
+Freq: A-DEC
+In [476]: ts.asfreq('M', how='start')      In [477]: ts.asfreq('B', how='end')
+Out[476]:                                  Out[477]:                          
+2006-01   -0.601544                        2006-12-29   -0.601544            
+2007-01    0.574265                        2007-12-31    0.574265            
+2008-01   -0.194115                        2008-12-31   -0.194115            
+2009-01    0.202225                        2009-12-31    0.202225            
+Freq: M                                    Freq: B
+Figure 10-1. Period frequency conversion illustration
+Quarterly Period Frequencies
+Quarterly data is standard in accounting, finance, and other fields. Much quarterly data
+is reported relative to a fiscal year end, typically the last calendar or business day of one
+of the 12 months of the year. As such, the period 2012Q4 has a different meaning de-
+pending on fiscal year end. pandas supports all 12 possible quarterly frequencies as Q-
+JAN through Q-DEC:
+In [478]: p = pd.Period('2012Q4', freq='Q-JAN')
+In [479]: p
+Out[479]: Period('2012Q4', 'Q-JAN')
+In the case of fiscal year ending in January, 2012Q4 runs from November through Jan-
+uary, which you can check by converting to daily frequency. See Figure 10-2 for an
+illustration:
+In [480]: p.asfreq('D', 'start')          In [481]: p.asfreq('D', 'end')      
+Out[480]: Period('2011-11-01', 'D')      Out[481]: Period('2012-01-31', 'D')
+Periods and Period Arithmetic | 309
+
+Thus, it’s possible to do period arithmetic very easily; for example, to get the timestamp
+at 4PM on the 2nd to last business day of the quarter, you could do:
+In [482]: p4pm = (p.asfreq('B', 'e') - 1).asfreq('T', 's') + 16 * 60
+In [483]: p4pm
+Out[483]: Period('2012-01-30 16:00', 'T')
+In [484]: p4pm.to_timestamp()
+Out[484]: <Timestamp: 2012-01-30 16:00:00>
+Figure 10-2. Different quarterly frequency conventions
+Generating quarterly ranges works as you would expect using period_range. Arithmetic
+is identical, too:
+In [485]: rng = pd.period_range('2011Q3', '2012Q4', freq='Q-JAN')
+In [486]: ts = Series(np.arange(len(rng)), index=rng)
+In [487]: ts
+Out[487]: 
+2011Q3    0
+2011Q4    1
+2012Q1    2
+2012Q2    3
+2012Q3    4
+2012Q4    5
+Freq: Q-JAN
+In [488]: new_rng = (rng.asfreq('B', 'e') - 1).asfreq('T', 's') + 16 * 60
+In [489]: ts.index = new_rng.to_timestamp()
+In [490]: ts
+Out[490]: 
+2010-10-28 16:00:00    0
+2011-01-28 16:00:00    1
+2011-04-28 16:00:00    2
+2011-07-28 16:00:00    3
+2011-10-28 16:00:00    4
+2012-01-30 16:00:00    5
+310 | Chapter 10: Time Series
+
+Converting Timestamps to Periods (and Back)
+Series and DataFrame objects indexed by timestamps can be converted to periods using
+the to_period method:
+In [491]: rng = pd.date_range('1/1/2000', periods=3, freq='M')
+In [492]: ts = Series(randn(3), index=rng)
+In [493]: pts = ts.to_period()
+In [494]: ts                  In [495]: pts       
+Out[494]:                     Out[495]:           
+2000-01-31   -0.505124        2000-01   -0.505124
+2000-02-29    2.954439        2000-02    2.954439
+2000-03-31   -2.630247        2000-03   -2.630247
+Freq: M                       Freq: M
+Since periods always refer to non-overlapping timespans, a timestamp can only belong
+to a single period for a given frequency. While the frequency of the new PeriodIndex is
+inferred from the timestamps by default, you can specify any frequency you want. There
+is also no problem with having duplicate periods in the result:
+In [496]: rng = pd.date_range('1/29/2000', periods=6, freq='D')
+In [497]: ts2 = Series(randn(6), index=rng)
+In [498]: ts2.to_period('M')
+Out[498]: 
+2000-01   -0.352453
+2000-01   -0.477808
+2000-01    0.161594
+2000-02    1.686833
+2000-02    0.821965
+2000-02   -0.667406
+Freq: M
+To convert back to timestamps, use to_timestamp:
+In [499]: pts = ts.to_period()
+In [500]: pts
+Out[500]: 
+2000-01   -0.505124
+2000-02    2.954439
+2000-03   -2.630247
+Freq: M
+In [501]: pts.to_timestamp(how='end')
+Out[501]: 
+2000-01-31   -0.505124
+2000-02-29    2.954439
+2000-03-31   -2.630247
+Freq: M
+Periods and Period Arithmetic | 311
+
+Creating a PeriodIndex from Arrays
+Fixed frequency data sets are sometimes stored with timespan information spread
+across multiple columns. For example, in this macroeconomic data set, the year and
+quarter are in different columns:
+In [502]: data = pd.read_csv('ch08/macrodata.csv')
+In [503]: data.year            In [504]: data.quarter    
+Out[503]:                      Out[504]:                 
+0    1959                      0    1                    
+1    1959                      1    2                    
+2    1959                      2    3                    
+3    1959                      3    4                    
+...                            ...                       
+199    2008                    199    4                  
+200    2009                    200    1                  
+201    2009                    201    2                  
+202    2009                    202    3                  
+Name: year, Length: 203        Name: quarter, Length: 203
+By passing these arrays to PeriodIndex with a frequency, they can be combined to form
+an index for the DataFrame:
+In [505]: index = pd.PeriodIndex(year=data.year, quarter=data.quarter, freq='Q-DEC')
+In [506]: index
+Out[506]: 
+<class 'pandas.tseries.period.PeriodIndex'>
+freq: Q-DEC
+[1959Q1, ..., 2009Q3]
+length: 203
+In [507]: data.index = index
+In [508]: data.infl
+Out[508]: 
+1959Q1    0.00
+1959Q2    2.34
+1959Q3    2.74
+1959Q4    0.27
+...
+2008Q4   -8.79
+2009Q1    0.94
+2009Q2    3.37
+2009Q3    3.56
+Freq: Q-DEC, Name: infl, Length: 203
+Resampling and Frequency Conversion
+Resampling refers to the process of converting a time series from one frequency to
+another. Aggregating higher frequency data to lower frequency is called downsam-
+pling, while converting lower frequency to higher frequency is called upsampling. Not
+312 | Chapter 10: Time Series
+
+all resampling falls into either of these categories; for example, converting W-WED (weekly
+on Wednesday) to W-FRI is neither upsampling nor downstampling.
+pandas objects are equipped with a resample method, which is the workhorse function
+for all frequency conversion:
+In [509]: rng = pd.date_range('1/1/2000', periods=100, freq='D')
+In [510]: ts = Series(randn(len(rng)), index=rng)
+In [511]: ts.resample('M', how='mean')
+Out[511]: 
+2000-01-31    0.170876
+2000-02-29    0.165020
+2000-03-31    0.095451
+2000-04-30    0.363566
+Freq: M
+In [512]: ts.resample('M', how='mean', kind='period')
+Out[512]: 
+2000-01    0.170876
+2000-02    0.165020
+2000-03    0.095451
+2000-04    0.363566
+Freq: M
+resample is a flexible and high-performance method that can be used to process very
+large time series. I’ll illustrate its semantics and use through a series of examples.
+Table 10-5. Resample method arguments
+Argument
+Description
+freq
+String or DateOffset indicating desired resampled frequency, e.g. ‘M', ’5min', or Sec
+ond(15)
+how='mean'
+Function name or array function producing aggregated value, for example 'mean',
+'ohlc', np.max. Defaults to 'mean'. Other common values: 'first', 'last',
+'median', 'ohlc', 'max', 'min'.
+axis=0
+Axis to resample on, default axis=0
+fill_method=None
+How to interpolate when upsampling, as in 'ffill' or 'bfill'. By default does no
+interpolation.
+closed='right'
+In downsampling, which end of each interval is closed (inclusive), 'right' or
+'left'. Defaults to 'right'
+label='right'
+In downsampling, how to label the aggregated result, with the 'right' or 'left'
+bin edge. For example, the 9:30 to 9:35 5-minute interval could be labeled 9:30 or
+9:35. Defaults to 'right' (or 9:35, in this example).
+loffset=None
+Time adjustment to the bin labels, such as '-1s' / Second(-1) to shift the aggregate
+labels one second earlier
+limit=None
+When forward or backward filling, the maximum number of periods to fill
+Resampling and Frequency Conversion | 313
+
+Argument
+Description
+kind=None
+Aggregate to periods ('period') or timestamps ('timestamp'); defaults to kind of
+index the time series has
+convention=None
+When resampling periods, the convention ('start' or 'end') for converting the low
+frequency period to high frequency. Defaults to 'end'
+Downsampling
+Aggregating data to a regular, lower frequency is a pretty normal time series task. The
+data you’re aggregating doesn’t need to be fixed frequently; the desired frequency de-
+fines bin edges that are used to slice the time series into pieces to aggregate. For example,
+to convert to monthly, 'M' or 'BM', the data need to be chopped up into one month
+intervals. Each interval is said to be half-open; a data point can only belong to one
+interval, and the union of the intervals must make up the whole time frame. There are
+a couple things to think about when using resample to downsample data:
+• Which side of each interval is closed
+• How to label each aggregated bin, either with the start of the interval or the end
+To illustrate, let’s look at some one-minute data:
+In [513]: rng = pd.date_range('1/1/2000', periods=12, freq='T')
+In [514]: ts = Series(np.arange(12), index=rng)
+In [515]: ts
+Out[515]: 
+2000-01-01 00:00:00     0
+2000-01-01 00:01:00     1
+2000-01-01 00:02:00     2
+2000-01-01 00:03:00     3
+2000-01-01 00:04:00     4
+2000-01-01 00:05:00     5
+2000-01-01 00:06:00     6
+2000-01-01 00:07:00     7
+2000-01-01 00:08:00     8
+2000-01-01 00:09:00     9
+2000-01-01 00:10:00    10
+2000-01-01 00:11:00    11
+Freq: T
+Suppose you wanted to aggregate this data into five-minute chunks or bars by taking
+the sum of each group:
+In [516]: ts.resample('5min', how='sum')
+Out[516]: 
+2000-01-01 00:00:00     0
+2000-01-01 00:05:00    15
+2000-01-01 00:10:00    40
+2000-01-01 00:15:00    11
+Freq: 5T
+314 | Chapter 10: Time Series
+
+The frequency you pass defines bin edges in five-minute increments. By default, the
+right bin edge is inclusive, so the 00:05 value is included in the 00:00 to 00:05 inter-
+val.1 Passing closed='left' changes the interval to be closed on the left:
+In [517]: ts.resample('5min', how='sum', closed='left')
+Out[517]: 
+2000-01-01 00:05:00    10
+2000-01-01 00:10:00    35
+2000-01-01 00:15:00    21
+Freq: 5T
+As you can see, the resulting time series is labeled by the timestamps from the right side
+of each bin. By passing label='left' you can label them with the left bin edge:
+In [518]: ts.resample('5min', how='sum', closed='left', label='left')
+Out[518]: 
+2000-01-01 00:00:00    10
+2000-01-01 00:05:00    35
+2000-01-01 00:10:00    21
+Freq: 5T
+See Figure 10-3 for an illustration of minutely data being resampled to five-minute.
+Figure 10-3. 5-minute resampling illustration of closed, label conventions
+Lastly, you might want to shift the result index by some amount, say subtracting one
+second from the right edge to make it more clear which interval the timestamp refers
+to. To do this, pass a string or date offset to loffset:
+In [519]: ts.resample('5min', how='sum', loffset='-1s')
+Out[519]: 
+1999-12-31 23:59:59     0
+2000-01-01 00:04:59    15
+2000-01-01 00:09:59    40
+2000-01-01 00:14:59    11
+Freq: 5T
+1. The choice of closed='right', label='right' as the default might seem a bit odd to some users. In
+practice the choice is somewhat arbitrary; for some target frequencies, closed='left' is preferable, while
+for others closed='right' makes more sense. The important thing is that you keep in mind exactly how
+you are segmenting the data.
+Resampling and Frequency Conversion | 315
+
+This also could have been accomplished by calling the shift method on the result
+without the loffset.
+Open-High-Low-Close (OHLC) resampling
+In finance, an ubiquitous way to aggregate a time series is to compute four values for
+each bucket: the first (open), last (close), maximum (high), and minimal (low) values.
+By passing how='ohlc' you will obtain a DataFrame having columns containing these
+four aggregates, which are efficiently computed in a single sweep of the data:
+In [520]: ts.resample('5min', how='ohlc')
+Out[520]: 
+                     open  high  low  close
+2000-01-01 00:00:00     0     0    0      0
+2000-01-01 00:05:00     1     5    1      5
+2000-01-01 00:10:00     6    10    6     10
+2000-01-01 00:15:00    11    11   11     11
+Resampling with GroupBy
+An alternate way to downsample is to use pandas’s groupby functionality. For example,
+you can group by month or weekday by passing a function that accesses those fields
+on the time series’s index:
+In [521]: rng = pd.date_range('1/1/2000', periods=100, freq='D')
+In [522]: ts = Series(np.arange(100), index=rng)
+In [523]: ts.groupby(lambda x: x.month).mean()
+Out[523]: 
+1    15
+2    45
+3    75
+4    95
+In [524]: ts.groupby(lambda x: x.weekday).mean()
+Out[524]: 
+0    47.5
+1    48.5
+2    49.5
+3    50.5
+4    51.5
+5    49.0
+6    50.0
+Upsampling and Interpolation
+When converting from a low frequency to a higher frequency, no aggregation is needed.
+Let’s consider a DataFrame with some weekly data:
+In [525]: frame = DataFrame(np.random.randn(2, 4),
+   .....:                   index=pd.date_range('1/1/2000', periods=2, freq='W-WED'),
+   .....:                   columns=['Colorado', 'Texas', 'New York', 'Ohio'])
+316 | Chapter 10: Time Series
+
+In [526]: frame[:5]
+Out[526]: 
+            Colorado     Texas  New York     Ohio
+2000-01-05 -0.609657 -0.268837  0.195592  0.85979
+2000-01-12 -0.263206  1.141350 -0.101937 -0.07666
+When resampling this to daily frequency, by default missing values are introduced:
+In [527]: df_daily = frame.resample('D')
+In [528]: df_daily
+Out[528]: 
+            Colorado     Texas  New York     Ohio
+2000-01-05 -0.609657 -0.268837  0.195592  0.85979
+2000-01-06       NaN       NaN       NaN      NaN
+2000-01-07       NaN       NaN       NaN      NaN
+2000-01-08       NaN       NaN       NaN      NaN
+2000-01-09       NaN       NaN       NaN      NaN
+2000-01-10       NaN       NaN       NaN      NaN
+2000-01-11       NaN       NaN       NaN      NaN
+2000-01-12 -0.263206  1.141350 -0.101937 -0.07666
+Suppose you wanted to fill forward each weekly value on the non-Wednesdays. The
+same filling or interpolation methods available in the fillna and reindex methods are
+available for resampling:
+In [529]: frame.resample('D', fill_method='ffill')
+Out[529]: 
+            Colorado     Texas  New York     Ohio
+2000-01-05 -0.609657 -0.268837  0.195592  0.85979
+2000-01-06 -0.609657 -0.268837  0.195592  0.85979
+2000-01-07 -0.609657 -0.268837  0.195592  0.85979
+2000-01-08 -0.609657 -0.268837  0.195592  0.85979
+2000-01-09 -0.609657 -0.268837  0.195592  0.85979
+2000-01-10 -0.609657 -0.268837  0.195592  0.85979
+2000-01-11 -0.609657 -0.268837  0.195592  0.85979
+2000-01-12 -0.263206  1.141350 -0.101937 -0.07666
+You can similarly choose to only fill a certain number of periods forward to limit how
+far to continue using an observed value:
+In [530]: frame.resample('D', fill_method='ffill', limit=2)
+Out[530]: 
+            Colorado     Texas  New York     Ohio
+2000-01-05 -0.609657 -0.268837  0.195592  0.85979
+2000-01-06 -0.609657 -0.268837  0.195592  0.85979
+2000-01-07 -0.609657 -0.268837  0.195592  0.85979
+2000-01-08       NaN       NaN       NaN      NaN
+2000-01-09       NaN       NaN       NaN      NaN
+2000-01-10       NaN       NaN       NaN      NaN
+2000-01-11       NaN       NaN       NaN      NaN
+2000-01-12 -0.263206  1.141350 -0.101937 -0.07666
+Notably, the new date index need not overlap with the old one at all:
+Resampling and Frequency Conversion | 317
+
+In [531]: frame.resample('W-THU', fill_method='ffill')
+Out[531]: 
+            Colorado     Texas  New York     Ohio
+2000-01-06 -0.609657 -0.268837  0.195592  0.85979
+2000-01-13 -0.263206  1.141350 -0.101937 -0.07666
+Resampling with Periods
+Resampling data indexed by periods is reasonably straightforward and works as you
+would hope:
+In [532]: frame = DataFrame(np.random.randn(24, 4),
+   .....:                   index=pd.period_range('1-2000', '12-2001', freq='M'),
+   .....:                   columns=['Colorado', 'Texas', 'New York', 'Ohio'])
+In [533]: frame[:5]
+Out[533]: 
+         Colorado     Texas  New York      Ohio
+2000-01  0.120837  1.076607  0.434200  0.056432
+2000-02 -0.378890  0.047831  0.341626  1.567920
+2000-03 -0.047619 -0.821825 -0.179330 -0.166675
+2000-04  0.333219 -0.544615 -0.653635 -2.311026
+2000-05  1.612270 -0.806614  0.557884  0.580201
+In [534]: annual_frame = frame.resample('A-DEC', how='mean')
+In [535]: annual_frame
+Out[535]: 
+      Colorado     Texas  New York      Ohio
+2000  0.352070 -0.553642  0.196642 -0.094099
+2001  0.158207  0.042967 -0.360755  0.184687
+Upsampling is more nuanced as you must make a decision about which end of the
+timespan in the new frequency to place the values before resampling, just like the 
+asfreq method. The convention argument defaults to 'end' but can also be 'start':
+# Q-DEC: Quarterly, year ending in December
+In [536]: annual_frame.resample('Q-DEC', fill_method='ffill')
+Out[536]: 
+        Colorado     Texas  New York      Ohio
+2000Q4  0.352070 -0.553642  0.196642 -0.094099
+2001Q1  0.352070 -0.553642  0.196642 -0.094099
+2001Q2  0.352070 -0.553642  0.196642 -0.094099
+2001Q3  0.352070 -0.553642  0.196642 -0.094099
+2001Q4  0.158207  0.042967 -0.360755  0.184687
+In [537]: annual_frame.resample('Q-DEC', fill_method='ffill', convention='start')
+Out[537]: 
+        Colorado     Texas  New York      Ohio
+2000Q1  0.352070 -0.553642  0.196642 -0.094099
+2000Q2  0.352070 -0.553642  0.196642 -0.094099
+2000Q3  0.352070 -0.553642  0.196642 -0.094099
+2000Q4  0.352070 -0.553642  0.196642 -0.094099
+2001Q1  0.158207  0.042967 -0.360755  0.184687
+318 | Chapter 10: Time Series
+
+Since periods refer to timespans, the rules about upsampling and downsampling are
+more rigid:
+• In downsampling, the target frequency must be a subperiod of the source frequency.
+• In upsampling, the target frequency must be a superperiod of the source frequency.
+If these rules are not satisfied, an exception will be raised. This mainly affects the quar-
+terly, annual, and weekly frequencies; for example, the timespans defined by Q-MAR only
+line up with A-MAR, A-JUN, A-SEP, and A-DEC:
+In [538]: annual_frame.resample('Q-MAR', fill_method='ffill')
+Out[538]: 
+        Colorado     Texas  New York      Ohio
+2001Q3  0.352070 -0.553642  0.196642 -0.094099
+2001Q4  0.352070 -0.553642  0.196642 -0.094099
+2002Q1  0.352070 -0.553642  0.196642 -0.094099
+2002Q2  0.352070 -0.553642  0.196642 -0.094099
+2002Q3  0.158207  0.042967 -0.360755  0.184687
+Time Series Plotting
+Plots with pandas time series have improved date formatting compared with matplotlib
+out of the box. As an example, I downloaded some stock price data on a few common
+US stock from Yahoo! Finance:
+In [539]: close_px_all = pd.read_csv('ch09/stock_px.csv', parse_dates=True, index_col=0)
+In [540]: close_px = close_px_all[['AAPL', 'MSFT', 'XOM']]
+In [541]: close_px = close_px.resample('B', fill_method='ffill')
+In [542]: close_px
+Out[542]: 
+<class 'pandas.core.frame.DataFrame'>
+DatetimeIndex: 2292 entries, 2003-01-02 00:00:00 to 2011-10-14 00:00:00
+Freq: B
+Data columns:
+AAPL    2292  non-null values
+MSFT    2292  non-null values
+XOM     2292  non-null values
+dtypes: float64(3)
+Calling plot on one of the columns grenerates a simple plot, seen in Figure 10-4.
+In [544]: close_px['AAPL'].plot()
+When called on a DataFrame, as you would expect, all of the time series are drawn on
+a single subplot with a legend indicating which is which. I’ll plot only the year 2009
+data so you can see how both months and years are formatted on the X axis; see
+Figure 10-5.
+In [546]: close_px.ix['2009'].plot()
+Time Series Plotting | 319
+
+In [548]: close_px['AAPL'].ix['01-2011':'03-2011'].plot()
+Quarterly frequency data is also more nicely formatted with quarterly markers, some-
+thing that would be quite a bit more work to do by hand. See Figure 10-7.
+In [550]: appl_q = close_px['AAPL'].resample('Q-DEC', fill_method='ffill')
+In [551]: appl_q.ix['2009':].plot()
+A last feature of time series plotting in pandas is that by right-clicking and dragging to
+zoom in and out, the dates will be dynamically expanded or contracted and reformat-
+ting depending on the timespan contained in the plot view. This is of course only true
+when using matplotlib in interactive mode.
+Moving Window Functions
+A common class of array transformations intended for time series operations are sta-
+tistics and other functions evaluated over a sliding window or with exponentially de-
+Figure 10-4. AAPL Daily Price
+Figure 10-5. Stock Prices in 2009
+320 | Chapter 10: Time Series
+
+caying weights. I call these moving window functions, even though it includes functions
+without a fixed-length window like exponentially-weighted moving average. Like other
+statistical functions, these also automatically exclude missing data.
+rolling_mean is one of the simplest such functions. It takes a TimeSeries or DataFrame
+along with a window (expressed as a number of periods):
+In [555]: close_px.AAPL.plot()
+Out[555]: <matplotlib.axes.AxesSubplot at 0x1099b3990>
+In [556]: pd.rolling_mean(close_px.AAPL, 250).plot()
+See Figure 10-8 for the plot. By default functions like rolling_mean require the indicated
+number of non-NA observations. This behavior can be changed to account for missing
+data and, in particular, the fact that you will have fewer than window periods of data at
+the beginning of the time series (see Figure 10-9):
+Figure 10-6. Apple Daily Price in 1/2011-3/2011
+Figure 10-7. Apple Quarterly Price 2009-2011
+Moving Window Functions | 321
+
+In [558]: appl_std250 = pd.rolling_std(close_px.AAPL, 250, min_periods=10)
+In [559]: appl_std250[5:12]
+Out[559]: 
+2003-01-09         NaN
+2003-01-10         NaN
+2003-01-13         NaN
+2003-01-14         NaN
+2003-01-15    0.077496
+2003-01-16    0.074760
+2003-01-17    0.112368
+Freq: B
+In [560]: appl_std250.plot()
+Figure 10-8. Apple Price with 250-day MA
+Figure 10-9. Apple 250-day daily return standard deviation
+To compute an expanding window mean, you can see that an expanding window is just
+a special case where the window is the length of the time series, but only one or more
+periods is required to compute a value:
+322 | Chapter 10: Time Series
+
+# Define expanding mean in terms of rolling_mean
+In [561]: expanding_mean = lambda x: rolling_mean(x, len(x), min_periods=1)
+Calling rolling_mean and friends on a DataFrame applies the transformation to each
+column (see Figure 10-10):
+In [563]: pd.rolling_mean(close_px, 60).plot(logy=True)
+Figure 10-10. Stocks Prices 60-day MA (log Y-axis)
+See Table 10-6 for a listing of related functions in pandas.
+Table 10-6. Moving window and exponentially-weighted functions
+Function
+Description
+rolling_count
+Returns number of non-NA observations in each trailing window.
+rolling_sum
+Moving window sum.
+rolling_mean
+Moving window mean.
+rolling_median
+Moving window median.
+rolling_var, rolling_std
+Moving window variance and standard deviation, respectively. Uses n - 1 denom-
+inator.
+rolling_skew, rolling_kurt
+Moving window skewness (3rd moment) and kurtosis (4th moment), respectively.
+rolling_min, rolling_max
+Moving window minimum and maximum.
+rolling_quantile
+Moving window score at percentile/sample quantile.
+rolling_corr, rolling_cov
+Moving window correlation and covariance.
+rolling_apply
+Apply generic array function over a moving window.
+ewma
+Exponentially-weighted moving average.
+ewmvar, ewmstd
+Exponentially-weighted moving variance and standard deviation.
+ewmcorr, ewmcov
+Exponentially-weighted moving correlation and covariance.
+Moving Window Functions | 323
+
+bottleneck, a Python library by Keith Goodman, provides an alternate
+implementation of NaN-friendly moving window functions and may be
+worth looking at depending on your application.
+Exponentially-weighted functions
+An alternative to using a static window size with equally-weighted observations is to
+specify a constant decay factor to give more weight to more recent observations. In
+mathematical terms, if mat is the moving average result at time t and x is the time series
+in question, each value in the result is computed as mat = a * mat - 1 + (a - 1) * x_t, where
+a is the decay factor. There are a couple of ways to specify the decay factor, a popular
+one is using a span, which makes the result comparable to a simple moving window
+function with window size equal to the span.
+Since an exponentially-weighted statistic places more weight on more recent observa-
+tions, it “adapts” faster to changes compared with the equal-weighted version. Here’s
+an example comparing a 60-day moving average of Apple’s stock price with an EW
+moving average with span=60 (see Figure 10-11):
+fig, axes = plt.subplots(nrows=2, ncols=1, sharex=True, sharey=True,
+                         figsize=(12, 7))
+aapl_px = close_px.AAPL['2005':'2009']
+ma60 = pd.rolling_mean(aapl_px, 60, min_periods=50)
+ewma60 = pd.ewma(aapl_px, span=60)
+aapl_px.plot(style='k-', ax=axes[0])
+ma60.plot(style='k--', ax=axes[0])
+aapl_px.plot(style='k-', ax=axes[1])
+ewma60.plot(style='k--', ax=axes[1])
+axes[0].set_title('Simple MA')
+axes[1].set_title('Exponentially-weighted MA')
+Binary Moving Window Functions
+Some statistical operators, like correlation and covariance, need to operate on two time
+series. As an example, financial analysts are often interested in a stock’s correlation to
+a benchmark index like the S&P 500. We can compute that by computing the percent
+changes and using rolling_corr (see Figure 10-12):
+In [570]: spx_rets = spx_px / spx_px.shift(1) - 1
+In [571]: returns = close_px.pct_change()
+In [572]: corr = pd.rolling_corr(returns.AAPL, spx_rets, 125, min_periods=100)
+In [573]: corr.plot()
+324 | Chapter 10: Time Series
+
+Suppose you wanted to compute the correlation of the S&P 500 index with many stocks
+at once. Writing a loop and creating a new DataFrame would be easy but maybe get
+repetitive, so if you pass a TimeSeries and a DataFrame, a function like rolling_corr
+will compute the correlation of the TimeSeries (spx_rets in this case) with each column
+in the DataFrame. See Figure 10-13 for the plot of the result:
+In [575]: corr = pd.rolling_corr(returns, spx_rets, 125, min_periods=100)
+In [576]: corr.plot()
+Figure 10-11. Simple moving average versus exponentially-weighted
+Figure 10-12. Six-month AAPL return correlation to S&P 500
+Moving Window Functions | 325
+
+User-Defined Moving Window Functions
+The rolling_apply function provides a means to apply an array function of your own
+devising over a moving window. The only requirement is that the function produce a
+single value (a reduction) from each piece of the array. For example, while we can
+compute sample quantiles using rolling_quantile, we might be interested in the per-
+centile rank of a particular value over the sample. The scipy.stats.percentileof
+score function does just this:
+In [578]: from scipy.stats import percentileofscore
+In [579]: score_at_2percent = lambda x: percentileofscore(x, 0.02)
+In [580]: result = pd.rolling_apply(returns.AAPL, 250, score_at_2percent)
+In [581]: result.plot()
+Figure 10-13. Six-month return correlations to S&P 500
+Figure 10-14. Percentile rank of 2% AAPL return over 1 year window
+326 | Chapter 10: Time Series
+
+Performance and Memory Usage Notes
+Timestamps and periods are represented as 64-bit integers using NumPy’s date
+time64 dtype. This means that for each data point, there is an associated 8 bytes of
+memory per timestamp. Thus, a time series with 1 million float64 data points has a
+memory footprint of approximately 16 megabytes. Since pandas makes every effort to
+share indexes among time series, creating views on existing time series do not cause
+any more memory to be used. Additionally, indexes for lower frequencies (daily and
+up) are stored in a central cache, so that any fixed-frequency index is a view on the date
+cache. Thus, if you have a large collection of low-frequency time series, the memory
+footprint of the indexes will not be as significant.
+Performance-wise, pandas has been highly optimized for data alignment operations
+(the behind-the-scenes work of differently indexed ts1 + ts2) and resampling. Here is
+an example of aggregating 10MM data points to OHLC:
+In [582]: rng = pd.date_range('1/1/2000', periods=10000000, freq='10ms')
+In [583]: ts = Series(np.random.randn(len(rng)), index=rng)
+In [584]: ts
+Out[584]: 
+2000-01-01 00:00:00          -1.402235
+2000-01-01 00:00:00.010000    2.424667
+2000-01-01 00:00:00.020000   -1.956042
+2000-01-01 00:00:00.030000   -0.897339
+...
+2000-01-02 03:46:39.960000    0.495530
+2000-01-02 03:46:39.970000    0.574766
+2000-01-02 03:46:39.980000    1.348374
+2000-01-02 03:46:39.990000    0.665034
+Freq: 10L, Length: 10000000
+In [585]: ts.resample('15min', how='ohlc')
+Out[585]: 
+<class 'pandas.core.frame.DataFrame'>
+DatetimeIndex: 113 entries, 2000-01-01 00:00:00 to 2000-01-02 04:00:00
+Freq: 15T
+Data columns:
+open     113  non-null values
+high     113  non-null values
+low      113  non-null values
+close    113  non-null values
+dtypes: float64(4)
+In [586]: %timeit ts.resample('15min', how='ohlc')
+10 loops, best of 3: 61.1 ms per loop
+The runtime may depend slightly on the relative size of the aggregated result; higher
+frequency aggregates unsurprisingly take longer to compute:
+In [587]: rng = pd.date_range('1/1/2000', periods=10000000, freq='1s')
+Performance and Memory Usage Notes | 327
+
+In [588]: ts = Series(np.random.randn(len(rng)), index=rng)
+In [589]: %timeit ts.resample('15s', how='ohlc')
+1 loops, best of 3: 88.2 ms per loop
+It’s possible that by the time you read this, the performance of these algorithms may
+be even further improved. As an example, there are currently no optimizations for
+conversions between regular frequencies, but that would be fairly straightforward to do.
+328 | Chapter 10: Time Series

@@ -1,0 +1,258 @@
+102 ff 第一篇 基础篇 
+第5 章 
+TensorFlow 源代码解析 
+在了解了TensorFlow 的基本原理、编程模型和常用API 后，我们一起梳理一下TensorFlow
+的源代码，以便更深入地理解TensorFlow 的设计，为今后学习各种模型示例做准备。 
+源代码解析往往是学习一门新技术时，能够整体理解其框架的重要途径，相信本章会是很
+多程序员最喜爱的一章。
+5.1  TensorFlow 的目录结构 
+我们仍然以TensorFlow 1.1.0 版本为例，看看TensorFlow 的代码结构。 
+进入tensorflow-1.1.0 目录，代码结构如下： 
+├── ACKNOWLEDGMENTS # TensorFlow 版权声明 
+├── ADOPTERS.md # 使用 TensorFlow 的人员或组织列表 
+├── AUTHORS # TensorFlow 作者的官方列表 
+├── BUILD 
+├── CONTRIBUTING.md # TensorFlow 贡献指导 
+├── ISSUE_TEMPLATE.md # 提ISSUE 的模板 
+├── LICENSE # 版权许可 
+├── README.md  
+├── RELEASE.md # 每次发版的change log 
+├── WORKSPACE # 配置移动端开发环境 
+├── bower.BUILD  
+├── configure 
+├── models.BUILD 
+├── tensorflow # 主目录，后面分析的重点 
+├── third_party # 第三方库，包括eigen3（特征运算的库，包括SVD、LU 分解等）、gpus（支持cuda）、
+hadoop、jpeg、llvm、py、sycl 
+├── tools # 构建cuda 支持 
+└── util 
+其中，最重要的源代码保存在tensorflow 目录中。tensorflow 目录的结构如下： 
+
+第5 章 TensorFlow 源代码解析 ee 103 
+├── BUILD 
+├── __init__.py 
+├── c 
+├── cc # 采用C++进行训练的样例 
+├── compiler 
+├── contrib # 将常用功能封装在一起的高级API 
+├── core # C++实现的主要目录 
+├── examples # 各种示例，本书后续讲的例子主要就在这个目录中 
+├── g3doc # 针对C++、Python 版本的代码文档 
+├── go  
+├── java 
+├── opensource_only # 声明目录 
+├── python # Python 实现的主要目录 
+├── stream_executor # 流处理 
+├── tensorboard # App、Web 支持，以及脚本支持  
+├── tensorflow.bzl 
+├── tf_exported_symbols.lds 
+├── tf_version_script.lds 
+├── tools # 一些工具杂项 
+├── user_ops 
+└── workspace.bzl 
+下面我们就简单介绍几个重点目录。
+5.1.1  contirb 
+contrib 目录中保存的是将常用的功能封装成的高级API。但是这个目录并不是官方支持的，
+很有可能在高级API 完善后被官方迁移到核心的TensorFlow 目录中或去掉，现在有一部分包
+（package）在https://github.com/tensorflow/models 有了更完整的体现。这里重点介绍几个常用包。 
+●
+framework：很多函数（如get_variables、get_global_step）都在这里定义，还有一些废
+弃或者不推推（deprecated）的函数。
+●
+layers：这个包主要有initializers.py、layers.py、optimizers.py、regularizers.py、summaries.py
+等文件。initializers.py 中主要是做变量初始化的函数。layers.py 中有关于层操作和权重
+偏置变量的函数。optimizers.py 中包含损失函数和global_step 张量的优化器操作。
+regularizers.py 中包含带有权重的正则化函数。summaries.py 中包含将摘要操作（见 4.4.2
+节可视化API）添加到tf.GraphKeys.SUMMARIES 集合中的函数。
+●
+learn：这个包是使用TensorFlow 进行深度学习的高级API，包括完成训练模型和评估
+模型、读取批处理数据和队列功能的API 封装。
+●
+rnn：这个包提供了额外的RNN Cell，也就是对RNN 隐藏层的各种改进，如LSTMBlockCell、
+GRUBlockCell、FusedRNNCell、GridLSTMCell、AttentionCellWrapper 等。
+●
+seq2seq：这个包提供了建立神经网络seq2seq 层和损失函数的操作。
+●
+slim：TensorFlow-Slim （TF-Slim）是一个用于定义、训练和评估TensorFlow 中的复杂
+模型的轻量级库。在使用中可以将TF-Slim 与TensorFlow 的原生函数和tf.contrib 中的
+
+104 ff 第一篇 基础篇 
+其他包进行自由组合。TF-Slim 现在已经被逐渐迁移到TensorFlow 开源的Models
+①中，
+这里包含了几种广泛使用的卷积神经网络图像分类模型的代码，可以从头训练模型或
+者预训练模型开始微调。TF-Slim 非常有用，在12.1 节中会用到。 
+5.1.2  core 
+这个目录中保存的都是C 语言的文件，是TensorFlow 的原始实现。 
+├── BUILD 
+├── common_runtime # 公共运行库 
+├── debug 
+├── distributed_runtime # 分布式执行模块，含有grpc session、grpc worker、 grpc master 等 
+├── example 
+├── framework # 基础功能模块 
+├── graph 
+├── kernels # 一些核心操作在CPU、CUDA 内核上的实现 
+├── lib # 公共基础库 
+├── ops 
+├── platform # 操作系统实现相关文件 
+├── protobuf # .proto 文件，用于传输时的结构序列化 
+├── public # API 的头文件目录 
+├── user_ops 
+└── util 
+Protocol Buffers 是谷歌公司创建的一个数据序列化
+②（serialization）工具，可以用于结构化
+数据序列化，很适合作为数据存储或者RPC 数据交换的格式。定义完协议缓冲区后，将生成.pb.h
+和.pb.cc 文件，其中定义了相应的get、set 以及序列化和反序列化函数。TensorFlow 的几个核心
+proto 文件graph_def.proto、node_def.proto、op_def.proto 都保存在framework 目录中。构图时先
+构建graph_def，存储下来，然后在实际计算时再转成如图、节点、操作等的内存对象。 
+下面以tensorflow-1.1.0/tensorflow/core/framework/node_def.proto 为例来说明定义proto 文件
+的过程。node_def.proto 定义中指定了设备（device）操作（op）以及操作的属性（attr）。代码
+如下：
+syntax = "proto3"; 
+package tensorflow; 
+option cc_enable_arenas = true; 
+option java_outer_classname = "NodeProto"; 
+option java_multiple_files = true; 
+option java_package = "org.tensorflow.framework"; 
+①
+https://github.com/tensorflow/models/tree/master/slim 
+② 序列化是指将对象的状态信息转换为可以存储或传输的形式的过程。
+
+第5 章 TensorFlow 源代码解析 ee 105 
+import "tensorflow/core/framework/attr_value.proto"; 
+message NodeDef { 
+  string name = 1; # 操作的名称 
+  string op = 2; # 操作的名称 
+  repeated string input = 3; # 每个input 指明了当前节点来自哪个节点的第几个张量， 
+# 格式是node:index 
+  string device = 4; # 指定device 方法 
+  map<string, AttrValue> attr = 5; # 其中AttrValue 又是另外一个协议缓冲区 
+}; 
+framework 目录中还有node_def_builder.h、node_def_builder.cc、node_def_util.h、node_def_ 
+util_test.cc 等文件，这都是为了在C++里能操作上面代码中定义的node_def.proto 的protobuf 结构。 
+5.1.3  examples 
+examples 目录中给出了深度学习的一些例子，包括MNIST、Word2vec、Deepdream、Iris、
+HDF5 的一些例子，对入门非常有帮助。此外，这个目录中还有TensorFlow 在Android 系统上的移
+动端实现，以及一些扩展为.ipynb 的文档教程，可以用jupyter 打开（使用方式参见2.4.3 节）。 
+5.1.4  g3doc 
+TensorFlow 的文档是用Markdown 在维护的，并存放在g3doc 中。g3doc 目录可以认为是
+TensorFlow 的离线手册，非常好用。 
+g3doc/api_docs 目录中的任何内容都是从代码中的注释生成的，不应该直接编辑。脚本
+tools/docs/gen_docs.sh 是用来生成API 文档的。如果无参数调用，它只重新生成Python API 文
+档（即操作的文档，包括用Python 和C ++定义的）。如果传递了-a，运行脚本时还会重新生成
+C++ API 的文档。这个脚本必须从tools/docs 目录调用，如果使用参数-a，需要安装doxygen
+①。 
+5.1.5  python 
+第4 章中介绍的很多函数的实现都是在python 这个目录中。例如，4.7 节中的激活函数、
+卷积函数、池化函数、损失函数、优化方法等。
+5.1.6  tensorboard 
+tensorboard 目录中是实现TensorFlow 图表可视化工具的代码，代码是基于Tornado
+②来实现
+①
+内容参参官方网站https://www.tensorflow.org/community/documentation。 
+② http://www.tornadoweb.org/en/stable/
+
+106 ff 第一篇 基础篇 
+网页端可视化的。
+5.2  TensorFlow 源代码的学习方法 
+如何高效地学习TensorFlow 源代码呢？很多人在接触TensorFlow 后会首先问这个问题。
+下面我就介绍一下TensorFlow 源代码的学习步骤。 
+（1）了解自己要研究的基本领域，如图像分类、物体检测、语音识别等，了解对应这个领
+域所用的技术，如卷积神经网络（convolutional neural network，CNN）和循环神经网络（recurrent 
+neural network，RNN），知道实现的基本原理。 
+（2）尝试运行GitHub 上对应的基本模型
+①，其目录结构如下： 
+├── AUTHORS 
+├── CONTRIBUTING.md 
+├── LICENSE 
+├── README.md 
+├── WORKSPACE 
+├── autoencoder 
+├── compression 
+├── differential_privacy 
+├── im2txt 
+├── inception 
+├── lm_1b 
+├── namignizer 
+├── neural_gpu 
+├── neural_programmer 
+├── next_frame_prediction 
+├── resnet 
+├── slim 
+├── street 
+├── swivel 
+├── syntaxnet 
+├── textsum 
+├── transformer 
+├── tutorials 
+└── video_prediction 
+如果研究领域是计算机视觉，可以看代码中的如下几个目录：compresssion（图像压缩）、
+im2txt（图像描述）、inception（对ImageNet 数据集用Inception V3 架构去训练和评估）、resnet
+（残差网络）、slim（图像分类）和street（路标识别或验证码识别）。 
+如果研究领域是自然语言处理，可以看lm_1b（语言模型）、namignizer（起名字）、swivel
+①
+https://github.com/tensorflow/models
+
+第5 章 TensorFlow 源代码解析 ee 107 
+（使用Swivel 算法转换词向量）、syntaxnet（分词和语法分析）、textsum（文本摘要）以及tutorials
+目录里的word2vec（词转换为向量）。 
+这些都是教科书式的代码，看懂学懂对今后自己实现模型大有裨益。尝试运行上述模型，
+并对模型进行调试和调参。当你完整阅读完MNIST 或者CIFAR10 整个项目的逻辑后，就会掌
+握TensorFlow 项目架构。 
+这里，我着重说一下slim 目录。 
+slim 目录中的TF-Slim 是图像分类的一个库，它包含用于定义、训练和评估复杂模型的轻
+量级高级API。可以用于训练和评估的几个广泛使用的CNN 图像分类模型，如lenet、alexnet、
+vgg、inception_v1、inception_v2、inception_v3、inception_v4、resnet_v1、resnet_v2 等，这些模
+型都位于slim/nets 中，具体如下： 
+├── alexnet.py 
+├── alexnet_test.py 
+├── cifarnet.py 
+├── inception.py 
+├── inception_resnet_v2.py 
+├── inception_resnet_v2_test.py 
+├── inception_utils.py 
+├── inception_v1.py 
+├── inception_v1_test.py 
+├── inception_v2.py 
+├── inception_v2_test.py 
+├── inception_v3.py 
+├── inception_v3_test.py 
+├── inception_v4.py 
+├── inception_v4_test.py 
+├── lenet.py 
+├── nets_factory.py 
+├── nets_factory_test.py 
+├── overfeat.py 
+├── overfeat_test.py 
+├── resnet_utils.py 
+├── resnet_v1.py 
+├── resnet_v1_test.py 
+├── resnet_v2.py 
+├── resnet_v2_test.py 
+├── vgg.py 
+└── vgg_test.py 
+TF-Slim 包含的脚本可以让人从头训练模型或从预先训练的网络开始训练模型并微调，这
+些脚本位于slim/scripts，具体如下： 
+├── finetune_inception_v1_on_flowers.sh 
+├── finetune_inception_v3_on_flowers.sh 
+├── train_cifarnet_on_cifar10.sh 
+└── train_lenet_on_mnist.sh 
+
+108 ff 第一篇 基础篇 
+TF-Slim 还包含用于下载标准图像数据集，将其转换为TensorFlow 支持的TFRecords 格式，
+这些脚本位于slim/datasets，具体如下： 
+├── cifar10.py 
+├── dataset_factory.py 
+├── dataset_utils.py 
+├── download_and_convert_cifar10.py 
+├── download_and_convert_flowers.py 
+├── download_and_convert_mnist.py 
+├── flowers.py 
+├── imagenet.py 
+└── mnist.py 
+随后可以轻松地在任何上述数据集上训练任何模型。
+（3）结合要做的项目，找到相关的论文，自己用TensorFlow 实现这篇论文的内容，这会让
+你有一个质的飞跃。
+上面介绍的学习方法在本书“实战篇”中会再结合例子进行讲解。
+ 5.3  小结 
+本章简略地解析了TensorFlow 源代码，介绍了它的主要的目录结构，以及一些模块的位置
+和功能，还介绍了TensorFlow 的源代码学习方法，建议读者可以自己多去研究。 

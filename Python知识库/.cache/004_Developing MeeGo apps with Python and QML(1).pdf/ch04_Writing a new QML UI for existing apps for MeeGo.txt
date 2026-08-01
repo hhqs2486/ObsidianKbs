@@ -1,0 +1,495 @@
+Writing a new QML UI for existing apps for MeeGo
+This section deals with a real-world application example and how to use our 
+knowledge gained in the previous section to create a great mobile UX for your 
+application to be used on MeeGo netbook and handset. As the dependencies 
+are in MeeGo Core, the same application obviously works on all other MeeGo 
+devices (IVI, TV, …) as well, but you might have to tailor your QML UIs to be 
+usable on these devices, as the usage situation is different. Again – you have to 
+create a special UI, but the technologies to create the UI are the same.
+A QML UI for gPodder
+gPodder is a podcast client with which you can download video and audio 
+content from the web to your device to play it on the go and manage 
+subscriptions to radio shows. The current gPodder UI is written using PyGTK, 
+which is still available on MeeGo Netbook, but the preferred UI toolkit is Qt with 
+QML, and MeeGo Handset does not support PyGTK very well. Our goal here is 
+not to show how to do a complete port of gPodder to Qt/QML, but to show how 
+to start and how to integrate existing code with QML UIs through the use of 
+code examples.
+The normal gPodder Desktop UI does not use QML yet, and it's more tailored 
+towards Desktop use and is not very easy to use with touchscreen devices. We 
+now want to create a touch-friendly podcast and episode list UI. The old UI 
+looks like this on MeeGo Netbook:
+
+The glue layer in Python (gpodder-qml.py)
+This file uses the existing gPodder codebase (which thankfully exports an easy-
+to-use API to our data structures via the “gpodder.api” module) and 
+implements the classes and structures necessary to expose the gPodder data 
+to our QML UI and also enables us to interact with the data by using a 
+Controller that is also exposed to the QML UI and can be accessed directly from 
+QML.
+# -*- coding: utf-8 -*-
+import os
+import sys
+from PySide import QtCore
+from PySide import QtGui
+from PySide import QtDeclarative
+from PySide import QtOpenGL
+from gpodder import api
+These statements import the required modules. If you don't want or need 
+OpenGL-accelerated QML, you can skip the import of the QtOpenGL module. 
+This example also assumes that you have gPodder already installed system-
+wide. It is also advisable to use the legacy gPodder application to subscribe to 
+some podcasts so that you can see some contents in the QML UI.
+class EpisodeWrapper(QtCore.QObject):
+    def __init__(self, episode):
+        QtCore.QObject.__init__(self)
+        self._episode = episode
+    def _title(self):
+        return self._episode.title
+    def _description(self):
+        return unicode(self._episode.one_line_description())
+    def _downloaded(self):
+        return self._episode.was_downloaded(and_exists=True)
+    @QtCore.Signal
+    def changed(self): pass
+    title = QtCore.Property(unicode, _title, notify=changed)
+    description = QtCore.Property(unicode, _description, notify=changed)
+    downloaded = QtCore.Property(bool, _downloaded, notify=changed)
+The “EpisodeWrapper” class is a subclass of QObject (because we need to 
+access it from QML) and exposes some information about the episode (i.e. its 
+title and description and whether or not it has already been downloaded) to the 
+QML UI. It's important here that you make the properties notifyable (by defining 
+a Signal “changed” and specifying it as notification signal for the properties by 
+using “notify=changed” when defining the properties), so that the QML UI can 
+be notified when it has to update its fields (i.e. when the downloaded state of 
+an episode changes, the QML UI should update itself to reflect that change).
+class PodcastWrapper(QtCore.QObject):
+    def __init__(self, podcast):
+        QtCore.QObject.__init__(self)
+        self._podcast = podcast
+    def _url(self):
+        return self._podcast.url
+    def _title(self):
+
+        return self._podcast.title
+    def _description(self):
+        return unicode(self._podcast._podcast.description)
+    def _cover_file(self):
+        f = self._podcast._podcast.cover_file
+        if os.path.exists(f):
+            return f
+        else:
+            return '/usr/share/gpodder/podcast-0.png'
+    def _count(self):
+        total, deleted, new, downloaded, unplayed = self._podcast._podcast.get_statistics()
+        return downloaded
+    @QtCore.Signal
+    def changed(self): pass
+    url = QtCore.Property(unicode, _url, notify=changed)
+    title = QtCore.Property(unicode, _title, notify=changed)
+    description = QtCore.Property(unicode, _description, notify=changed)
+    cover_file = QtCore.Property(unicode, _cover_file, notify=changed)
+    count = QtCore.Property(int, _count, notify=changed)
+As we display not only episodes, but also podcasts (a podcast is a collection of 
+several episodes), we have to wrap the gPodder-internal podcast objects as 
+well, and do the same thing as for the episode objects. We do the same as for 
+the EpisodeWrapper, but expose different properties. If one of the properties 
+were to change, we would call “self.changed.emit()” from the PodcastWrapper 
+instance to update its representation in the UI.
+class PodcastListModel(QtCore.QAbstractListModel):
+    COLUMNS = ('podcast',)
+    def __init__(self):
+        QtCore.QAbstractListModel.__init__(self)
+        self._client = api.PodcastClient()
+        self._podcasts = [PodcastWrapper(x) for x in self._client.get_podcasts()]
+        self.setRoleNames(dict(enumerate(PodcastListModel.COLUMNS)))
+    def rowCount(self, parent=QtCore.QModelIndex()):
+        return len(self._podcasts)
+    def data(self, index, role):
+        if index.isValid() and role == PodcastListModel.COLUMNS.index('podcast'):
+            return self._podcasts[index.row()]
+        return None
+QML can display lists of items and automatically provide an easy way to display 
+lists using the ListView component. In order to display any data, it has to be put 
+into a list model (which is a collection of rows that need to be displayed). We 
+create such a list model for podcasts here. You could define multiple columns, 
+but in order to make use of QObject properties, we only have one column which 
+is a QObject. The podcast objects are directly loaded from the gPodder API.
+The internal representation of the data is a normal Python list 
+(“self._podcasts”), whereas the QML ListView has some expectations on how to 
+get the data – namely the rowCount method (which returns the number of rows 
+in the model) and the data method, which should return the data for a given 
+row and column (in our case, we only have one column – the “podcasts” 
+column that contains a PodcastWrapper for every episode).
+
+class EpisodeListModel(QtCore.QAbstractListModel):
+    COLUMNS = ('episode',)
+    def __init__(self, episodes):
+        QtCore.QAbstractListModel.__init__(self)
+        self._episodes = [EpisodeWrapper(x) for x in episodes]
+        self.setRoleNames(dict(enumerate(EpisodeListModel.COLUMNS)))
+    def rowCount(self, parent=QtCore.QModelIndex()):
+        return len(self._episodes)
+    def data(self, index, role):
+        if index.isValid() and role == EpisodeListModel.COLUMNS.index('episode'):
+            return self._episodes[index.row()]
+        return None
+Just as with the PodcastListModel, in order to display a list of episodes, we need 
+an EpisodeListModel. The problem here is that the list of episodes is not static, 
+as it depends on which podcast was selected in the UI (this will become clear in 
+a bit when you see how the UI is structured). Therefore, we don't grab the list 
+of episodes directly in the constructor, but receive them as a parameter to the 
+constructor.
+We then take all “native” gPodder episode objects, wrap them in our 
+EpisodeWrapper (to be accessible from QML) and implement rowCount and 
+data. This is basically the same as for the PodcastListModel, but it shows how 
+you can have parameters in your model to provide the data.
+class Controller(QtCore.QObject):
+    @QtCore.Slot(QtCore.QObject)
+    def podcastSelected(self, wrapper):
+        global view, episodeList
+        view.rootObject().setProperty("state", "Episodes")
+        episodeList = EpisodeListModel(wrapper._podcast._podcast.get_all_episodes())
+        view.rootObject().setEpisodeModel(episodeList)
+        print wrapper._podcast._podcast.__dict__
+    @QtCore.Slot(QtCore.QObject)
+    def episodeSelected(self, wrapper):
+        global view
+        view.rootObject().setProperty("state", "Podcasts")
+The Controller is the “director” of our QML show – it exposes some helpful 
+functions for our QML UI to use, and knows about the underlying Python 
+objects, and makes sure that the view receives updated data when something 
+is to be shown. In order to do so, we again need to subclass it from QObject (all 
+objects that you want to access from QML have to be QObject subclasses, as 
+QML does not know about Python objects).
+Methods on that objects that need to be accessible (callable) from QML need to 
+be decorated with the “QtCore.Slot” decorator – the parameters of the 
+decorator describe the count and data type of the parameters that the 
+functions expect – in that case, it's a single parameter of type QObject. We 
+expose two simple functions – podcastSelected and episodeSelected that will 
+be called from QML when the user clicks on (or touches) an item in one of the 
+list views.
+When a podcast is selected, we set the state of the UI to “Episodes” (which 
+automatically starts the transition in QML – which we will see later) and we 
+
+populate the list of episodes from the podcast, and when an episode is 
+selected, we simply go back to the podcasts list (for this example, this is 
+enough – a full-fledged application might want to show a “episode details” 
+view, play the episode or start the download).
+app = QtGui.QApplication(sys.argv)
+view = QtDeclarative.QDeclarativeView()
+glw = QtOpenGL.QGLWidget()
+view.setViewport(glw)
+view.setResizeMode(QtDeclarative.QDeclarativeView.SizeRootObjectToView)
+This code sets up a new Qt UI application and creates a window that can be 
+used for displaying QML content (QDeclarativeView). The two lines with “glw” 
+are optional and enable OpenGL rendering of QML content (which – depending 
+on your device – might be faster than normal rendering). If your MeeGo device 
+does not support this, or if the performance is worse, simply comment out 
+these two lines.
+The “setResizeMode” function on QDeclarativeView defines how the resizing of 
+the window is handled – in our case, we want the root object in our QML to be 
+automatically resized to fill the window. This is what you usually want if you 
+don't want to hardcode the QML to a specific size.
+controller = Controller()
+podcastList = PodcastListModel()
+episodeList = EpisodeListModel([])
+These three lines create instances of our classes defined above – a Controller 
+used as access point for QML, the podcast list (already populated with the 
+user's podcast subscriptions) and the episode list (which is empty until the user 
+clicks on a podcast).
+rc = view.rootContext()
+rc.setContextProperty('controller', controller)
+rc.setContextProperty('podcastList', podcastList)
+rc.setContextProperty('episodeList', episodeList)
+The QML root context can have properties that can be accessed by name from 
+QML code. We have to expose our three objects (the controller, the podcast list 
+an the episode list) and give them property names so that we can access them 
+directly from QML.
+view.setSource(__file__.replace('.py', '.qml'))
+view.show()
+app.exec_()
+Now that we have everything set up, we simply have to load our QML UI into 
+the view (by using setSource on the view). The “__file__.replace('.py', '.qml')” 
+means that the QML file has the same name as our Python script, but with the 
+extension “.qml” instead of “.py”.
+Now all we need to do is create the QML UI code for our little app.
+
+The QML main UI file (gpodder-qml.qml)
+Now that we have our backend code (written in Python) set up, we just need to 
+create a nice QML UI on top of it. The “interface” to the backend is already 
+defined by the context properties that we have defined – there's no other 
+“route” to call Python code from QML. In our special case, that is the Controller 
+object on which we can call methods and the two models, which will be used by 
+the ListView components to display lists of podcasts and episodes.
+In order to demonstrate good modularity of QML apps, we also split out the 
+podcast list and episode list as separate components, so that the look and feel 
+(and behaviour) of the lists can be changed without needing to edit the main UI 
+file (it also makes the main UI file smaller and easier to understand).
+import Qt 4.7
+This imports all basic QML elements for use into this QML file. In Qt 4.7.1 and 
+newer, you should use “import QtQuick 1.0” instead, but with Qt 4.7.0 (as is 
+the case on MeeGo Netbook), you have to use “import Qt 4.7”.
+Rectangle {
+    id: rectangle1
+    width: 400
+    height: 400
+    opacity: 1
+    state: "Podcasts"
+Here, we define our outermost “root” object – a simple Rectangle with the id 
+“rectangle1” that has a width and height of 400 pixels (due to the 
+setResizeMode call in our Python code, this object will get resized when the 
+window size changes). The default state of this object is “Podcasts” (see 
+below), which means that by default, the podcast list will be shown when the 
+QML UI is first loaded.
+    function setEpisodeModel(mod) {
+        episodelist.model = mod
+    }
+This function is used to set a new model on the episode list view. It is a method 
+of our root object and can therefore be called from Python – see the Controller 
+class on how this function is used to load a list of episodes into the view.
+    PodcastList {
+        id: podcastlist
+        model: podcastList
+        contr: controller
+    }
+The PodcastList component isn't defined in Qt – it's a component we will define 
+by ourself as “PodcastList.qml” in the same directory as this QML file. We give 
+it an ID to be able to reference it from other parts of the file, and set properties 
+“model” (the data model to use – in our case the list of podcasts) and “contr” 
+(a custom property that we use to give a reference to the controller to the list 
+view, so that we can access the controller directly from the list view).
+
+    EpisodeList {
+        id: episodelist
+        model: episodeList
+        contr: controller
+    }
+This is equivalent to the PodcastList component usage above – the component 
+will be defined by us later in the file “EpisodeList.qml”, and will be accessible 
+through the ID “episodelist” in this QML file (i.e. it's already referenced by 
+setEpisodeModel above).
+    states: [
+    State {
+        name: "Podcasts"
+        PropertyChanges {
+            target: podcastlist
+            opacity: 1
+            visible: true
+        }
+        PropertyChanges {
+            target: episodelist
+            scale: 0
+            opacity: 0
+            rotation: 180
+        }
+    },
+Here, we define the “states” in which this QML component (our root object) can 
+be in – in our case, there are two states: “Podcasts” (show a list of podcasts) 
+and “Episodes” (show a list of episodes). When the component is in this state, 
+the podcastlist object will be shown and the episode list will be hidden (by 
+scaling it to a factor of zero, setting its opacity to zero and rotating it by 180 
+degrees – for a nice effect that we will define later by the use of transitions).
+    State {
+        name: "Episodes"
+        PropertyChanges {
+            target: podcastlist
+            z: 0
+            rotation: -180
+            scale: 0.3
+            visible: true
+            opacity: 0
+        }
+        PropertyChanges {
+            target: episodelist
+            scale: 1
+            opacity: 1
+        }
+    }
+    ]
+The other state that our root object can be in is “Episodes”. In this state, we 
+hide the podcast list (and rotate and scale it and then set its opacity to zero to 
+hide it) and instead show the episode list. When this state is entered, the target 
+components will automatically get these properties assigned.
+
+    transitions: [
+        Transition {
+            PropertyAnimation {
+                properties: "scale,opacity,rotation"
+                duration: 500
+            }
+        }
+    ]
+}
+I mentioned transitions. Just hiding and showing elements is boring. Therefore, 
+we simply define some transitions on our root object that will be used to 
+animate its children when the root object state changes – in our case, we want 
+to animate the “scale”, “opacity” and “rotation” properties, and the animation 
+should take exactly 500 milliseconds. With this definition, changing the 
+properties will not have an immediate effect, but the properties will be 
+“animated” to reach the end value in 500 milliseconds from the time the 
+property has been set.
+Here's how the transition looks like:
+This is everything we need for our little QML app – the specific appearance of 
+each component is then defined in the PodcastList.qml and EpisodeList.qml 
+files. The transitions and state changes between these objects are taken care 
+of by the root view and our controller written in Python.
+
+The QML file for displaying a list of podcasts (PodcastList.qml)
+What's left to do now is to specify the appearance of the podcast and episode 
+list. Let's start with the podcast list, as this is th-e one that is shown first:
+import Qt 4.7
+We again need the default QML components shipped with Qt, so we import 
+them here.
+ListView {
+    id: podcastListView
+    property variant contr
+The component is based on the QML ListView, but has a new property (of type 
+“variant”, so we can place any arbitrary QObject in there) and has the name of 
+“contr”. This is used by our QML application to give the Python Controller 
+object to this listview. We also need to give this component a component-wide 
+ID, so that we can access the controller using “podcastListView.contr” in other 
+parts of this file.
+    anchors.fill: parent
+This component should automatically fill all the available space of the parent 
+component – in practice, this means that the podcast list will always fill the 
+whole visible area of our window – even when its size changes.
+    delegate: Component {
+        Rectangle {
+            width: podcastListView.width
+            height: 60
+            color: ((index % 2 == 0)?"#222":"#111")
+A delegate is used as “template” for rendering a single row in the list view. 
+
+Delegates get created and destroyed automatically as needed by QML. Our 
+delegate is a simple Rectangle that has the same width as our view (because 
+we want the list items to fill the whole width of the list). The background color 
+of the list is defined by the “color” property of the Rectangle.
+The “index” value inside a delegate gives us the (zero-based) row index of the 
+current row that is to be rendered. We can utilize it to shade alternating rows 
+with different background colors – when “index % 2 == 0” (the first, third, fifth, 
+… row), the background color will be “#222” and when it is not (the second, 
+fourth, sixth, … row), the background color will be “#333”.
+            Image {
+                id: cover
+                source: model.podcast.cover_file
+                sourceSize {
+                    width: height
+                    height: height
+                }
+                width: 50
+                height: 50
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.leftMargin: (parent.height - width)/2
+                anchors.topMargin: (parent.height - height)/2
+            }
+We want to display the cover art of a podcast – it should be 50x50 pixels in 
+size, and its filename is taken from “model.podcast.cover_file”. The “model” 
+property accesses the underlying model (current row), and the “podcast” 
+accesses the role name of “podcast” from the model – in our case, it is the first 
+column (column index zero) of the model – a PodcastWrapper instance. The 
+PodcastWrapper instance for the given row has a “cover_file” property that 
+points to the file that should be displayed as cover art.
+The rest of the definitions (anchors) is used for layouting, and is out of scope 
+for this tutorial – you can read about this in the QML documentation.
+            Text {
+                id: title
+                elide: Text.ElideRight
+                text: model.podcast.title
+                color: "white"
+                font.bold: true
+                anchors.top: parent.top
+                anchors.left: cover.right
+                anchors.right: count.left
+                anchors.bottom: parent.verticalCenter
+                anchors.leftMargin: 10
+                verticalAlignment: Text.AlignBottom
+            }
+            Text {
+                id: subtitle
+                elide: Text.ElideRight
+                color: "#aaa"
+                text: model.podcast.description || "No description ;)"
+                font.pointSize: 10
+                anchors.top: title.bottom
+                anchors.left: cover.right
+                anchors.right: count.left
+                anchors.leftMargin: 10
+                verticalAlignment: Text.AlignTop
+            }
+Here we simply show two different lines of text – one being the title of the 
+podcast, taken from “model.podcast.title”, and the other one the description of 
+the podcast, taken from “model.podcast.description”. If the PodcastWrapper for 
+
+a given line does not give a description, we use the “No description” text as 
+default description.
+            Text {
+                id: count
+                color: "white"
+                font.pointSize: 30
+                visible: model.podcast.count > 0
+                text: model.podcast.count
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.right: parent.right
+                anchors.rightMargin: 10
+            }
+This is the amount of podcasts – the “count” property of PodcastWrapper. This 
+component is only visible when the count of (downloaded) episodes is greater 
+than zero. You can use as many properties as you want in a single expression, 
+and can also use properties for different kinds of things – in this case we use it 
+for both the visibility of the text and the contents of the text itself.
+            MouseArea {
+                anchors.fill: parent
+                onClicked: { contr.podcastSelected(model.podcast) }
+            }
+Up to now, we only have displaying of data. What we also want is to be able to 
+click on a row and have some action performed. We can do this via a 
+MouseArea – it should fill the parent component (otherwise it would not “catch” 
+any clicks) and when it is clicked, the “podcastSelected” slot of our “contr” 
+property should be called with “model.podcast” (a PodcastWrapper instance) as 
+parameter. This is the “magic” in this case, as it will pass the object to the 
+controller, which in turn will take care of switching the state of the main 
+application and populating the list of episodes in the view.
+        }
+    }
+}
+Always make sure to close the brackets that you open in QML, or you will get a 
+syntax error :)
+
+The QML file for displaying a list of episodes (EpisodeList.qml)
+-
+The last part of our little project is the list of episodes. This is similar to the list 
+of podcasts, so the listing of the code should be enough in this case:
+import Qt 4.7
+ListView {
+    id: episodeListView
+    property variant contr
+    anchors.fill: parent
+    delegate: Component {
+        Rectangle {
+            width: episodeListView.width
+            height: 60
+            color: (model.episode.downloaded?("#987"):((index % 2 == 0)?"#eee":"#ccc"))
+            Text {
+                id: title
+                text: model.episode.title
+                color: "black"
+                font.bold: model.episode.downloaded
+                anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.verticalCenter
+                anchors.leftMargin: 10
+                verticalAlignment: Text.AlignBottom
+            }
+            Text {
+                id: subtitle
+                color: "#333"
+                text: model.episode.description || "No description ;)"
+                font.pointSize: 10
+                anchors.top: title.bottom
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.leftMargin: 10
+                verticalAlignment: Text.AlignTop

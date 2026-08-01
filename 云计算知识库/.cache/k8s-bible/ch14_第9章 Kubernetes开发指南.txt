@@ -1,0 +1,889 @@
+第9章　Kubernetes开发指南
+本章将引入REST的概念，详细说明Kubernetes API的概念和使用方
+法，并举例说明如何基于Jersey和Fabric8框架访问Kubernetes API，深入
+分析基于这两个框架访问Kubernetes 
+API的优缺点，最后对Kubernetes
+API的扩展进行详细说明。下面从REST开始说起。
+9.1　REST简述
+REST（Representational State Transfer，表述性状态传递）是由Roy
+Thomas Fielding博士在他的论文Architectural Styles and the Design of
+Network-based Software Architectures中提出的一个术语。REST本身只是
+为分布式超媒体系统设计的一种架构风格，而不是标准。
+基于Web的架构实际上就是各种规范的集合，比如HTTP是一种规
+范，客户端服务器模式是另一种规范。每当我们在原有规范的基础上增
+加新的规范时，就会形成新的架构。而REST正是这样一种架构，它结
+合了一系列规范，形成一种新的基于Web的架构风格。
+传统的Web应用大多是B/S架构，涉及如下规范。
+（1）客户端-服务器：这种规范的提出，改善了用户接口跨多个平
+台的可移植性，并且通过简化服务器组件，改善了系统的可伸缩性。最
+为关键的是通过分离用户接口和数据存储，使得不同的用户终端共享相
+同的数据成为可能。
+（2）无状态性：无状态性是在客户端-服务器规范的基础上添加的
+又一层规范，它要求通信必须在本质上是无状态的，即从客户端到服务
+器的每个request都必须包含理解该request必需的所有信息。这个规范改
+善了系统的可见性（无状态性使得客户端和服务器端不必保存对方的详
+细信息，服务器只需处理当前的request，而不必了解所有request的历
+史）、可靠性（无状态性减少了服务器从局部错误中恢复的任务量）、
+可伸缩性（无状态性使得服务器端可以很容易释放资源，因为服务器端
+
+不必在多个request中保存状态）。同时，这种规范的缺点也是显而易见
+的，不能将状态数据保存在服务器上，导致增加了在一系列request中发
+送重复数据的开销，严重降低了效率。
+（3）缓存：为了改善无状态性带来的网络的低效性，客户端缓存
+规范出现。缓存规范允许隐式或显式地标记一个response中的数据，赋
+予了客户端缓存response数据的功能，这样就可以为以后的request共用
+缓存的数据消除部分或全部交互，提高了网络效率。但是客户端缓存了
+信息，所以客户端数据与服务器数据不一致的可能性增加，从而降低了
+可靠性。
+B/S架构的优点是部署非常方便，在用户体验方面却不很理想。为
+了改善这种状况，REST规范出现。REST规范在原有B/S架构的基础上
+增加了三个新规范：统一接口、分层系统和按需代码。
+（1）统一接口：REST架构风格的核心特征就是强调组件之间有一
+个统一的接口，表现为在REST世界里，网络上的所有事物都被抽象为
+资源，REST通过通用的链接器接口对资源进行操作。这样设计的好处
+是保证系统提供的服务都是解耦的，可极大简化系统，改善系统的交互
+性和可重用性。
+（2）分层系统：分层系统规则的加入提高了各种层次之间的独立
+性，为整个系统的复杂性设置了边界，通过封装遗留的服务，使新的服
+务器免受遗留客户端的影响，也提高了系统的可伸缩性。
+（3）按需代码：REST允许对客户端的功能进行扩展。比如，通过
+下载并执行applet或脚本形式的代码来扩展客户端的功能。但这在改善
+系统可扩展性的同时降低了可见性，所以它只是REST的一个可选约
+束。
+REST架构是针对Web应用而设计的，其目的是降低开发的复杂
+度，提高系统的可伸缩性。REST提出了如下设计准则。
+（1）网络上的所有事物都被抽象为资源（Resource）。
+（2）每个资源都对应唯一的资源标识符（Resource Identifier）。
+（3）通过通用的连接器接口（Generic Connector Interface）对资源
+进行操作。
+
+（4）对资源的各种操作都不会改变资源标识符。
+（5）所有操作都是无状态的（Stateless）。
+REST中的资源指的不是数据，而是数据和表现形式的组合，比
+如“最新访问的10位会员”和“最活跃的10位会员”在数据上可能有重叠或
+者完全相同，而它们由于表现形式不同，被归为不同的资源，这也就是
+为什么REST的全名是Representational State Transfer。资源标识符就是
+URI（Uniform 
+Resource 
+Identifier），不管是图片、Word还是视频文
+件，甚至只是一种虚拟服务，也不管是XML、TXT还是其他文件格式，
+全部通过URI对资源进行唯一标识。
+REST是基于HTTP的，任何对资源的操作行为都通过HTTP来实
+现。以往的Web开发大多数用的是HTTP中的GET和POST方法，很少使
+用其他方法，这实际上是因为对HTTP的片面理解造成的。HTTP不仅仅
+是一个简单的运载数据的协议，还是一个具有丰富内涵的网络软件的协
+议，它不仅能对互联网资源进行唯一定位，还能告诉我们如何对该资源
+进行操作。HTTP把对一个资源的操作限制在4种方法（GET、POST、
+PUT和DELETE）中，这正是对资源CRUD操作的实现。由于资源和URI
+是一一对应的，在执行这些操作时URI没有变化，和以往的Web开发有
+很大的区别，所以极大地简化了Web开发，也使得URI可以被设计成能
+更直观地反映资源的结构。这种URI的设计被称作RESTful的URI，为开
+发人员引入了一种新的思维方式：通过URL来设计系统结构。当然，这
+种设计方式对于一些特定情况也是不适用的，也就是说不是所有URI都
+适用于RESTful。
+REST之所以可以提高系统的可伸缩性，就是因为它要求所有操作
+都是无状态的。没有了上下文（Context）的约束，做分布式和集群时就
+更为简单，也可以让系统更为有效地利用缓冲池（Pool），并且由于服
+务器端不需要记录客户端的一系列访问，也就减少了服务器端的性能损
+耗。
+Kubernetes API也符合RESTful规范，下面对其进行介绍。
+9.2　Kubernetes API详解
+
+本章详细讲解Kubernetes API方面的内容。
+9.2.1　Kubernetes API概述
+Kubernetes API是集群系统中的重要组成部分，Kubernetes中各种资
+源（对象）的数据都通过该API接口被提交到后端的持久化存储
+（etcd）中，Kubernetes集群中的各部件之间通过该API接口实现解耦
+合，同时Kubernetes集群中一个重要且便捷的管理工具kubectl也是通过
+访问该API接口实现其强大的管理功能的。Kubernetes API中的资源对象
+都拥有通用的元数据，资源对象也可能存在嵌套现象，比如在一个Pod
+里面嵌套多个Container。创建一个API对象是指通过API调用创建一条有
+意义的记录，该记录一旦被创建，Kubernetes就将确保对应的资源对象
+会被自动创建并托管维护。
+在Kubernetes系统中，在大多数情况下，API定义和实现都符合标准
+的HTTP REST格式，比如通过标准的HTTP操作（POST、PUT、GET、
+DELETE）来完成对相关资源对象的查询、创建、修改、删除等操作。
+但同时，Kubernetes也为某些非标准的REST行为实现了附加的API接
+口，例如Watch某个资源的变化、进入容器执行某个操作等。另外，某
+些API接口可能违背严格的REST模式，因为接口返回的不是单一的
+JSON对象，而是其他类型的数据，比如JSON对象流或非结构化的文本
+日志数据等。
+Kubernetes开发人员认为，任何成功的系统都会经历一个不断成长
+和不断适应各种变更的过程，因此他们期望Kubernetes API是不断变更
+和增长的，并在设计和开发时，有意识地兼容已存在的客户需求。通
+常，我们不希望将新的API资源和新的资源域频繁地加入系统中，资源
+或域的删除需要一个严格的审核流程。
+在Kubernetes 1.13及之前的版本中，Kubernetes API Server服务提供
+了Swagger格式自动生成的API接口文档。Swagger UI是一款REST API
+文档在线自动生成和功能测试软件，通过设置kube-apiserver服务的启动
+参数--enable-swagger-ui=true来启用Swagger 
+UI页面，其访问地址为
+http：//<master-ip>：<master-port>/swagger-ui/。假设API 
+Server启动了
+192.168.18.3服务器上的8080端口（非安全端口），则可以通过访问
+
+http：//192.168.18.3：8080/swagger-ui/来查看API列表。
+Kubernetes从1.14版本开始使用OpenAPI文档的格式生成API接口文
+档，并且不再提供Swagger UI）。OpenAPI文档规范始于Swagger规范，
+Swagger 2.0也是OpenAPI文档规范的第1个标准版本（OpenAPI v2）。
+相对于Swagger 1.2，Open API v2版本对REST接口的定义更精确化，也
+更容易利用代码生成各种语言版本的接口源码。
+Kubernetes的OpenAPI访问地址为http：//<master-ip>：<master-
+port>/openapi/v2，其内容为JSON格式的API说明文档，可以使用命令行
+工具curl进行查询：
+
+
+
+
+整个OpenAPI文档非常大，以文本方式不易查看和检索，可以通过
+其他Swagger 
+UI工具使用浏览器查看，这样更加直观、方便，步骤如
+下。
+首先将OpenAPI文档导出为JSON文件，名称为k8s-swagger.json：
+接下来启动一个swaggerapi/swagger-ui容器，导入k8s-swagger.json
+文件：
+然后就可以通过浏览器查看Swagger UI了，如图9.1所示。
+
+
+图9.1　查看效果
+单击某个API链接，即可查看该API的详细信息，包括请求和应答
+的参数说明，也可以直接在页面上进行测试。以创建Pod的API为例，其
+REST API的访问路径为“/api/v1/namespaces/{namespace}/pods”，如图9.2
+所示。
+图9.2　创建Pod的API
+单击链接展开，即可查看详细的API接口说明，如图9.3和9.4所示。
+
+图9.3　API接口说明——请求说明
+
+
+图9.4　API接口说明——应答说明
+可以看到，在Kubernetes API中，一个API的顶层（Top Level）元素
+由kind、apiVersion、metadata、spec和status这5部分组成，接下来分别
+对这5部分进行说明。
+1.kind
+kind表明对象有以下三大类别。
+（1）对象（objects）：代表系统中的一个永久资源（实体），例
+如Pod、RC、Service、Namespace及Node等。通过操作这些资源的属
+性，客户端可以对该对象进行创建、修改、删除和获取操作。
+（2）列表（list）：一个或多个资源类别的集合。所有列表都通过
+items域获得对象数组，例如PodLists、ServiceLists、NodeLists。大部分
+被定义在系统中的对象都有一个返回所有资源集合的端点，以及零到多
+个返回所有资源集合的子集的端点。某些对象有可能是单例对象
+（singletons），例如当前用户、系统默认用户等，这些对象没有列表。
+（3）简单类别（simple）：该类别包含作用在对象上的特殊行为和
+非持久实体。该类别限制了使用范围，它有一个通用元数据的有限集
+合，例如Binding、Status。
+2.apiVersion
+apiVersion表明API的版本号，当前版本默认只支持v1。
+3.metadata
+metadata是资源对象的元数据定义，是集合类的元素类型，包含一
+组由不同名称定义的属性。在Kubernetes中，每个资源对象都必须包含
+以下3种metadata。
+（1）namespace：对象所属的命名空间，如果不指定，系统则会将
+对象置于名为default的系统命名空间中。
+（2）name：对象的名称，在一个命名空间中名称应具备唯一性。
+（3）uid：系统为每个对象都生成的唯一ID，符合RFC 4122规范的
+定义。
+
+此外，每种对象都还应该包含以下几个重要元数据。
+（1）labels：用户可定义的“标签”，键和值都为字符串的map，是
+对象进行组织和分类的一种手段，通常用于标签选择器，用来匹配目标
+对象。
+（2）annotations：用户可定义的“注解”，键和值都为字符串的
+map，被Kubernetes内部进程或者某些外部工具使用，用于存储和获取
+关于该对象的特定元数据。
+（3）resourceVersion：用于识别该资源内部版本号的字符串，在用
+于Watch操作时，可以避免在GET操作和下一次Watch操作之间造成信息
+不一致，客户端可以用它来判断资源是否改变。该值应该被客户端看作
+不透明，且不做任何修改就返回给服务端。客户端不应该假定版本信息
+具有跨命名空间、跨不同资源类别、跨不同服务器的含义。
+（4）creationTimestamp：系统记录创建对象时的时间戳，符合RFC
+3339规范。
+（5）deletionTimestamp：系统记录删除对象时的时间戳，符合RFC
+3339规范。
+（6）selfLink：通过API访问资源自身的URL，例如一个Pod的link
+可能是“/api/v1/namespaces/default/pods/frontend-o8bg4”。
+4.spec
+spec是集合类的元素类型，用户对需要管理的对象进行详细描述的
+主体部分都在spec里给出，它会被Kubernetes持久化到etcd中保存，系统
+通过spec的描述来创建或更新对象，以达到用户期望的对象运行状态。
+spec的内容既包括用户提供的配置设置、默认值、属性的初始化值，也
+包括在对象创建过程中由其他相关组件（例如schedulers、auto-scalers）
+创建或修改的对象属性，比如Pod的Service IP地址。如果spec被删除，
+那么该对象将被从系统中删除。
+5.status
+status用于记录对象在系统中的当前状态信息，也是集合类元素类
+型。status在一个自动处理的进程中被持久化，可以在流转的过程中生
+成。如果观察到一个资源丢失了它的状态，则该丢失的状态可能被重新
+
+构造。以Pod为例，Pod的status信息主要包括conditions、
+containerStatuses、hostIP、phase、podIP、startTime等，其中比较重要的
+两个状态属性如下。
+（1）phase：描述对象所处的生命周期阶段，phase的典型值是
+Pending（创建中）、Running、Active（正在运行中）或Terminated（已
+终结），这几种状态对于不同的对象可能有轻微的差别，此外，关于当
+前phase附加的详细说明可能被包含在其他域中。
+（2）condition：表示条件，由条件类型和状态值组成，目前仅有
+一种条件类型：Ready，对应的状态值可以为True、False或Unknown。
+一个对象可以具备多种condition，而condition的状态值也可能不断发生
+变化，condition可能附带一些信息，例如最后的探测时间或最后的转变
+时间。
+9.2.2　Kubernetes API版本的演进策略
+为了在兼容旧版本的同时不断升级新的API，Kubernetes提供了多版
+本API的支持能力，每个版本的API都通过一个版本号路径前缀进行区
+分，例如/api/v1beta3。在通常情况下，新旧几个不同的API版本都能涵
+盖所有的Kubernetes资源对象，在不同的版本之间，这些API接口存在一
+些细微差别。Kubernetes开发团队基于API级别选择版本而不是基于资源
+和域级别，是为了确保API能够清晰、连续地描述一个系统资源和行为
+的视图，能够控制访问的整个过程和控制实验性API的访问。
+API的版本号通常用于描述API的成熟阶段，例如：
+◎　v1表示GA稳定版本；
+◎　v1beta3表示Beta版本（预发布版本）；
+◎　v1alpha1表示Alpha版本（实验性的版本）。
+当某个API的实现达到一个新的GA稳定版本时（如v2），旧的GA
+版本（如v1）和Beta版本（例如v2beta1）将逐渐被废弃，Kubernetes建
+议废弃的时间如下。
+◎　对于旧的GA版本（如v1），Kubernetes建议废弃的时间应不少
+
+于12个月或3个大版本Release的时间，选择最长的时间。
+◎　对旧的Beta版本（如v2beta1），Kubernetes建议废弃的时间应
+不少于9个月或3个大版本Release的时间，选择最长的时间。
+◎　对旧的Alpha版本，则无须等待，可以直接废弃。
+完整的API更新和废弃策略请参考官方网站的说明。
+9.2.3　API Groups（API组）
+为了更容易扩展、升级和演进API，Kubernetes将API分组为多个逻
+辑集合，称之为API Groups，它们支持单独启用或禁用，在不同的API
+Groups中使用不同的版本，允许各组以不同的速度演进，例如apps/v1、
+apps/v1beta2、apps/v1beta1等。API Groups以REST URL中的路径进行定
+义并区别彼此，每个API Group群组都表现为一个以/apis为根路径的rest
+路径，不过核心群组Core有个专用的简化路径/api/v1，当前支持以下两
+类API Groups。
+（1）Core Groups（核心组），也可以称之为Legacy Groups。其作
+为Kubernetes核心的API，在资源对象的定义中被表示为“apiVersion：
+v1”，我们常用的资源对象大部分都在这个组里，例如Container、Pod、
+ReplicationController、Endpoint、Service、ConfigMap、Secret、Volume
+等。
+（2）具有分组信息的API，以/apis/$GROUP_NAME/$VERSION
+URL路径进行标识，例如apiVersion：batch/v1、apiVersion：
+extensions：v1beta1、apiVersion：apps/v1beta1等。比如/apis/apps/v1在
+apiversion字段中的格式为“$GROUP_NAME/$VERSION”。下面是常见
+的一些分组说明。
+◎　apps/v1：是Kubernetes中最常见的API组，其中包含许多核心
+对象，主要与用户应用的发布、部署有关，例如Deployments，
+RollingUpdates和ReplicaSets。
+◎　extensions/VERSION：扩展API组，例如DaemonSets、
+ReplicaSet和Ingresses都在此版本中有重大更改。
+
+◎　batch/VERSION：包含与批处理和类似作业的任务相关的对
+象，例如Job，包括v1与v1beta1两个版本。
+◎　autoscaling/VERSION：包含与HPA相关的资源对象，目前有稳
+定的v1版本。
+◎　certificates.k8s.io/VERSION：包含集群证书操作相关的资源对
+象。
+◎　rbac.authorization.k8s.io/v1：包含RBAC权限相关的资源对象。
+◎　policy/VERSION：包含Pod安全性相关的资源对象。
+如果需要实现自定义的资源对象及相应的API，则使用CRD进行扩
+展是最方便的。
+例如，Pod的API说明如图9.5所示，由于Pod属于核心资源对象，所
+以不存在某个扩展API 
+Group，页面显示为Core，在Pod的定义中
+为“apiVersion：v1”。
+StatefulSet则属于名为apps的API组，版本号为v1，在StatefulSet的
+定义中为“apiVersion：apps/v1”，如图9.6所示。
+
+图9.5　Pod的API说明
+
+图9.6　StatefulSet的API说明
+如果要启用或禁用特定的API组，则需要在API Server的启动参数中
+设置--runtime-config进行声明，例如，--runtime-config=batch/v2alpha1表
+示启用API组batch/v2alpha1；也可以设置--runtime-config=batch/v1=false
+表示禁用API组batch/v1。多个API组的设置以逗号分隔。在当前的API
+Server服务中，DaemonSets、Deployments、HorizontalPodAutoscalers、
+Ingress、Jobs和ReplicaSets所属的API组是默认启用的。
+9.2.4　API REST的方法说明
+API资源使用REST模式，对资源对象的操作方法如下。
+
+（1）GET/<资源名的复数格式>：获得某一类型的资源列表，例如
+GET/pods返回一个Pod资源列表。
+（2）POST/<资源名的复数格式>：创建一个资源，该资源来自用
+户提供的JSON对象。
+（3）GET/<资源名复数格式>/<名称>：通过给出的名称获得单个
+资源，例如GET/pods/first返回一个名为first的Pod。
+（4）DELETE/<资源名复数格式>/<名称>：通过给出的名称删除单
+个资源，在删除选项（DeleteOptions）中可以指定优雅删除（Grace
+Deletion）的时间（GracePeriodSeconds），该选项表明了从服务端接收
+到删除请求到资源被删除的时间间隔（单位为s）。不同的类别
+（Kind）可能为优雅删除时间（Grace 
+Period）声明默认值。用户提交
+的优雅删除时间将覆盖该默认值，包括值为0的优雅删除时间。
+（5）PUT/<资源名复数格式>/<名称>：通过给出的资源名和客户端
+提供的JSON对象来更新或创建资源。
+（6）PATCH/<资源名复数格式>/<名称>：选择修改资源详细指定
+的域。
+对于PATCH操作，目前Kubernetes 
+API通过相应的HTTP首
+部“Content-Type”对其进行识别。
+目前支持以下三种类型的PATCH操作。
+（1）JSON 
+Patch，Content-Type：application/json-patch+json。在
+RFC6902的定义中，JSON Patch是执行在资源对象上的一系列操作，例
+如{"op"："add"，"path"："/a/b/c"，"value"：["foo"，"bar"]}。详情请查
+看RFC6902的说明。
+（2）Merge 
+Patch，Content-Type：application/merge-json-
+patch+json。在RFC7386的定义中，Merge 
+Patch必须包含对一个资源对
+象的部分描述，这个资源对象的部分描述就是一个JSON对象。该JSON
+对象被提交到服务端，与服务端的当前对象合并，从而创建一个新的对
+象。详情请查看RFC73862的说明。
+（3）Strategic 
+Merge 
+Patch，Content-Type：application/strategic-
+merge-patch+json。Strategic Merge Patch是一个定制化的Merge Patch实
+
+现。接下来将详细讲解Strategic Merge Patch。
+在标准的JSON Merge Patch中，JSON对象总被合并（Merge），但
+是资源对象中的列表域总被替换，用户通常不希望如此。例如，我们通
+过下列定义创建一个Pod资源对象：
+接着，我们希望添加一个容器到这个Pod中，代码和上传的JSON对
+象如下：
+如果我们使用标准的Merge Patch，则其中的整个容器列表将被单个
+log-tailer容器替换，然而我们的目的是使两个容器列表合并。
+为了解决这个问题，Strategic 
+Merge 
+Patch添加元数据到API对象
+中，并通过这些新元数据来决定哪个列表被合并，哪个列表不被合并。
+当前这些元数据作为结构标签，对于API对象自身来说是合法的。对于
+客户端来说，这些元数据作为Swagger 
+annotations也是合法的。在上述
+例子中向containers中添加了patchStrategy域，且它的值为merge，通过添
+加patchMergeKey，它的值为name。也就是说，containers中的列表将会
+被合并而不是被替换，合并的依据为name域的值。
+
+Kubernetes 
+API还增加了Watch的API接口，配合List接口（如
+GET/pods）可以实现高效的资源同步、缓存及实时检测处理能力。
+◎　GET/watch/<资源名复数格式>：随着时间的变化，不断接收一
+连串的JSON对象，这些JSON对象记录了给定资源类别内所有资源对象
+的变化情况。
+◎　GET/watch/<资源名复数格式>/<name>：随着时间的变化，不
+断接收一连串的JSON对象，这些JSON对象记录了某个给定资源对象的
+变化情况。
+需要注意的是，watch接口返回的是一连串JSON对象，而不是单个
+JSON对象。
+如果集群的规模很大，那么某些资源对象的List接口（如
+GET/pods）返回的数据集就很大，这对Kubernetes API Server及客户端
+程序都造成很大的压力，比如在集群中有上千个Pod实例的情况下，每
+个Pod的JSON数据都会有1～2KB，List返回的结果会有10～20MB！所
+以从1.9版本开始，Kubernetes又提供了分段模式的List接口（Retrieving
+large results sets in chunks），其使用方法也很简单，类似数据库结果集
+遍历，只增加了limit和continue两个参数：
+另外，Kubernetes增加了HTTP Redirect与HTTP Proxy这两种特殊的
+API接口，前者实现资源重定向访问，后者则实现HTTP请求的代理。
+9.2.5　API Server响应说明
+API Server在响应用户请求时附带一个状态码，该状态码符合HTTP
+规范。表9.1列出了API Server可能返回的状态码。
+表9.1　API Server可能返回的状态码
+
+续表
+
+在调用API接口发生错误时，Kubernetes将会返回一个状态类别
+（Status Kind）。下面是两种常见的错误场景。
+（1）当一个操作不成功时（例如，当服务端返回一个非2xx HTTP
+状态码时）。
+（2）当一个HTTP DELETE方法调用失败时。
+状态对象被编码成JSON格式，同时该JSON对象被作为请求的响应
+体。该状态对象包含人和机器使用的域，在这些域中包含来自API的关
+于失败原因的详细信息。状态对象中的信息补充了对HTTP状态码的说
+明。例如：
+
+
+其中：
+◎　status域包含两个可能的值，即Success或Failure。
+◎　message域包含对错误的描述信息。
+◎　reason域包含对该操作失败原因的描述信息。
+◎　details可能包含和reason域相关的扩展数据。每个reason域都可
+以定义它的扩展的details域。该域是可选的，返回数据的格式是不确定
+的，不同的reason类型返回的details域的内容不一样。
+为了让开发人员更方便地访问Kubernetes的RESTful 
+API，
+Kubernetes社区推出了针对Go、Python、Java、dotNet、JavaScript等编
+程语言的客户端库，这些库由特别兴趣小组（SIG）API 
+Machinary维
+护。在Java客户端框架中，Fabric8 Kubernetes Java client于2015年推出，
+
+虽然不是“官方”宣布支持的Java客户端框架，但它是除Kubernetes 
+Go
+client 
+library外非常流行的客户端框架，也是非常强大的Java版本的
+Kubernetes客户端框架，所以本书后面主要以它为例，给出相关使用案
+例。
+9.3　使用Fabric8访问Kubernetes API
+Fabric8包含多款工具包，Kubernetes 
+Client只是其中之一，本例代
+码涉及的Jar包如图9.7所示，能以Maven方式获取依赖包。因为该工具包
+已经对访问Kubernetes API客户端做了较好的封装，因此其访问代码比
+较简单，其具体的访问过程会在后续章节中举例说明。
+
+图9.7　本例代码涉及的Jar包
+9.3.1　具体应用示例
+首先，举例说明对API资源的基本访问，也就是对资源的增、删、
+改、查，以及替换资源的status。其中会单独对Node和Pod的特殊接口做
+举例说明。表9.2列出了常见资源对象的基本接口。
+表9.2　常见资源对象的基本接口
+
+续表
+
+
+续表
+
+
+表9.2中的Service Endpoints资源对象表示的是一个Service的所有Pod
+实例的访问地址列表。在通常情况下，一个Service只有几个Pod实例，
+所以它的Endpoints列表也不多，但是在某些大规模的系统中，一个
+Service对应几十、几百个Pod实例的情况下，它的Endpoints列表会变得
+很大，在这种情况下，当某个Pod实例出现变动时，Service的整个
+Endpoints列表都会跟着变动，导致Kubernetes Master承受很大的负荷，
+因此后面增加了新的资源对象——EndpointSlices，可以从根本上解决这
+个问题。在默认情况下，Kubernetes会自动分割Service的Endpoints列表
+并创建对应的EndpointSlices，确保每个EndpointSlices最多只包含100个
+Endpoints。
+接下来举例说明如何通过API接口创建资源对象，基于Fabric8框架
+的代码如下：
+
+由于Fabric8框架对Kubernetes API对象做了很好的封装，对其中的
+大量对象都做了定义，所以用户可以通过其提供的资源对象去定义
+Kubernetes API对象，例如上面例子中的命名空间对象。Fabric8框架中
+的kubernetes-model工具包用于API对象的封装。在上面的例子中，通过
+Fabric8框架提供的类创建了一个名为ns-fabric8的命名空间对象。
+接下来会通过基于Jeysey框架的代码创建两个Pod资源对象。在两
+个例子中，一个是在上面创建的命名空间 
+ns-sample中创建Pod资源对
+象，另一个是为后续创建“cluster service”创建的Pod资源对象。由于基于
+Fabric8框架创建Pod资源对象的方法很简单，因此这里不再用Fabric8框
+架对上述两个例子做说明。通过基于Jersey框架创建这两个Pod资源对象
+的代码如下：
+
+其中，podInNs.json和pod4ClusterService.json是对创建两个Pod资源
+对象的定义。podInNs.json的内容如下：
+
+pod4ClusterService.json的内容如下：
+
+下面的例子代码用于获取Pod资源列表，其中，第1部分代码用于获
+
+取所有Pod资源对象，第2、3部分代码主要用于说明如何使用标签选择
+Pod资源对象，最后一部分代码用于举例说明如何使用field选择Pod资源
+对象。代码如下：
+
+
+接下来的例子代码用于替换一个Pod对象，在通过Kubernetes API替
+换一个Pod资源对象时需要注意如下两点。
+（1）在替换该资源对象前，先从API中获取该资源对象的JSON对
+象，然后在该JSON对象的基础上修改需要替换的部分。
+（2）在Kubernetes API提供的接口中，PUT方法（replace）只支持
+替换容器的image部分。
+代码如下：
+其中，pod4Replace.json的内容如下：
+
+
+
+
+接下来的两个例子实现了在9.2.4节中提到的两种Merge方式：
+Merge Patch和Strategic Merge Patch。
+Merge Patch的示例如下：
+其中，pod4MergeJsonPatch.json的内容如下：
+
+Strategic Merge Patch的示例如下：
+
+其中，pod4StrategicMerge.json的内容如下：
+接下来实现了修改Pod资源对象的状态，代码如下：
+
+其中，pod4Status.json的内容如下：
+
+
+
+接下来实现了查看Pod的log日志功能，代码如下：
+
+下面通过API访问Node的多种接口，代码如下：
+
+
+
+最后，举例说明如何通过API删除资源对象pod，代码如下：
+下面基于Fabric8实现对资源对象的监听，代码如下：
+
+9.3.2　其他客户端库
+目前Kubernetes官方支持的客户端库如表9.3所示。
+表9.3　目前Kubernetes官方支持的客户端库
+
+此外，Kubernetes社区也在开发和维护基于其他开发语言的客户端
+库，如表9.4所示。
+表9.4　基于其他开发语言的客户端库
+
+续表
+
+
+9.4　Kubernetes API的扩展
+随着Kubernetes的发展，用户对Kubernetes的扩展性也提出了越来越
+高的要求。从1.7版本开始，Kubernetes引入扩展API资源的能力，使得
+开发人员在不修改Kubernetes核心代码的前提下可以对Kubernetes API进
+行扩展，并仍然使用Kubernetes的语法对新增的API进行操作，这非常适
+用于在Kubernetes上通过其API实现其他功能（例如第三方性能指标采集
+服务）或者测试实验性新特性（例如外部设备驱动）。
+在Kubernetes中，所有对象都被抽象定义为某种资源对象，同时系
+统会为其设置一个API URL入口（API Endpoint），对资源对象的操作
+（如新增、删除、修改、查看等）都需要通过Master的核心组件API
+Server调用资源对象的API来完成。与API Server的交互可以通过kubectl
+命令行工具或访问其RESTful API进行。每个API都可以设置多个版本，
+在不同的API 
+URL路径下区分，例
+如“/api/v1”或“/apis/extensions/v1beta1”等。使用这种机制后，用户可以
+很方便地定义这些API资源对象（YAML配置），并将其提交给
+Kubernetes（调用RESTful API），来完成对容器应用的各种管理工作。
+Kubernetes系统内置的Pod、RC、Service、ConfigMap、Volume等
+资源对象已经能够满足常见的容器应用管理要求，但如果用户希望将其
+自行开发的第三方系统纳入Kubernetes，并使用Kubernetes的API对其自
+定义的功能或配置进行管理，就需要对API进行扩展了。目前Kubernetes
+提供了以下两种API扩展机制供用户扩展API。
+（1）CRD：复用Kubernetes的API 
+Server，无须编写额外的API
+Server。用户只需要定义CRD，并且提供一个CRD控制器，就能通过
+Kubernetes的API管理自定义资源对象了，同时要求用户的CRD对象符
+合API Server的管理规范。
+（2）API聚合：用户需要编写额外的API Server，可以对资源进行
+更细粒度的控制（例如，如何在各API版本之间切换），要求用户自行
+处理对多个API版本的支持。
+本节主要对CRD和API聚合这两种API扩展机制的概念和用法进行
+
+详细说明。
+9.4.1　使用CRD扩展API资源
+CRD是Kubernetes从1.7版本开始引入的特性，在Kubernetes早期版
+本中被称为TPR（ThirdPartyResources，第三方资源）。TPR从
+Kubernetes 1.8版本开始停用，被CRD全面替换。
+CRD本身只是一段声明，用于定义用户自定义的资源对象。但仅有
+CRD的定义并没有实际作用，用户还需要提供管理CRD对象的CRD控制
+器（CRD Controller），才能实现对CRD对象的管理。CRD控制器通常
+可以通过Go语言进行开发，需要遵循Kubernetes的控制器开发规范，基
+于客户端库client-go实现Informer、ResourceEventHandler、Workqueue等
+组件具体的功能处理逻辑，详细的开发过程请参考官方示例和client-go
+库的说明。
+1.创建CRD的定义
+与其他资源对象一样，对CRD的定义也使用YAML配置进行声明。
+以Istio系统中的自定义资源VirtualService为例，配置文件crd-
+virtualservice.yaml的内容如下：
+
+CRD定义中的关键字段如下。
+
+（1）group：设置API所属的组，将其映射为API URL中/apis/的下
+一级目录，设置networking.istio.io生成的API 
+URL路径
+为/apis/networking.istio.io。
+（2）scope：该API的生效范围，可选项为Namespaced（由
+Namespace限定）和Cluster（在集群范围全局生效，不局限于任何命名
+空间），默认值为Namespaced。
+（3）versions：设置此CRD支持的版本，可以设置多个版本，用列
+表形式表示。目前还可以设置名为version的字段，只能设置一个版本，
+在将来的Kubernetes版本中会被弃用，建议使用versions进行设置。如果
+该CRD支持多个版本，则每个版本都会在API
+URL“/apis/networking.istio.io”的下一级进行体现，例
+如/apis/networking.istio.io/v1或/apis/networking.istio.io/v1alpha3等。每个
+版本都可以设置下列参数。
+◎　name：版本的名称，例如v1、v1alpha3等。
+◎　served：是否启用，设置为true表示启用。
+◎　storage：是否进行存储，只能有一个版本被设置为true。
+（4）names：CRD的名称，包括单数、复数、kind、所属组等名称
+的定义，可以设置如下参数。
+◎　kind：CRD的资源类型名称，要求以驼峰式命名规范进行命名
+（单词的首字母都大写），例如VirtualService。
+◎　listKind：CRD列表，默认设置为<kind>List格式，例如
+VirtualServiceList。
+◎　singular：单数形式的名称，要求全部小写，例如
+virtualservice。
+◎　plural：复数形式的名称，要求全部小写，例如virtualservices。
+◎　shortNames：缩写形式的名称，要求全部小写，例如vs。
+◎　categories：CRD所属的资源组列表。例如，VirtualService属于
+istio-io组和networking-istio-io组，用户通过查询istio-io组和networking-
+istio-io组，也可以查询到该CRD实例。
+
+使用kubectl create命令完成CRD的创建：
+在CRD创建成功后，由于本例的scope设置了命名空间限定，所以
+可以通过API
+Endpoint“/apis/networking.istio.io/v1alpha3/namespaces/<namespace>/virtua
+理该CRD资源。
+用户接下来就可以基于该CRD的定义创建自定义资源对象了。
+2.基于CRD的定义创建自定义资源对象
+基于CRD的定义，用户可以像创建Kubernetes系统内置的资源对象
+（如Pod）一样创建CRD资源对象。在下面的例子中，virtualservice-
+helloworld.yaml定义了一个类型为VirtualService的资源对象：
+
+除了需要设置该CRD资源对象的名称，还需要在spec段设置相应的
+参数。在spec中可以设置的字段是由CRD开发者自定义的，需要根据
+CRD开发者提供的手册进行配置。这些参数通常包含特定的业务含义，
+由CRD控制器进行处理。
+使用kubectl create命令完成CRD资源对象的创建：
+然后，用户就可以像操作Kubernetes内置的资源对象（如Pod、
+RC、Service）一样去操作CRD资源对象了，包括查看、更新、删除和
+watch等操作。
+查看CRD资源对象：
+
+也可以通过CRD所属的categories进行查询：
+3.CRD的高级特性
+随着Kubernetes的演进，CRD也在逐步添加一些高级特性和功能，
+包括subresources子资源、校验（Validation）机制、自定义查看CRD时
+需要显示的列，以及finalizer预删除钩子。
+1）CRD的subresources子资源
+Kubernetes从1.11版本开始，在CRD的定义中引入了名为
+subresources的配置，可以设置的选项包括status和scale两类。
+◎　status：启用/status路径，其值来自CRD的.status字段，要求
+CRD控制器能够设置和更新这个字段的值。
+◎　scale：启用/scale路径，支持通过其他Kubernetes控制器（如
+HorizontalPodAutoscaler控制器）与CRD资源对象实例进行交互。用户
+通过kubectl 
+scale命令也能对该CRD资源对象进行扩容或缩容操作，要
+求CRD本身支持以多个副本的形式运行。
+下面是一个设置了subresources的CRD示例：
+
+
+基于该CRD的定义，创建一个自定义资源对象my-crontab.yaml：
+之后就能通过API Endpoint查看该资源对象的状态了：
+并查看该资源对象的扩缩容（scale）信息：
+用户还可以使用kubectl 
+scale命令对Pod的副本数量进行调整，例
+如：
+2）CRD的校验（Validation）机制
+
+Kubernetes从1.8版本开始引入了基于OpenAPI 
+v3 
+schema或
+validatingadmissionwebhook的校验机制，用于校验用户提交的CRD资源
+对象配置是否符合预定义的校验规则。该机制到Kubernetes 1.13版本时
+升级为Beta版本。要使用该功能，需要为kube-apiserver服务开启--
+feature-gates=CustomResourceValidation=true特性开关。
+下面的例子为CRD定义中的两个字段（cronSpec和replicas）设置了
+校验规则：
+
+校验规则如下。
+
+◎　spec.cronSpec：必须为字符串类型，并且满足正则表达式的格
+式。
+◎　spec.replicas：必须将其设置为1～10的整数。
+对于不符合要求的CRD资源对象定义，系统将拒绝创建。
+例如，下面的my-crontab.yaml示例违反了CRD中validation设置的校
+验规则，即cronSpec没有满足正则表达式的格式，replicas的值大于10：
+创建时，系统将报出validation失败的错误信息：
+
+3）自定义查看CRD时需要显示的列
+从Kubernetes 1.11版本开始，通过kubectl get命令能够显示哪些字段
+由服务端（API Server）决定，还支持在CRD中设置需要在查看（get）
+时显示的自定义列，在spec.additionalPrinterColumns字段设置即可。
+在下面的例子中设置了3个需要显示的自定义列Spec、Replicas和
+Age，并在JSONPath字段设置了自定义列的数据来源：
+
+
+运行kubectl get命令查看CronTab资源对象，会显示出这3个自定义
+列：
+4）Finalizer（CRD资源对象的预删除钩子方法）
+Finalizer设置的方法在删除CRD资源对象时调用，以实现CRD资源
+对象的清理工作。
+在下面的例子中为CRD“CronTab”设置了一个finalizer（也可以设置
+多个），其值为URL“finalizer.stable.example.com”：
+
+在用户发起删除该资源对象的请求时，Kubernetes不会直接删除这
+个资源对象，而是在元数据部分设置时间
+戳“metadata.deletionTimestamp”的值，将其标记为开始删除该CRD对
+象。然后控制器开始执行finalizer定义的钩子方
+法“finalizer.stable.example.com”进行清理工作。对于耗时较长的清理操
+作，还可以设置metadata.deletionGracePeriodSeconds超时时间，在超过
+这个时间后由系统强制终止钩子方法的执行。在控制器执行完钩子方法
+后，控制器应负责删除相应的finalizer。当全部finalizer都触发控制器执
+行钩子方法并都被删除之后，Kubernetes才会最终删除该CRD资源对
+象。
+5）CRD的多版本（Versioning）特性
+Kubernetes发展到1.17版本时，CRD资源对象的多版本特性达到稳
+定阶段。用户在定义一个CRD时，需要在spec.versions字段中列出支持
+的全部版本号，例如在下面的例子中，CRD支持v1beta1、v1两个版
+本：
+
+
+问题来了，在支持多个版本的CRD资源对象时，存在低版本的资源
+对象升级到高版本的转换问题，所以Kubernetes同时实现了Webhook
+Conversion for Custom Resources特性，通过使用Webhook回调接口来完
+成CRD资源对象多版本的转换问题。具体做法：开发并部署一个CRD多
+版本对象转换的Webhook服务；通过修改spec中的conversion部分来使用
+上述自定义转换的Webhook。
+6）结构化的CRD对象
+在CRD对象中，除了部分字段（如apiVersion、kind和metadata等）
+会被API 
+Server强制校验，其他字段都是用户自定义的，并不会被API
+Server校验，这就存在一些问题，比如某些数据被运维人员或其他不清
+楚此CRD格式的人设置为非法数据，仍然会被API Server接受并更新，
+导致应用失败或异常。因此，Kubernetes也为CRD对象增加了结构化定
+义和相关数据校验的特性，这一特性是通过OpenAPI 
+v3.0 
+validation
+schema实现的，即在CRD中增加了一个schema的定义。下面是一个完整
+的例子：
+
+
+CRD的OpenAPI v3.0 validation schema具有以下一些特性。
+◎　可以给CRD中的某个字段设置默认值，即Defaulting特性，此
+特性在Kubernetes 1.17时升级为GA版本。
+◎　通过validation schema校验的CRD对象的数据被写入etcd里持久
+保存，如果在CRD里出现一个未知的字段，即schema里没有声明的字
+段，则这个字段会被“剪除”，这个特性被称为Field pruning。
+通过增加OpenAPI 
+v3.0 
+validation 
+schema，CRD也能像普通的
+Kubernetes资源对象一样，具备结构化数据存储能力并且确保写入API
+Server的数据都是合法的。如果schema方式还不足以验证特殊的CRD数
+据结构，则还可以通过Admission Webhooks实现更为复杂的数据校验规
+则。
+4.小结
+CRD极大扩展了Kubernetes的能力，使用户像操作Pod一样操作自定
+义的各种资源对象。CRD已经在一些基于Kubernetes的第三方开源项目
+中得到广泛应用，包括CSI存储插件、Device 
+Plugin（GPU驱动程
+序）、Istio（Service Mesh管理）等，已经逐渐成为扩展Kubernetes能力
+的标准。
+9.4.2　使用API聚合机制扩展API资源
+API聚合机制是Kubernetes 1.7版本引入的特性，能够将用户扩展的
+API注册到kube-apiserver上，仍然通过API Server的HTTP URL对新的
+API进行访问和操作。为了实现这个机制，Kubernetes在kube-apiserver服
+务中引入了一个API聚合层（API Aggregation Layer），用于将扩展API
+的访问请求转发到用户提供的API 
+Server上，由它完成对API请求的处
+理。
+设计API聚合机制的主要目标如下。
+◎　增加API的扩展性：使得开发人员可以编写自己的API Server来
+发布其API，而无须对Kubernetes核心代码进行任何修改。
+
+◎　无须等待Kubernetes核心团队的繁杂审查：允许开发人员将其
+API作为单独的API Server发布，使集群管理员不用对Kubernetes的核心
+代码进行修改就能使用新的API，也就无须等待社区繁杂的审查了。
+◎　支持实验性新特性API开发：可以在独立的API聚合服务中开
+发新的API，不影响系统现有的功能。
+◎　确保新的API遵循Kubernetes的规范：如果没有API聚合机制，
+开发人员就可能被迫推出自己的设计，可能不遵循Kubernetes规范。
+总的来说，API聚合机制的目标是提供集中的API发现机制和安全
+的代理功能，将开发人员的新API动态地、无缝地注册到Kubernetes API
+Server中进行测试和使用。
+下面对API聚合机制的使用方式进行详细说明。
+1.在Master的API Server中启用API聚合功能
+为了能够将用户自定义的API注册到Master的API Server中，首先需
+要配置kube-apiserver服务的以下启动参数来启用API聚合功能。
+◎　--requestheader-client-ca-file=/etc/kubernetes/ssl_keys/ca.crt：客
+户端CA证书。
+◎　--requestheader-allowed-names=：允许访问的客户端common
+names列表，通过header中--requestheader-username-headers参数指定的字
+段获取。客户端common names的名称需要在client-ca-file中进行设置，
+将其设置为空值时，表示任意客户端都可访问。
+◎　--requestheader-extra-headers-prefix=X-Remote-Extra-：请求头
+中需要检查的前缀名。
+◎　--requestheader-group-headers=X-Remote-Group：请求头中需要
+检查的组名。
+◎　--requestheader-username-headers=X-Remote-User：请求头中需
+要检查的用户名。
+◎　--proxy-client-cert-
+file=/etc/kubernetes/ssl_keys/kubelet_client.crt：在请求期间验证
+Aggregator的客户端CA证书。
+
+◎　--proxy-client-key-
+file=/etc/kubernetes/ssl_keys/kubelet_client.key：在请求期间验证
+Aggregator的客户端私钥。
+如果kube-apiserver所在的主机上没有运行kube-proxy，即无法通过
+服务的ClusterIP地址进行访问，那么还需要设置以下启动参数：
+在设置完成后重启kube-apiserver服务，就启用API聚合功能了。
+2.注册自定义APIService资源
+在启用了API Server的API聚合功能之后，用户就能将自定义API资
+源注册到Kubernetes 
+Master的API 
+Server中了。用户只需配置一个
+APIService资源对象，就能进行注册了。APIService示例的YAML文件如
+下：
+
+在这个APIService中设置的API组名为custom.metrics.k8s.io，版本号
+为v1beta1，这两个字段将作为API路径的子目录注册到API路径/apis/
+下。注册成功后，就能通过Master 
+API路
+径/apis/custom.metrics.k8s.io/v1beta1访问自定义的API Server了。
+在service段通过name和namespace设置了后端的自定义API Server，
+本例中的服务名为custom-metrics-server，命名空间为custom-metrics。
+通过kubectl create命令将这个APIService定义发送给Master，就完成
+了注册操作。之后，通过Master 
+API 
+Server
+对/apis/custom.metrics.k8s.io/v1beta1路径的访问都会被API聚合层代理转
+发到后端服务custom-metrics-server.custom-metrics.svc上了。
+3.实现和部署自定义API Server
+
+仅仅注册APIService资源还是不够的，用户
+对/apis/custom.metrics.k8s.io/v1beta1路径的访问实际上都被转发给了
+custom-metrics-server.custom-metrics.svc服务。这个服务通常能以普通
+Pod的形式在Kubernetes集群中运行。当然，这个服务需要由自定义API
+的开发者提供，并且需要遵循Kubernetes的开发规范，详细的开发示例
+可以参考官方给出的示例说明。
+下面是部署自定义API Server的常规操作步骤。
+（1）确保APIService API已启用，这需要通过kube-apiserver的启动
+参数--runtime-config进行设置，默认是启用的。
+（2）建议创建一个RBAC规则，允许添加APIService资源对象，因
+为API扩展对整个Kubernetes集群都生效，所以不推荐在生产环境中对
+API扩展进行开发或测试。
+（3）创建一个新的命名空间用于运行扩展的API Server。
+（4）创建一个CA证书用于对自定义API Server的HTTPS安全访问
+进行签名。
+（5）创建服务端证书和秘钥用于自定义API Server的HTTPS安全访
+问。服务端证书应该由上面提及的CA证书进行签名，也应该包含含有
+DNS域名格式的CN名称。
+（6）在新的命名空间中使用服务端证书和秘钥创建Kubernetes
+Secret对象。
+（7）部署自定义API Server实例，通常可以以Deployment形式进行
+部署，并且将之前创建的Secret挂载到容器内部。该Deployment也应被
+部署在新的命名空间中。
+（8）确保自定义的API Server通过Volume加载了Secret中的证书，
+这将用于后续的HTTPS握手校验。
+（9）在新的命名空间中创建一个Service Account对象。
+（10）创建一个ClusterRole用于对自定义API资源进行操作。
+（11）使用之前创建的ServiceAccount为刚刚创建的ClusterRole创建
+一个ClusterRolebinding。
+
+（12）使用之前创建的ServiceAccount为系统ClusterRole“system：
+auth-delegator”创建一个ClusterRolebinding，以使其可以将认证决策代理
+转发给Kubernetes核心API Server。
+（13）使用之前创建的ServiceAccount为系统Role“extension-
+apiserver-authentication-reader”创建一个Rolebinding，以允许自定义API
+Server访问名为“extension-apiserver-authentication”的系统ConfigMap。
+（14）创建APIService资源对象。
+（15）访问APIService提供的API URL路径，验证对资源的访问能
+否成功。
+下面以部署Metrics Server为例，说明一个聚合API的实现方式。
+随着API聚合机制的出现，Heapster也进入弃用阶段，逐渐被
+Metrics Server替代。Metrics Server通过聚合API提供Pod和Node的资源使
+用数据，供HPA控制器、VPA控制器及kubectl 
+top命令使用。Metrics
+Server的源码可以在其GitHub代码库中找到，在部署完成后，Metrics
+Server将通过Kubernetes核心API Server的/apis/metrics.k8s.io/v1beta1路径
+提供Pod和Node的监控数据。
+首先，部署Metrics 
+Server实例，在下面的YAML配置中包含一个
+ServiceAccount、一个Deployment和一个Service的定义：
+
+
+然后，创建Metrics Server所需的RBAC权限配置：
+
+
+
+
+最后，定义APIService资源，主要设置自定义API的组（group）、
+版本号（version）及对应的服务（metrics-server.kube-system）：
+
+在所有资源都成功创建之后，在命名空间kube-system中会看到新建
+的metrics-server Pod。
+通过Kubernetes 
+Master 
+API 
+Server的
+URL“/apis/metrics.k8s.io/v1beta1”就能查询到Metrics Server提供的Pod和
+Node的性能数据了：
+
+
+

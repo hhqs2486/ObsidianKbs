@@ -1,0 +1,285 @@
+管理手册
+一旦你的Ceph 对象存储服务成功启动并运行, 你就可以实现管理服务, 比如用户管理、访问控
+制、限额和用量跟踪等功能。
+用户管理
+Ceph 对象存储用户管理是指Ceph 对象存储服务的用户(即：这里讲的并不是Ceph 对象网
+关是作为Ceph 存储集群的一个用户)。你必须创建一个用户, 生成access 和access 秘钥以
+使得最终用户能够与Ceph 对象网关服务进行交互。
+有两种类型的用户:
+
+用户: ‘用户’ 这个表示这个是使用S3 接口的一个用户.
+
+子用户: ‘子用户’ 这个词表示使用的是Swift 接口的一个用户. 一个子用户是和一个用
+户关联的.
+对于用户和子用户，你可以执行新建、修改、查看、停用和删除操作。除了用户和子用户的
+ID，你还需要给用户添加一个显示名称和邮件地址。你可以手动指定access 和secret 密钥，
+或者选择自动生成。当你生成或者指定密钥的时候，请注意，用户的ID 是跟S3 类型的密钥
+关联而子用户的ID 则是跟Swift 类型的密钥关联。Swift 密钥也拥
+有read, write, readwrite 和full 这几种访问级别。
+新建一个用户
+执行下面的命令新建一个用户(S3 接口):
+
+radosgw-admin user create --uid={username} --display-
+name="{display-name}" [--email={email}]
+实例如下:
+radosgw-admin user create --uid=johndoe --display-
+name="John Doe" --email=john@example.com
+{ "user_id": "johndoe",
+"display_name": "John Doe",
+"email": "john@example.com",
+"suspended": 0,
+"max_buckets": 1000,
+"auid": 0,
+"subusers": [],
+"keys": [
+{ "user": "johndoe",
+"access_key": "11BS02LGFB6AL6H1ADMW",
+"secret_key":
+"vzCEkuryfn060dfee4fgQPqFrncKEIkh3ZcdOANY"}],
+"swift_keys": [],
+"caps": [],
+"op_mask": "read, write, delete",
+"default_placement": "",
+
+"placement_tags": [],
+"bucket_quota": { "enabled": false,
+"max_size_kb": -1,
+"max_objects": -1},
+"user_quota": { "enabled": false,
+"max_size_kb": -1,
+"max_objects": -1},
+"temp_url_keys": []}
+新建用户的时候也同时会生成access_key 和secret_key 入口，以便任何兼容S3 API
+的客户端能够使用。
+Important
+仔细检查命令输出的密钥。有时radosgw-admin 会生成一个JSON 转义字符(\),但是有
+些客户端不道如何处理JSON 转义字符。补救措施包括将JSON 转义字符(\) 删除，将这些字
+符串封装在引号内，重新生成密钥直到确定没有JSON 转义字符存在或手动指定所需的密钥。
+新建一个子用户
+为了给用户新建一个子用户(Swift 接口) ，你必须为该子用户指定用户的ID(--
+uid={username})，子用户的ID 以及访问级别:
+radosgw-admin subuser create --uid={uid} --subuser={uid}
+--access=[ read | write | readwrite | full ]
+实例如下:
+
+radosgw-admin subuser create --uid=johndoe --
+subuser=johndoe:swift --access=full
+Note
+full 并不表示readwrite, 因为它还包括访问权限策略.
+{ "user_id": "johndoe",
+"display_name": "John Doe",
+"email": "john@example.com",
+"suspended": 0,
+"max_buckets": 1000,
+"auid": 0,
+"subusers": [
+{ "id": "johndoe:swift",
+"permissions": "full-control"}],
+"keys": [
+{ "user": "johndoe",
+"access_key": "11BS02LGFB6AL6H1ADMW",
+"secret_key":
+"vzCEkuryfn060dfee4fgQPqFrncKEIkh3ZcdOANY"}],
+"swift_keys": [],
+"caps": [],
+
+"op_mask": "read, write, delete",
+"default_placement": "",
+"placement_tags": [],
+"bucket_quota": { "enabled": false,
+"max_size_kb": -1,
+"max_objects": -1},
+"user_quota": { "enabled": false,
+"max_size_kb": -1,
+"max_objects": -1},
+"temp_url_keys": []}
+获取用户信息
+要获取一个用户的信息，你必须使用user info 子命令并且制定一个用户ID(--
+uid={username}) .
+radosgw-admin user info --uid=johndoe
+修改用户信息
+要修改一个用户的信息，你必须指定用户的ID (--uid={username})，还有你想要修改的
+属性值。典型的修改项主要是access 和secret 密钥，邮件地址，显示名称和访问级别。举
+例如下:
+radosgw-admin user modify --uid=johndoe --display-
+name="John E. Doe"
+
+要修改子用户的信息, 使用subuser modify 子命令并且执行子用户的ID. 举例如下:
+radosgw-admin subuser modify --uid=johndoe:swift --
+access=full
+用户启用/停用
+当你创建了一个用户，用户默认情况下是处于启用状态的。然而，你可以暂停用户权限并在
+以后随时重新启用它们。暂停一个用户，使用user suspend 子命令然后哦指定用户的ID:
+radosgw-admin user suspend --uid=johndoe
+要重新启用已经被停用的用户，使用user enable 子命令并指明用户的ID.
+radosgw-admin user enable --uid=johndoe
+Note
+停用一个用户后，它的子用户也会一起被停用.
+删除用户
+删除用户时，这个用户以及他的子用户都会被删除。当然，如果你愿意，可以只删除子用户。
+要删除用户（及其子用户），可使用user rm 子命令并指明用户ID ：
+radosgw-admin user rm --uid=johndoe
+只想删除子用户时，可使用subuser rm 子命令并指明子用户ID 。
+radosgw-admin subuser rm --subuser=johndoe:swift
+
+其它可选操作：
+
+Purge Data: 加--purge-data 选项可清除与此UID 相关的所有数据。
+
+Purge Keys: 加--purge-keys 选项可清除与此UID 相关的所有密钥。
+删除子用户
+在你删除子用户的同时，也失去了Swift 接口的访问方式，但是这个用户在系统中还存在。要
+删除子用户，可使用subuser rm 子命令并指明子用户ID ：
+radosgw-admin subuser rm --subuser=johndoe:swift
+其它可选操作：
+
+Purge Keys: 加--purge-keys 选项可清除与此UID 相关的所有密钥。
+新建一个密钥
+要为用户新建一个密钥，你需要使用key create 子命令。对于用户来说，需要指明用户的
+ID 以及新建的密钥类型为s3 。要为子用户新建一个密钥，则需要指明子用户的ID 以及密钥
+类型为swift 。实例如下:
+radosgw-admin key create --subuser=johndoe:swift --key-
+type=swift --gen-secret
+{ "user_id": "johndoe",
+"rados_uid": 0,
+"display_name": "John Doe",
+"email": "john@example.com",
+"suspended": 0,
+"subusers": [
+
+{ "id": "johndoe:swift",
+"permissions": "full-control"}],
+"keys": [
+{ "user": "johndoe",
+"access_key": "QFAMEDSJP5DEKJO0DDXY",
+"secret_key":
+"iaSFLDVvDdQt6lkNzHyW4fPLZugBAI1g17LO0+87"}],
+"swift_keys": [
+{ "user": "johndoe:swift",
+"secret_key":
+"E9T2rUZNu2gxUjcwUBO8n\/Ev4KX6\/GprEuH4qhu1"}]}
+新建/删除ACCESS 密钥
+用户和子用户要能使用S3 和Swift 接口，必须有access 密钥。在你新建用户或者子用户的
+时候，如果没有指明access 和secret 密钥，这两个密钥会自动生成。你可能需要新建
+access 和/或secret 密钥，不管是手动指定还是自动生成的方式。你也可能需要删除一个
+access 和secret 。可用的选项有：
+
+--secret=<key> 指明一个secret 密钥(e.即手动生成).
+
+--gen-access-key 生成一个随机的access 密钥(新建S3 用户的默认选项).
+
+--gen-secret 生成一个随机的secret 密钥.
+
+--key-type=<type> 指定密钥类型. 这个选项的值可以是: swift, s3
+要新建密钥，需要指明用户ID.
+radosgw-admin key create --uid=johndoe --key-type=s3 --
+gen-access-key --gen-secret
+
+你也可以使用指定access 和secret 密钥的方式.
+要删除一个access 密钥, 也需要指定用户ID.
+radosgw-admin key rm --uid=johndoe
+添加/删除管理权限
+Ceph 存储集群提供了一个管理API，它允许用户通过REST API 执行管理功能。默认情况下，
+用户没有访问这个API 的权限。要启用用户的管理功能，需要为用户提供管理权限。
+执行下面的命令为一个用户添加管理权限:
+radosgw-admin caps add --uid={uid} --caps={caps}
+你可以给一个用户添加对用户、bucket、元数据和用量(存储使用信息)等数据的读、写或者所
+有权限。举例如下:
+--
+caps="[users|buckets|metadata|usage|zone]=[*|read|write|r
+ead, write]"
+实例如下:
+radosgw-admin caps add --uid=johndoe --caps="users=*"
+要删除某用户的管理权限，可用下面的命令：
+radosgw-admin caps rm --uid=johndoe --caps={caps}
+
+配额管理
+Ceph 对象网关允许你在用户级别、用户拥有的bucket 级别设置配额。配额包括一个bucket
+内允许的最大对象数和最大存储容量，大小单位是兆字节。
+
+Bucket: 选项--bucket 允许你为用户的某一个bucket 设置配额。
+
+Maximum Objects: 选项--max-objects 允许你设置最大对象数。负数表示不启
+用这个设置。
+
+Maximum Size: 选项--max-size 允许你设置一个最大存储用量的配额。负数表
+示不启用这个设置。
+
+Quota Scope: 选项--quota-scope 表示这个配额生效的范围。这个参数的值
+是bucket 和user. Bucket 配额作用于用户的某一个bucket。而用户配额作用于一
+个用户。
+设置用户配额
+在你启用用户的配额前，你需要先设置配额参数。例如:
+radosgw-admin quota set --quota-scope=user --uid=<uid> [-
+-max-objects=<num objects>] [--max-size=<max size>]
+实例如下:
+radosgw-admin quota set --quota-scope=user --uid=johndoe
+--max-objects=1024 --max-size=1024
+最大对象数和最大存储用量的值是负数则表示不启用指定的配额参数。
+启用/禁用用户配额
+在你设置了用户配额之后，你可以启用这个配额。实例如下:
+radosgw-admin quota enable --quota-scope=user --uid=<uid>
+
+你也可以禁用已经启用了配额的用户的配额。举例如下:
+radosgw-admin quota-disable --quota-scope=user --
+uid=<uid>
+设置BUCKET 配额
+Bucket 配额作用于用户的某一个bucket，通过uid 指定用户。这些配额设置是独立于用户之
+外的。:
+radosgw-admin quota set --uid=<uid> --quota-scope=bucket
+[--max-objects=<num objects>] [--max-size=<max size]
+最大对象数和最大存储用量的值是负数则表示不启用指定的配额参数。
+启用/禁用BUCKET 配额
+在你设置了bucket 配额之后，你可以启用这个配额。实例如下:
+radosgw-admin quota enable --quota-scope=bucket --
+uid=<uid>
+你也可以禁用已经启用了配额的bucket 的配额。举例如下:
+radosgw-admin quota-disable --quota-scope=bucket --
+uid=<uid>
+获取配额信息
+你可以通过用户信息API 来获取每一个用户的配额设置。通过CLI 接口读取用户的配额设置
+信息，请执行下面的命令:
+radosgw-admin user info --uid=<uid>
+
+更新配额统计信息
+配额的统计数据的同步是异步的。你也可以通过手动获取最新的配额统计数据为所有用户和
+所有bucket 更新配额统计数据:
+radosgw-admin user stats --uid=<uid> --sync-stats
+获取用户用量统计信息
+执行下面的命令获取当前用户已经消耗了配额的多少:
+radosgw-admin user stats --uid=<uid>
+Note
+你应该在执行radosgw-admin user stats 的时候带上--sync-stats 参数来获取
+最新的数据.
+读取/设置全局配额
+你可以在region map 中读取和设置配额。执行下面的命令来获取region map:
+radosgw-admin regionmap get > regionmap.json
+要为整个region 设置配额，只需要简单的修改region map 中的配额设置。然后使
+用region set 来更新region map 即可:
+radosgw-admin region set < regionmap.json
+Note
+
+在更新region map 后，你必须重启网关.
+用量
+Ceph 对象网关会为每一个用户记录用量数据。你也可以通过指定日期范围来跟踪用户的用量
+数据。
+可用选项如下:
+
+Start Date: 选项--start-date 允许你指定一个起始日期来过滤用量数据
+(format: yyyy-mm-dd[HH:MM:SS]).
+
+End Date: 选项--end-date 允许你指定一个截止日期来过滤用量数据
+(format: yyyy-mm-dd[HH:MM:SS]).
+
+Log Entries: 选项--show-log-entries 允许你指明显示用量数据的时候是否
+要包含日志条目。(选项值: true | false).
+Note
+你可以指定时间为分钟和秒，但是数据存储是以一个小时
+的间隔存储的.
+展示用量信息
+显示用量统计数据，使用usage show 子命令。显示某一个特定用户的用量数据，你必须
+指定该用户的ID。你也可以指定开始日期、结束日期以及是否显示日志条目。:
+radosgw-admin usage show --uid=johndoe --start-date=2012-
+03-01 --end-date=2012-04-01
+通过去掉用户的ID，你也可以获取所有用户的汇总的用量信息
+radosgw-admin usage show --show-log-entries=false

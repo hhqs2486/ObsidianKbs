@@ -1,0 +1,555 @@
+第   章 
+解析iTunes 播放列表 
+我们的Python 探险始于一个简单的项目，该项目在iTunes
+播放列表文件中查找重复的乐曲音轨，并绘制各种统计数据，如
+音轨长度和评分。你可以从查看iTunes 播放列表格式开始，然
+后学习如何用Python 提取这些文件的信息。为了绘制这些数据，
+要用到matplotlib 库。 
+在这个项目中，我们将学习以下主题：
+•
+XML 和属性列表（p-list）文件；
+•
+Python 列表和字典；
+•
+使用Python 的set 对象；
+•
+使用numpy 数组；
+•
+直方图和散点图；
+•
+用matplotlib 库绘制简单的图；
+•
+创建和保存数据文件。
+1.1  iTunes 播放列表文件剖析 
+iTunes 资料库中的信息可以导出为播放列表文件（在iTunes 中选择FileLibrary
+1
+
+4 Python 极客项目编程 
+Export Playlist）。播放列表文件以可扩展标记语言（XML）写成，这是一种基于
+文本的语言，旨在分层表示基于文本的信息。它包括一些用户定义的标签所构成
+的树状集合，标签形如<MyTag>，每个标签可以有一些属性和子标签，其中包含
+附加的信息。
+如果在文本编辑器中打开一个播放列表文件，你会看到类似这样的简化版本： 
+<?xml version="1.0" encoding="UTF-8"?> 
+ <!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www 
+.apple.com/DTDs/PropertyList-1.0.dtd"> 
+ <plist version="1.0"> 
+ <dict> 
+ <key>Major Version</key><integer>1</integer> 
+ <key>Minor Version</key><integer>1</integer> 
+   --snip-- 
+    <key>Tracks</key> 
+ <dict> 
+ <key>2438</key> 
+ <dict> 
+ <key>Track ID</key><integer>2438</integer> 
+ <key>Name</key><string>Yesterday</string> 
+ <key>Artist</key><string>The Beatles</string> 
+ <key>Composer</key><string>Lennon [John], McCartney [Paul]</string> 
+ <key>Album</key><string>Help!</string> 
+ </dict> 
+ --snip-- 
+</dict> 
+     <key>Playlists</key> 
+ <array> 
+ <dict> 
+ <key>Name</key><string>Now</string> 
+ <key>Playlist ID</key><integer>21348</integer> 
+ --snip-- 
+ <array> 
+ <dict> 
+ <key>Track ID</key><integer>6382</integer> 
+ </dict> 
+ --snip-- 
+ </array> 
+ </dict> 
+   </array> 
+</dict> 
+</plist> 
+ 
+属性列表（P-list）文件将对象表示为字典，<dict> 和 <key> 标签与这种方式有
+关。字典是把键和值关联起来的数据结构，让查找值变得容易。属性列表文件使用
+字典的字典，其中和键关联的值往往自身又是另一个词典（甚至一个字典列表）。
+<xml>标签确定文件为XML 文件。在这个开始标签之后，文档类型定义（DTD）
+定义了XML 文档的结构。如你所见，苹果在该标签中的统一资源定位符（URL）
+中定义了这种结构。
+在行，文件声明了顶层<plist>标签，其唯一子元素是字典<dict> 。该字典
+包含了各种键，在行，包括Major Version、Minor Version，等等，但我们的兴趣
+
+在行的Tracks 键。注意，该键对应的值也是一个字典，它将整数的音轨ID 映射
+到另一个字典，其中包含Name、Artist 等元素。音乐收藏中的每个音轨都有唯一的
+音轨ID 键。 
+播放列表顺序在行由Playlists 定义，它是顶层字典的一个子节点。 
+1.2  所需模块 
+在这个项目中，我们用内置模块plistlib 来读取播放列表文件。我们还用
+matplotlib 库来绘图，用numpy 的数组来存储数据。 
+1.3  代码 
+该项目的目标是找到你的音乐收藏中的重复乐曲，确定播放列表之间共同的音
+轨，绘制音轨时长的分布图，以及歌曲评分和时长之间的关系图。
+随着音乐收藏不断增加，你总会遇到重复的乐曲。为了确定重复的乐曲，查找
+与Tracks 键关联的字典中的名称（前面讨论过），找到重复的乐曲，并用音轨长度
+作为附加准则来检测重复的乐曲，因为名称相同、但长度不同的音轨，可能是不一
+样的。
+要找到两个或多个播放列表之间共同的音轨，你需要将音乐收藏导出为播放列
+表文件，收集每个播放列表的音轨名称，作为集合进行比较，通过发现集合的交集
+来找到共同的音轨。
+在收集音乐收藏数据的同时，我们将使用强大的matplotlib（http://matplotlib.org/）
+绘图软件包来创建一些图，该软件包由已故的John Hunter 开发。我们可以绘制直
+方图来显示音轨时长的分布，绘制散点图来比较乐曲评分与长度。
+要查看完整的项目代码，请直接跳到1.4 节。 
+1.3.1  查找重复 
+首先可以用findDuplicates()方法来查找重复的曲目，如下所示： 
+def findDuplicates(fileName): 
+ print('Finding duplicate tracks in %s...' % fileName) 
+ # read in a playlist 
+ 
+ plist = plistlib.readPlist(fileName) 
+ # get the tracks from the Tracks dictionary 
+ 
+ tracks = plist['Tracks'] 
+ # create a track name dictionary 
+ 
+ trackNames = {} 
+ # iterate through the tracks 
+ 
+ for trackId, track in tracks.items(): 
+ try: 
+第 1 章  解析 iTunes 播放列表 5 
+
+6 Python 极客项目编程 
+ 
+ name = track['Name'] 
+ duration = track['Total Time'] 
+ # look for existing entries 
+ 
+ if name in trackNames: 
+ # if a name and duration match, increment the count 
+ # round the track length to the nearest second 
+ 
+ if duration//1000 == trackNames[name][0]//1000: 
+ count = trackNames[name][1] 
+ 
+ trackNames[name] = (duration, count+1) 
+ else: 
+ # add dictionary entry as tuple (duration, count) 
+ 
+ trackNames[name] = (duration, 1) 
+ except: 
+ # ignore 
+ pass 
+在行，readPlist()方法接受一个p-list 文件作为输入，并返回顶层字典。在
+行，访问Tracks 字典，在行，创建一个空的字典，用来保存重复的乐曲。在
+行，开始用items()方法迭代Tracks 字典，这是Python 在迭代字典时取得键和值的
+常用方法。
+在行，取得字典中每个音轨的名称和时长。用in 关键字，检查当前乐曲的名
+称是否已在被构建的字典中。如果是这样的，程序检查现有的音轨和新发现的音
+轨长度是否相同，用//操作符，将每个音轨长度除以1000，由毫秒转换为秒，并
+四舍五入到最接近的秒，以进行检查（当然，这意味着，只有毫秒差异的两个音轨
+被认为是相同的）。如果确定这两个音轨长度相等，就取得与name 关联的值，这是
+（duration，count）元组，并在行增加计数。如果这是程序第一次遇到的音轨名称，
+就创建一个新条目，count 为1。 
+将代码的主for 循环放在try 语句块中，这是因为一些乐曲音轨可能没有定义乐
+曲名称。在这种情况下，跳过该音轨，在except 部分只包含pass（什么也不做）。 
+1.3.2  提取重复 
+利用以下代码，提取重复的音轨：
+ # store duplicates as (name, count) tuples 
+ 
+ dups = [] 
+ for k, v in trackNames.items(): 
+ 
+ if v[1] > 1: 
+   dups.append((v[1], k)) 
+ # save duplicates to a file 
+ 
+ if len(dups) > 0: 
+   print("Found %d duplicates. Track names saved to dup.txt" % len(dups)) 
+ else: 
+   print("No duplicate tracks found!") 
+ 
+ f = open("dups.txt", "w") 
+ for val in dups: 
+ 
+f.write("[%d] %s\n" % (val[0], val[1]))
+f.close()
+
+在行，创建一个空列表，保存重复乐曲。接下来，迭代遍历trackNames 字典，
+如果count（用v[1]访问，因为它是元组的第二个元素）大于1，则将元组（name，
+count）添加到列表中。在行，程序打印它找到的信息，然后用open()方法将信息
+存入文件。在行，迭代遍历dups 列表，写下重复的条目。 
+1.3.3  查找多个播放列表中共同的音轨 
+现在，让我们来看看如何找到多个播放列表中共同的乐曲音轨：
+def findCommonTracks(fileNames): 
+ # a list of sets of track names 
+ 
+ trackNameSets = [] 
+ for fileName in fileNames: 
+ # create a new set 
+ 
+ trackNames = set() 
+ # read in playlist 
+ 
+ plist = plistlib.readPlist(fileName) 
+ # get the tracks 
+ tracks = plist['Tracks'] 
+ # iterate through the tracks 
+ for trackId, track in tracks.items(): 
+ try: 
+ # add the track name to a set 
+ 
+ trackNames.add(track['Name']) 
+ except: 
+ # ignore 
+   pass 
+ # add to list 
+ 
+ trackNameSets.append(trackNames) 
+ # get the set of common tracks 
+ 
+ commonTracks = set.intersection(*trackNameSets) 
+ # write to file 
+ if len(commonTracks) > 0: 
+ 
+ f = open("common.txt", "w") 
+ for val in commonTracks: 
+ s = "%s\n" % val 
+ 
+f.write(s.encode("UTF-8"))
+f.close()
+ print("%d common tracks found. " 
+   "Track names written to common.txt." % len(commonTracks)) 
+ else: 
+ print("No common tracks!") 
+首先，将播放列表的文件名列表传入findCommonTracks()，它创建一个空列表
+，保存从每个播放列表创建的一组对象。然后程序迭代遍历列表中的每个文件。
+对每个文件，创建一个名为trackNames 的Python set 对象，然后像在findDuplicates()
+中一样，用plistlib 读入文件，取得Tracks 字典。接下来，迭代遍历该字典中的每
+个音轨，并添加trackNames 对象。程序读完一个文件中的所有音轨后，将这个集
+合加入trackNameSets。 
+在行，使用set.intersection()方法来获得集合之间共同音轨的集合（用Python*
+的运算符来展开参数列表）。如果程序发现集合之间的共同音轨，就将音轨名称写
+第 1 章  解析 iTunes 播放列表 7 
+
+8 Python 极客项目编程 
+入一个文件。在行，打开文件，接下来的两行代码完成写入。使用encode()来格
+式化输出，确保所有Unicode 字符都正确处理。 
+1.3.4  收集统计信息 
+接下来，用plotStats()方法，针对这些音轨名称收集统计信息： 
+def plotStats(fileName): 
+ # read in a playlist 
+ 
+ plist = plistlib.readPlist(fileName) 
+ # get the tracks from the playlist 
+ tracks = plist['Tracks'] 
+ # create lists of song ratings and track durations 
+ 
+ ratings = [] 
+ durations = [] 
+ # iterate through the tracks 
+ for trackId, track in tracks.items(): 
+ try: 
+ 
+ ratings.append(track['Album Rating']) 
+   durations.append(track['Total Time']) 
+ except: 
+ # ignore 
+ pass 
+ # ensure that valid data was collected 
+ 
+ if ratings == [] or durations == []: 
+ print("No valid Album Rating/Total Time data in %s." % fileName) 
+ return 
+这里的目标是收集评分和音轨时长，然后画一些图。在行和接下来的代码行
+中，读取了播放列表文件，并访问Tracks 字典。接下来，创建两个空列表，保存评
+分和时长（在iTunes 播放列表中，评分是一个整数，范围是[0，100]）。迭代遍历
+音轨，在行，将评分和时长添加到相应的列表中。最后，在行检查完整性，确
+保从播放列表文件收集了有效数据。
+1.3.5  绘制数据 
+我们已准备好绘制一些数据了。
+ # scatter plot 
+ 
+ x = np.array(durations, np.int32) 
+ # convert to minutes 
+ 
+ x = x/60000.0 
+ 
+ y = np.array(ratings, np.int32) 
+ 
+ pyplot.subplot(2, 1, 1) 
+ 
+ pyplot.plot(x, y, 'o') 
+ 
+ pyplot.axis([0, 1.05*np.max(x), -1, 110]) 
+ 
+ pyplot.xlabel('Track duration') 
+ 
+ pyplot.ylabel('Track rating') 
+ # plot histogram 
+ pyplot.subplot(2, 1, 2) 
+ 
+ pyplot.hist(x, bins=20) 
+ pyplot.xlabel('Track duration') 
+
+ pyplot.ylabel('Count') 
+ # show plot 
+ 
+ pyplot.show() 
+在行，利用numpy.array()（在代码中作为np 导入），将音轨时长数据放到32
+位整数数组中。然后在行，利用numpy，将一个操作应用于数组中的每个元素。
+在这个例子中，将每个以毫秒为单位的时长值除以值60×1000。在行，将乐曲评
+分保存另一个numpy 数组y 中。 
+用matplotlib 在同一图像上绘制两张图。在行，提供给subplot()的参数（即，
+(2, 1, 1)）告诉matplotlib，该图应该有两行（2）一列（1），且下一个点应在第一行（1）。
+在行，通过调用plot()创建一个点，并且o 告诉matplotlib 用圆圈来表示数据。 
+在行，为x 轴和y 轴设置略微大一点儿的范围，以便在图和轴之间留一些空
+间。在和行，为x 轴和y 轴设置说明文字。 
+现在用matplotlib 的方法hist()，在同一张图中的第二行中，绘制时长直方图。
+bins 参数设置了数据分区的个数，其中每分区用于添加在这个范围内的计数。最后，
+调用show()，matplotlib 在新窗口中显示出漂亮的图。 
+1.3.6  命令行选项 
+现在，我们来看看该程序的main()方法如何处理命令行参数： 
+def main(): 
+ # create parser 
+ descStr = """ 
+ This program analyzes playlist files (.xml) exported from iTunes. 
+ """ 
+ 
+ parser = argparse.ArgumentParser(description=descStr) 
+ # add a mutually exclusive group of arguments 
+ 
+ group = parser.add_mutually_exclusive_group() 
+ # add expected arguments 
+ 
+ group.add_argument('--common', nargs='*', dest='plFiles', required=False) 
+ 
+ group.add_argument('--stats', dest='plFile', required=False) 
+ 
+ group.add_argument('--dup', dest='plFileD', required=False) 
+ # parse args 
+ 
+ args = parser.parse_args() 
+ if args.plFiles: 
+ # find common tracks 
+   findCommonTracks(args.plFiles) 
+ elif args.plFile: 
+ # plot stats 
+ plotStats(args.plFile) 
+ elif args.plFileD: 
+ # find duplicate tracks 
+   findDuplicates(args.plFileD) 
+ else: 
+ 
+ print("These are not the tracks you are looking for.") 
+第 1 章  解析 iTunes 播放列表 9 
+
+10 Python 极客项目编程 
+本书的大多数项目都有命令行参数。不要尝试手工分析它们并搞得一团糟，要
+将这个日常的任务委派给Python 的argparse 模块。在行，为此创建了一个
+ArgumentParser 对象。该程序可以做三件不同的事情，如发现播放列表之间的共同
+音轨，绘制统计数据，或发现播放列表中重复的曲目。但是，一个时间程序只能做
+其中一件事，如果用户决定同时指定两个或多个选项，我们不希望它崩溃。argparse
+模块为这个问题提供了一个解决方案，即相互排斥的参数分组。在行，用
+parser.add_mutually_exclusive_group()方法来创建这样一个分组。 
+在、和行，指定了前面提到的命令行选项，并输入应该将解析值存入的
+变量名（args.plFiles、args.plFile 和args.plFileD），实际解析在行完成。参数解析
+后，就将它们传递给相应的函数，findCommonTracks()、plotStats()和findDuplicates()，
+本章前面讨论过这些函数。
+要查看参数是否被解析，就测试args 中相应的变量名。例如，如果用户没有使
+用--common 选项（该选项找出播放列表之间的共同音轨），解析后args.plFiles 应该
+设置为None。 
+在行，处理用户未输入任何参数的情况。 
+1.4  完整代码 
+下面是完整的程序。在https://github.com/electronut/pp/tree/master/playlist/，你也
+可以找到本项目的代码和一些测试数据。
+import re, argparse 
+import sys 
+from matplotlib import pyplot 
+import plistlib 
+import numpy as np 
+def findCommonTracks(fileNames): 
+ """ 
+ Find common tracks in given playlist files, 
+ and save them to common.txt. 
+ """ 
+ # a list of sets of track names 
+ trackNameSets = [] 
+ for fileName in fileNames: 
+ # create a new set 
+ trackNames = set() 
+ # read in playlist 
+ plist = plistlib.readPlist(fileName) 
+ # get the tracks 
+ tracks = plist['Tracks'] 
+ # iterate through the tracks 
+ for trackId, track in tracks.items(): 
+ try: 
+ # add the track name to a set 
+
+ trackNames.add(track['Name']) 
+ except: 
+ # ignore 
+   pass 
+ # add to list 
+ trackNameSets.append(trackNames) 
+ # get the set of common tracks 
+ commonTracks = set.intersection(*trackNameSets) 
+ # write to file 
+ if len(commonTracks) > 0: 
+ f = open("common.txt", 'w') 
+ for val in commonTracks: 
+ s = "%s\n" % val 
+f.write(s.encode("UTF-8"))
+f.close()
+ print("%d common tracks found. " 
+ "Track names written to common.txt." % len(commonTracks)) 
+ else: 
+ print("No common tracks!") 
+ def plotStats(fileName): 
+ """ 
+ Plot some statistics by reading track information from playlist. 
+ """ 
+ # read in a playlist 
+ plist = plistlib.readPlist(fileName) 
+ # get the tracks from the playlist 
+ tracks = plist['Tracks'] 
+ # create lists of song ratings and track durations 
+ ratings = [] 
+ durations = [] 
+ # iterate through the tracks 
+ for trackId, track in tracks.items(): 
+ try: 
+ ratings.append(track['Album Rating']) 
+ durations.append(track['Total Time']) 
+ except: 
+ # ignore 
+   pass 
+ # ensure that valid data was collected 
+ if ratings == [] or durations == []: 
+ print("No valid Album Rating/Total Time data in %s." % fileName) 
+ return 
+ # scatter plot 
+ x= np.array(durations, np.int32) 
+ # convert to minutes 
+ x = x/60000.0 
+ y = np.array(ratings, np.int32) 
+ pyplot.subplot(2, 1, 1) 
+ pyplot.plot(x, y, 'o') 
+ pyplot.axis([0, 1.05*np.max(x), -1, 110]) 
+ pyplot.xlabel('Track duration') 
+ pyplot.ylabel('Track rating') 
+第 1 章  解析 iTunes 播放列表 11 
+
+12 Python 极客项目编程 
+ # plot histogram 
+ pyplot.subplot(2, 1, 2) 
+ pyplot.hist(x, bins=20) 
+ pyplot.xlabel('Track duration') 
+ pyplot.ylabel('Count') 
+ # show plot 
+ pyplot.show() 
+ def findDuplicates(fileName): 
+ """ 
+ Find duplicate tracks in given playlist. 
+ """ 
+ print('Finding duplicate tracks in %s...' % fileName) 
+ # read in playlist 
+ plist = plistlib.readPlist(fileName) 
+ # get the tracks from the Tracks dictionary 
+ tracks = plist['Tracks'] 
+ # create a track name dictionary 
+ trackNames = {} 
+ # iterate through tracks 
+ for trackId, track in tracks.items(): 
+ try: 
+ name = track['Name'] 
+ duration = track['Total Time'] 
+ # look for existing entries 
+ if name in trackNames: 
+ # if a name and duration match, increment the count 
+ # round the track length to the nearest second 
+ if duration//1000 == trackNames[name][0]//1000: 
+ count = trackNames[name][1] 
+ trackNames[name] = (duration, count+1) 
+ else: 
+ # add dictionary entry as tuple (duration, count) 
+ trackNames[name] = (duration, 1) 
+ except: 
+ # ignore 
+   pass 
+ # store duplicates as (name, count) tuples 
+ dups = [] 
+ for k, v in trackNames.items(): 
+ if v[1] > 1: 
+   dups.append((v[1], k)) 
+ # save duplicates to a file 
+ if len(dups) > 0: 
+   print("Found %d duplicates. Track names saved to dup.txt" % len(dups)) 
+ else: 
+   print("No duplicate tracks found!") 
+ f = open("dups.txt", 'w') 
+ for val in dups: 
+f.write("[%d] %s\n" % (val[0], val[1]))
+f.close()
+ # gather our code in a main() function 
+ def main(): 
+
+ # create parser 
+ descStr = """ 
+ This program analyzes playlist files (.xml) exported from iTunes. 
+ """ 
+ parser = argparse.ArgumentParser(description=descStr) 
+ # add a mutually exclusive group of arguments 
+ group = parser.add_mutually_exclusive_group() 
+ # add expected arguments 
+ group.add_argument('--common', nargs='*', dest='plFiles', required=False) 
+ group.add_argument('--stats', dest='plFile', required=False) 
+ group.add_argument('--dup', dest='plFileD', required=False) 
+ # parse args 
+ args = parser.parse_args() 
+ if args.plFiles: 
+ # find common tracks 
+ findCommonTracks(args.plFiles) 
+ elif args.plFile: 
+ # plot stats 
+   plotStats(args.plFile) 
+ elif args.plFileD: 
+ # find duplicate tracks 
+   findDuplicates(args.plFileD) 
+ else: 
+ print("These are not the tracks you are looking for.") 
+# main method 
+if __name__ == '__main__': 
+ main() 
+1.5  运行程序 
+下面是该程序的运行示例：
+$ python playlist.py --common test-data/maya.xml test-data/rating.xml 
+下面是输出：
+5 common tracks found. Track names written to common.txt. 
+$ cat common.txt 
+God Shuffled His Feet 
+Rubric 
+Floe 
+Stairway To Heaven 
+Pi's Lullaby 
+moksha:playlist mahesh$ 
+现在，让我们绘制这些音轨的一些统计数据。
+$ python playlist.py --stats test-data/rating.xml 
+图1-1 展示了这次运行的输出。 
+第 1 章  解析 iTunes 播放列表 13 
+
+14 Python 极客项目编程 
+图1-1  playlist.py 运行示例 
+1.6  小结 
+在这个项目中，我们开发了一个程序，分析了iTunes 播放列表。在这个过程中，
+我们学习了一些有用的Python 结构。在接下来的项目中，你将基于这里介绍的一些
+基础知识，探索各种有趣的主题，深入地研究Python。 
+1.7  实验 
+下面有一些方法可以扩展这个程序。
+1．发现重复音轨时，考虑了以音轨时长作为附加标准，来确定两个音轨是否
+相同。但寻找共同的音轨时，只用了音轨名称进行比较。在findCommonTracks()中，
+请结合音轨时长作为额外的检查。
+2．在plotStats()方法中，用了matplotlib 的hist()方法来计算和显示柱状图。请
+编写代码手动计算直方图，不用hist()方法显示。要将结果显示为条形图，请阅读
+matplotlib 文档中条形图的部分。 
+3．有一些数学公式用于计算相关系数，测量两个变量之间的关系强度。阅读
+相关性的资料，利用你自己的音乐数据，计算评分/时长散点图中的相关系数。请考
+虑可以利用播放列表中收集的数据，制作出另外那些散点图。

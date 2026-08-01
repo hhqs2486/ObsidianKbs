@@ -1,0 +1,806 @@
+,
+U
+U 
+乱
+，
+户
+’
+J4
+… 
+ι
+u
+w
+gH
+ 
+勺
+，
+叫
+“
+!
+· 
+.... 
+”
+”
+．
+·
+”
+且
+阜
+·
+·
+·
+·
+·
+A
+叶
+.... 
+r, 
+.... 
+匈
+牙
+···.
+{! 
+..... 
+.... 
+. ... 
+.. 
+.. 
+OpenShift 企业部署
+在生产环境中，一个容器云平台往往管理着数十台甚至上百台的主机作为集群的计算
+资源，承担容器计算的负载。因为各种原因，一个企业中往往存在不止一套的容器云集群实
+例。高效合理地对容器云平台的部署进行规划是容器云平台上线和成功的基础。
+OpenShi位的部署架构非常灵活，用户可以根据实际环境的需要调整部署的架构。一个
+最小化的OpenShift 集群可以只有一台主机，既是Master 节点，又是Node 节点。这种集群
+适合快速开发和测试使用。
+OpenSh的集群也可以是由一个Master 节点搭配多个Node 节点组
+成，作为一个开发团队的集成测试环境。又或者由多个Master 节点搭配多个Node 节点和外
+部的etcd 集群组成，在企业的生产环境提供对外服务。这一章将探讨OpenShift 的部署架构
+及多节点集群的安装部署方法。
+部署架构
+多环境单集群
+多环境单集群的结构示意图如图4-1
+所示。企业内的不同开发和测试环境的
+主机都在一个数据中心，它们组成一个
+Open Sh的集群。通过标签，我们将不同
+的计算节点进行分区和分组。部署应用
+时，通过标签选择器部署到目标环境中。
+这种部署方式的优点是简单高效，但是
+4.1 
+4.1.1 
+
+48
+令
+基础篇
+缺点是隔离性低，各个环境的应用存在相互影响的可能。这种部署方式适合开发和测试环境
+使用。
+4.1.2 
+多环境多集群
+多集群的需求往往来源于两个方面，一是因为安全或管理的原因，企业内部往往需要在
+不同的环境或者为不同的团队部署不同的集群。二是企业内部对资源需求的不断增长，一个
+集群难以提供足够的计算能力。
+图4-2 为企业内一个典型的场景。开发、测试和生产分别有自己的环境，且这些环境相
+互隔离。集群之间互不通信，唯一的联系是开发测试镜像仓库中特定的镜像通过人工或自动
+的方式同步到生产环境中的镜像仓库。生产环境的OpenShift 集群会从生产仓库中下载镜像
+进行部署。这种场景的多集群管理比较简单，每个环境的集群不相互影响，保证了生产环境
+的安全稳定。
+一－－－－－－－麦塞雪F壁一－一－－’一－一＿＿＿＿＿＿＿J＿…·………用坦~N在一－… I - - －…－－－＊t'－~~－－－－－－ 
+圈圈里
+图4-2
+企业内多个环境中的集群
+4.1.3 
+多个数据中心
+另一种场景的部署需求是跨数据中心的部署，如图4-3 所示。用户希望能在两个同城
+或者异地的数据中心部署多套OpenShi武集群，而且在一个统一的入口管理多个集群。
+以
+图4-3 为例子，用户希望在部署一个应用时，实现一次部署就可以在多个数据中心同时部署
+一定数量的容器以达到高可用。这种需求往往需要结合第三方的混合云管理工具来实现，如
+Manage IQ 或CloudForms 。
+随着公有云兴起，现在越来越多的客户考虑使用公有云的资源来满足对计算能力快速增
+长的需求。当业务繁忙时，通过自动化的方式启动公有云上的实例提供服务。这种方式和多
+数据中心的部署方案从本质上来说是一致的。
+
+第4 章
+OpenShift 企业部署
+令
+49
+深圳
+上海
+己已己已
+国国
+酣醺
+图4-3
+多个数据中心的集群
+在讨论多数据中心部署时经常碰见的疑问是“多个数据中心能不能部署成一套大的集
+群”。在理论上是可行的，但是现实中往往无法保证数据中心之间网络的质量。因为网络的
+抖动和异常会极大影响集群的稳定性，所以要慎重考虑跨越数据中心的集群部署。
+4.2 
+高级安装模式
+前面章节提到OpenShift Origin 的安装部署有多种方法，如通过二进制、
+Docker 容器或
+者Ansible 。在第2 章中，我们使用二进制安装包通过手工的方式安装了一个All-in-One 的
+OpenShift 集群。但在实际的生产环境中，集群的规模往往比较庞大，不可能通过于工的方
+式安装部署。因此，实际上，
+Open Shift 的安装一般通过高级安装模式，即Ansible 来完成。
+Ansible 是当前非常流行的一款运维自动化工具。
+Ansible 提供了非常丰富的模块，帮助用户
+快速对运维各个环节的操作进行标准化和自动化。
+OpenShift 项目在一开始就以Ansible 为基
+础提供了OpenShi位集群的自动化安装。
+在高级安装模式下，
+OpenShi负集群的部署主要分为以下几个阶段：
+1 ）主机准备。根据安装的要求准备OpenShift 集群使用的主机。这些主机可以是物理机
+或者是在私有云以及公有云上的虚拟机。
+2 ）安装前预配置。为OpenShift 的安装准备相应的系统配置及软件依赖。
+3 ）执行安装。执行Ansible Playbook 进行自动化安装。这个过程是全自动的，用户基本
+无须干预。
+4 ）安装后配置。
+OpenShift 安装完毕后，用户根据需要添加相应的组件及修改配置，如
+导人部署模板、镜像流、部署度量及日志收集组件等。
+
+50
+令
+基础篇
+＠墨
+OpenShift Ori阴官方推荐的操作系统为Fedo肌
+CentOS、红帽企业版Linux 或者红帽
+7.f又
+Atomic Host。关于安装要求的具体细节见句enShift 创gin 的官方文档（https ://docs .o严nshift.
+org/latest/install _ config/install/prerequisi tes . html#system-requirements ）。
+下面展示一个3 节点的OpenShi负Origin 集群的部署过程。这个集群包含了一个Master
+节点及两个Node 节点。
+4.2.1 
+主机准备
+在本章的例子中，笔者准备了3 台虚拟机，配置如表4-1 所示。
+表4-1
+集群节点硬件配置
+类型
+CPU 
+内存
+硬盘
+主机名
+IP 地址
+操作系统
+Master 节点
+I CPU 
+I GB 
+20 GB xz 
+master.example.com 
+192.168.172.168 
+CentOS 7.2 
+Node 节点
+1 CPU 
+4GB 
+20 GB x 2 
+node l .example.com 
+192.168.172.169 
+CentOS 7.2 
+Node 节点
+1 CPU 
+1 GB 
+20 GB x2 
+node2.example.com 
+192.168.172.170 
+CentOS 7.2 
+OpenShift 集群节点数量的多少具有很大的弹性。在最小安装的情况下，可以将所有
+组件安装到一台集群上，形成一个单节点的集群，如本书前文搭建的All-in-One 的实验环
+境。在实际的生产中，一个OpenSh的集群可以有多达近1000 个计算节点，同时可能有多个
+OpenShfit 集群同时运行。
+。盖在实际安装的过程中，请注意将域名和叫址替换为实际环境中的域名和IP 地址。
+4.2.2 
+安装前预配置
+本实验中的所有节点均安装了CentOS 7 .2 ，并选择了最小化安装。
+1. 配置主机名
+请确认各个主机的主机名已正确配置。如有需要，可以通过hostnamectl 命令为各个
+主机设置主机名。
+hostnamectl set - hostname master.example . com 
+此外必须保证主机名能解析到本机某一网卡上实际绑定的IP 地址。可以通过ping
+$ 
+(hostname ）检查主机名的解析。为了方便实验，本示例中直接在各个节点的／etc/
+hosts 文件上添加静态的域名解析。在实际的生产环境中，请配置相关的域名解析服务器，
+以确保主机名能被正确解析。
+192 . 168.172.168 master . example.com 
+
+192 . 168.172.169 nodel.example.com 
+192 . 168.172.170 node2.example . com 
+第4 章
+OpenShift 企业部署
+令
+51
+ft景
+CentOS 7 的网络默认是没有激活的，如需要激活，可以通过以下的启用，
+或者使
+用nmtui 命令在字符图形界面调整。
+[root ＠所有节点～］＃nmcli con show ＃查找Connect 工on Name 
+NAME 
+UUID 
+TYPE 
+DEVICE 
+eno16777736 
+f7074aa4-44e9 - 48ad-b775-3c429606329f 
+802-3-ethernet 
+eno16777736 
+[root ＠所有节点～］＃nmcli con up eno16777736 
+Connection successfully activated (D-Bus active path : /org/freedesktop/NetworkManager/ 
+ActiveConnection/1) 
+[root ＠所有节点－］＃nmcli con mod eno167 777 36 connection.autoconnect yes 
+[root ＠所有节点～］＃systemctl restart NetworkManager 
+2 . 安装及配置软件包
+在所有节点上执行以下命令安装OpenShi负依赖的软件包。
+[root ＠所有节点～］# yum install -y wgetgit net-tools b工口d -ut 工lsiptabl es-services
+bridge-uti ls bash-completion 
+在所有节点上安装必不可少的容器引擎Docker。
+[root ＠所有节点－］＃
+yum install -y docker 
+在所有节点上执行docker-storage-setup 命令为Docker 配置储存。在默认情况
+下，
+Docker 将使用一个文件作为后端的储存。因为性能的关系，在生产环境中不推荐使用。
+在实际的生产环境中，计算节点上一般会预留一块未分配空间的分区，或是一块未分配空间
+的硬盘作为Docker 的数据存储区域。
+编辑／etc/sysconfi g / docker-storage-setup 文件，指定用于Docker 储存的设
+备路径。笔者实验主机上的硬盘为／dev /s db ，配置如下：
+DEVS=/dev/sdb 
+执行docker-storage-setup 命令，根据指定的分区创建Docker 使用的数据卷。
+[root ＠所有节点～］＃docker-storage-setup 
+命令执行完毕后，可以通过docker
+info 命令查看当前Docker 使用的后端储存的
+信息。
+由于国内访问DockerHub 下载镜像的速度过于缓慢，可以使用中国科技大学的Docker­
+Hub 镜像服务器进行加速。具体请参见2.1.4 节的相关内容。
+由于OpenShift 安装以Ansible 为基础，所以需要启用EPEL 仓库以安装Ansible 。在
+Master 节点上执行以下命令。
+
+52 
+•！•
+基础篇
+[root@master ~]# yum 
+y install https : //dl .fedoraproject.org/pub/epel/7/x86_64/ 
+e/epel-release 7-8.noarch.rpm 
+[root@master ~]# sed 
+i 
+e
+” s /<enabled=l/enabled=O / " / etc/yum.repos. d /epel . repo 
+[root@master ~]# yum -y - enablerepo=epel install ansiblepyOpenSSL 
+在Master 节点上生成SSH 密钥。
+[root@master ~]# ssh-keygen -f /root/ .ssh ／工d_rsa
+-N '' 
+Ansible 是基于Agentless 架构实现的，即不需要在远程的目标主机上预先安装Agent 程
+序。
+Ansible 对远程主机命令的执行依赖于SSH 等远程控制协议。因为将在Master 上执行
+Ansible Playbook 安装OpenShift ，所以需要配置Master 节点到各个Node 节点的互信。这里
+要注意的是，除了Master 节点到Node 节点的互信还必须配置Master 节点到Master 节点
+自身的互信。在Master 节点上执行以下命令：
+[root@master ~]# for host in master.example.com \ 
+nodel example . com \ 
+口ode2.example.com;
+\ 
+dossh-copy-id －工
+～／
+. ssh/id_rsa.pub $host; \ 
+done 
+在Master 节点上下载安装OpenShift 的Ansible Playbook。
+Ansible Playbook 就是预定
+义好的一组Ansible 执行逻辑。
+[root@master - l # wget ht tps: / /gi thub . com/openshift I openshi ft-ansible/ archive/ 
+open s h 工ft-ans 工ble-3
+. 3.26-1.tar.gz
+[root@master ~]# tar zxvf openshift-ansible-3.3.26-1.tar.gz 
+安装单Master 的OpenShift 集群可以不单独安装etcd 。但是这里选择单独安装一个单节
+点的etcd 集群。在实际的生产环境中，请配置含有3 个或以上成员的etcd 集群以保证高可
+用。在Master 节点上执行以下命令。
+[root@master ~]# yum install -y etcd 
+[root@master ~]# systemctl enable etcd 
+[root@master ~]# systemctl start etcd 
+3. 配置Ansible
+配置Ansible 的hosts 配置文件。
+Ansible 的hosts 配置文件也称为Ansible 的Inventory,
+其中记录了Ansible 需要操作的目标主机的信息。先备份原有的hosts 文件。
+[root@master ~]# mv -f /etc/ansible/hosts /etc/ansible/hosts.org 
+创建／etc/ansible/hosts 文件，添加下面的内容。下面的文本定义了需要安装的
+机器的列表、各个机器的角色以及相关的参数。这里要注意，
+Master 节点其实本身也是一个
+Node 节点。不过它是一个特殊的Node 节点，默认并不运行容器。
+# Create an OSEv3 group that contains the masters and nodes groups 
+
+第4 章
+OpenShift 企业部署
+•！•
+53 
+[OSEv3:children] 
+masters 
+nodes 
+etcd 
+# Set variables common for all OSEv3 hosts 
+[OSEv3:vars] 
+# SSH user , this user should allow ssh based auth without requiring a password 
+ansible ssh user=root 
+deployment_type=origin 
+openshift_release=l.3.0 
+# uncomment the following to enable htpasswd authentication; defaults to DenyAllPassword 
+Id.ent i tyProvider 
+q皿shift...]naster_identity＿卫roviders= [ ｛’ nar阻气’ htpass;吐出出’ ，’ 1咱in ＇：’ true ’，’ chall四ge ’：
+'true ’ , 
+’ kind 气
+’ HI'Pass叫Passwor司工d四tityPr·αr土der',
+’ filename 气
+’ ／etc/origin/master/htpasSI岖’｝］
+# host group for masters 
+[masters] 
+master.example.com 
+# host group for nodes, includes region info 
+[nodes] 
+master . example.com 
+nodel . example.com 
+node2.example.com 
+[etcd] 
+master . example.com 
+4.2.3 
+执行安装
+执行ansible-playbook 命令并指定要执行的Playbook ，即可启动OpenShift 集群的
+安装。
+[root@master ~]# ansible-playbook ~/openshift-ansible-openshift-ansible-3.3.26-1/ 
+playbooks/byo/config .yml 
+安装的过程是完全自动化的，无需手工干预。使用Ansible 的一个优点是在多数情况下，
+Ansible 的脚本Playbook 是可以反复执行的，因为Ansible 的模块在设计时保证执行的结果具
+备幕等性，即多次执行结果一致。如果在安装OpenShift 的过程中出错了，比如配置错误或
+者网络中断，修复问题后可以再次执行Playbook ，在之前的基础上继续安装的过程。
+安装完成后，
+Ansible 会输出一个结果汇总信息。从汇总信息可以判断安装的执行结果。
+PLAY RECAP 
+＊＊食＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊食食＊＊＊＊＊＊＊＊食禽＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊
+localhost 
+ok=14 
+changed=B 
+unreachable=O 
+failed=O 
+master.example.com 
+ok=427 
+changed=Sl 
+unreachable=O 
+failed=O 
+nodel.example.com 
+ok=144 
+changed=33 
+unreachable=O 
+failed=D 
+node2.example.com 
+ok=144 
+changed=33 
+unreachable=O 
+fa 工led=O
+
+54 
+•！•
+基础篇
+安装完毕后，执行oc
+get node 命令，可以检查当前集群的成员列表以及它们的状
+态。通过下面的输出可以看到，当前集群中有3 个节点。所有节点的状态都是Ready ，即就
+绪。
+Master 节点多了一个状态SchedulingDisabled 。这意味着Master 节点不承担运行
+容器的任务。如果需要的话，可以通过设置更改。
+[root@master ~]# oc get node 
+NAME 
+STATUS 
+AGE 
+master.example . comReady , SchedulingDisabled 
+Sm 
+node!. example . com 
+Ready 
+Sm 
+node2.example.com 
+Ready 
+Sm 
+4.2.4 
+安装后配置
+基础的安装完毕后，下一步就是要配置组件和功能。根据不同的需求，安装后配置内容
+会有很大的差别。常见的任务有：
+口对接用户身份信息库。
+口导人Image Stream 。
+口导人Template 。
+口部署Router 。
+口部署Regis町。
+口部署度量收集组件。
+口部署日志聚合组件。
+1. 对接用户身份信息库
+和大多数的企业系统一样，
+OpenShift 有认证和授权的概念。用户必须以有效的用户名和
+密码登录系统。不同的用户或组会被分配不同的角色，不同的角色有不同的权限。
+OpenShift
+本身并不提供用户身份信息库，但是OpenShi位可以通过不同的Provider 连接不同的用户
+身份信息库，如HTPasswd 文件、
+Lightweight Directory Access ( LDAP ）服务器、
+OpenStack
+Keystone 等。关于身份验证的详细内容，在后续章节会有详细的讨论。安装时，我们在
+灿灿le 的hosts 文件中定义了HTPasswd 文件作为后端的用户身份信息库。
+openshift_master_id四tity_providers ＝［｛’ name 气’ ht阴sswd_auth ＇，’ log扛1 ’：’ true ’，
+’ challenge ’：
+’ true ＇，’ kind 勺’ HTPass叫PasSI届时工d四tityProvider ’ ，＇filenar晤’：’ ／etc /origin/master/htp臼S础’ ｝］
+安装程序自动生成了数据文件／etc/origin /master/htpasswd。但是此时这个文
+件还只是一个空文件，并没有任何用户信息，需要通过htpasswd 命令来创建用户。这里创
+建一个用户dev ，其密码为dev 。
+[root@master ~ J# htpasswd -b /etc/origin/master/ htpasswd dev dev 
+2. 导入Image Stream 
+在前面章节的手工安装模式下，我们手工将Image S位eam 导人系统中。在高级安装模式
+
+第4 章
+Open Shift 企业部署<·
+55 
+中，
+Ansible 默认已经将OpenShift 社区提供的Image Stream 导人系统中。如果企业内部存在
+自定义的Image Stream ，可以在此时导人。
+[root@master ~]# oc get is -n openshift 
+NAME 
+DOCKER REPO 
+TAGS 
+jenkins 
+1,latest 
+mariadb 
+10.1,latest 
+mongodb 
+2.4,2.6 , 3 . 2 + 1 more .. . 
+mysql 
+5. 6, latest, 5. 5 
+nodejs 
+0 . 10 , 4 , latest 
+perl 
+5 . 16,5.20 , latest 
+php 
+5 . 5 , 5. 6 , latest 
+postgresql 
+9 . 5, latest , 9 . 2 + 1 more .. . 
+python 
+2 . 7 , 3 . 3 , 3 . 4 + 2 more . . . 
+ruby 
+2 . 2,2.3,latest + 1 more . . . 
+wildfly 
+10.0 , 8.1 , 9.0 + 1 more . . . 
+3 . 导入Template
+UPDATED 
+10 hours ago 
+10 hours ago 
+10 hours ago 
+10 hours ago 
+10 hours ago 
+10 hours ago 
+10 hours ago 
+10 hours ago 
+10 hours ago 
+10 hours ago 
+10 hours ago 
+在高级安装模式中，
+Ansible 默认已经将OpenShi位社区提供的Template 导人系统中。执
+template 命令可以查看系统中已经存在的Template 。
+’- 
+f丁oc get 
+[r。。t@n咀ster 句］＃。c get t田nplate -n openshift 
+NAME 
+DESCRIPI'Iαq 
+cakephp-example 
+An example CakePHP appllcat1。n with n。
+database
+cakephp-mysql-exarnple An example CakePHP applicati。n with a MySQL database 
+dancer－自由mple
+An example D缸1cer application with no database 
+dancer-mysql-exarnple 
+An example D缸1cer application with a MySQL database 
+dbc。ns。le
+djar1g。－example
+An example Djar1g。
+appl 工cation with no database 
+djar1go-psql-ex缸nple
+An example Dj ar1g。
+application with a p。stgreSQL database 
+Jenk1ns-eph四eral
+Jenkins service, with。ut persistent st。rage.
+WARNING: Any data st。red will be ... 
+Jenkins-persistent 
+Jenkins service, with persistent st。rage.
+y。u must have persistent v。lumes av ... 
+4 . 部署Router
+PARAMETERS 
+18 (9 blar业）
+19 (4 blank) 
+11 (5 blank) 
+18 (5 blank) 
+0 (all set) 
+16 (10 blank) 
+17 (5 bl缸业）
+OBJECTS 
+5 
+7 
+5 
+7 
+4 
+5 
+7 
+6 (1 generated) 6 
+7 (1 generated) 
+在多节点的集群部署Router 组件要注意预先规划好Router 运行的目标节点。
+Router 组
+件是以容器的形式运行在OpenShift 平台上。在多节点的集群中，默认情况下，我们并不知
+道Router 容器最终会实际运行在哪一个Node 节点上。
+OpenShi位平台上所有指向具体应用
+的域名最终都要指向Router 所在Node 节点的IP 地址，如果无法确定Router 所在的Node 节
+点，也就无法创建相关的域名解析。在OpenShi负中，可以为目标的Node 打上标签（Label ) ,
+然后在部署Router 时，定义节点选择器（N odeSelector ）。最终Router 会被部署到带有和节点
+选择器相匹配的标签的Node 节点上。
+本例中，我们将把Router 部署在Nodel 上，
+因此需要为Nodel 打上标签。
+[root@master ~]# oc label node nodel.example.com infra=yes 
+
+56 
+•！•
+基础篇
+再次查看Node 节点，可见Nodel 已经打上了inf ra=yes 的标记。
+[root@master -]# oc get node --show-labels 
+NAME 
+STATUS 
+master.example.comReady,SchedulingDisabled 
+nodel . example . com 
+Ready 
+node2 .example.com 
+Ready 
+为Router 使用的Service Account 赋权。
+AGE 
+LABELS 
+lOh 
+kubernetes.io/hostname=master.example.com 
+lOh 
+infra=yes,kubernetes.io/hostname=nodel. 
+ex田nple.com
+lOh 
+kubernetes io/hostn缸ne=node2
+. ex缸nple.com
+[root@master ~ J# oadm pol 工cy add-sec-to-user pr 工vileged system : serviceaccount:d 
+efault:router 
+[root@master ~ J# oadm policy add-cluster-role-to-user cluster-reader system:ser 
+v i ceaccount:default:router 
+接下来开始部署Router。这里部署了一个名为ose-router 的Router ，它有且只有一
+个实例。为了性能和负载均衡的考虑，一个OpenShi负中可以部署多个Router 实例。多个
+Router 实例可以组成一个集群。
+[root@master
+~ J # oadm router ose-router --replicas=l --service-account=router 
+--selector= 'infra=yes ’ 
+＠理
+部署Router 需要到Do阳Hub 上下载相关的镜像。国内访问DockerHub 的速度比较
+刁主
+缓慢，建议配置中国科技大学的DockerHub 镜像加速镜像的下载。配置的方法请参
+考2 .1.4 节。
+部署完毕后，请确认Router 容器的状态正常。
+[root@master ~ J# oc get pod -n default lgrep router 
+ose-router-l-v7sz5 
+1/1 
+Run口ing
+0 
+4m 
+5. 部署Registry
+Registry 的部署和Router 类似，也是通过oadm 命令完成。这里，同样把Registry 部署
+到Nodel 上。
+[root@master
+~ J # oadm registry --config=’ / etc/origin/master/admin . kubeconfig ’ 
+--service account=registry --selector=’ inf ra=yes ’-n default 
+部署完毕后，请确认Regis问F 容器的状态正常。
+[root@master ~]# oc get pod -n default lgrep registry 
+docker-registry-1-eBOzj 
+1/1 
+Running 
+0 
+默认情况下，
+Regis町组件是非持久化的。在实际的生产环境中，建议为Regis町组件
+配置持久化的后端储存，配置的方式请参考第8 章。
+
+第4 章
+OpenShift 企业部署
+令
+57
+6 . 完成配置
+至此，一个基础的Open Shi位集群配置完毕。根据实际需要，用户还可以部署OpenShi仕
+的其他组件，如负责容器性能指标采集的Metric 组件和日志聚合管理组件等。这些内容将在
+后面的章节里详细讨论。
+部署完毕后，可以通过浏览器或oc 命令行登录OpenShift ，通过创建项目及部署应用测
+试安装配置完成的集群。
+4.3 
+离线安装
+在OpenShift 集群的安装部署过程中，涉及众多的盯M 软件包及Docker 镜像的下载。
+这些资源默认是从互联网上的yum 软件包仓库和Docker 镜像仓库中下载。前文介绍的安
+装过程是基于可以连接互联网的情况下实现的。但是企业的内网往往与互联网隔离，在与
+互联网隔离的环境中的安装部署，称为离线安装（disconnected installation ）。在企业内部署
+OpenShfit 集群需要提前下载所需的盯M 软件包及Docker 镜像，并在企业内部搭建yum 服
+务器及Docker 镜像仓库。此外，还需要在OpenShift 中将原有指向外部仓库的地址均修改为
+企业内部仓库的地址。
+目前，到本书定稿为止，
+Open Shi负Origin 的官方文档未提供离线安装的官方指引。但是
+OpenShift 企业版3.2 的版本中提供了相关的描述。
+OpenSh的企业版离线安装的思路同样适
+用于OpenShift Origin 。
+离线安装主要包含以下几个阶段：
+1 ）下载RPM 软件包。通过reposync 命令，将操作系统和OpenSh的所依赖的RPM
+包同步到本地。
+2 ）下载Docker 镜像。下载所依赖的Docker 镜像，通过docker
+save 命令保存备用。
+3 ）搭建企业内部yum 服务器。为预先下载好的RPM 包创建yum 仓库，供安装过程下
+载安装。
+4 ）搭建企业内部Docker 镜像仓库。将预先下载好的Docker 镜像推送到企业内部的
+Docker 仓库。
+5 ）安装前预配置。注意修改集群主机的yum 和Docker 的配置，指向企业内部仓库。
+6 ）执行Open Shift 高级安装。
+7) 执行安装后配置。注意替换ImageStream 中所有外部镜像仓库的地址至企业内部的
+镜像仓库。
+关于每一个阶段的详细操作步骤，请参考企业版的离线安装指南，本书就不再赘述了。
+＠景
+O阳
+en Shift 企业版离线安装指南：
+htφs:/
+install/disconnected install.html 。
+
+58
+令
+基础篇
+4.4 
+集群高可用
+为了防止单点失效，在实际的生产部署中必须考虑集群的高可用。
+OpenShift 集群的高
+可用需要从四个方面考虑，下面将分别展开叙述。
+4.4.1 
+主控节点的高可用
+OpenShi丘集群中的节点分为主控节点（Master 节点）以及受控节点（Node 节点）两类。
+主控节点承担了集群管理的工作，所有的计算节点和部分容器需要访问Master 节点获取集群
+相关的信息。一旦Master 节点停止了服务，
+OpenShi位集群的功能将受到很大影响。
+~景常见的一个疑问是“如果M邵阳节点停机了，OpenShift 平台上的容器会停止运行吗？”
+对于一般的容器应用而言，
+Master 节点的停机不会造成正在运行的容器停止运行。但
+是由于Master 停机，调度器缺失，所以在Master 节点恢复前都不会再产生新的容
+器。对于一些依赖Master 节点的容器而言，由于Master 节点停机导致调用Master 节
+点上的接口失败，容器是否会停止运行取决于容器内应用的错误处理机制。
+OpenShift 默认提供了Master 高可用的方案：
+Native HA 。在OpenShift 的Native HA 方
+案下，用户可以同时部署多个Master 节点形成Master 节点的多活集群，如图4-4 所示。
+由
+于存在多个Master 节点同时提供服务，在Master 节点集群的前端需要挂载一个负载均衡器
+作为流量人口。这个负载均衡器可以是Haproxy 、
+LVS ,
+F5 或者其他云平台提供的高可用负
+载均衡器。在默认情况下，
+OpenShift 使用Haproxy 作为负载均衡器。
+Haproxy 可以配置成集
+群，防止单点失效。
+etcd 是OpenShift 集群底层的数据源。
+etcd
+原生就是一个高可用的分布式键值对数据库。
+在OpenShift 高可用的环境中，用户可以部署一
+个包含多个etcd 节点的集群，
+OpenShi位可以配
+置连接到外部的etcd 集群。
+Open Shi丘多主集群的安装和部署可以通过
+Ansible 实现。在Ansible Hosts 文件中定义涉及
+的主机及角色信息，然后安置自动化安装部署。
+下面是一个多主集群的Ansible 配置示例。
+＃主机组
+[OSEv3 :children] 
+masters 
+nodes 
+etcd 
+图4-4
+OpenShi白多Master 高可用架构
+
+＃主机参数
+[OSEv3:vars] 
+ans 工ble ssh user=root 
+deployment_type=origin 
+# Master 节点主机
+[masters] 
+master.example.com 
+# etcd 主机
+[etcd] 
+e tcdl.example.com 
+etcd2.example.com 
+etcd3.example.com 
+# Node 节点主机
+[nodes] 
+第4 童
+OpenShift 企业部署
+令
+59
+master.ex缸nple.com openshift_node_labels=” {’ region ’:’ infra ’，’ zone 勺’ default ’ } ” 
+nodel . example . com openshift_node_labels=”{’ region ’:’ primary ’ ,
+’ zone’:’ east ’ }” 
+node2.example.com openshift_node_labels=”{’ region ’:' primary ’,’ zone’:’west ’}” 
+＠景
+OpenShi企创gi
+主控节点配置：
+ht
+://docs.opens 
+components/kub巳metes一inf云astructure.html#high-availability-masters 。
+4.4.2 
+计算节点的高可用
+我们对计算节点高可用的着眼点更多在于其上运行的容器应用。在OpenShi位集群中，
+计算节点往往存在多个实例。一个计算节点不幸异常停机后，其上的容器将会被逐步迁移到
+其他节点上，从而保证了高可用。
+值得注意的是，可以通过标签的方式来管理计算节点，将不同的计算节点划分为不同的
+可用区或者组。在部署应用时，可以使用节点选择器将应用部署至带有指定标签的目标计算
+节点上。在规划计算节点标签时，要尽量保证用于节点选择器的标签组合的目标计算节点数
+大于1 。这样可以避免一台目标节点停机后，调度器找不到满足节点选择器要求的计算节点
+进行容器的部署。
+4.4.3 
+组件的高可用
+在OpenShi位集群中的系统组件如Router 及Registry 的失效也会为系统和应用的运行带
+来风险。
+Router 和Registry 是以容器的形式部署在集群中，它们都可以弹性扩展至多个实例。
+Router 和Registry 容器都有相应的Replication Controller 负责监控容器的状态，当容器实例
+意外退出后，新的容器实例将被启动。这里需要注意的是，用户要保证Router 和Regis町部
+署定义中的节点选择器能匹配上多个计算节点，以保证高可用。
+
+60 
+•！•
+基础篇
+Router 扩展至多个实例后，由于Router 需要占用主机的物理端口（80 、
+443 及1936 ),
+所以一台计算节点上只能部署一个Router 容器。
+当Router 实现了多实例后，
+Router 前端需
+要挂接上负载均衡器作为流量入口。
+在生产中，
+Registη 底层将挂载持久化存储。在储存类型的选择上要保证所选择的储存
+类型可以被多个节点挂载。这样即使Registry 容器漂移到其他计算节点上，持久化储存也能
+被正确对接到容器中。
+4.4.4 
+应用的高可用
+要实现应用的高可用，可以在应用层面应用自身实现高可用的机制，也可以依赖于
+OpenShi俞平台的弹性扩张、
+自恢复、
+Service 及Router 的负载均衡来实现。应用自身实现的
+高可用机制类型很多，这里聚焦在OpenShi位提供的功能如何实现应用的高可用。
+应用在Open Shift 集群内通过弹性扩展的机制实现多实例的部署。
+Replication Controller 
+负责监控容器状态。当容器应用异常退出时，
+Replication Controller 负责启动新的应用容器填
+补空缺。多个容器实例前端可以定义Service,
+Service 为集群内的访问提供了负载均衡。对
+于集群外的访问，由Router 提供负载均衡。
+Router 和Service 将会根据后端容器的情况实时
+调整负载均衡规则，保证用户请求转发到状态正常的容器进行处理。在利用OpenShift 的容
+器调度实现应用高可用时，要注意提供满足调度规则的计算节点的数量是否存在冗余。
+4.5 
+本章小结
+本章介绍了OpenShift 的集群部署架构及高级安装模式，并通过高级安装模式部署了一
+个3 节点的OpenShi位集群。以此为基础，可以创建更复杂的集群部署架构。本章还探讨了
+OpenShift 集群高可用相关的话题。掌握这些内容，将使你在为企业规划OpenShift 集群部署
+时更加自信。
+
+.................. 
+................. 
+................. 
+…. •II………· 
+................ 
+................ 
+............... 
+............ 
+……………..................................... ... 
+…...…… 
+………. • II 
+… E …·· 
+．．．．．．．．”
+TTι~ ~ 
+一一一
+· 
+·::…. • 
+7T 
+汉
+J丽
+：
+. . . : 
+· : 
+... 
+. . . . : 
+. 
+· 第5 章
+· 第6 章
+· 第7 章
+．第8 章
+· 第9 章
+容器应用的构建与部署自动化
+持续集成与部署
+应用的微服务化
+应用数据持久化
+容器云上的应用开发
+.............................. ....... 

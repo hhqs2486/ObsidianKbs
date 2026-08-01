@@ -1,0 +1,1257 @@
+实现并发性
+本书前面探索了如何测量程序的性能，以及如何通过巧妙的算法和高效的机器码来减少CPU
+执行的操作数，进而改善程序的性能。在有些程序中，大部分时间都花在等待速度比CPU 慢得
+多的资源（如永久性存储和网络资源）上，本章将把注意力转向这样的程序。
+异步编程是一种编程范式，可帮助你处理速度缓慢且不可预测的资源（如用户），它被广泛
+用于打造H向应迅速的服务和用户界面。本章将介绍如何在
+Python 中使用协程和响应式编程等技
+术来进行异步编程。
+本章介绍如下主题：
+口存储器层次结构；
+口回调函数；
+口也ture·
+口事件循环；
+口使用a synci o 编写协程；
+口将同步代码转换为异步代码；
+口使用RxPy 进行响应式编程；
+口使用被观察者（observable );
+口使用RxPy 打造内存监视器。
+6.1 
+异步编程
+异步编程是一种处理缓慢且不可预测资源的方式。异步程序能够高效地同时处理多种资源，
+而不是坐在那里等待资源可用。异步编程可能很难，因为这需要处理外部请求，而这些外部请求
+的到达顺序可能不可预测，处理它们所需的时间可能不是固定的，还可能意外地失败。本节将介
+绍异步编程的主要概念和术语，以及工作原理。
+仅供非商业用途成交流宇习攸用
+
+6. 1 
+异步编程
+99 
+6.1 .1 等待1/0
+现代计算机利用各种不同的存储器来存储数据和执行操作。通常，计算机中包含昂贵但运行
+速度快的内存，还有价格便宜但运行速度缓慢的存储器，后者通常用来存储大量的数据。
+存储器的层次结构如下图所示。
+寄存器
+I 
+缓存
+内存
+外存
+在存储器层次结构的顶端是CPU 寄存器，它们集成在CPU 中，用于存储和执行机器指令。
+访问寄存器中的数据所需的时间通常为一个时钟周期，这意味着如果CPU 的频率为3GHz ，访问
+CPU 寄存器中一个元素所需的时间大约为0 .3 纳秒。
+寄存器下面那层是CPU 缓存。缓存有多级，也被集成到处理器中。缓存的速度比寄存器慢
+些，但在一个数量级内。
+存储器层次结构中的接下来一层是主存（内存），它能够存储的数据比缓存多得多，但速度
+更慢。从内存中获取一个元素所需的时间可能是几百个时钟周期。
+最底层是永久性存储，如旋转磁盘（HDD ）和固态硬盘
+（SSD ）。这些设备能够存储的数据
+最多，但速度比主存差几个数量级。为寻找并获取一个元素，
+HDD 可能需要几毫秒，而SSD 的
+速度则阳，需要叫不到
+l 毫秒。
+团
+为了让你对各种存储器的相对速度有清楚的认识，可以打个比方：如果CPU 的时钟周期约
+为
+l 秒，访问寄存器将相当于从桌子上取支铅笔，访问缓存相当于从书架上取本书，访问内存相
+当于将衣物在干洗机上放好（比访问缓存慢2 0 倍）。永久性存储的速度相差很大：从SSD 中获
+取一个元素相当于4 天的旅行，而从HDD 中获取一个元素需要6 个月！如果要通过网络访问资
+源，需要的时间将更长。
+前面的示例清楚地说明，相比于CPU ，访问永久性存储和其他IIO 设备中数据的速度要慢得
+多。因此处理这些资源时，不让CPU 漫无目的地等待至关重要。为确保这一点，可精心地设计
+软件，使其能够同时管理多个请求。
+6.1.2 
+并发
+并发是一种实现系统同时处理多个请求的方式，其基本理念是在等待资源期间可着手处理其
+他的资源。并发的工作原理是：将任务划分成可不按顺序执行的子任务，这样就能同时处理多个
+仅供非商业用途或交流学习使用
+
+100 
+第6 幸实现并发性
+子任务，而无须等到前面的子任务完成。
+在第一个示例中，我们将介绍如何实现对缓慢的网络资源的并发访问。假设有一个Web 服
+务，它获取数字的平方；另外，假设从请求该Web 服务到获得响应的时间大约为
+1 秒。我们可
+实现函数network_request ，它接受一个数字，并返回一个字典，其中包含有关计算是否成功
+的信息以及计算结果。为模拟该Web 服务，可使用函数time
+. sleep ，如下所示。
+import time 
+def network_request(number) : 
+time
+. sleep(l
+. 。）
+retur口｛” success ”
+：
+True ，
+” result "
+:
+number** 2) 
+另外，我们还编写其他一些代码，它们发出请求、核实请求成功并打印结果。在下面的代码
+中，我们定义了函数fetch_square ，并使用它来计算数字2 的平方（而它通过调用n etwork
+request 计算这个数的平方）。
+def fetch_ square(number) : 
+response= network_ request(number) 
+if response [ ” success " l : 
+print ("Result is : 
+｛｝
+”
+. format(respo口se
+［” result
+" l)) 
+fetch_ square(2) 
+＃输出
+，
+＃
+结采：
+4 
+由于网络速度缓慢，从网络获取一个数字需要
+l 秒。如果要计算多个数字的平方，该怎么办
+呢？我们可多次调用fetch_square ，其中每个调用都将在前一个调用结束后发起网络请求。
+fetch_ square(2) 
+fetch_ square(3) 
+fetch square(4 ) 
+＃输出
+＃
+结采
+4 
+＃结采
+9 
+＃
+结果·
+16 
+上述代码需要3 秒才能执行完毕，但这样的结果不是最佳的。没必要等待前一个请求结束，
+因为从技术上说，我们可以同时提交多个请求，再等待它们的结果。
+在下图中，用方恒表示了这三个任务，其中CPU 为处理并提交请求而花费的时间为深灰色，
+而等待时间为浅灰色。从中可知，大部分时间都花在等待资源上，而在等待期间，机器在那里干
+坐着，什么都没做。
+fetch_squa re(2) 
+fetch_square(3) 
+fetch_square(4) 
+仅供非商业用途或交流学习使用
+
+6.1 
+异步编程
+101 
+理想情况下，应在等待己提交的任务结束时开始另一个新任务。在下图中，提交
+fetch_
+square(2 ）中的请求后，就可开始为fetch_square(3 ）做准备了。这样可减少CPU 等待时间，
+并在有了结果后立即着于处理。
+CPU 
+之所以能够采取这种策略，是因为这三个请求是完全独立的，无须等到前一个任务完成后再
+着手处理下一个任务。另外，单个CPU 就能得心应手地处理这种情形。虽然将工作分配给多个
+CPU 去完成可进一步提高执行速度，但如果相对于处理时间而言等待时间很长，这样做带来的速
+度提升将很有限。
+要实现并发，必须以不同的方式思考和编写代码。下一节将介绍实现健壮的并发应用程序的
+技巧和最佳实践。
+6.1.3 
+回调函数
+前面介绍的代码阻塞程序的执行，直到资源可用，其中负责等待的调用是time.sleep 。为
+M代码立即着手处理则町要想办法避免阻塞程序流程，让程序的其他部分叫续完团
+成其他任务。
+为此，最简单的办法之一是使用回调函数，其策略与我们叫出租车时很像。
+假设你在饭店喝了几杯酒，而外面下着雨，你不想去坐公交车，于是决定叫辆出租车，并让
+司机到达后给你打电话。这样你将在接到电话后再出饭店，避免在雨中等待。
+在这种情况下，你叫了辆出租车（速度较慢的资掠），但不在饭店外等待出租车到来，而是
+向司机提供电话号码和说明（回调函数），以便等出租车到了后再出来乘车回家。
+下面来演示如何在代码中使用这种机制。我们将对阻塞代码
+time
+. sleep 与非阻塞代码
+threadi吨.Timer 进行比较。
+在这个示例中，我们将编写一个函数一--wait_and print ，它将程序执行流程阻塞－秒钟，
+再打印一条消息。
+
+102 
+第6 幸实现并发性
+def wait and_print (msg) : 
+time sleep(l.0) 
+pr 工nt(msg)
+要以非阻塞方式编写这个函数，可使用
+threading
+. Timer 类。我们可初始化一个
+threading
+. Timer 实例：传递要等待的时长以及一个回调函数。回调函数不过是一个将在定时
+器到期后被调用的函数。请注意，我们还必须调用方法Timer.start 来激活定时器。
+工mport
+thread 工ng
+def wait_and_print_ async(msg) 
+def callback() : 
+pr 工nt(msg)
+timer= threading.Timer(l 0, callback) 
+t 工mer
+. start () 
+函数wai t_and_pr 工nt_async 的一个重要特征是，其中的所有语句都不会阻塞程序的执行
+流程。
+@ 
+threading
+. Timer 是如何做到在等待的同时不阻塞的呢？
+thread工口g
+. Tirner
+使用的策略是启动一个新线程，该线程能够并行地执行代码。如果这不好理解，
+也不用担心，本书后面将详细介绍线程和并行编程。
+这种注册回调函数，以便在特定事件发生时执行它的方式称为好莱坞原则，这是因为在好莱
+坞，演员试镜后可能被告知“不要给我们打电话，我们会给你打电话”，这意味着他们不会立即
+告诉你是否选定了你，但如果选定了你，会给你电话的。
+为突出阻塞版wa 工t_and_print 和非阻塞版的差别，可比较这两个版本的执行情况。在下
+面的输出注释中，
+〈等待…… 〉表示等待过程。
+＃同步的
+wait_and_print ( ” First call ” ) 
+飞，；a i t _and_pr 工nt
+（” Second cal l ” ) 
+print ( "After call " ) 
+＃输出，
+＃〈等待… ＞
+# First call 
+＃〈等待…·· 〉
+# Second call 
+# After call 
+＃异步的
+wa 工t_and_print_async
+（” F 工rst call async " ) 
+wa 工t _and_pr 工口t_async
+（” Second call asy口C " ) 
+pr 工nt ( "After submission " ) 
+＃输出．
+# After submission 
+＃〈等待··>
+# First call 
+# Second call 
+
+6.1 
+异步编程
+103 
+同步版本的行为与以前很像：代码等待
+l 秒钟，打印F 工rst call ，再等待
+l 秒钟，然后打
+印消息Se cond
+call 和I After call 。
+在异步版本中，wait_and_print_async 提交（而不是执行）这些调用井立即接着往前走。
+从输出可知，立即打印了消息After
+submission ，这说明这种机制发挥了作用。
+知道这些后，就可以探索更复杂些的情形了：使用回调函数重写函数network_request 。
+在下面的代码中，我们定义了函数
+network_request_a sync 。相比于阻塞版，函数
+network_request_async 最大的不同在于它什么都没返回，这是因为在network_request_
+a sync 被调用时，我们只提交请求，而结果要等到请求完成后才能得到。
+既然什么都不能返回，如何传递请求的结果呢？我们将结果作为参数传递给回调函数
+on_ done ，而不是返回它。
+在这个函数余下的代码中，向timer.Timer 类提交了一个回调函数（timer done ），它将
+在准备就绪后调用on_do口e 。
+def network_request_async(number, on_done) 
+def timer_done() : 
+0口一done({"success ”：True , 
+” result ”:
+number ** 2)) 
+timer = threading Timer(l .O, timer_done) 
+t 工mer
+. start () 
+口etwork_request_async 的用法与timer.Timer 很像，只需传递一个要计算其平方的数
+字，以及在结果准备就绪后将收到它的回调函数，如下面的代码所示。
+def o口
+done(result):
+print(result) 
+network_request_async(2 , on_done) 
+现在，如果你提交多个网络请求，将发现调用将并发地执行，而不会阻塞代码。
+network_request_async(2, 
+。口＿do口巳）
+network request_async(3 , 
+o口＿done)
+network_request_async(4, on_done) 
+print (”After submission ") 
+要在fetch
+square 中使用network_request_async ，需要对其进行修改，以使用异步
+结构。在下面的代码中，我们修改了fetch_square一一定义回调函数on
+done 并将其传递给
+network_request _async 。
+def f etch_square(number) : 
+def on_done(response) : 
+工f response["success ” ] : 
+
+104 
+第6 幸实现并发性
+print ( ” Resul t
+工s
+:
+{} ” . format(response[ "resul t ” ])) 
+network_request_async(number , on_done) 
+你可能注意到了，相比于同步代码，异步代码要复杂得多。这是因为每次需要获取结果时，
+都必须编写并传递一个回调函数，这导致代码一层套一层，变得难以理解。
+6.1.4 future 
+futu re 是－种更便利的模式，可用来跟踪异步调用的结果。在前面的代码中，没有返回结果，
+而是接受一个回调函数，并在结果就绪后将其传递给这个回调函数。有趣的是，到目前为止，没
+有跟踪资源状态的简单途径。
+future 是一种抽象，可帮助我们跟踪请求的资源、并等到它可用。在Python 中，
+c o口curre口t
+.
+future s . Future 类提供了一种“ture 实现。要创建这个类的实例，可调用其构造函数且不提供
+任何参数。
+fut = Future () 
+＃
+结采·
+# <Future at Ox7f03e41599e8 state=pending> 
+futu re 表示一个还不可用的值，其字符串表示指出了结果的当前状态（这里为pending ，即还
+未确定）。要让结果可用，可使用方法Future . set
+result 。
+f ut set_ result (" Hello ” ) 
+＃
+结采．
+# <Future at Ox7f03e41599e8 
+s tate =f 工nished returned str> 
+fut . result() 
+＃结采．
+# ”Hello ” 
+如你所见，设置结果后，
+Future 将指出任务结束了，此时可使用方法Fu ture
+. re sul t 来
+访问结果。还可给future 指定一个回调函数，这样一旦结果可用，就将执行这个回调函数。要指
+定回调函数，只需向方法Future . add_done_cal l back 传递一个函数即可。这样任务结束后，
+指定的函数将被调用，并将
+Future 实例作为第一个参数。在指定的回调函数中，可使用方法
+Future . resu l t （）来访问结果。
+fut = Future () 
+fut . add_done_callback(lambda future : pr 工nt(future
+. result()
+,
+flush=True)) 
+fut . set result ( ” Hello ” ) 
+＃输出
+# Hello 
+为了让你掌握如何在实际工作中使用负iture ，我们将｛彦改函数net1《1ork一requ est一as y nc , 
+在其中转而使用负itur
+这里的理念是，不再什么都不返回，而是返回一个Futur e ，用于跟踪
+
+6.1 
+异步编程
+105 
+结果。这里需要注意两点。
+口不再接受回调函数on_done ，因为可在以后使用方法Future
+. add_done_callback 来
+关联到回调函数。另外，将通用方法
+Future. set_result 作为回调函数传递给
+thr ea ding.Timer 。
+口这次可以返回一个值，因此代码与前一节介绍的阻塞版本更像。
+from concurrent .futures import Future 
+def network_request_async(number) 
+future = Future () 
+result ={ ” success " : True , "result " : number * * 2} 
+timer = threading .Timer(l 0, lambda : future . set_result(result ) ) 
+timer s tart() 
+return future 
+fut = network request_async(2) 
+。
+在这些示例中，我们直接实例化并管理
+fu阳re ，但在实际应用程序中，
+future 是
+由框架处理的。
+如果你执行上述代码，什么都不会发生，因为这些代码只是创建井返回一个Future 实例。
+要进一步操作future 的结果，需要使用方法Future
+. add_done_callbac k 。在下面的代码中，
+我们修改函数fe tch_squar e 以使用future 。
+def fetch_square(number) : 
+fu t = network_request_async(number) 
+def on_done_ future(future) 
+r esponse = future . result() 
+if response [ ” success ” ] : 
+print ( ” Result is : {}” . format(response [ ” result " J)) 
+回
+fut . add_done_callback(on_done_ future) 
+这些代码依然与回调版本很像。
+future 提供了另一种使用回调函数的方式，而且更方便些。
+使用句阳re 也更好，因为它们能够跟踪资源状态、撤销已调度的任务以及以更自然的方式处理
+异常。
+6.1 .5 
+事件循环
+前面使用了操作系统线程来实现并行，但在很多异步框架中，并发任务之间的协调工作是由
+事件循环管理的。
+事件循环背后的理念是，不断地监视各种资源（如网络链接和数据库查询）的状态，并在事
+件发生（如资源准备就绪或定时器到期）时执行相应的回调函数。
+ρ
+
+106 
+第6 章实现并发性
+为何不坚持使用线程呢？
+在有些情况下，事件循环是更佳的选择，因为每个执行羊元都不会与其他执行单
+元同时运行，这简化了共享变量、数据结构和资源的处理工作。有关并行执行及
+其缺点的详细信息，请参阅下一章。
+在本节的第一个示例中，我们将实现
+t hreading. Timer 的非线程版本。我们可定义一个
+Timer 类，它接受超时时间，并实现方法Timer . done （这个方法在定时器到期时返回True ）。
+。
+class Timer : 
+def
+一＿i口it＿一（self
+,
+timeout) 
+self
+. t 工meout
+= timeout 
+self. s tart = time . time() 
+def done(self) : 
+return t 工me
+. time()
+- self star t >self . timeout 
+为判断定时器是否已到期，可编写一个循环，它不断调用方法巳me r . done 来检查定时器
+的状态。定时器到期后，我们可打印一条消息，并退出循环。
+timer= Timer(l.0) 
+wh 工le True : 
+i f t i mer . done (): 
+print （” Timer
+工s done !” ) 
+break 
+通过以这样的方式实现定时器，可确保执行流程绝不会被阻塞，因此从原则上说，可在这个
+whi le 循环中执行其他操作。
+＠叫阳叫时待事件友生这通叫为忙等待（bus
+理想情况下，应指定一个在定时器到期时执行的自定义函数，就像thr ead 工ng.T ime r 中那
+样。为此，可实现方法Timer . on_ t imer_done ，它接受一个要在定时器到期时执行的回调函数。
+class Ti mer : 
+＃
+……以前的代码
+def 
+on_ t 工me r_done(self,
+callback) : 
+self . callback = callback 
+请注意，
+on_time r_done 只是存储了一个指向回调函数的引用，负责监视事件并执行回调
+函数的是循环。下面来演示这一点。在这里，不再在循环中使用函数print ，而是在合适的情况
+下调用t imer. c allba c k 。
+t i mer = Timer (l . 0) 
+t 工rner . on_t 工mer done(lambda : print （” T工mer is done !” )) 
+在
+
+6.1 
+异步编程
+107 
+while True : 
+if timer done() : 
+timer.callback() 
+break 
+如你所见，一个异步框架的雏形已经形成。在循环外面，我们只定义了定时器和回调函数，
+监视定时器和执行回调函数的工作由循环负责。我们可进一步扩展这些代码，以支持多个定时器。
+为实现多个定时器，一种自然而然的方式是将多个Timer 实例添加到一个列表中，并修改
+循环，使其定期地检查所有的定时器，并在必要时调用回调函数。在下面的代码中，我们定义了
+两个定时·器，并将每个定时器都关联到一个回调函数。这些定时器被添加到一个列表（t irne r s ) 
+中。事件循环不断地监视这个列表，一旦有定时器到期，就执行相应的回调函数，井将该定时器
+从列表中删除。
+timers = [] 
+timerl = Timer(l.0) 
+timerl . on_ timer done(lambda 
+print ( ” First t 工mer is done !” )) 
+timer2 = Timer(2 . 0 ) 
+t 工mer2
+. on_timer done(lambda : print ( ” Second timer is done !” )) 
+t 工mers . append ( t imerl) 
+t imers . append (timer2) 
+while True : 
+for timer in t 工mers
+:
+if timer . done ( ) : 
+timer . callback () 
+timers
+. remove(t 工me r)
+＃
+如采71 ）求中没有任何定时器，
+就退出循到：
+• 
+工f len (timers ) = = 0 : 
+break 
+事件循环的主要局限性在于绝不能使用阻塞调用，因为执行流程是由不断运行的循环管理
+的。可以想见，如果在循环中使用了阻塞语句（如
+time
+. sleep ），事件监视和回调函数分派将
+停止，直到阻塞调用完成。
+为避免这种情况发生，我们不使用阻塞调用（如
+t ime
+. sleep ），而是让事件循环负责检测
+资源是否已就绪，并在资源就绪后调用回调函数。通过避免阻塞执行流程，事件循环可同时监视
+多项资源。
+。
+事件通知通常是通过操作系统调用（如Un ix 工具sele ct ）实现的，操作系统
+调用会在事件就绪后恢复程序执行，
+而不是忙等待。
+Pytho n 标准库包含一个基于事件循环的并发框架
+a synci o ，它使用起来很方便，这将在
+下一节介绍。
+在
+
+108 
+第6 章实现并发性
+6.2 
+asyncio 框架
+至此，你应对并发的工作原理以及如何使用回调函数和也阳re 有了深入的认识，可以接着学
+习如何使用a sync 工o 包了（从Python 3.4 起，
+Python 标准库就包含这个包）。我们还将探索全新
+的a sync/await 语法，这是一种非常自然的异步编程方式。
+在本节的第一个示例中，我们将介绍如何使用a syncio 获取并执行一个简单的回调函数。
+要获取asyncio 循环，可调用函数asyncio
+. get_event_loop （）。要调度回调函数，可使用
+loop.call_l ater ，它接受以秒为单位的延迟和一个回调函数。你还可使用方法
+loop
+. stop
+来停止循环并退出程序。要开始处理己调度的调用，必须启动循环，为此可使用
+loop.run_forever 。下面的示例演示了如何使用这些基本方法，它调度了一个打印消息并停止
+循环的回调函数。
+import asyncio 
+loop = asyncio .get_event_loop() 
+def callback() : 
+print ( ” Hello, 
+asynci 。” ）
+loop . stop () 
+loop . call_later(l . O, callback) 
+loop . run_ forever() 
+6.2.1 
+协程
+使用回调函数的一个主要问题是，必须将程序划分成在特定事件发生时将被调用的小型函
+数。正如你在本章前面看到的，回调函数很容易变得非常烦琐。
+协程是另一种（可能更自然的）将程序划分成小块的方式，让程序员能够编写看起来像同
+步代码但将异步执行的代码。可将协程视为可停止和恢复执行的函数。一个简单的协程示例是
+生成器。
+在Python 中，要定义生成器，可在函数中使用y ield 语句。在下面的示例中，我们实现了
+函数raηge_ge口erator ，它生成并返回值。到口。我们还添加了一条print 语句，以显示生成
+器的内部状态。
+def range_generator(n) : 
+工＝
+0 
+while i 
+＜口：
+pr 工nt （钳Gen巳rating value {} 
+yield i 
+工
+＋＝
+1 
+在
+
+6.2 
+asyncio 框架
+109 
+当你调用函数range_ge口era tor 时，其中的代码并不会立即执行。请注意，下面的代码执
+行时，什么都没有打印，而只是返回一个ge口era tor 对象。
+generator = range_ge口erator(3)
+generator 
+＃结采·
+# <ge口erator object ra口ge_generator at Ox7f03e418ba40> 
+要从生成器中取值，必须使用函数next
+:
+next(generator) 
+＃
+输出．
+# Generating value 0 
+next(generator) 
+＃输出：
+# Generat 工ng value 1 
+请注意，每当我们调用next 时，都将运行代码，直到遇到yield 语句。要让生成器接着
+往下执行，必须再次调用next 。你可将yield 语句视为一个断点，可执行到这里停止，还可从
+这里开始继续执行（同时保持生成器的内部状态不变）。可在事件循环中利用这种停止和继续执
+行功能来实现并发。
+还可使用yield 语句将值注入生成器（而不是从中提取值）。在下面的示例中，我们声明了
+函数parrot ，它重复我们发送的每条消息。要让生成器接收值，可将yield 赋给一个变量（在
+这里，使用的是语句message
+= yield ）。要将值插入生成器，可使用方法
+se叫。在
+Pytho n
+中，能够接收值的生成器称为基于生成器的协程。
+def parrot(): 
+while True : 
+message = yield 
+print ( ” Parrot says : {} ’' • format (message) ) 
+• 
+generator = parrot() 
+generator . send(None) 
+generator . send ( ” Hel lo ” ) 
+generator . send ( ”World ” ) 
+请注意，开始发送消息前，必须调用ge口erator . send(None ），这旨在将函数执行到第－
+条yield 语句。另外，注意函数parrot 中有一个无限循环，如果不使用生成器，这个循环将
+没完没了地执行下去！
+基于前面的介绍，你完全可以想见，事件循环可让多个生成器逐步推进，而不阻塞整个程
+序的执行流程。你还可以想见，生成器可仅在相关资源就绪时才往前推进，从而不需要使用回
+调函数。
+在a syncio 中，可使用yield 语句来实现协程，但从3 . 5 版起，
+Python 支持使用更直观的
+p
+
+110 
+第6 幸实现并发性
+语法来定义功能强大的协程。
+要使用a sync 工0 来定义协程，可使用语句async def : 
+async def hello() 
+print ( "Hello, async !” ) 
+coro = hello () 
+coro 
+＃
+输出
+# <coroutine object hel lo at Ox7f314 846bd58> 
+如你所见，
+ifoJ用函数hello 时，没有立即执行其代码，而是返回了一个coroutine 对象。
+asy口cio 协程不支持四川，但可在asy口C 工o 事件循环中轻松地运行它们，为此只需使用方法
+run_until_complete 即可。
+loop = asyncio . get_ event loop () 
+loop run_until_complete(coro) 
+。使用a…叫叫协问原生协程。
+模块asyncio 提供了资源（被称为awaitable ），你可在协程中使用await 语法来请求它
+们。例如，如果你要等待一段时间后再执行语句，可使用函数asyncio
+. sleep 。
+async def wait and_print (rnsg): 
+await asyncio.sleep （工）
+print ( ”Message :
+”,
+rnsg) 
+loop
+. run_u口til_cornplete(wait_and print ( ” Hello ” )) 
+这样编写出来的代码漂亮而整洁。我们根本没有使用丑陋的回调函数，就编写出了功能完美
+的异步代码！
+@ 
+你可能注意到了，
+awa 工t 给事件循环提供了一个断，点，因此在等待资源期间，
+事件循环可继续管理其他协程。
+锦上添花的是，协程也是awa 工table ，因此可使用await 语句将协程异步地串接起来。在
+下面的示例中，我们重写了本章前面定义的函数network_request一一将time . sleep 替换为
+a sync 工o
+. sleep 。
+async def network_request(number): 
+await asyncio.sleep(l.0) 
+return {"success ” : True,’' result" . number** 2) 
+接下来，可重新实现fetch
+square 。如你所见，可直接等待（await )network_request, 
+而不需要额外的future 或回调函数。
+ρ
+
+6.2 
+async io 框架
+111 
+async def fetch_square(number ): 
+res po 口se = await network_request （口umber)
+工f res po口se
+［” success "
+]
+:
+print ( ” Resul t
+工s
+:
+{} ” . format(response [ ” result "])) 
+可使用loop.run_until_comple te 分别运行协程：
+loop.run_unt 工l complete(fetch_ square(2)) 
+loop . run until complete(fetch_ square(3)) 
+l oop . run until_complete(fetch_ square(4)) 
+对测试和调试来说，使用run_until_complete 来运行任务很好，但在大多数情况下，程
+序都将首先执行loop
+. run_forever ，因此需要在循环已经在运行的情况下提交任务。
+asy口cio 提供了函数
+ensure_future ，可用来调度协程（和“阳re ）。要使用
+ensure_
+future ，只需将要调度的协程传递给它即可。下面的代码调度多个fetch
+squar e 调用，这些
+调用将并发地执行。
+asyncio .ensure_ future(fetch squar e(2)) 
+asyncio . ensure_future(fetch square(3)) 
+asyncio .ensure_fut ure (fetch_ squar e(4)) 
+loop . run forever ( ) 
+＃
+妥停牛循环，
+可按Ctr l -C
+另外，向它传入一个协程时，函数a synci o
+. ensure
+future 将返回一个Ta sk 实例（Task
+是Fut ure 的子类），这让我们既能使用await 语法，又能利用future 的资源跟踪功能。
+6.2.2 
+将阻塞代码转换为非阻塞代码
+虽然asyncio 支持即方式连接到资源但在有些情况下必须使用阻塞酬，例如，在回
+第三方API （如数据库访问库）只暴露了阻塞调用时，或执行长时间运行的计算时。在这一节中，
+我们将介绍如何处理阻塞AP I ，使其与async 工o 兼容。
+对于阻塞代码，一种有效的处理策略是在一个独立的线程中运行它们。线程是在操作系统
+(OS ）层级实现的，允许阻塞代码并行地执行。
+Pyth on 提供了接口Executor ，它设计用于在独
+立的线程中运行任务，并使用future 来监视任务的进度。
+要初始化ThreadPoolExecutor ，必须先从模块concurrent
+. futures 导人它。这种执
+行器会生成一系列线程（被称为工作线程），这些钱程将等待执行抛给它们的任何任务。函数被
+提交后，执行器将负责将执行它的工作分派给空闲的工作线程，并跟踪结果。要指定线程数量，
+可使用参数max_workers 。
+请注意，任务结束后，执行器不会销毁相应的线程，这样可降低创建和销毁线程的开销。
+在下面的示例中，我们创建了一个包含三个工作线程的ThreadPoolExecutor ，并提交了
+在
+
+112 
+第6 章实现并发性
+函数wait_and_return ，这个函数将程序执行流程阻塞
+l 秒钟，并返回一个消息字符串。然后，
+我们使用方法submit 调用这个函数，将其交给线程去执行。
+from concurrent
+. futures
+工rnport ThreadPoolExecutor 
+executor = ThreadPoolExecut or(rnax workers=3) 
+def wait_ and_ return(rnsg) : 
+tirne . sleep(l) 
+return rnsg 
+executor
+. subrnit(wa 工t_and_retur口，
+” Hello.
+executor ” ) 
+＃结采：
+# <Future at Ox7ff616ff6748 state=running> 
+方法executor . submit 立即调度这个函数，并返回一个future 。在asyncio 中，可使用
+方法loop.run_in_executor 来管理任务的执行，这个方法的工作原理与execut or
+. submit
+很像。
+fut = loop run_in_executor(executor, wa 工t_and_return ，’t Hello, asyncio 
+executor ”) 
+# <Future pending ... more info ... > 
+方法run_in_executor 也返回一个asyncio
+. Future 实例，你可在其他代码中等待这个
+实例；主要差别在于，这个fu阳re 仅在我们启动循环后才会运行。要运行它并获取响应，可使用
+loop
+. run_u口t il _complete 。
+loop
+. run_unt 工l _cornplete(fut)
+＃
+结采，
+# ’ Hello, executor ’ 
+作为一个实例，我们可使用这种技巧同时获取多个网页。为此，我们导人流行的（阻塞）库
+requests ，并在执行器中运行函数requests
+. get 。
+工rnport requests 
+async def fetch_urls (urls) : 
+responses = (] 
+for url in urls : 
+responses.append(await loop . run_in_executor 
+(executor, requests.get, url)) 
+return responses 
+loop .run_until_cornplete(fetch_ruls ((’ http : //www .google corn ', 
+'http: // www . exarnple corn ’ , 
+'http://www . facebook . com ’ ])) 
+＃结果
+#[] 
+这个版本的f etch_urls 不会阻塞执行，允许asyncio 中的其他协程运行，但它并不是最
+优的，因为它不会并行地获取URL。要并行地获取URL ，可使用asynci o
+. ensure_future,
+在
+
+6.3 
+响应式编程
+113 
+也可使用便利函数asy口C 工o
+. gather （它一次性提交所有的协程并收集到来的结果）。下面演示
+了asyncio.gather 用法。
+def fetch_urls(urls): 
+retur口
+asyncio .g acher(*[loop
+. run_i n_executor
+(executor, requests . get, url) 
+for url
+工n urls)) 
+＠使附方叫行地获取的URL 数量取决于印个叫程。为避时
+限制，应使用非阻塞原生库，如aiohttp 。
+6.3 
+响应式编程
+响应式编程是一种编程范式，旨在打造更出色的并发系统。响应式应用程序符合响应式宣言
+( reactive manifesto ）规定的要求。
+口晌应速度快：系统迅速地响应用户。
+口伸缩性高：系统能够处理不同水平的负载，并能够适应更严苛的需求。
+口富有弹性：系统能够妥善地应对故障，这是通过模块化以及避免单点故障实现的。
+口消息驱动：系统不应阻塞，并利用事件和消息。消息驱动的应用程序有助于满足前述所
+有需求。
+如你所见，响应式系统目标远大，但响应式编程到底是如何工作的呢？本节将以Rx.Py 库为
+例介绍响应式编程的原理。
+。
+~e：~~4~忖目实现了用叫语言叫式编程工具刊以其
+回
+6.3.1 
+被观察者
+顾名思义，响应式编程的主要理念是对事件做出响应。前一节介绍了一些使用回调函数实现
+这种理念的示例：注册回调函数，使其在事件发生时立即执行。
+响应式编程扩展了这种理念，它将事件视为数据流。为证明这一点，我们来看看Rx.Py 中一
+些这样的流。可基于迭代器来创建数据流，为此可使用工厂方法Observable
+. frorn_iterable,
+如下所示。
+from rx import Observable 
+obs = Observable from_iterable(ra口ge (4)) 
+要接收来自obs 的数据，可使用方法Observabl e .subscribe ，这样将对数据源发射（emit )
+的每个值执行传入的函数。
+
+114 
+第6 幸实现并发性
+obs
+. subscr 工be(pri口t)
+＃输出
+# 0 
+# 1 
+# 2 
+# 3 
+你可能注意到了，被观察者是有序的元素集合，就像列表（推而广之是像迭代器）一样。这
+并非巧合。
+。
+术语ob servable （被观察者）由observer
+（观辜者）和
+iterabl e
+（可迭代对象）组
+合而成。观察者是一个对象，在其观察的变量发生变化时做出反应，而可迭代对
+象能够生成并跟踪迭代器。
+在Python 中，迭代器是定义了方法＿next一的对象，你可通过调用next 来提取其元素。
+迭代器通常是通过对集合执行i ter 来生成的。生成迭代器后，就可使用next 或for 循环来提
+取元素。提取迭代器中的一个元素后，就不能回过头去再提取。下面从一个列表创建一个迭代器，
+以演示迭代器的用法。
+collectio口＝list([l , 2, 3, 4 , 5]) 
+工terator
+＝工ter( c ollec t ion)
+pr 工nt
+（” Next ” ) 
+print (next (iterator)) 
+pr 工n t (next(iterator))
+pri口巳（” For loop " ) 
+for i 
+i口工terator
+:
+print (i) 
+＃输出
+# Next 
+# 1 
+# 2 
+# For loop 
+# 3 
+# 4 
+# 5 
+从这个示例可知，每当我们调用next 或进行迭代时，迭代器都生成一个值并前进一步。从
+某种意义上说，这是从迭代器中提取结果。
+。
+迭代器看起来很像生成器，但更通用。在Python 中，生成器是由使用yield 表
+达式的函数返回的。你知道，生成器支持n ex t ，因此是一种特殊的迭代器。
+至此，你明白迭代器和被观察者的异同了。被观察者准备就绪后向我们推送一个数据流，它
+还能够在出现错误或没有更多数据时告诉我们。实际上，可使用方法Observable
+. subscribe
+注册其他回调函数。在下面的示例中，我们创建了一个被观察者，并使用参数on一口e xt 和｜
+
+6.3 
+响应式编程
+11 5 
+0口
+completed 注册了两个回调函数，这两个回调函数将分别在下一项数据可用以及没有更多数
+据时被调用。
+obs= Observable . from_ iter(range(4 )) 
+obs . subscribe(on_next=lambda x : print(on_next= "Next item : {} '’ ) , 
+on_ completed=lambda : print (” No more data ” )) 
+＃输出
+# Next element 
+0 
+# Next element : 1 
+# Next element : 2 
+# Next element : 3 
+# No more data 
+这种与迭代器的类似性很重要，因为我们可以使用处理迭代器的方法来处理事件流。
+Rx Py 提供了可用来创建、变换和过滤被观察者以及对其进行编组的运算符。响应式编程的
+威力在于，这些操作返回其他被观察者，因此可将它们串接和组合在一起。为了让你体会这一点，
+下面来演示take 运算符的用法。
+给定一个被观察者，
+t ake 返回一个新的被观察者，但这个被观察者只提供前n 个元素。这
+个运算符的用法非常简单。
+obs 
+=
+Ob servabl e .f rom
+工terable
+( ra口ge ( 100000)) 
+obs2 = obs . take(4) 
+obs2
+. sub sc ribe(pr 工口t)
+＃输出
+# 0 
+# 1 
+# 2 
+# 3 
+Rx Py 实现了丰富而多样的运算符，你可使用它们来创建复杂的应用程序。
+6.3.2 
+很有用的运算符
+本节将探索以某种方式对源被观察者的元素进行变换的运算符。在这个运算符家族中，最重
+要的成员是map ，它对源被观察者的元素执行指定的函数，再将结果发射出去。例如，可使用
+map 来计算一系列数字的平方。
+(Observable . from_ iterable(range(4)) 
+.map(lambda x : x**2) 
+. subscribe(print)) 
+＃
+输出
+# 0 
+# 1 
+# 4 
+# 9 
+回
+
+116 
+第6 章实现并发性
+可使用弹珠图（marble diagram ）来表示运算符，这可帮助我们更好地理解运算符的工作原
+理，元素可能在特定时间区域内发射出去时尤其如此。在弹珠图中，实线表示数据流（这里是一
+个被观察者），圆形（或其他形状）表示被观察者发射的值，符号X 表示错误，而垂直线表示数
+据流的终点。
+下面是前述map 运算符的弹珠图。
+源被观察者位于弹珠图顶部，中间是变换，而底部是生成的被观察者。
+另一个变换运算符group_by ，它根据键将元素编组。运算符group_by 接受一个函数，这
+个函数根据提供给它的元素提取键，并为每个键生成一个新的被观察者，其中包含与该键相关联
+的元素。
+使用弹珠图可将group_by 操作更清晰地呈现出来。在下图中，group_by 发射两个被观察
+者。另外，元素被发射后，就被动态地编组。
+为了深入理解group_by 的工作原理，来看一个简单的示例。假设我们要根据数字是奇数还
+是偶数对其进行分组，为此可使用group
+by ，并将表达式lambda
+x : x
+宅
+2 作为键函数传递
+给它。这个键函数在数字为偶数时返回0 ，在数字为奇数时返回
+l 。
+obs= (Observable . from_range(range(4)) 
+.group_by(lambda x: 
+x
+毡
+2))
+现在，如果我们订阅并打印obs 的内容，将打印两个被观察者。
+
+6.3 
+响应式编程
+117 
+obs . subscribe(print) 
+# <rx.linq.groupedobservable .GroupedObservable object at Ox7f0fba5lf9e8> 
+# <rx.linq .groupedobservable GroupedObservable object at Ox7f0fba5lfa58> 
+要获悉分组的键，可使用属性key。要提取所有的偶数，可使用take 运算符获取第一个被
+观察者（其键值为0 ）并订阅它，如下面的代码所示。
+obs . subscribe(lambda x 
+pri口t ( "group key ·” , x key)) 
+＃
+输出
+# group key : 0 
+# group key : 1 
+obs.take(l) . subscr 工be(lambda x: x subscribe(print)) 
+＃输出。
+# 0 
+# 2 
+通过使用group_by ，我们引入了发射其他被观察者的被观察者。在响应式编程中，这是一
+种常见的模式。还有一些函数能够合并不同的被观察者。
+在合并被观察者方面，两个很有用的工具是merge
+all 和concat_all 。rnerge_all 接受
+多个被观察者，并生成一个被观察者，其中包含接受的被观察者中的所有元素，而这些元素的排
+列顺序与发射顺序相同。可使用弹珠图来更好地说明这一点。
+rnerge_all 类似于concat_all ，但后者返回一个新的被观察者，这个被观察者先发射第一
+个被观察者中的元素，再发射第二个被观察者中的元素，以此类推。concat_all 的弹珠图如下。
+为了演示这两个运算符的用法，我们将它们应用于group_by 返回的被观察者的被观察者。
+rnerge_all 将按元素的初始顺序返回它们（别忘了g roup_by 将元素分两组发射）。
+回
+
+11 8 
+第6 幸实现并发性
+obs .merge_all() .subscribe(print) 
+＃输出
+# 0 
+# 1 
+# 2 
+# 3 
+而
+concat_all 先返回偶数元素，再返回奇数元素，因为它先发射第一个被观察者中的元
+素，发射完毕后再发射第二个被观察者中的元素，下面的代码演示了这一点。在这个示例中，我
+们还使用了函数make_replay 。为何需要使用它呢？因为使用完“偶数”流后，第二个流中的
+元素已发射完毕，
+concat_all 无法使用它们。等你阅读6.3.3 节后，将会深刻地理解这一点。
+def make_replay (a) : 
+result = a . replay(None) 
+result connect() 
+return result 
+obs .map (make replay) . concat_all () . subscribe (print) 
+＃输出
+# 0 
+# 2 
+# 1 
+# 3 
+这次先打印的是偶数，打印完偶数后才打印奇数。
+~ 
+Rx.Py山了操作时和co旦出问用叫合拙的被观察者。
+6.3.3 
+hot 被观察者和cold 被观察者
+前一节介绍了如何使用方法Observable
+. from＿工terable 来创建被观察者。
+RxPy 提供了
+很多其他的工具，可用来创建更有趣的事件源。
+Observable .int erval 接受一个以毫秒为单位的时间段（参数period ），并创建一个每
+隔指定时间就发射一个值的被观察者。下面的代码行创建一个被观察者（obs ），这个被观察者
+从零开始每秒发射一个数字。我们使用了运算符take 对这个定时器进行限制，使其只触发4 个
+事件。
+obs = Obser飞rable. interval ( 1000) 
+obs . take(4) .subscribe(print) 
+＃输出．
+# 0 
+# 1 
+# 2 
+# 3 
+
+6.3 
+响应式编程
+119 
+对于Obs ervab le
+. interval ，非常重要的一点是，它生成的定时器在订阅后才会启动。为证
+明这一点，可打印索引以及相对于定义定时器时的延迟（这是使用time .time （）计算得到的），
+如下所示。
+import time 
+start = 
+t 工me
+. t 工me()
+obs =Observable interval(l000) . map(lambda a 
+＃
+我们等2 秒后再ir11句
+time . sleep(2) 
+obs. take (4 ) 
+subscr 工be(pr 工nt)
+＃输出
+# (0, 3 .003735303878784) 
+# ( l , 4 . 004871129989624) 
+样
+（2,
+5 . 005947589874268) 
+# (3 , 6. 00749135017395) 
+(a , time time() 
+start)) 
+如你所见，第一个元素（对应于索引0 ）是在3 秒后生成的，这意味着这个定时器在我们调
+用方法subsc r ib e (print ）后才启动。
+Observable.interval 生成的被观察者被称为惰性
+（lazy ）的，因为它们等到被请求后才
+开始生成值（可将这样的被观察者视为自动售卖机，仅当顾客按下按钮后才吐出商品）。用拟
+的话说，这种被观察者是
+cold 的。
+cold 被观察者的一个特征是，如果将其关联到两个订阅者，
+定时器将启动多次，这一点在下面的示例中非常明显。在这里，我们在第一次订阅0 .5 秒后再次
+订阅。如你所见，两次订阅的输出时间是不同的：
+start = time . t 工me()
+obs= Observable.interval(lOOO ) .map(lambda a : 
+(a , time.time() - start)) 
+＃我们等2 秒后再订阅
+time . sleep(2) 
+obs . take ( 4 ) . subscribe (lambda x : 
+pri口t
+（” F 工rst
+subscr 工ber
+:
+{} 
+time. sleep (0. 5 ) 
+obs . take(4) . subscribe(lambda x : 
+pr 工nt
+（” Second
+subscr 工ber
+:
+{} " .format (x))) 
+＃输出
+# First subs criber : (0, 3 0036110877990723) 
+# Second subscr 工ber
+:
+(0 , 3 5052847862243652) 
+# First subscriber : 
+(1, 4 004414081573486 ) 
+# Second subscr 工ber
+:
+( 1 , 4 506155252456665) 
+# F 工rst
+subscr 工ber
+:
+(2 , 5 005316972732544) 
+# Second subscr 工ber
+:
+(2 , 5 .506817102432251) 
+#First subscriber : (3 , 6 . 0062034130096436) 
+# Second subscriber : (3, 6 . 508296489715576) 
+
+120 
+第6 幸实现并发性
+在有些情况下，这种行为可能是你不想要的，因为你希望多个订阅者订阅同一个数据源。
+要让被观察者只生成一份数据，可使用publish 来延迟数据生成，确保所有订阅者得到的数据
+相同。
+pub l 工sh 将被观察者转换为ConnectableObservable ，后者不会立即推送数据，而是等
+到你调用方法connect 后才推送数据。下面的代码演示了publish 和c onnect 的用法。
+start =time . time() 
+obs= Observable interval (lOOO) . map(lambda a : (a , 
+t 工me
+. t 工me()
+-
+start)) .publish() 
+obs . take(4) .s ubscr 工be(lambda x : print ( ” First subscriber : 
+{} ” . format (x))) 
+obs . connect ( ) 
+＃现在才开始生成数据
+time . sleep(2) 
+obs . take (4) .subscribe (lambda x : 
+pr 工口t(
+" Second subscriber : 
+{} ”. format (x) )) 
+＃
+输出·
+# First subscriber: (0 , 1 . 0016899108886719) 
+# First subscriber : ( 1 , 2 . 00279903 41186523) 
+# First subscriber : (2 , 3 . 003532648086548) 
+# Second subscriber : (2, 3 . 003532648086548) 
+# First subscr 工ber
+:
+(3 , 4 . 004265308380127) 
+# Second sub s cr 工ber
+:
+(3, 4 004265308380127) 
+# Second subscriber : 
+(4 , 5 005320310592651) 
+# Second subscriber : ( 5 , 6 00579524040 22 22 ) 
+在这个示例中，我们先调用方法publ ish ，再关联第一个订阅者然后调用方法conne ct 。
+调用方法connect 后，定时器将开始生成数据。第二个订阅者后加入，事实上，它没有收到前
+两条消息，而是从第三条消息开始接收。注意，这次两个订阅者共享同一份数据。这种不为订阅
+者分别生成数据的数据源被称为是hot 的。
+你还可使用类似于publish 的方法rep lay ，它为每个订阅者从头开始生成数据，如下面
+的示例所示。除了将publish 替换成了replay 外，这个示例与前一个示例相同。
+import t 工me
+start = time time () 
+obs= Observable . interval(lOOO) .map(lambda a : (a, 
+t 工me time () 
+start)) . replay(None) 
+obs . take(4) . subscribe(lambda x : 
+pr 工nt
+（” F 工rst subscriber : 
+{} " . format (x))) 
+obs. connect () 
+time . sleep(2) 
+obs . take(4) . subscribe(lambda x : print ( ” Second subscriber : 
+{} “. format (x))) 
+First subscriber : (0 , 1 . 0008857250213 62 3) 
+
+First subscriber 
+(1 , 2 . 0019824504852295) 
+Second subscriber: (0, 1. 0008857250213623) 
+Second subscriber: (1, 2. 0019824504852295) 
+F 工rst
+subscr 工ber
+:
+(2 , 3 . 0030810832977295) 
+Second subscr 工ber
+(2 , 3 . 0030810832977295) 
+F 工rst
+subscr 工ber
+(3 , 4 . 004604816436768) 
+Second subscriber : (3 , 4 . 004604816436768) 
+6.3 
+响应式编程
+121 
+如你所见，这次虽然第二个订阅者后加入，但它依然获得了之前发射的所有数据。
+另一种创建ho t 被观察者的方式是使用Subject 类。这个类很有趣，既能接收数据，又能
+推送数据，因此可用来手动将数据推送给被观察者。
+Subj ect 使用起来非常简单。在下面的代
+码中，我们创建了一个Sub j ect 井订阅它，然后使用方法。口＿next 向它推送值。向它推送值后，
+订阅者就立即被调用。
+s = Subj ect () 
+s subscribe (lambda a : 
+pri 口t ( "Subject emitted value : {} ”. format (x)) 
+s 
+0口口ext (1) 
+# Subject em 工tted value : 1 
+s
+. o口－口ext(2)
+# Subject emitted value 
+2 
+请注意，
+Subject 也是hot 被观察者。
+6.3.4 
+打造CPU 监视器
+掌握主要的响应式编程概念后，就可实现一个示例应用程序了。在这一节中，我们将实现一
+个监视器，它向我们提供有关CPU 使用率的实时信息，并能够检测出使用率峰值。
+。…U叫台完整向阳刚＿m川y 中找到l 。
+首先，我们来实现一个数据源。我们将使用模块
+psutil ，它提供了一个名为
+psutil
+.
+cpu_pe rce口t 的函数，这个函数以百分比的方式返回最近的CPU 使用率（且不阻塞）。
+import psutil 
+psutil
+. cpu_perce口t () 
+＃
+结果：
+9 . 7 
+由于我们要开发的是监视器，因此要每隔一段时间采集一次这种信息。为此，可像前一节那
+样使用熟悉的Ob servable
+. inte rval 和map 。另外，我们还要让这个被观察者是h ot 的，因为
+对这个应用程序而言，所有订阅者收到的应该是同一份数据。为让Observab l e
+. i nte rva l 是
+hot 的，可使用方法publ is h 和c onnect 。创建被观察者cpu_data 的代码如下：
+cpu_ data = (Observable 
+. interval(l00) ＃每隔100 毫秒
+
+122 
+第6 章实现并发性
+. map(lambda x : 
+psut 工l cpu_percent()) 
+. publish ()) 
+cpu_data co日口ect () 
+＃
+开始生成数据
+为测试这个监视器，可打印4 个元素。
+cpu_data . take(4) 
+subscribe(pr 工nt)
+＃
+输出
+# 12 . 5 
+# 5.6 
+# 4 . 5 
+# 9 6 
+主数据源就绪后，就可使用matplotlib 实现监视器可视化了。这里的理念是，创建一个
+图表，其中包含的数据量是固定的；有新数据到来后，就在图表中包含这个最新的数据，并将最
+旧的数据删除。这通常被称为移动窗口，可通过图示更深入地认识它。在下图中，数据流
+cpu_data 由一系列数字表示。获得前4 个数字后，就绘制第一个图表，而每当有新数字到来后，
+就将窗口移动一个位置，并更新图表。
+产~z／二：：；：／
+芒／＼〉代
+为实现这种算法，可编写一个函数一－mon 工tor_cpu ，它将创建并更新绘图窗口。这个函
+数所做的工作如下。
+口初始化一个空图表，并设置正确的坐标轴范围。
+口对被观察者
+cpu_data 进行变换，
+以返回一个随数据移动的窗口。为此可使用运算柯：
+buffer_with_count ，它将窗口中的点数（npoints
+）作为参数，并移动一个位置。
+口订阅这个新的数据流，并使用到来的数据更新图表。
+这个函数的完整代码如下所示。如你所见，代码非常紧凑。请花点时间运行这个函数，并尝
+试使用不同的参数。
+工mport numpy as np 
+from matplotlib import pyplot as plt 
+def monitor_cpu(npoints) 
+lines,= plt .plot([], []) 
+plt xlim(O , npoints) 
+
+plt .ylim(O , 100) # 
+O 毡至1]
+100 毛
+cpu data window= c pu_data.buffer_with count(npoints, 1) 
+def update_plot(cpu_read 工n gs)
+:
+l i nes . set_xdata(np . arange(npoints ) ) 
+1 工nes
+. set_ydata(np
+. ar ray(cpu_read 工ngs))
+plt . draw() 
+cpu_data_window.subscribe(update__plot) 
+plt . show() 
+6.4 
+4 、生吉
+123 
+你可能想添加的一个功能是，在CPU 使用率持续高企一定时间后触发警报，因为这可能昭
+示着计算机正在做艰难的处理。为此，可结合使用bu f fer_with
+count 和map 。我们可获取
+CPU 使用率数据流和一个窗口，再在函数map 中检查是否所有CPU 使用率都超过20% （在四核
+CPU 中，这相当于单个处理器的使用率为
+100% ）。如果窗口中所有点的值都超过20% ，我们就
+在图表窗口中显示一条警告消息。
+这个新的被观察者的实现如下。它在CPU 使用率持续高企时发射True ，否则发射False 。
+alertpoints = 4 
+high_ cpu = (cpu_ da ta 
+. buffer_with_count (a l ertpoi nts , 1) 
+.map (l ambda 
+r e a d 工ng s
+: all(r > 20 for r in readings) )) 
+被观察者high_cpu 准备就绪后，就可创建rna tplotli b 标签，并订阅这个被观察者以更
+新标签了。
+label = plt . text ( 1 , 1,”normal ” ) 
+def updat e warning （工s_high) : 
+if i s h 工g h:
+l a bel . set_ tex t ( ” high ”) 
+else : 
+l a bel . set_ text ( ” normal ” ) 
+high_cpu .s ubscrib e (update_wa rn 工ng )
+6.4 
+小结
+在需要处理速度缓慢且无法预测的资源（如I/O 设备和网络）时，异步编程很有用。本章探
+索了重要的并发和异步编程概念，并介绍了如何使用a synci o 和Rx.Py 库来编写并发代码。
+处理多个彼此关联的资源时，
+asyn c io 协程是极佳的选择，因为它们巧妙地避开了回调函
+数，从而极大地简化了代码逻辑。在这些情形下，响应式编程也是不错的选择，但它真正擅长的
+是处理实时应用程序和用户界面中常见的数据流。
+接下来的两章将介绍并行编程，以及如何利用多核和多台计算机极大地改善’性能。
+回

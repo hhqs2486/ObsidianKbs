@@ -1,0 +1,779 @@
+Kubernetes部署指南
+单机部署
+集群部署
+kubeadm
+kargo
+frakti
+证书生成示例
+kubectl客户端
+在CentOS上部署kubernetes1.6集群
+(1) 创建TLS证书和秘钥
+(2) 创建kubeconfig 文件
+(3) 创建高可用etcd集群
+(4) 安装kubectl命令行工具
+(5) 部署高可用master集群
+(6) 部署node节点
+(7) 安装kubedns插件
+(8) 安装dashboard插件
+(9) 安装heapster插件
+(10) 安装EFK插件
+其他部署方法
+4. 部署配置
+282
+
+单机部署
+创建Kubernetes cluster（单机版）最简单的方法是minikube:
+首先下载kubectl
+curl -Lo kubectl https://storage.googleapis.com/kubernetes-release/re
+lease/v1.6.4/bin/linux/amd64/kubectl
+chmod +x kubectl
+安装minikube
+# install minikube
+$ brew cask install minikube
+$ brew install docker-machine-driver-xhyve
+# docker-machine-driver-xhyve need root owner and uid
+$ sudo chown root:wheel $(brew --prefix)/opt/docker-machine-driver-xh
+yve/bin/docker-machine-driver-xhyve
+$ sudo chmod u+s $(brew --prefix)/opt/docker-machine-driver-xhyve/bin
+/docker-machine-driver-xhyve
+最后启动minikube
+# start minikube.
+# http proxy is required in China
+$ minikube start --docker-env HTTP_PROXY=http://proxy-ip:port --docke
+r-env HTTPS_PROXY=http://proxy-ip:port --vm-driver=xhyve
+开发版
+minikube/localkube只提供了正式release版本，而如果想要部署master或者开发版的
+话，则可以用 hack/local-up-cluster.sh 来启动一个本地集群：
+4.1 单机部署
+283
+
+cd $GOPATH/src/k8s.io/kubernetes
+export KUBERNETES_PROVIDER=local
+hack/install-etcd.sh
+export PATH=$GOPATH/src/k8s.io/kubernetes/third_party/etcd:$PATH
+hack/local-up-cluster.sh
+打开另外一个终端，配置kubectl：
+cd $GOPATH/src/k8s.io/kubernetes
+export KUBECONFIG=/var/run/kubernetes/admin.kubeconfig
+cluster/kubectl.sh
+4.1 单机部署
+284
+
+集群部署
+Kubernetes集群架构
+etcd集群
+从 https://discovery.etcd.io/new?size=3 获取token后，把
+https://kubernetes.io/docs/admin/high-availability/etcd.yaml放到每台机器
+的 /etc/kubernetes/manifests/etcd.yaml ，并替换掉 ${DISCOVERY_TOKEN} ,
+ ${NODE_NAME} 和 ${NODE_IP} ，既可以由kubelet来启动一个etcd集群。
+对于运行在kubelet外部的etcd，可以参考etcd clustering guide来手动配置集群模式。
+kube-apiserver
+4.2 集群部署
+285
+
+把https://kubernetes.io/docs/admin/high-availability/kube-apiserver.yaml放到每台
+Master节点的 /etc/kubernetes/manifests/ ，并把相关的配置放
+到 /srv/kubernetes/ ，即可由kubelet自动创建并启动apiserver:
+basic_auth.csv - basic auth user and password
+ca.crt - Certificate Authority cert
+known_tokens.csv - tokens that entities (e.g. the kubelet) can use to talk to the
+apiserver
+kubecfg.crt - Client certificate, public key
+kubecfg.key - Client certificate, private key
+server.cert - Server certificate, public key
+server.key - Server certificate, private key
+apiserver启动后，还需要为它们做负载均衡，可以使用云平台的弹性负载均衡服务或者
+使用haproxy/lvs/nginx等为master节点配置负载均衡。
+另外，还可以借助Keepalived、OSPF、Pacemaker等来保证负载均衡节点的高可用。
+注意：
+大规模集群注意增加 --max-requests-inflight （默认400）
+使用nginx时注意增加 proxy_timeout: 10m 
+controller manager和scheduler
+controller manager和scheduler需要保证任何时刻都只有一个实例运行，需要一个选主
+的过程，所以在启动时要设置 --leader-elect=true ，比如
+kube-scheduler --master=127.0.0.1:8080 --v=2 --leader-elect=true
+kube-controller-manager --master=127.0.0.1:8080 --cluster-cidr=10.245
+.0.0/16 --allocate-node-cidrs=true --service-account-private-key-file
+=/srv/kubernetes/server.key --v=2 --leader-elect=true
+把kube-scheduler.yaml和kube-controller-manager.yaml(非GCE平台需要适当修改) 放到
+每台master节点的 /etc/kubernetes/manifests/ 即可。
+kube-dns
+kube-dns可以通过Deployment的方式来部署，默认kubeadm会自动创建。但在大规模
+集群的时候，需要放宽资源限制，比如
+4.2 集群部署
+286
+
+dns_replicas: 6
+dns_cpu_limit: 100m
+dns_memory_limit: 512Mi
+dns_cpu_requests 70m
+dns_memory_requests: 70Mi
+另外，也需要给dnsmasq增加资源，比如增加缓存大小到10000，增加并发处理数量 --
+dns-forward-max=1000 等。
+数据持久化
+除了上面提到的这些配置，持久化存储也是高可用Kubernetes集群所必须的。
+对于公有云上部署的集群，可以考虑使用云平台提供的持久化存储，比如aws ebs
+或者gce persistent disk
+对于物理机部署的集群，可以考虑使用iSCSI、NFS、Gluster或者Ceph等网络存
+储，也可以使用RAID
+GCE/Azure
+在GCE或者Azure上面可以利用cluster脚本方便的部署集群：
+# gce,aws,gke,azure-legacy,vsphere,openstack-heat,rackspace,libvirt-c
+oreos
+export KUBERNETES_PROVIDER=gce
+curl -sS https://get.k8s.io | bash
+cd kubernetes
+cluster/kube-up.sh
+AWS
+在aws上建议使用kops来部署。
+物理机或虚拟机
+在Linux物理机或虚拟机中，建议使用kubeadm来部署Kubernetes集群。
+4.2 集群部署
+287
+
+kubeadm
+统一化安装脚本
+# on master
+git clone https://github.com/feiskyer/ops
+cd ops
+kubernetes/setup_kubernetes.sh
+# on node
+git clone https://github.com/feiskyer/ops
+cd ops
+export TOKEN=xxxxx
+export MASTER_IP=xx.xx.xx.xx
+kubernetes/add_docker_node.sh
+以下是详细的安装步骤。
+初始化系统
+所有机器都需要初始化docker和kubelet。
+ubuntu
+kubeadm
+289
+
+# for ubuntu 16.04+
+apt-get update && apt-get install -y apt-transport-https
+curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-k
+ey add -
+cat <<EOF > /etc/apt/sources.list.d/kubernetes.list
+deb http://apt.kubernetes.io/ kubernetes-xenial main
+EOF
+apt-get update
+# Install docker if you don't have it already.
+apt-get install -y docker.io
+apt-get install -y kubelet kubeadm kubectl kubernetes-cni
+systemctl enable docker && systemctl start docker
+systemctl enable kubelet && systemctl start kubelet
+centos
+cat <<EOF > /etc/yum.repos.d/kubernetes.repo
+[kubernetes]
+name=Kubernetes
+baseurl=http://yum.kubernetes.io/repos/kubernetes-el7-x86_64
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg
+       https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+EOF
+setenforce 0
+yum install -y docker kubelet kubeadm kubectl kubernetes-cni
+systemctl enable docker && systemctl start docker
+systemctl enable kubelet && systemctl start kubelet
+安装master
+kubeadm
+290
+
+# --api-advertise-addresses <ip-address>
+# for flannel, setup --pod-network-cidr 10.244.0.0/16
+kubeadm init kubeadm init --pod-network-cidr 10.244.0.0/16 --kubernet
+es-version latest
+# eanable schedule pods on the master
+export KUBECONFIG=/etc/kubernetes/admin.conf
+# for v1.5-, use kubectl taint nodes --all dedicated-
+kubectl taint nodes --all node-role.kubernetes.io/master:NoSchedule-
+配置Network plugin
+CNI bridge
+mkdir -p /etc/cni/net.d
+cat >/etc/cni/net.d/10-mynet.conf <<-EOF
+{
+    "cniVersion": "0.3.0",
+    "name": "mynet",
+    "type": "bridge",
+    "bridge": "cni0",
+    "isGateway": true,
+    "ipMasq": true,
+    "ipam": {
+        "type": "host-local",
+        "subnet": "10.244.0.0/16",
+        "routes": [
+            { "dst": "0.0.0.0/0"  }
+        ]
+    }
+}
+EOF
+cat >/etc/cni/net.d/99-loopback.conf <<-EOF
+{
+    "cniVersion": "0.3.0",
+    "type": "loopback"
+}
+EOF
+kubeadm
+291
+
+flannel
+#kubectl apply -f https://gist.githubusercontent.com/feiskyer/1e7a95f
+27c391a35af47881eb20131d7/raw/4266f05355590fa185bc8e50c0f50d2841993d2
+0/flannel.yaml
+kubectl create -f https://github.com/coreos/flannel/raw/master/Docume
+ntation/kube-flannel-rbac.yml
+kubectl create -f https://github.com/coreos/flannel/raw/master/Docume
+ntation/kube-flannel.yml
+weave
+# kubectl apply -f https://gist.githubusercontent.com/feiskyer/0b0068
+8584cc7ed9bd9a993adddae5e3/raw/67f3558e32d5c76be38e36ef713cc46deb2a74
+ca/weave.yaml
+kubectl apply -f https://git.io/weave-kube-1.6
+calico
+# kubectl apply -f https://gist.githubusercontent.com/feiskyer/0f952c
+7dadbfcefd2ce81ba7ea24a8ca/raw/92addea398bbc4d4a1dcff8a98c1ac334c8acb
+26/calico.yaml
+kubectl apply -f http://docs.projectcalico.org/v2.1/getting-started/k
+ubernetes/installation/hosted/kubeadm/1.6/calico.yaml
+添加Node
+token=$(kubeadm token list | grep authentication,signing | awk '{prin
+t $1}')
+kubeadm join --token $token ${master_ip}
+删除安装
+kubeadm reset
+kubeadm
+292
+
+动态升级
+kubeadm将在v1.8支持动态升级，目前升级还需要手动操作。
+升级Master
+假设你已经有一个使用kubeadm部署的Kubernetes v1.6集群，那么升级到v1.7的方法
+为：
+1. 升级安装包  apt-get upgrade && apt-get update 
+2. 重启kubelet  systemctl restart kubelet 
+3. 删除kube-proxy DaemonSet  KUBECONFIG=/etc/kubernetes/admin.conf
+kubectl delete daemonset kube-proxy -n kube-system 
+4. kubeadm init --skip-preflight-checks --kubernetes-version v1.7.1
+5. 更新CNI插件
+升级Node
+1. 升级安装包  apt-get upgrade && apt-get update 
+2. 重启kubelet  systemctl restart kubelet 
+kubeadm
+293
+
+Kubespray 集群安裝
+Kubespray 是 Kubernetes incubator 中的项目，目标是提供 Production Ready
+Kubernetes 部署方案，该项目基础是通过 Ansible Playbook 来定义系统与 Kubernetes
+集群部署的任务，具有以下几个特点：
+可以部署在 AWS, GCE, Azure, OpenStack以及裸机上.
+部署 High Available Kubernetes 集群.
+可组合性(Composable)，可自行选择 Network Plugin (flannel, calico, canal,
+weave) 来部署.
+支持多种 Linux distributions(CoreOS, Debian Jessie, Ubuntu 16.04,
+CentOS/RHEL7).
+本篇将说明如何通过 Kubespray 部署 Kubernetes 至裸机节点，安装版本如下所示：
+Kubernetes v1.6.1
+Etcd v3.1.6
+Flannel v0.7.1
+Docker v17.04.0-ce
+节点资讯
+本次安装测试环境的作业系统采用 Ubuntu 16.04 Server ，其他细节内容如下：
+IP Address
+Role
+CPU
+Memory
+192.168.121.179
+master1 + deploy
+2
+4G
+192.168.121.106
+node1
+2
+4G
+192.168.121.197
+node2
+2
+4G
+192.168.121.123
+node3
+2
+4G
+这边 master 为主要控制节点，node 为工作节点。
+预先准备资讯
+所有节点的网路之间可以互相通信。
+ 部署节点(这边为 master1) 对其他节点不需要 SSH 密码即可登入。
+Kubespray
+294
+
+所有节点都拥有 Sudoer 权限，并且不需要输入密码。
+所有节点需要安装  Python 。
+所有节点需要设定 /etc/host 解析到所有主机。
+修改所有节点的 /etc/resolv.conf 
+$ echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf
+ 部署节点(这边为 master1) 安装 Ansible >= 2.3.0。
+Ubuntu 16.04 安装 Ansible:
+$ sudo sed -i 's/us.archive.ubuntu.com/tw.archive.ubuntu.com/g' /etc/
+apt/sources.list
+$ sudo apt-get install -y software-properties-common
+$ sudo apt-add-repository -y ppa:ansible/ansible
+$ sudo apt-get update && sudo apt-get install -y ansible git cowsay p
+ython-pip python-netaddr libssl-dev
+安装 Kubespray 与准备部署资讯
+首先通过 pypi 安装 kubespray-cli，虽然官方说已经改成 Go 语言版本的工具，但是根本
+没在更新，所以目前暂时用 pypi 版本：
+$ sudo pip install -U kubespray
+安裝完成後，新增配置檔 /etc/kubespray/kubespray.yml ，並加入以下內容：
+$ mkdir /etc/kubespray
+$ cat <<EOF > /etc/kubespray/kubespray.yml
+kubespray_git_repo: "https://github.com/kubernetes-incubator/kubespra
+y.git"
+# Logging options
+loglevel: "info"
+EOF
+接着用 kubespray cli 来产生 inventory 文件：
+Kubespray
+295
+
+$ kubespray prepare --masters master1 --etcds master1 --nodes node1 n
+ode2 node3
+$ cat ~/.kubespray/inventory/inventory.cfg
+也可以自己新建 inventory 来描述部署节点。
+完成后通过以下指令进行部署 Kubernetes 集群：
+$ time kubespray deploy --verbose -u root -k .ssh/id_rsa -n flannel
+Run kubernetes cluster deployment with the above command ? [Y/n]y
+...
+master1                    : ok=368  changed=89   unreachable=0    fa
+iled=0
+node1                      : ok=305  changed=73   unreachable=0    fa
+iled=0
+node2                      : ok=276  changed=62   unreachable=0    fa
+iled=0
+node3                      : ok=276  changed=62   unreachable=0    fa
+iled=0
+Kubernetes deployed successfuly
+其中 -n 为部署的网络插件类型，目前支持 calico、flannel、weave 与 canal。
+验证集群
+当 Ansible 运行完成后，若没发生错误就可以开始进行操作 Kubernetes，如取得版本资
+讯：
+$ kubectl version
+Client Version: version.Info{Major:"1", Minor:"6", GitVersion:"v1.6.1
++coreos.0", GitCommit:"9212f77ed8c169a0afa02e58dce87913c6387b3e", Git
+TreeState:"clean", BuildDate:"2017-04-04T00:32:53Z", GoVersion:"go1.7
+.5", Compiler:"gc", Platform:"linux/amd64"}
+Server Version: version.Info{Major:"1", Minor:"6", GitVersion:"v1.6.1
++coreos.0", GitCommit:"9212f77ed8c169a0afa02e58dce87913c6387b3e", Git
+TreeState:"clean", BuildDate:"2017-04-04T00:32:53Z", GoVersion:"go1.7
+.5", Compiler:"gc", Platform:"linux/amd64"}
+Kubespray
+296
+
+取得当前集群节点状态：
+$ kubectl get node
+NAME      STATUS                     AGE       VERSION
+master1   Ready,SchedulingDisabled   11m       v1.6.1+coreos.0
+node1     Ready                      11m       v1.6.1+coreos.0
+node2     Ready                      11m       v1.6.1+coreos.0
+node3     Ready                      11m       v1.6.1+coreos.
+查看当前集群 Pod 状态：
+Kubespray
+297
+
+$ kubectl get po -n kube-system
+NAME                                  READY     STATUS    RESTARTS   
+AGE
+dnsmasq-975202658-6jj3n               1/1       Running   0          
+14m
+dnsmasq-975202658-h4rn9               1/1       Running   0          
+14m
+dnsmasq-autoscaler-2349860636-kfpx0   1/1       Running   0          
+14m
+flannel-master1                       1/1       Running   1          
+14m
+flannel-node1                         1/1       Running   1          
+14m
+flannel-node2                         1/1       Running   1          
+14m
+flannel-node3                         1/1       Running   1          
+14m
+kube-apiserver-master1                1/1       Running   0          
+15m
+kube-controller-manager-master1       1/1       Running   0          
+15m
+kube-proxy-master1                    1/1       Running   1          
+14m
+kube-proxy-node1                      1/1       Running   1          
+14m
+kube-proxy-node2                      1/1       Running   1          
+14m
+kube-proxy-node3                      1/1       Running   1          
+14m
+kube-scheduler-master1                1/1       Running   0          
+15m
+kubedns-1519522227-thmrh              3/3       Running   0          
+14m
+kubedns-autoscaler-2999057513-tx14j   1/1       Running   0          
+14m
+nginx-proxy-node1                     1/1       Running   1          
+14m
+nginx-proxy-node2                     1/1       Running   1          
+14m
+nginx-proxy-node3                     1/1       Running   1          
+14m
+Kubespray
+298
+
+Frakti运行时部署指南
+简介
+Frakti是一个基于Kubelet CRI的运行时，它提供了hypervisor级别的隔离性，特别适用于
+运行不可信应用以及多租户场景下。Frakti实现了一个混合运行时：
+特权容器以Docker container的方式运行
+而普通容器则以hyper container的方法运行在VM内
+Allinone安装方法
+Frakti提供了一个简便的安装脚本，可以一键在Ubuntu或CentOS上启动一个本机的
+Kubernetes+frakti集群。
+curl -sSL https://github.com/kubernetes/frakti/raw/master/cluster/all
+inone.sh | bash
+集群部署
+首先需要在所有机器上安装hyperd, docker, frakti, CNI 和 kubelet。
+安装hyperd
+Ubuntu 16.04+:
+apt-get update && apt-get install -y qemu libvirt-bin
+curl -sSL https://hypercontainer.io/install | bash
+CentOS 7:
+curl -sSL https://hypercontainer.io/install | bash
+配置hyperd:
+Frakti+Hyper
+300
+
+echo -e "Kernel=/var/lib/hyper/kernel\n\
+Initrd=/var/lib/hyper/hyper-initrd.img\n\
+Hypervisor=qemu\n\
+StorageDriver=overlay\n\
+gRPCHost=127.0.0.1:22318" > /etc/hyper/config
+systemctl enable hyperd
+systemctl restart hyperd
+安装docker
+Ubuntu 16.04+:
+apt-get update
+apt-get install -y docker.io
+CentOS 7:
+yum install -y docker
+启动docker:
+systemctl enable docker
+systemctl start docker
+安装frakti
+Frakti+Hyper
+301
+
+curl -sSL https://github.com/kubernetes/frakti/releases/download/v0.2
+/frakti -o /usr/bin/frakti
+chmod +x /usr/bin/frakti
+cgroup_driver=$(docker info | awk '/Cgroup Driver/{print $3}')
+cat <<EOF > /lib/systemd/system/frakti.service
+[Unit]
+Description=Hypervisor-based container runtime for Kubernetes
+Documentation=https://github.com/kubernetes/frakti
+After=network.target
+[Service]
+ExecStart=/usr/bin/frakti --v=3 \
+          --log-dir=/var/log/frakti \
+          --logtostderr=false \
+          --cgroup-driver=${cgroup_driver} \
+          --listen=/var/run/frakti.sock \
+          --streaming-server-addr=%H \
+          --hyper-endpoint=127.0.0.1:22318
+MountFlags=shared
+TasksMax=8192
+LimitNOFILE=1048576
+LimitNPROC=1048576
+LimitCORE=infinity
+TimeoutStartSec=0
+Restart=on-abnormal
+[Install]
+WantedBy=multi-user.target
+EOF
+安装CNI
+Ubuntu 16.04+:
+Frakti+Hyper
+302
+
+apt-get update && apt-get install -y apt-transport-https
+curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-k
+ey add -
+cat <<EOF > /etc/apt/sources.list.d/kubernetes.list
+deb http://apt.kubernetes.io/ kubernetes-xenial main
+EOF
+apt-get update
+apt-get install -y kubernetes-cni
+CentOS 7:
+cat <<EOF > /etc/yum.repos.d/kubernetes.repo
+[kubernetes]
+name=Kubernetes
+baseurl=http://yum.kubernetes.io/repos/kubernetes-el7-x86_64
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg
+       https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+EOF
+setenforce 0
+yum install -y kubernetes-cni
+配置CNI网络，注意
+frakti目前仅支持bridge插件
+所有机器上Pod的子网不能相同，比如master上可以用 10.244.1.0/24 ，而第一
+个Node上可以用 10.244.2.0/24 
+Frakti+Hyper
+303
+
+mkdir -p /etc/cni/net.d
+cat >/etc/cni/net.d/10-mynet.conf <<-EOF
+{
+    "cniVersion": "0.3.0",
+    "name": "mynet",
+    "type": "bridge",
+    "bridge": "cni0",
+    "isGateway": true,
+    "ipMasq": true,
+    "ipam": {
+        "type": "host-local",
+        "subnet": "10.244.1.0/24",
+        "routes": [
+            { "dst": "0.0.0.0/0"  }
+        ]
+    }
+}
+EOF
+cat >/etc/cni/net.d/99-loopback.conf <<-EOF
+{
+    "cniVersion": "0.3.0",
+    "type": "loopback"
+}
+EOF
+安装Kubelet
+Ubuntu 16.04+:
+apt-get install -y kubelet kubeadm kubectl
+CentOS 7:
+yum install -y kubelet kubeadm kubectl
+配置Kubelet使用frakti runtime:
+Frakti+Hyper
+304
+
+sed -i '2 i\Environment="KUBELET_EXTRA_ARGS=--container-runtime=remot
+e --container-runtime-endpoint=/var/run/frakti.sock --feature-gates=A
+llAlpha=true"' /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
+systemctl daemon-reload
+配置Master
+kubeadm init kubeadm init --pod-network-cidr 10.244.0.0/16 --kubernet
+es-version latest
+# Optional: enable schedule pods on the master
+export KUBECONFIG=/etc/kubernetes/admin.conf
+kubectl taint nodes --all node-role.kubernetes.io/master:NoSchedule-
+配置Node
+# get token on master node
+token=$(kubeadm token list | grep authentication,signing | awk '{prin
+t $1}')
+# join master on worker nodes
+kubeadm join --token $token ${master_ip}
+配置CNI网络路由
+在集群模式下，需要为容器网络配置直接路由，假设有一台master和两台Node：
+NODE   IP_ADDRESS   CONTAINER_CIDR
+master 10.140.0.1  10.244.1.0/24
+node-1 10.140.0.2  10.244.2.0/24
+node-2 10.140.0.3  10.244.3.0/24
+CNI的网络路由可以这么配置：
+Frakti+Hyper
+305
+
+# on master
+ip route add 10.244.2.0/24 via 10.140.0.2
+ip route add 10.244.3.0/24 via 10.140.0.3
+# on node-1
+ip route add 10.244.1.0/24 via 10.140.0.1
+ip route add 10.244.3.0/24 via 10.140.0.3
+# on node-2
+ip route add 10.244.1.0/24 via 10.140.0.1
+ip route add 10.244.2.0/24 via 10.140.0.2
+参考文档
+Frakti部署指南
+Frakti+Hyper
+306
+
+kubectl客户端
+kubectl的安装方法
+OSX
+可以使用Homebrew或者curl下载kubectl
+brew install kubectl
+或者
+curl -LO https://storage.googleapis.com/kubernetes-release/release/$(
+curl -s https://storage.googleapis.com/kubernetes-release/release/sta
+ble.txt)/bin/darwin/amd64/kubectl
+Linux
+curl -LO https://storage.googleapis.com/kubernetes-release/release/$(
+curl -s https://storage.googleapis.com/kubernetes-release/release/sta
+ble.txt)/bin/linux/amd64/kubectl
+Windows
+curl -LO https://storage.googleapis.com/kubernetes-release/release/$(
+curl -s https://storage.googleapis.com/kubernetes-release/release/sta
+ble.txt)/bin/windows/amd64/kubectl.exe
+kubectl使用方法
+kubectl的详细使用方法请参考kubectl指南。
+4.3 kubectl客户端
+307
+
+Kubernetes Addons
+Dashboard
+Heapster
+EFK
+4.4 附加组件
+309
+
+Kubernetes Dashboard
+Kubernetes Dashboard的部署非常简单，只需要运行
+kubectl create -f https://git.io/kube-dashboard
+稍等一会，dashborad就会创建好
+$ kubectl -n kube-system get service kubernetes-dashboard
+NAME                   CLUSTER-IP       EXTERNAL-IP   PORT(S)        
+AGE
+kubernetes-dashboard   10.101.211.212   <nodes>       80:32729/TCP   
+1m
+$ kubectl -n kube-system describe service kubernetes-dashboard
+Name:            kubernetes-dashboard
+Namespace:        kube-system
+Labels:            app=kubernetes-dashboard
+Annotations:        <none>
+Selector:        app=kubernetes-dashboard
+Type:            NodePort
+IP:            10.101.211.212
+Port:            <unset>    80/TCP
+NodePort:        <unset>    32729/TCP
+Endpoints:        10.244.1.3:9090
+Session Affinity:    None
+Events:            <none>
+然后就可以通过 http://nodeIP:32729 来访问了。
+https
+通常情况下，建议Dashboard服务以https的方式运行，在访问它之前我们需要将证书导
+入系统中:
+Dashboard
+310
+
+openssl pkcs12 -export -in apiserver-kubelet-client.crt -inkey apiser
+ver-kubelet-client.key -out kube.p12
+curl -sSL -E ./kube.p12:password -k https://nodeIP:6443/api/v1/proxy/
+namespaces/kube-system/services/kubernetes-dashboard
+将kube.p12导入系统就可以用浏览器来访问了。注意，如果nodeIP不在证书CN里面，
+则需要做个hosts映射。
+Dashboard
+311
+
+Heapster
+git clone https://github.com/kubernetes/heapster
+cd heapster
+kubectl create -f deploy/kube-config/influxdb/
+Heapster
+312
+
+Elasticsearch Fluentd Kibana (EFK)
+ELK可谓是容器日志收集、处理和搜索的黄金搭档:
+Logstash（或者Fluentd）负责收集日志
+Elasticsearch存储日志并提供搜索
+Kibana负责日志查询和展示
+具体使用方法可以参考Kubernetes日志处理。
+EFK
+313
+
+Kubernetes配置最佳实践
+本文翻译自Kubernetes官方文档Configuration Best Practices。
+本文档旨在汇总和强调用户指南、快速开始文档和示例中的最佳实践。该文档会很很活
+跃并持续更新中。如果你觉得很有用的最佳实践但是本文档中没有包含，欢迎给我们提
+Pull Request。
+通用配置建议
+定义配置文件的时候，指定最新的稳定API版本（目前是V1）。
+在配置文件push到集群之前应该保存在版本控制系统中。这样当需要的时候能够快
+速回滚，必要的时候也可以快速的创建集群。
+使用YAML格式而不是JSON格式的配置文件。在大多数场景下它们都可以作为数据
+交换格式，但是YAML格式比起JSON更易读和配置。
+尽量将相关的对象放在同一个配置文件里。这样比分成多个文件更容易管理。参
+考guestbook-all-in-one.yaml文件中的配置（注意，尽管你可以在使用 kubectl 命
+令时指定配置文件目录，你也可以在配置文件目录下执行 kubectl create ——查
+看下面的详细信息）。
+为了简化和最小化配置，也为了防止错误发生，不要指定不必要的默认配置。例
+如，省略掉 ReplicationController 的selector和label，如果你希望它们
+跟 podTemplate 中的label一样的话，因为那些配置默认是 podTemplate 的label
+产生的。更多信息请查看 guestbook app 的yaml文件和 examples 。
+将资源对象的描述放在一个annotation中可以更好的内省。
+裸奔的Pods vs Replication Controllers和 Jobs
+如果有其他方式替代“裸奔的pod”（如没有绑定到replication controller 上的pod），
+那么就使用其他选择。在node节点出现故障时，裸奔的pod不会被重新调度。
+Replication Controller总是会重新创建pod，除了明确指定了 restartPolicy:
+Never  的场景。Job 对象也适用。
+Services
+通常最好在创建相关的replication controllers之前先创建service（没有这个必要
+4.5 推荐配置
+314
+
+吧？）你也可以在创建Replication Controller的时候不指定replica数量（默认是
+1），创建service后，在通过Replication Controller来扩容。这样可以在扩容很多个
+replica之前先确认pod是正常的。
+除非十分必要的情况下（如运行一个node daemon），不要使用 hostPort （用来
+指定暴露在主机上的端口号）。当你给Pod绑定了一个 hostPort ，该pod可被调
+度到的主机的受限了，因为端口冲突。如果是为了调试目的来通过端口访问的话，
+你可以使用 kubectl proxy and apiserver proxy 或者 kubectl port-forward。你可使
+用 Service 来对外暴露服务。如果你确实需要将pod的端口暴露到主机上，考虑使
+用 NodePort service。
+跟 hostPort 一样的原因，避免使用  hostNetwork 。
+如果你不需要kube-proxy的负载均衡的话，可以考虑使用使用headless services。
+使用Label
+定义 labels 来指定应用或Deployment的 semantic attributes 。 For example,
+instead of attaching a label to a set of pods to explicitly represent some service
+(e.g.,  service: myservice ), or explicitly representing the replication controller
+managing the pods (e.g.,  controller: mycontroller ), attach labels that
+identify semantic attributes, such as  { app: myapp, tier: frontend, phase:
+test, deployment: v3 } . This will let you select the object groups appropriate
+to the context— e.g., a service for all “tier: frontend” pods, or all “test” phase
+components of app “myapp”. See the guestbook app for an example of this
+approach.
+A service can be made to span multiple deployments, such as is done across
+rolling updates, by simply omitting release-specific labels from its selector, rather
+than updating a service’s selector to match the replication controller’s selector
+fully.
+为了滚动升级的方便，在Replication Controller的名字中包含版本信息，例如作为
+名字的后缀。设置一个 version 标签页是很有用的。滚动更新创建一个新的
+controller而不是修改现有的controller。因此，version含混不清的controller名字就
+可能带来问题。查看Rolling Update Replication Controller文档获取更多关于滚动升
+级命令的信息。
+注意 Deployment 对象不需要再管理 replication controller 的版本名。Deployment
+中描述了对象的期望状态，如果对spec的更改被应用了话，Deployment controller
+会以控制的速率来更改实际状态到期望状态。（Deployment目前是  extensions 
+4.5 推荐配置
+315
+
+API Group的一部分）。
+利用label做调试。因为Kubernetes replication controller和service使用label来匹配
+pods，这允许你通过移除pod中的label的方式将其从一个controller或者service中移
+除，原来的controller会创建一个新的pod来取代移除的pod。这是一个很有用的方
+式，帮你在一个隔离的环境中调试之前的“活着的” pod。查看  kubectl label  命
+令。
+容器镜像
+默认容器镜像拉取策略 是  IfNotPresent , 当本地已存在该镜像的时候 Kubelet 不
+会再从镜像仓库拉取。如果你希望总是从镜像仓库中拉取镜像的话，在yaml文件中
+指定镜像拉取策略为 Always （  imagePullPolicy: Always ）或者指定镜像的
+tag为  :latest  。
+如果你没有将镜像标签指定为 :latest ，例如指定为 myimage:v1 ，当该标签的
+镜像进行了更新，kubelet也不会拉取该镜像。你可以在每次镜像更新后都生成一个
+新的tag（例如 myimage:v2 ），在配置文件中明确指定该版本。
+注意： 在生产环境下部署容器应该尽量避免使用 :latest 标签，因为这样很难追
+溯到底运行的是哪个版本的容器和回滚。
+Using kubectl
+尽量使用  kubectl create -f <directory>  。kubeclt会自动查找该目录下的所
+有后缀名为 .yaml 、 .yml 和 .json 文件并将它们传递给 create 命令。
+使用  kubectl delete  而不是  stop .  Delete  是  stop 的超集， stop  已经
+被弃用。
+使用 kubectl bulk 操作（通过文件或者label）来get和delete。查看label selectors
+和 using labels effectively。
+使用  kubectl run  和  expose  命令快速创建只有单个容器的Deployment。查
+看 quick start guide中的示例。
+4.5 推荐配置
+316

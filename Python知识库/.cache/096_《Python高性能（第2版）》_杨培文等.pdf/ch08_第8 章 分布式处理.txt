@@ -1,0 +1,1393 @@
+分布式处理
+前一章介绍了井行处理的概念以及如何利用多核处理器和
+GPU ，现在我们再进一步，将注
+意力转向分布式处理
+通过在多台计算机中执行任务来解决问题。
+本章将阐述在计算机集群中运行代码的挑战、用例和示例。Python 提供了易于使用且可靠的
+分布式处理包，让我们能够轻松地实现可伸缩的容错代码。
+本章介绍如下主题：
+口分布式计算和MapReduce 模型；
+口Dask 有向无环图；
+口使用Dask 数组、
+Bag 和DataF rame 编写并行代码；
+口使用Dask distributed 实现分布式并行算法；
+口PySpark 简介；
+口Spark 弹性分布式数据集和DataFrame;
+口使用mpi4py 执行科学计算。
+8.1 
+分布式计算简介
+如今，计算机、智能手机等设备在人们的生活中已不可或缺。每天都有海量的数据生成。数
+十亿人访问互联网上的服务，而公司不间断地收集数据，以便了解用户，进而提供更有针对性的
+产品和更佳的用户体验。
+为处理越来越多的数据，我们面临着严峻的挑战。大型公司和组织常常打造计算机集群，以
+便存储、处理和分析复杂的大型数据集。在环境科学和医疗保健等数据密集型领域，也会生成类
+似的数据集。最近，这些大型数据集被称为大数据。大数据分析方法通常涉及机器学习、信息检
+索和可视化。
+计算集群在科学计算领域已使用几十年，这些领域的复杂问题研究必须使用在高性能分布式
+系统中运行的并行算法。为支持这样的应用程序，高校和其他组织提供并管理着用于研究和工程
+在
+
+8.1 
+分布式计算简介
+149 
+方面的超级计算机。运行在超级计算机上的应用程序通常专注于数值计算密集型工作负载，如蛋
+白质和分子模拟、量子力学计算、气候模型等。
+只要想一想将数据和计算任务分布到计算机局域网后通信开销的增加情况，分布式系统编程
+面临的挑战就显而易见。相比于处理器的速度，网络传输的速度慢如蜗牛，因此使用分布式处理
+时，尽可能减少网络通信显得更加重要。为此，可采用多种不同的策略，它们优先考虑本地数据
+处理，不到万不得已不传输数据。
+分布式处理面临的另一个挑战是，计算机网络通常是不可靠的。考虑到计算集群可能包含数
+千台计算机，从概率上说，显然经常会有节点出现故障。有鉴于此，分布式系统必须能够妥善地
+处理节点故障，避免中断当前执行的工作。所幸各公司投入了大量资源、来开发容错分布式引擎，
+它们能够自动处理前述方方面面。
+MapReduce 简介
+Map Reduce 是一个编程模型，让你能够以特定的方式表示算法，使其能够在分布式系统中高
+效地执行。MapReduce 模型最初是由Goog le 于2004 年推出的，旨在将数据集分配给不同的计算
+机，并将本地处理和集群节点之间的通信自动化。
+那时，
+MapReduc巳框架和一种分布式文件系统一－Google 文件系统
+（GFS 或Goog leFS ）协
+同工作，这种文件系统是为在计算集群中进行数据切片（partit i on ）和复制而设计的。为存储和
+处理单个节点容纳不下的数据集，切片很有用，而复制确保系统能够妥善地处理故障。当时，
+Goog le 结合使用MapReduce 和GFS 是为了建立网页索引，但后来Doug Cutting （当时是Yah oo!
+一名员工）实现了MapReduce 和GFS 概念，推出了最初的Hadoop 分布式文件系统（HDFS ）和
+Hadoop MapR巳duce 。
+Map Reduce 暴露的编程模型实际上非常简单，其理念是将计算表示为两个非常通用的步骤：
+映射（Map ）和归井（Reduce ）。有些读者可能熟悉Python 函数map 和reduce ，但在MapReduce 
+中，
+Map 和Reduce 步骤能够表示的操作更多。
+Map 将一组数据作为输入，并对其进行变换。通常，
+Map 的结果是一系列可交给Reduce 步
+骤的键一值对；
+Reduce 步骤聚合键相同的数据项，并对得到的集合应用一个函数，这通常会生成
+更小的数据’集合。
+对于前一章介绍的pi 值估算问题，可轻松地将其转换为一系列Map 和Reduce 步骤。在这个
+例子中，输入是一系列随机数字对。变换（Map 步骤）是击中检查，而Reduce 步骤是计算击中
+检查结果为True 的次数。
+一个典型的MapReduce 模型示例是单词计数实现：程序将一系列文档作为输入，并返回每
+个单词在这些文档中出现的总次数。下图说明了单词计数程序的Map 和Reduce 步骤，其中左边
+是输入文档。Map 操作生成一系列（k町，valu e）项，其中第一个元素为单词，而第二个元素为
+1 （因• 
+在
+
+150 
+第8 章分布式处理
+为单词每次出现都将导致最终计数加
+I
+）。
+接下来，我们执行Reduce 操作，将键相同的项聚合起来，得到每个单词出现的总次数。从
+下图可知，将键为the 的项的值累积，得到（the, 4）项。
+the, 1 
+dog, 1 
+刊由~；· [;> ~：：：~至盹
+on the mat 
+on, 1 
+dog, 1 
+mat, 1 
+s鼠，2
+The cat sat 
+the, 1 
+cat, 1 
+on theπiat 
+cat, 1 
+on, 2 
+sat, 1 
+mat, 2 
+the, 1 
+on, 1 
+mat, 1 
+如果我们使用Map 和Reduce 操作来实现这种算法，该框架实现将通过巧妙的算法限制节点
+之间的通信，确保高效地完成数据生成和聚合。
+然而，
+MapReduce 是如何最大限度地减少通信的呢？我们来看一个MapReduce 任务的完成
+过程。假设有一个包含两个节点的集群，每个节点都从磁盘加载一个数据分片（通常位于节点本
+地），为处理数据做好准备。在每个节点中，都创建一个映射器（mapper ）进程，并对数据进行
+处理以生成中间结果。
+接下来，必须将数据发送给归并器（red ucer ）做进一步的处理，但这样做时，必须确保键相
+同的所有项都被发送给同一个归并器。这项操作被称为分组
+（shuffling ），是MapReduce 模型中
+最主要的通信任务。
+..... 
+..... 
+m
+u 
+分组
+节点l
+节点2
+
+8.2 
+Dask 
+151 
+请注意，交换数据前，必须给每个归井器分配一个链’子集，这个步骤被称为切片
+（partitioning ）。
+归并器获得自己的键切片后，就可处理数据并将结果写入磁盘了。
+通过Apache Hadoop 项目，
+MapReduce 框架得以被众多公司和组织广泛使用。最近，推出了
+一些新框架，它们扩展了
+MapReduce 引人的理念，可用于创建这样的系统：能够表示更复杂的
+工作流程，能够更高效地使用内存，支持精益而高效地执行分布式任务。
+在接下来的几节中，我们将介绍在Python 分布式领域用得最多的两个库：
+Dask 和PySpark。
+8.2 
+Dask 
+Dask 是Continuum Analytics 推出的一个项目（这家公司还推出了Numba 和包管理器conda ), 
+这是一个用于并行和分布式计算的Pytho n 库，擅长执行数据分析任务，并紧密地集成到了Python
+生态系统中。
+Dask 最初用于在单机上处理超过内存量的数据集，但最近随着Dask Distributed 项目的推出，
+其代码做了修改，能够在集群中执行任务，且’性能和容错功能都极为出色。Dask 支持MapReduce
+型任务以及复杂的数值算法。
+8.2.1 
+有向无环图
+Dask 背后的理念与前一章介绍的Theano 和Tensorflow 的基本思想很像。你可使用一个熟悉
+的Python 式API 来建立执行计划，而这个框架会自动将工作流程划分成任务，并将它们交给多
+个进程或多台计算机去执行。
+Dask 使用有向无环图（DAG ）来表示变量和操作，而这种图可使用简单的Python 字典来表
+示。为了大致演示其中的工作原理，我们将使用Dask 来计算两个数的和。为定义计算图，我们
+将输入变量的值存储在字典中，如下所示（这里将变量a 和b 的值都设置为2 ）。
+dsk = { 
+”a”. 2 ' 
+” b ”
+2 , 
+每个变量都相当于DAG 中的一个节点。为创建DAG ，接下来必须定义要对节点执行的操作。
+在Dask 中，要定义任务，可在字典（这里为d sk ）中添加一个元组，其中包含一个Python 函数
+及其位置参数。为实现求和运算，可添加一个名为result 的新节点（你可随便给这个节点命名）。
+这个节点的值是一个元组，其中包含我们要执行的函数及其参数，如下面的代码所示。
+dsk = { 
+" a " : 2 , 
+”b ”:
+2 , 
+
+152 
+第8 幸分布式处理
+"result ": (lambda x, y : x + y ，’『a ’＇＇
+"b") 
+出于风格和清晰方面的考虑，可修改求和运算，将
+l ambda 语句替换为标准库函数
+operat or
+. a dd 。
+from operator import add 
+dsk = { 
+" a ”:
+2 ' 
+”b ”:
+2 ' 
+”result ”:
+(add , "a ”,”b’') 
+必须指出的是，这里使用宇符串” a
+点a 和b。请注意，前面定义DAG 时，没有使用任何Dask 特有的函数，这表明这个框架非常灵
+活而简洁，因为所有操作都是在简单而熟悉的Python 字典上执行的。
+任务是由调度器执行的。调度器是一个函数，它接受一个DAG 以及要执行的任务，并返回
+计算得到的值。默认Dask 调度器为函数das k.ge t ，你可像下面这样使用它：
+工mpo r t dask 
+res = dask .get(dsk, ”result ” ) 
+print(res) 
+＃
+输出
+# 4 
+所有复杂性都隐藏在调度器背后，调度器会负责将任务分配给不同的线程、进程乃至不同的
+计算机。调度器dask.ge t 采用的是同步串行实现，非常适合用于测试和调试。
+就理解Dask 如何发挥其魔力以及进行调试而言，使用简单的字典来定义DAG 很有帮助。你
+还可使用原始（raw ）字典来实现Dask API 中没有的复杂算法。接下来，我们来学习Dask 是如
+何通过类似于NumPy 和Pandas 的接口来自动生成任务的。
+8.2.2 
+Dask 数组
+Das k 的主要用途之一是自动生成并行数组操作，这可极大地简化规模超过内存容量的数组
+的处理工作。
+Dask 采用的策略是，将数组分割为大量的子单元一－Dask 称之为块（chunk ）。
+D ask 在模块das k . a rray （以下简称为da ）中实现了一个类似于NumPy 的数组接口。要从
+NumPy 数组创建一个Dask 数组，可使用函数da.from_array 。这个函数要求你指定块大小
+并返回一个da. array 对象，而da. array 对象会负责将原始数组分割为指定大小的子单元。
+在下面的代码中，我们创建了一个包含30 个元素的数组，并将其分割成块，其中每块包含10 个
+元素。
+
+import numpy as np 
+import dask.array as da6 
+a = np . random . rand(30) 
+a_ da = da .f rom array(a, chunks=l0) 
+＃结果
+8.2 
+Dask 
+153 
+# dask . array<array-4 .. ., shape=(30 , ) , dtype=float64, 
+chunks 工ze=(l0
+, )>
+变量a_da 维护着一个Dask 图，这个图可通过属性dask 来访问。为了弄明白Dask 在幕后
+做了哪些工作，可查看这个Dask 图的内容。从下面的示例可知，这个Dask 图包含4 个节点，其
+中一个是源数组，其键为
+’ array -or 工ginal-4c76
+’ 。字典a
+da
+. dask 中的其他三个键是任务，
+你可使用它们和函数dask . array
+. c or e
+. getarray 来访问原始数组中的块。如你所见，每个
+任务都提取一个包含10 个元素的切片（slice ）。
+d工ct(a_da
+. dask)
+＃结果
+{ ( ' array-4c76 ＇，
+。）: 
+(<functio口
+dask
+. array
+. core.getarray>,
+『array-original - 4c76
+'
+,
+(slice(O , 10 , None) ,)), 
+( ' array - 4c76 『，
+2)
+:
+(<functio口
+dask
+. array
+. core
+. getarray>,
+' array-original -4c76 ', 
+(slice(20 , 30 , None) ,) ) , 
+( ’array-4c76 ’,
+1) : (<fun ct ion dask . array . core . getarray> , 
+’ array-original -4 c76 ', 
+(slice(lO , 20 , None) , )) , 
+’ array original-4c7 6 ' : array ( [ . . . ] ) 
+如果我们对数组a_da 执行操作，
+Dask 将生成更多操作块的子任务，这打开了并行的大门。
+da . array 暴露的接口遵循NumPy 语义和广播规则。下面的完整代码演示了Dask 与NumPy 广
+播规则、基于元素的操作和其他方法的良好兼容性。
+N = 10000 
+chunksize = 1000 
+x_data = np
+. random.unif orm(-1 ，
+工，
+N)
+y_data = np.random .uni form(-1 , l, N) 
+x = da.from_array(x data , chunks=chunksize) 
+y = da . from_array(y_data , chunks=chunksize) 
+hit_ test = x ** 2 + y ** 2 < 1 
+hits= hit_ test . sum() 
+pi = 4 * hits I N 
+要计算p i 的值，可使用方法compute 。调用这个方法时，也可使用可选参数ge t 指定其他
+调度器（默认’情况下，
+da .a rray 使用一个多线程调度器）。
+pi. compute () 
+＃
+也可这样做，
+pi
+. compute(get=dask
+. get)
+回
+
+154 
+第8 章分布式处理
+＃结果
+# 3 1804000000000001 
+即便是看起来非常简单的算法，如估算p i 的值，也可能需要执行大量的任务。
+Dask 提供了
+计算图可视化工具。下面是pi 值估算的Dask 图，要获取它，可执行方法pi.visualize （）。在
+这个图中，圆圈表示对节点执行的变换，而节点用矩形表示。通过这个示例，我们可对Dask 图
+的复杂性有大致的认识，并知道调度器的职责是制订高效的执行计划，其中包括按正确的顺序排
+列任务以及挑选出要并行执行的任务。
+8.2.3 Dask Bag 和DataFrame
+Dask 提供了其他用于自动生成计算图的数据结构。本节将介绍
+dask.bag . Bag
+和
+dask . datafrarne
+. DataFrarne ，其中前者是一种通用的元素集合，可用来编写MapReduce 式算
+法代码，而后者是pa口das
+. DataFrarne 的分布式版本。
+可从Python 集合轻松地创建Bag 。例如，要从列表创建Bag ，可使用工厂函数from sequenceo 
+
+8.2 
+Dask 
+155 
+要指定并行等级，可使用参数叩artitions （这将把Bag 的内容分成很多块）。在下面的示例
+中，我们创建了一个B吨，它包含数字O～99 ，并被分成4 块。
+import dask . bag as dab 
+dab . from sequence(range(100), npartitions=4 ) 
+＃结果
+# dask .bag<from_se ... , 
+npart 工t 工0口S=4>
+在下一个示例中，我们将使用类似于MapReduce 的算法，计算一组字符串中各个单词出现
+的次数。给定一个序列集合，我们依次使用str.split 和concat 来生成一个线性列表，其中
+包含给定文档中所有的单词。接下来，对于每个单词，我们生成一个字典，其中包含一个单词和
+值
+I （参见本章前面的“MapReduce 简介” 一节）。然后，我们编写一个Reduce 步骤，使用运算
+符foldby 来计算单同出现的次数。
+变换foldby 很有用，可用来实现合并单词计数的Reduce 步骤，这样便无须将元素分组再
+进行分配。假设我们的单词数据集被分成两个切片。为计算单词出现的次数，一种不锚的策略是
+先计算每个切片中单词出现的次数，再将这些数据合井，得到最终的结果，如下图所示。左边是
+输入切片。我们先计算每个切片中单词出现的次数（这是使用二元运算binop 完成的），再使用
+函数combin e 将这两部分数据合并。
+the, l 
+dog,l 
+the, 2 
+sat. 1 
+binop 
+dog, l 
+the, 1 
+..... 
+sat, 1 
+on, l 
+on, l 
+口iat , 1 
+mat. 1 
+切片I"-
+the, 4 
+cat. 1 
+combine 
+dog, 1 
+the, 1 
+he, 2 1 / 
+sat, 2 
+cat, 1 
+on, 2 
+sat, 1 
+binop 
+cat, 1 
+mat, 2 
+the, 1 
+.... , 
+sat. 1 
+on. 1 
+on, 1 
+mat. 1 
+阿1at. 1 
+切片
+下面
+t码演刊日f可｛吏用叫百运算符foldby 叫单i司
+接受5 个参数。
+口key ：这是一个函数，返回用于归并操作的键。
+口binop ：这是一个函数，它接受两个参数一－total 和x。给定总值（到目前为止的累积
+值），
+binop 会将下一项合并到总值中。
+
+156 
+第8 章分布式处理
+口initial ：这是给binop 提供的初始累积值。
+口combine ：这是一个函数，将各个切片的总值合并（这里是简单的求和）。
+口initial
+combine ：这是给combine 提供的初始累积值。
+下面来看看代码：
+collect 工on= dab . from sequence ([ ’' the cat sat on the mat ”, 
+’B the dog sat on the mat " ] , 
+npart 工t 工0口s= 2)
+4) l 
+binop = l ambda t otal , x : t ot a l 
++ x [ ” count" ] 
+c ombine = lambda a, b : a + b 
+(collection 
+. map( st r
+. spl 工巳）
+. concat () 
+. map (lambda x : { ”word ": x,”count ” :
+1}) 
+. foldby{lambda x: x [”word” ] , 
+binop ，
+。，
+c ombine ，。）
+. compute()) 
+＃
+输出
+# [ ( ' dog ' , 1) , 
+( ' cat ' , 1) , ( ’ sat ’ ,
+2 ) ' 
+（
+『0口’，
+2) , 
+( ' mat ', 2) , 
+( ' the ’, 
+如你所见，要使用Bag 高效地表示复杂的操作，可能很烦琐。有鉴于此，
+Dask 提供了另一
+种数据结构一－dask
+. dataframe.DataFrame ，这种数据结构是为分析型工作负载而设计的。
+在Dask 中，要初始化DataFrame ，可使用很多方式，如从分布式文件系统中的csv 文件初始
+化，或者直接从Bag 初始化。就像da . array 提供了准确反映NumPy 功能的AP ！
+－一样，
+Dask
+DataFrame 可作为分布式pa叫“
+. DataFrame
+为了演示这一点，我们将使用DataFrame 来计算单词出现的次数。我们首先加载数据，以
+生成一个由单词组成的Bag ，再使用方法t o_dat af rame 将这个Bag 转换为DataF rame 。通过
+向方法to_dat af rame 传递一个列名，可初始化一个DataFrarr队它只包含一列，名为word s 。
+collect 工on= dab . from_sequence([ "the cat sat on the mat ” , 
+” the dog sat on the mat ” ] , 
+npartit 工0口s =2)
+words= collection .map(str . split) . concat() 
+df = words. to_dataframe ( [ ' words ’ ]) 
+df . head() 
+＃结果：
+# 
+words 
+# 0 
+the 
+# 1 
+cat 
+# 2 
+sat 
+# 3 
+on 
+# 4 
+the 
+Dask DataFrarr 
+words 列调用方法value一counts ，而Dask~寄自动设计一种并行计算策略。要触发这种计算，
+
+8.2 
+D ask 
+157 
+只需调用方法compu te :
+df . words . value_counts ( ) . compute () 
+＃
+结果，
+# the 
+4 
+# sat 
+2 
+# on 
+2 
+# mat 
+2 
+# dog 
+1 
+# cat 
+1 
+# Name : words , dtype : i nt 64 
+你可能会提出一个有趣的问题：
+Data F rame 在幕后使用的是什么样的算法？要找出这个问
+题的答案，可查看生成的Dask 图的上半部分，如下图所示。最下面的两个矩形表示两个数据集
+切片，它们被存储为两个pd.Serie s 实例。为计算单词出现的总次数，Dask 先对每个pd.Series
+执行value_counts ，再使用va l ue
+cou口ts_aggr e gate 将次数合并。
+（’v alue-co山it s-agg-#2' , 0) 
+value_cotmts aggregate( ... ) 
+（’v alue-cmmts-chu咄咄＇. o. o, O) I 
+｜（’叫ue切unt s-chmlk -#2 ' , 0, I, 0) 
+仅供非商业用途或交流学习使用
+回
+
+158 
+第8 章分布式处理
+如你所见，
+Dask 数组和DataFrame 利用了NumPy 和Pandas 的快速向量化实现，来获得出
+色的性能和稳定性。
+8.2.4 
+Dask distributed 
+Dask 项目的最初几个版本被设计成在单机上运行，使用的是基于线程或进程的调度器。最
+近推出了新的分布式后端实现，可用来在计算机网络上创建和运行Dask 图。
+0 
+D.,k ct;"'ib" 
+（使用命令$
+COT 
+a
+工nstall d工stributed ），也可使用pip （使用命令$p ip
+install distributed ）。
+Dask di s tributed 使用起来非常容易，要完成准备工作，最简单的方式是实例化一个C l ient
+对象。
+from dask
+. distr 工buted import Client 
+cl 工ent = Client () 
+＃结果
+# <Client : scheduler= ' tcp : // 127 0 0 1:46472 ’ processes=4 cores=4> 
+默认情况下，
+Dask 将在本地计算机上启动几个重要的进程。要通过Client 实例调度和执
+行分布式任务，这些进程必不可少。
+Dask 集群的主要组件是一个调度器和一系列工作进程。
+调度器是负责将工作分配给工作进程并监视和管理结果的进程。一般而言，任务被提交给用
+户后，调度器将找到一个空闲的工作进程，并将任务提交给它去执行。工作进程完成任务后，将
+告诉调度器结果可用了。
+工作进程接受到来的任务并生成结果。工作进程可能位于网络中其他的计算机上。工作进程
+使用Th r eadPoolExecutor 来执行任务；在使用的函数（如nog i l 块中的Numpy 、
+Pandas 和
+Cython 函数）不会获取GIL 时，这样可实现并行性。执行纯粹的Python 代码时，启动大量单线
+程工作进程更有利，因为这样即便代码会获取GIL ，也将实现并行性。
+可使用Client 类中熟悉的异步方法，手动将任务提交给调度器。例如，要将函数提交给集
+群去执行，可使用方法
+Client
+. map
+和
+Cli ent
+. submit 。下面的代码演示了如何使用
+Client .map 和Clie川
+. submit 来计算几个数字的平方。Client 将向调度器提交一系列任务，
+对于每个任务，我们都将获得一个Future 实例。
+def square (x) : 
+return x ** 2 
+fut = client . submit(square , 2) 
+＃结采·
+# <Future : stat us : pending , key : 
+仅供非商业用途或交流学习使用
+
+square 0523 6e00d545 104 55 9e0 cd2 0f94cd8ab > 
+c l 工ent
+. map
+( s quare )
+futs = clie 口t . map (square , 
+[ 0 , 1, 2 , 3 , 4] ) 
+＃
+结采，
+# [<Future : status : 
+p end 工ng,
+key: 
+squared043f00cl427622a694 f 5183 4 887 0a2f> , 
+# 
+<Future 
+status : p e nding, k ey : 
+square - 9352eaclfblf6659e8442ca4838b6f8d > , 
+# 
+<Future : s tatus: f inished , t ype : int , key : 
+# 
+square-05236e00d545104559e0cd 20f 94cd8ab> , 
+# 
+<Future : s tatus: p ending, key : 
+# 
+square-c89f4c21ae6004ce0fe5206fla 8d619d> , 
+# 
+<Futu re : s tatus: p ending, key : 
+# 
+s quare-a66flcl3e2a46762b092a4f2922e9db9>] 
+8.2 
+Dask 
+159 
+到目前为止，与本书前面使用The adPoolExe cuto r 和Pr o ce s sPool Execut o r 的情况很
+像。然而，
+Dask distributed 不仅提交任务，还将计算结果缓存到工作进程的内存中。在上面的示
+例中就可看到缓存在发挥作用。我们首次调用client
+. submit 时，创建了任务squar e ( 2 ), 
+其状态被设置为未完
+（pendin g ）；我们接着调用clien t
+. map 时，任务square( 2
+）被再次提交
+给调度器，但这次没有重新计算它的值，调度器直接从工作进程那里获取了结果。因此，
+map 返
+回的第三个Future 的状态为完成（finished ）。
+要从一系列Fu ture 实例中获取结果，可使用方法C li ent
+. gat her :
+client . gathe r(futs) 
+＃结采
+# [0 , 1 , 4 , 9 , 16] 
+Cli ent 还可用来运行任何Dask 图。例如，要估算pi 值，只需将函数c l ient
+. get 作为可
+选参数传递给pi
+. c ompute 。
+pi compute (ge t=client .get) 
+这种特征让Dask 的可伸缩性极强，因为你可使用较简单的调度器在本地计算机上开发井运
+行算法，如果对性能不满意，可在由数百台计算机组成的集群上运行这些算法。
+手动建立集群
+要手动实例化调度器和工作进程，可使用命令行工具da sk- schedu ler 和dask -work e r 。
+首先，使用命令da s k- schedul er 初始化一个调度器。
+$ dask-scheduler 
+distributed.scheduler -
+INFO - --------------------------------------------
+distributed.scheduler －工NFO - Scheduler at: tcp://192.168.0.102:8786 
+distributed.scheduler －工NFO - bokeh at: 0 .0.0.0:8788 
+distributed.scheduler －工NFO - http at: 0.0 . 0 . 0:9786 
+distributed.bokeh.application －工NFO -
+Web UI : 
+仅供非商业用途或交流学习使用
+回
+
+仅供非商业用途或交流学习使用
+160 
+第8 幸分布式处理
+http://127.0.0.1:8787/status/ 
+distributed.scheduler －工NFO
+- -------------------------------------------
+这将给调度器提供一个地址，还将提供一个WebUI 地址，可通过访问它来监视集群的状态。
+现在可以给调度器分配一些工作进程了，为此可使用命令das k-worker ，并将调度器的地址传
+递给工作进程。这将自动启动一个包含4 个线程的工作进程。
+$ dask-worker 192.168 . 0 . 102:8786 
+distributed.nanny －工NFO
+- Start Nanny at: 'tcp://192.168.0.102:45711 ’ 
+distributed . worker －工NFO - Start worker at: tcp://192.168.0.102:45928 
+distributed.worker －工NFO -
+bokeh at: 192.168.0 . 102:8789 
+distributed.worker －工NFO - http at: 192.168.0.102:46154 
+distributed.worker －工NFO -
+nanny at: 192.168.0 . 102:45711 
+distributed.worker －工NFO - Waiting to connect to: tcp://192.168.0.102:8786 
+distributed . worker －工NFO -
+－－－－－－－－－－町－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－
+distributed.worker －工NFO -
+Threads: 4 
+distributed.w口rker
+－工NFO -
+Memory: 4.97 GB 
+distributed.worker －工NFO -
+Local Directory: /tmp/nanny-jhlesoo7 
+distributed.worker －工NFO -
+－－－－－－－－－－－－『－－－－－－－－町－－－－－－－－－－－－－－－－－－－－－－－－－
+distributed.worker －工NFO - Registered to: tcp://192.168 . 0.102:8786 
+distributed.worker －工NFO - ------------ - ----------------------------------
+distributed . nanny -
+INFO -
+Nanny
+’ tcp://192.168.0.102:45711' starts worker 
+process 'tcp://192.168.0.102:45928 ’ 
+Dask 调度器的适应能力极强，如果我们先添加再删除一个工作进程，调度器将能够跟踪哪
+些结果不可用，并根据需要重新计算。最后，要在
+Python 会话中使用你初始化的调度器，只需
+初始化一个Cl 工e口t 实例，并提供调度器的地址。
+client = Client(address=’ 192 .168. 0 .102: 8786') 
+＃结果：
+# <Client: scheduler ＝『tcp://192.168.0.102:8786'
+processes ＝工
+cores=4>
+Dask 还提供了便利的用于诊断的Web U1 ，可用来监视状态、以及在集群上执行的每项任务花
+费的时间。在下图中，
+Task Stream 指出了执行pi 值估算花费的时间。图中的每条灰色线对应于
+工作进程使用的一个线程（在这里，有一个工作进程一一也叫Worker Core ，它包含4 个线程），
+而每个矩形框对应于一个任务，这些矩形框是彩色的一一相同的颜色表示相同类型的任务，如加
+法运算、求幕或指数运算。从该图可知，所有矩形框都很小且彼此相隔很远，这意味着相比于通
+信开销，这些任务都很小。
+仅供非商业用途或交流学习使用
+
+Task Strean、
+240ms 
+260ms 
+仅供非商业用途或交流学习使用
+| | || 
+| || | 
+28。”、s
+血泪ms
+Time 
+8.3 
+千吏用PySpark
+161 
+..... iP GP 0 
+~ 
+320ms 
+340ms 
+就这个示例而言，提高块大小是有利的，因为这样每项任务的运行时间将相对于通信时间
+更长。
+8.3 
+使用PySpark
+当前，Apache Spark 是最受欢迎的分布式计算项目之一。发布于2014 年的Spark 是使用Sca l a
+编写的，它集成了HDFS ，相比于Hadoop MapReduce 框架有多个方面的优势和改进。
+不同于Hadoop MapReduce, Spark 设计用于交互地处理数据，并提供了供Java 、Scala 和Python
+编程语言使用的API 。由于Spark 采用的架构不同，尤其是将结果存储在内存中，其速度通常比
+Hadoop MapReduce 快得多。
+8.3.1 搭建Spark 和PySpark 环境
+要从头搭建Py Spark 环境，需要安装Java 和Scala 运行时＼从源代码编译这个项目，并配置
+Python 和Jupyter notebook 以便安装Spark 时能够使用它们。一种搭建PySpark 环境的方式是，使
+用通过Docker 容器提供的配置好的Spark 集群，这种方式简单且不容易出错。
+＠
+叫可从h
+有关这方面的简介。
+要搭建Spark 集群，只需切换到本章代码文件所在的目录（其中有一个名为Dockerfile 的文
+件），并执行如下命令：
+仅供非商业用途或交流学习使用
+• 
+
+仅供非商业用途或交流学习使用
+162 
+第8 幸分布式处理
+$ docker build -t pyspark 
+这个命令将自动下载Spark 、
+Python 和Jupyter notebook ，并在一个隔离环境中安装和配置它
+们。要启动Spark 和Jupyter notebook 会话，可执行如下命令：
+$ docker run -d -p 8888:8888 -p 4040:4040 pyspark 
+22b9dbc2767c260e525dcbc562b84a399a7f338felc06418cbe6b351c998e239 
+这个命令打印一个独一无二的ID
+（容器时，可用来引用应用程序容器），并在后台启动Spark
+和Jupyter not巳book。选项
+p 确保我们能够在本地计算机中访问SparkUI 和Jupyt巳r 网络端口。执
+行这个命令后，就可在浏览器中输入地址http :/1127.0. 0.1 :8888 来访问Jupyter notebook 会话。要检
+查是否正确地初始化了Spark ，可创建一个新的notebook ，并在其中一个单元格中执行如下代码：
+import pyspark 
+sc = pyspark .SparkContext( ' local[ *] ' ) 
+rdd = 
+sc
+. parallel 工ze(range(lOOO))
+rdd .first() 
+＃
+结果：
+# 0 
+这将初始化一个SparkCont ex t ，并获取一个集合中的第一个元素（这些新术语将在后面详
+细解释）。初始化Sp arkContext 后，还可访问ht甲：／/12 7 . 0 . 0 . 1 :4040 来打开Spark Web UI 。
+完成搭建工作后，接下来探索Spark 的工作原理，以及如何使用其功能强大的API 来实现简
+单的并行算法。
+8.3.2 
+Spark 架构
+Spark 集群是一组分布在不同计算机上的进程。驱动器程序（driver program ）是一个进程，
+如Scala 或Python 解释器，用户使用它来提交要执行的任务。
+与Dask 中一样，用户可使用一个特殊的API 来创建任务图，并将这些任务提交给集群管理
+器（cluster manager ）。集群管理器负责将这些任务分配给执行器（executor ）一－负责执行任务
+的进程。在多用户系统中，集群管理器还负责给每位用户分配资源。
+用户通过驱动器程序与集群管理器交互。负责在用户和
+Spark 集群之间通信的类被称为
+SparkContext ，这个类能够根据用户可用的资源连接井配置集群上的执行器。
+在大多数情况下，
+Spark 通过一种名为弹’性分布式数据集（RDD ）的数据结构来管理其数据。
+RDD 表示一个元素集合，它能够处理大型数据集，这是通过将数据集中的元素切片，再并行地
+操作这些切片实现的（请注意，几乎对用户隐藏了这种机制）。在合适的情况下，RDD 还可存储
+在内存中，以提高访问速度以及缓存访问开销极高的中间结果。
+仅供非商业用途或交流学习使用
+
+仅供非商业用途或交流学习使用
+8.3 
+千史用PySpark
+163 
+通过使用RDD ，可定义任务和变换（这很像在Dask 中自动生成计算图），而在被请求时，
+集群管理器将自动将任务分派给空闲执行器去执行。
+执行器接受集群管理器分配的任务，执行任务，并在需要的时候保留结果。请注意，执行器
+可能有多个内核，而集群中的每个节点都可能有多个执行器。一般而言，
+Spark 能够抵御执行器
+故障。
+下图说明了Spark 集群中前述组件是如何交互的。驱动器程序与集群管理器交互，而集群管
+理器管理不同节点上的执行器实例（每个执行器实例都可能有多个线程）。请注意，虽然驱动器
+程序不直接控制执行器，但存储在执行器实例上的结果将直接在执行器和驱动器程序之间传输，
+因此必须能够从执行器进程通过网络连接到驱动器程序。
+执行器
+执行籍
+节点
+l
+驱动嚣程序
+执行器
+执行器
+节点
+2
+那么问题来了，作为一款使用Scala 编写的软件，
+Spark 怎么能够执行Python 代码呢？集成
+是通过Py4J 库实现的，这个库在幕后维护着一个Python 进程，并通过套接宇（一种进程间通信
+方式）与这个进程通信。为运行任务，执行器维护着一系列Python 进程，以便并行地处理Python
+代码。
+RDD 和在驱动器程序中的时hon 进程中定义的变量被串行化，而集群管理器和执行器之间
+的通信（包括shuffling ）是由S park 的Scala 代码处理的。为了在Python 和Scala 之间交互，还必
+须执行额外的串行化步骤，这也将增加通信开销。因此，使用PySpark 时必须特别小心，要确保
+使用的数据结构能够被高效地串行化，同时确保数据切片足够大，让通信开销相比于执行开销可
+以忽略不计。
+仅供非商业用途或交流学习使用
+回
+
+仅供非商业用途或交流学习仪m
+164 
+第8 幸分布式处理
+下图列出了为执行PySpark 所需的Python 进程。这些多出来的Python 进程会消耗内存，还
+增加了一个间接层，导致错误报告更加复杂。
+驱动器程序
+节点2
+虽然存在这些缺点，但PySpark 依然被广泛使用，因为它在活跃的Python 生态系统和行业领
+先的Hadoop 基础设施之间架起了一座桥梁。
+8.3.3 
+弹性分布式数据集
+要在Python 中创建RDD ，最简单的方式是使用方法SparkContext .parallelize 。在本
+章前面，我们使用这个方法并行化了一个包含整数O～1000 的集合，如下所示。
+rdd = sc .parallel 工ze(range(1000))
+＃结采
+# PythonRDD[3] at RDD at PythonRDD . scala : 48 
+集合rdd 将被分成很多个切片，这里为默认的4 个（可使用配置选项来修改默认值）。要显
+式地指定切片个数，可向parallelize 再传递→个参数。
+rdd = sc .parallelize(range(1000), 2) 
+rdd.getNumPart 工tions()
+＃
+这个函数将返回切片个数
+partitio口S
+＃结采
+# 2 
+RDD 支持很多函数式编程运算符，就像第6 章介绍的响应式编程和数据流（但在响应式编
+程中，运算符是设计用于处理事件而不是普通集合的）。我们来演示一下你现在应该很熟悉的基
+仅供非商业用途成交流学斗使用
+
+仅供二II＇商业用途或交流学习侦m
+8.3 
+千史用PySpark
+165 
+本函数map 。在下面的示例中，我们使用了map 来计算一系列数字的平方。
+s quare_r dd = rdd .map(lambda x : x ** 2) 
+＃结采
+# PythonRDD[ 5] at RDD at PythonRDD . s cala 48 
+函数map 返回一个新的RDD ，而没有执行任何计算。要触发计算，可使用方法c o llect,
+这将获取集合中的所有元素；也可使用方法take ，它只返回前10 个元素。
+square rdd.col lect() 
+＃
+结采：
+# [ 0 ' 1 , ... l 
+square_ rdd . take ( 10) 
+＃结采
+# [0 , 1 , 4 , 9 , 16 , 25 , 36 , 49 , 64 , 81] 
+为比较PySpark 、
+Dask 和本书前面介绍过的其他并行编程库，我们将再次估算pi 的值。在
+Py Spark 实现中，我们首先使用par allel i ze 创建两个包含随机数的RDD ，再使用（与Python
+函数等效的）函数zip 合并这两个数据集，然后检查这些随机点是否在圆内。
+工mport numpy as np 
+N = 10000 
+x = np. random.uniform(-1 , 1 , N) 
+y = np .random.uniform(- 1 , 1 , N) 
+rdd_x = sc.para llelize( x) 
+rdd_y = sc.parallelize (y) 
+hit_ t e st = rdd_x
+. z 工p(rdd_y) . map(lambda xy : xy[O] ** 2 + xy [l] ** 2 < 1) 
+pi= 4 * hit_ t e s t . sum( ) /N 
+必须指出的是，
+zip 和map 操作生成新的RDD ，而不对底层数据执行指令。在刚才的示例
+中，将在我们调用函数hi t_t es t
+. sum 时触发代码执行，这个函数返回一个整数。这种行为不
+同于DaskAPI ，使用DaskAPI 编写的所有代码（包括最终结果pi ）都不会触发代码执行。
+下面通过一个更有趣的应用程序来演示其他的RDD 方法。我们将学习如何计算网站的每位
+用户在一天内的访问次数。在实际编程中，数据已收集到数据库或存储在分布式文件系统（如
+HDFS ）中，但在这个示例中，我们将生成一些数据，再进行分析。
+在下面的代码中，我们生成了一个字典列表，其中每个字典都包含一位用户（从20 位用户...
+中选出来的）和一个时间戳。生成这个数据集的步骤如下。
+‘··
+(1 ）创建一个包含20 位用户的用户池（变量u ser s ）。
+(2）定义一个函数，返回一个介于两个日期之间的随机时间。
+(3）从用户池中随机选择一位用户，并随机选择一个介于2017 年
+1 月
+l 日和2017 年
+l 月
+7
+仅供非商业用途成交流于习使用
+
+仅供二1 1°商业用途或交流学习佼川
+166 
+第8 章分布式处理
+日之间的时间。重复这种操作
+I O 000 次。
+import datetirne 
+from uuid
+工rnport uuid4 
+from random
+工mport randrange , choice 
+＃
+生成20 位用户
+n_users = 20 
+users= [uuid4() for i in range(n_users)) 
+def random t 工me(start
+,
+end) : 
+『『返回一个介于起始日期和终止日期之间的随机时间戳’，
+t
+＃
+选择一个用秒数农示的时间
+total_seconds = (end - start) . total_ seconds () 
+return start + 
+datetime . timedelta(seconds=randrange(total_seconds) ) 
+start = datetime .datetime(2017, 1, 1) 
+end= datetime .datetime(2017 , 1, 7) 
+entries = [) 
+N = 10000 
+for i in range (N) : 
+entries . append({ 
+' user ' : choice (users) , 
+’ times tamp ’: random_time(start, end) 
+}) 
+生成数据集后，就可开始提问并使用PySpark 来回答了。一个常见的问题是，某位用户访问
+了网站多少次。为回答这个问题，一种比较幼稚的办法是，将RDD 中的条目按用户分组（使用
+运算柯：groupBy ），并计算每位用户有多少个条目。在PySpark 中，
+groupBy 将一个用于提取分
+组键的函数作为参数，并返回一个新的RDD ，其中包含形如（key,
+group ）的元组。在下面的
+示例中，我们将用户ID 作为键提供给group时，并使用first 来查看第一个元素。
+entries_ rdd = sc.parallelize(entries) 
+entries_ rdd . groupBy(larnbda x : x [ ’ user ’ ]) . first() 
+＃结采．
+# (UUID （『0604 aab5-c7ba-4d5b - ble0 16091052fbl l ’ ) , 
+# 
+<pyspark . resultiterable . Resultiterable at Ox7faced4cd0b8>) 
+在groupBy 返回的值中，每个用户ID 都有一个对应的Resultrter abl e （大致相当于一
+个列表）。要计算每位用户的访问次数，只需计算每个Resultiterable 的长度即可。
+(entries_rdd 
+. groupBy(larnbda x : 
+x
+［
+『user
+’ ］）
+.map (lambda kv: (kv[O], len (kv [1 ] ))) 
+take(5)) 
+＃结采．
+# [ (UUID( ' 0604aab5-c7ba 4d5b- ble0-16091052fbll ' ), 536), 
+# 
+(UUID ( ’ d72c81cl-83f9 4b3c-a21a-788736c9b2ea ’) ' 504)' 
+仅供非商业用i垂成交流学斗使用
+
+仅供非商业用途或交流学习使用
+# 
+(UUID
+（
+『e2e125fa 8984 4a9a 9cal b0620b113cdb ' ) , 498) , 
+# 
+(UUID （
+『b90acaf9-f279-430d-854f-5df74432dd52
+『
+）' 561) ' 
+# 
+(UUID
+（
+『00d7be53-22c3-43cf-ace7-974689e9d54b
+’
+）' 466) l 
+8.3 
+千史用PySpark
+167 
+对于小型数据集来说，这个算法的效果很好，但groupBy 要求收集每位用户的所有条目并
+将其存储到内存中，而这可能会超过节点的内存量。由于我们不需要这个列表，而只需要访问次
+数，因此一种更佳的方式是，只计算每位用户的访问次数，而不将其访问列表存储到内存中。
+＠
+处理…对组成的ROD 时可使用…u叫一叫应用他在前
+面的代码中，可将调用
+map(lambda
+kv: 
+(kv[O ] , 
+len (kv[l ］）））替换为
+mapValues(len ），这样可读性更好。
+为提高计算效率，可使用函数
+r educeByKey ，它执行的操作类似于本章前面“MapReduce 
+简介” 一节介绍的Reduce 步骤。前面的ROD 由元组组成，其中每个元组的第一个元素都是键，
+而第二个元素为值，因此对其调用函数reduc eByKey ，并将一个执行归并计算的函数作为其第
+一个参数。下面的代码演示了函数r educeByKey 的一种简单用法。在这个示例中，有一些与整
+数相关联的字符串键，我们要获取相同键关联的所有值的和，这是使用
+lambda 表达式表示的归
+并函数实现的。
+rdd = 
+sc
+. parallel 工ze ( [ ( ” a ”,
+1) ' 
+（
+’『b”,
+2) ' 
+( ” a ” ,
+3) ' 
+(" b ”,
+4) ' 
+( ” c ”, 
+5) l) 
+rdd . reduceByKey(lambda a , b : a + b) . collect() 
+＃
+结果。
+#[ ( ’ c ’,
+5) ' 
+( ' b '' 6) ' 
+( ’ a ', 4) J 
+函数reduceByKey 的效率比g roupBy 高得多，因为归并操作是可并行化的，同时不需要
+在内存中存储分组。另外，它还避免了在执行器之间传输数据（它执行的操作与本章前面介绍的
+Dask 运算符foldby 类似）。现在可以使用reduceByKey 重写计算访问次数的代码了。
+(entries_ rdd 
+.map(lambda x : (x [’ user ’ l' 1)) 
+. reduceByKey(lambda a, b : a + b) 
+. take(3)) 
+＃结果·
+# [ (UUID ( ’ 0604aab5 c7ba-4d5b- ble0-16091052fbll ' ) , 536), 
+# 
+(UUID ( ’ d72c81cl 83f9-4b3c - a21a-788736c9b2ea ’ ) ' 504) ' 
+# 
+(UUID ( ’ e2e125fa - 8984 4a9a 9cal-b0620bl13cdb ’ ) ' 498) l 
+使用Spark 的RDDAPI ，还可轻松地回答下面这样的问题：网站在每天中都被访问了多少次？
+这可使用reduceByKey 和合适的键（从时间戳中提取的日期）来计算。下面的示例演示了如何, ..
+计算。另外，还使用了运算符sortByKey 将返回的访问次数按日期排序。
+...
+(en tr 工es_rdd
+.map(lambda x : 
+(x ［
+’ t 工mes tamp ’ J . date () , 1) ) 
+. reduceByKey(lambda a , b : a + b) 
+. sortByKey ( ) 
+. collect () ) 
+
+仅供二l l0i1li业用途或交流学习佼川
+168 
+第8 幸分布式处理
+,,,,,] 
+)))))) 
+只
+J
+R
+J
+飞
+d
+飞
+J
+1
+4
+「
+3
+Q
+U
+气
+，
+＆
+r
+b
+d
+a
+2
+J
+R
+J
+r
+o
+r
+o
+r
+b
+ζ
+U
+叮
+’
+r
+o
+－
+－
+企
+句
+4
+命
+叮
+I
+A
+叮
+l
+牛
+叮
+l
+＆
+寸
+l
+品
+,,,,,
+, 
+)))))) 
+1
+4
+气
+，
+“
+飞
+d
+A
+性
+民
+J
+r
+b
+,,,,,
+, 
+111111 
+,,,,,, 
+叮
+，
+叮
+，
+叮
+，
+勺
+，
+句
+I
+叮
+1
+1
+ι
+1
+4
+1
+牛
+叮
+牛
+叮
+－
+－
+寸
+牛
+nunununununu 
+《
+J
+A
+码
+，
+L
+《
+4
+《
+4
+气
+，
+命
+气
+，
+b
+(((((( 
+eeeeee 
+←
+l
+w
+←
+」
+←
+」
+←
+」
+←
+I
+』
+←
+L
+aaaaaa 
+dddddd 
+...... 
+eeeeee 
+mmmmmm 
+ll·
+-lll 
+－
+L
+←
+L
+←
+L
+←
+」
+←
+」
+←
+」
+eeeeee 
+－
+－
+」
+←
+L
+←
+L
+←
+I
+》
+←
+－
+－
+←
+－
+－
+Jaaaaaa 
+来
+d
+d
+d
+d
+d
+d
+i(((((( 
+佳
+’
+r
+t
+“
+钟
+H
+U
+作
+品
+”
+H
+A
+作
+品
+品
+H
+A
+作
+品
+价
+8.3.4 
+Spark DataFr缸ne
+对于数值计算和分析任务，
+Spark 通过模块pyspark. sql （也叫SparkSQL ）提供了一个便
+利的接口。这个模块包含一个spark
+. sql
+. DataFrame 类，可用来高效地执行SQL 式查询，就
+像Pandas 中那样。要访问SQL 接口，可创建一个SparkSession 对象。
+from pyspark
+. sql
+工mport SparkSession 
+spark = SparkSession.builder.getOrCreate() 
+然后，通过这个对象调用函数createDataFrame 来创建一个DataFrame ，这个函数将一
+个RDD 、列表或pandas.DataFrame 作为参数。
+在下面的示例中，我们通过转换一个包含一系列
+Row 实例的RDD (rows ）来创建一个
+spark . sql.DataFrame 。
+Row 实例就像pd . Da taFrame 中的行一样，将一组列名关联到一组
+值。在这个示例中，有两列一－x 和y ，我们将它们关联到随机数。
+＃使用前面定义的x
+rdd 和y_rdd
+rows= rdd_x . zip(rdd_y) . map(lambda xy: Row(x=float(xy[O]), y=float(xy[l])) ) 
+rows.first() ＃查看第一个元素
+＃结果
+# Row(x=0 . 18432163061239137, y=O 632310101419016) 
+有了Row 实例集合后，就可将它们合并成一个DataFrame ，如下所示。我们还可使用方法
+show 查看这个DataFrame 的内容。
+df = spark.createDataFrame(rows) 
+df show(S) 
+＃输出·
+#+-------------
+---+-------------------+ 
+#| 
+xi 
+yl 
+#+--------------+----------------
+-+ 
+#|{] .184321630612391371
+0 . 6323101014190161 
+# I O. 81591455255779871 -0. 95784487780298291 
+# 1-0 . 65650502260330421 
+0. 46447734531294961 
+# l-0 . 15661914765533181-0 . 115422119782164321 
+#I 0 . 75367300823815641 0.269530554760747171 
+#+--------------
+---+----------------
++ 
+＃只显示了前5 行
+
+8.4
+使用mpi4py 执行科学计算
+169 
+spark . sql
+. DataFrarne 支持使用便利的SQL 语法对分布式数据集执行变换。例如，可使
+用方法selectExpr 来计算SQL 表达式的值。在下面的代码中，我们使用了x 和y 列以及SQL
+函数pow 来检查是否击中。
+hits_df = df .selectExpr ( ” pow(x , 2) + pow(y , 2) < 1 as h工ts ”
+）
+hits_df.show(S) 
+＃输出：
+#+--- - + 
+# I hitsl 
+#+---
++ 
+# I truel 
+# lfalsel 
+# I truel 
+# I truel 
+# I truel 
+#+-----+ 
+＃只显示了前5 行
+为了演示SQL 强大的表达力，我们还可使用一个表达式来估算pi 的值。在这个表达式中，
+使用了sum 、
+pow 、
+cast 和count 等SQL 函数。
+result = df selectExpr ( ’ 4 * sum(cast(pow(x, 2) + 
+result. first () 
+＃
+结果：
+# Row(pi=3 . 13976) 
+pow(y, 2) 
+＜工
+as int))/count(x) as pi' ) 
+Spark SQL 的语法与Hive 相同。
+Hive 是一个建立在Hadoop 基础之上的分布式数据集SQL
+引擎。要全面了解其语法，请参阅https: //cwiki.apache.
+·g!confluenc巳／d isp l ay/Hive/Languag巳νlanual 。
+要通过Python 接口利用Sca la 的威力及其所做的优化，
+DataFrarne 是绝佳的途径，其中的
+主要原因是，虽然查询在名义上是由
+SparkSQL 解释的，但实际上是直接在Sca l a 中执行的，中
+间结果不会经过Python 。这极大地降低了串行化开销，并利用了SparkSQL 所做的查询优化。优
+化和查询规划让你能够使用SQL 运算符，如GROUP BY ，
+同时不会像直接对RDD 使用groupBy
+那样降低性能。
+8.4 
+使用mpi4py 执行科学计算
+虽然Dask 和Spark 是很出色的技术，在IT 行业得到了广泛使用，但在学术研究领域还未被
+广泛采纳。在学术界，几十年来一直使用包含数千个处理器的超级计算机来运行执行大量数值计
+算的应用程序，因此通常超级计算机运行的软件截然不同，这些软件专注于使用C 、Fortran 乃至
+汇编语言等低级语言实现计算密集型算法。
+在这种系统上，用来实现并行执行的主要库是消息传递接口（MPI ），这个接口虽然不像Dask’ 
+
+170 
+第8 章分布式处理
+和
+Spark 那样便利和精致，但完全能够表达并行算法并获得极佳的性能。请注意，不同于
+Dask
+和Spark,
+MPI 并没有采用MapReduce 模型，因此最适合用来运行数千个几乎不相互发送数据的
+进程。
+MPI 的工作原理与本章前面介绍的截然不同。在MPI 中，并行性是通过在多个可能位于不
+同节点上的进程中运行同一个脚本实现的；进程之间的通信和同步由一个专门的进程处理，这个
+进程通常被称为根（root ），并由ID O 标识。
+在本节中，我们将以mp i4py ( P灿onMPI 接口）为例，初略地演示主要的MPI 概念。下面的
+示例演示了使用MPI 编写的最简单的代码。这些代码导人模块MPI ，并获取COMM_WORLD­
+一个可用来与其他MPI 进程交互的接口。函数Get _ra出返回当前进程的整型标识符：
+from mpi4py i mport MPI 
+comm= MPI . COMM WORLD 
+rank = comm. Get_rank () 
+pr 工口t (" This is process ”, rank ) 
+我们可将这些代码放在文件mpi_example.py 中，并执行这个文件。运行这个脚本通常不会做
+任何特殊的事情，因为它只在一个进程中执行。
+$ python mpi_example.py 
+Th 工s is process 0 
+MPI 作业应该使用命令mpiexec 来执行，这个命令包含指定并行进程数的选项－口。使用下
+面的命令运行这个朋l本将生成4 个不同的进程，它们执行同一个脚本，
+ID 各不相同。
+$ mpiexec - n 4 python mpi_example.py 
+Th 工s is process 0 
+Th 工s is process 2 
+Th 工s is process 1 
+Th 工s is process 3 
+通过使用资源管理器（如TORQUE ），进程将自动分散到网络中。通常，超级计算机都是由
+系统管理员配置的，他们会提供有关如何运行MPI 软件的说明。
+为了让你感觉一下MPI 程序是什么样的，我们再次来实现pi 值估算。完整的代码如下面所
+示。这个程序，所做的工作如下。
+口为每个进程创建一个长度为N I n_pr ocs 的随机数组，让每个进程检查相同数量的样本
+（口_p rocs 是使用函数Get_s 工ze 获得的）。
+口在每个进程中，计算击中检查结果之和，并将其存储在hits_coun ts 中，它表示每个进
+程检查到的击中次数。
+口使用函数reduce 计算所有进程检查到的击中次数之和。使用reduce 时，需要指定使用
+参数root 来指定哪个进程将收到结果。
+
+口只在根进程中打印最终结果：
+from mp 工4py import MPI 
+comm = MPI cm心1
+WORLD 
+rank = comm .Get_rank () 
+工mport numpy as
+口P
+N = 10000 
+n_procs = comm
+. Get_s 工ze () 
+print("This is process ” ,
+rank) 
+＃创建一个数纽
+x_part = np . random . uniform(-1 , 1 , int(N/n_procs)) 
+y part = np . random . uniform(-1, 1 , int (N/n_procs)) 
+h 工t s _part = x_part 女女2
++ y_part ** 2 < 1 
+h 工t s _ count = h 工ts part . sum() 
+print ( ”partial count s ”，
+h 工t s count) 
+total_ counts = comm
+. reduce(h 工ts_count
+,
+root=O) 
+工f rank == 0 : 
+print ( "Total h 工ts : ”,
+to t al counts) 
+pr 工nt
+（
+’＇Final result : '’ ,
+4 * total_counts / N) 
+8.5 
+1 J 、结
+1 7 1
+现在可以将上述代码放在文件mpi_p i .py 中，并使用mpiexec 来执行这个文件。输出表明，
+在reduce 调用前，四个进程同时执行。
+$ mpiexec -n 4 python mpi_pi.py 
+This is process 3 
+partial counts 1966 
+This is process 1 
+partial counts 1944 
+This is process 2 
+partial counts 1998 
+This is proce ss 0 
+partial counts 1950 
+Total hits: 7858 
+Final result: 3.1432 
+8.5 
+小结
+分布式处理可通过在计算机集群中分配小型任务，实现能够处理超大数据集的算法。多年来，
+为实现性能卓越而又可靠的分布式软件，开发出了Ap ache Hadoop 等众多软件包。
+’ 
+
+172 
+第8 幸分布式处理
+本章介绍了Dask 和Py Spark 等Python 包的架构和用法，它们提供了功能强大的A凹，让你
+能够设计可在数百台计算机上运行的程序。我们还简要地介绍了
+MPI 库，几十年来它一直用于
+在超级计算机（用于学术研究）上分配工作。
+到目前为止，本书探索了多种程序性能改进方法，使用这些方法可提高程序的速度，并使其
+能够处理更大的数据集。下一章将介绍编写和维护高性能代码的策略和最佳实践。

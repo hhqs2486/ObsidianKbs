@@ -1,0 +1,483 @@
+第9章 ConfigMap
+多数的业务系统由两部分组成。
+●应用执行程序。
+●配置。
+像Nginx或httpd（Apache）等Web Server，脱离了配置文件就无
+从施展。不过一旦应用程序与配置文件一起，就所向披靡。
+以往，我们将应用和配置一起置于一个易于部署的包中。在云原
+生微服务应用出现的早期，我们也采用了类似的做法。不过这一模式
+与云原生世界是不相容的。云原生微服务应用应当将应用和配置解
+耦，其优点如下。
+●可重用的应用镜像。
+●更容易测试。
+●更简单、更少的破坏性改动。
+随着本章内容的深入，将对以上几点予以解释。
+本章内容将分为如下3个部分。
+●概述。
+●ConfigMap原理。
+●ConfigMap实战。
+9.1 概述
+上面提到，多数应用程序由两部分组成：应用执行程序和配置。
+在基于Kubernetes的云原生微服务应用中，这并未改变。不过核心理
+更多IT书籍请关注：www.cmsblogs.cn
+
+念是将这两种组件解耦——它们将被分别构建和存储，然后在运行时
+进行结合。
+下面通过例子来帮助理解其中的好处。
+9.1.1 简单的例子
+想象一下，张三所在的公司将应用部署在Kubernetes上，其中有3
+个独立的环境。
+●dev。
+●test。
+●prod。
+公司的研发人员开发和更新应用程序，这时的基础测试是在dev环
+境中运行的。全面而严格的测试是在test环境中运行的。最终，通过
+测试的组件会被上线到prod环境。
+各个环境中运行的方式都有所不同，比如节点数量、节点配置、
+网络和安全策略，一系列不同的凭证和证书等。
+目前的策略是将各个微服务程序和配置放在一起（程序和配置被
+打包在同一个构件中）。这样的话，需要对每一个业务应用执行如下
+所有操作。
+●构建3个不同的镜像（分别部署到dev、test和prod）。
+●将镜像存储在3个不同的库中（dev、test和prod）。
+●在不同的环境中运行不同版本的镜像（dev、test和prod）。
+对配置的每次改动，都需要构建一个新的镜像，然后还要进行线
+上的滚动升级——即使只是简单地改了个拼写错误或者字号、颜色。
+9.1.2 例子分析
+更多IT书籍请关注：www.cmsblogs.cn
+
+将程序和配置打包到一个构件（容器镜像）中有多方面的不足。
+由于dev、test和prod环境有不同的特点，因此需要针对每个环境
+构建不同的镜像。因为这些差异的存在，prod的镜像无法运行在dev和
+test环境中。从而需要创建和维护3份应用，这会带来更多的复杂性，
+以及更大的出差错的风险。
+另外，还需要在3个不同的仓库中存储3个镜像。不仅如此，还要
+仔细处理各个构件仓库的权限。prod的镜像中通常包含一些敏感的线
+上配置信息、密码、密钥等，而这些是不应该让研发和测试工程师获
+取到的。
+还有一点，当某次升级中同时包含应用程序和配置的更新时，对
+其进行问题排查就更加困难。如果程序和配置紧密耦合，那么故障原
+因也难以区分。而且，即使是对配置的小改动（例如修改Web页面上的
+一个拼写错误），也需要重新打包、测试和部署包括程序和配置在内
+的整个应用。
+9.1.3 解耦的世界
+继续以张三的公司为例，不过方式有了变化。这一次，应用程序
+和配置是解耦的。
+●构建的镜像可以被所有3个环境共享。
+●镜像被保存在一个构件仓库中。
+●在所有的环境中都运行同一版本的镜像。
+为了实现这一点，就需要构建的应用程序镜像尽可能通用，尽可
+能不包含配置。然后在独立的对象中创建和保存配置信息，并在运行
+时将配置信息注入应用中。举例说明，张三现在有一个Web Server，
+可以部署到所有3个环境中，当部署到prod环境的时候，就使用prod的
+配置；当部署到dev的时候，就使用dev的配置。
+更多IT书籍请关注：www.cmsblogs.cn
+
+在这种模式下，只需要构建和测试一个版本的应用镜像，然后将
+其保存到一个仓库中。所有的人都可以从镜像仓库中获取这个镜像，
+因为其中并不包含任何敏感信息。最终，可以独立地对程序和配置分
+别进行更新——更新一个简单的拼写错误再也不需要重新构建和部署
+整个应用程序和配置了。
+那么Kubernetes是如何来实现的呢？
+9.2 ConfigMap原理
+Kubernetes通过提供一个名为ConfigMap（CM）的对象，将配置数
+据从Pod中剥离出来。使用它可以动态地在Pod运行时注入数据。
+注：当提到Pod的时候，实际上是指Pod及其所有的容器。毕竟最
+终是Pod内的容器获取了配置数据。
+ConfigMap是Kubernetes中位于core API组的一等公民，并且版本
+是v1。
+●它是稳定的（v1）。
+●它已经出现了一定时间了（它位于core API组中）。
+●可以使用Kubectl命令来操作它。
+●可以使用YAML文件来定义和部署它。
+ConfigMap通常用于存储如下的非敏感配置数据。
+●环境变量的值。
+●整个配置文件（比如Web Server的配置和数据库的配置）。
+●主机名（hostname）。
+●服务端口（Service port）。
+●账号名称（Account name）。
+我们不应使用ConfigMap来存储诸如凭证和密码等的敏感数据。
+Kubernetes提供了另一种名为Secret的对象来存储敏感数据。Secret
+更多IT书籍请关注：www.cmsblogs.cn
+
+和ConfigMap在设计和实现上是非常类似的，主要的区别就在于
+Kubernetes会对保存在Secret中的值进行混淆。当然，要混淆
+ConfigMap中的数据也是轻而易举的。
+9.2.1 ConfigMap如何工作
+概括来说，ConfigMap是保存配置数据的地方，它可以无缝地将配
+置注入运行中的容器，并且能够被应用以一种方便的方式使用。
+下面深入挖掘一下细节原理。
+在后台，ConfigMap是一个保存有一组键值对（key/value pair）
+的map，每一个键值对称为一个entry。
+●key是一个可以包含字母、数字、中划线、点和下划线的名称。
+●value可以包含任何内容，包括换行符。
+●key和value之间用冒号隔开——key:value。
+举两个简单的例子。
+●db-port:13306。
+●hostname:msb-prd-db1。
+下面的例子更加复杂，它保存了整个配置文件。
+key:conf value:  
+  
+directive in;  
+main block;  
+http {  
+  server {  
+    listen        80 default_server; 
+    server_name   *.msb.com;  
+    root          /var/www/msb.com;  
+    index         index.html   
+  
+    location / {  
+      root   /usr/share/nginx/html;  
+更多IT书籍请关注：www.cmsblogs.cn
+
+      index  index.html;   
+    }  
+  }   
+}
+在数据被保存到ConfigMap之后，可以通过以下任一种途径注入运
+行的容器中。
+●环境变量。
+●容器启动命令的参数。
+●某个卷（volume）上的文件。
+所有的方法都可以被现有的应用无缝使用。事实上，应用程序可
+以通过任意方式——环境变量、启动命令参数、文件——获取到配置
+数据。应用程序并不知道数据来自于ConfigMap。如图9.1所示。
+图9.1
+这3种方式中最灵活的是卷的方式，最受限制的是启动命令的方
+式。本书将会依次介绍这3种方式，不过在开始之前，先简单了解一下
+Kubernetes原生应用。
+9.2.2 ConfigMap与Kubernetes原生应用
+更多IT书籍请关注：www.cmsblogs.cn
+
+所谓Kubernetes原生应用，是指知道自己运行在Kubernetes上
+的、能够查询Kubernetes API的应用。因此，Kubernetes原生应用能
+够通过API直接访问ConfigMap数据，而无须使用类似环境变量或卷的
+方式。这一点能够简化应用的配置，但是应用只能运行在Kubernetes
+上。至本书编写时，Kubernetes原生应用还比较少见。
+9.3 ConfigMap实战
+与其他的Kubernetes对象一样，ConfigMap可以通过命令式和声明
+式的方式创建。首先看一下命令式的方法。
+9.3.1 命令式创建ConfigMap
+命令式地创建ConfigMap的命令是kubectl create configmap，
+configmap可以简写为cm。命令接受两种数据来源。
+●命令行中的字面值（--from-literal）。
+●命令行中指定的文件（--from-file）。
+执行如下命令来创建一个名为testmap1 的ConfigMap，其中包含
+两个通过命令行字面值传入的entry。
+$ kubectl create configmap testmap1 \  
+  --from-literal shortname=msb.com \  
+  --from-literal longname=magicsandbox.com
+以下命令可以用来查看这两个entry是如何保存在map中的。
+$ kubectl describe cm testmap1 
+Name:         testmap1  
+Namespace:    default  
+Labels:       <none>  
+更多IT书籍请关注：www.cmsblogs.cn
+
+Annotations:  <none>  
+  
+Data  
+====  
+shortname:  
+----  
+msb.com  
+longname:  
+----  
+magicsandbox.com  
+Events: <none>  
+由此可见，这个testmap1就是一个被包装为Kubernetes对象的键
+值对map。map中的两个entry就是在命令中指定的——Entry1：
+shortname=msb.com；Entry2：longname=magicsandbox.com。
+下一个命令将通过一个名为cmfile.txt的文件来创建一个
+ConfigMap（假定在当前目录下有一个名为cmfile.txt的文件）。文件
+中的内容是下面的一段单行的文本，读者也可以在本书的GitHub库
+configmaps目录下复制它。
+Magic Sandbox, hands-on learning that blurs the lines 
+between training and the real world.
+执行如下命令基于文件内容来创建ConfigMap。注意，命令中使用
+了--from-file参数来代替--from-literal。
+$ kubectl create cm testmap2 --from-file cmfile.txt 
+configmap/testmap2 created
+针对这个ConfigMap执行describe命令的结果包括以下3个。
+●一个map的entry被创建。
+●entry的key就是文件的名称（cmfile.txt）。
+●entry的value是文件的内容。
+更多IT书籍请关注：www.cmsblogs.cn
+
+$ kubectl describe cm testmap2  
+Name:         testmap2  
+Namespace:    default  
+Labels:       <none>  
+Annotations:  <none>  
+  
+Data  
+====  
+cmfile.txt:  
+----  
+Magic Sandbox, hands-on learning that blurs the lines 
+between training and the real world.  
+Events:  <none>
+9.3.2 查看ConfigMap
+ConfigMap是一等API对象。因此我们可以像对其他API对象一样查
+看和查询ConfigMap。上面已经提到kubectl describe命令，除此之
+外，其他的kubectl命令也可以使用。kubectl get命令可以列出所有
+的ConfigMap，并且可以使用-o yaml和-o j son参数从集群存储中拉
+取完整的配置。
+执行kubectl get来遍历当前命名空间中的所有ConfigMap。
+$ kubectl get cm  
+AME       DATA   AGE  
+testmap1   2      11m  
+testmap2   1      2m23s
+在执行kubectl get命令的时候使用-o yaml参数来显示对象的完
+整配置，以及其他有趣的信息。
+$ kubectl get cm testmap1 -o yaml 
+apiVersion: v1  
+data:   
+  longname: magic-sandbox   
+更多IT书籍请关注：www.cmsblogs.cn
+
+  shortname: msb  
+kind: ConfigMap  
+metadata:  
+  creationTimestamp: "2019-10-27T11:42:23Z"  
+  name: testmap1  
+  namespace: default  
+  resourceVersion: "39223"   
+  selfLink: /api/v1/namespaces/default/configmaps/testmap1  
+  uid: 0b2f5daa-5905-419c-a1bc-0289e32fdead
+有趣的是，ConfigMap对象没有状态（期望状态和当前状态）的概
+念。因此它没有spec和status部分，取而代之的是data。
+在介绍如何将ConfigMap的数据注入Pod之前，先完成关于声明式
+创建ConfigMap的介绍。
+9.3.3 声明式创建ConfigMap
+下面的ConfigMap配置定义了两个entry：firstname和lastname。
+其内容来自本书GitHub库的configmap目录下的multimap.yml。当然，
+读者也可以创建空文件从头编写。
+kind: ConfigMap  
+apiVersion: v1  
+metadata:  
+  name: multimap  
+data:  
+  given: Nigel  
+  family: Poulton
+可见ConfigMap配置中有普通的kind和apiVersion，以及metadata
+字段。不过，就像前面提到的，它没有spec部分，而是在data中定义
+键值映射。
+更多IT书籍请关注：www.cmsblogs.cn
+
+执行如下命令来部署它（命令假定在当前目录下有名为
+multimap.yml的文件）。
+$ kubectl apply -f multimap.yml 
+configmap/multimap created
+接下来的YAML显得更加复杂——它定义了只有一个entry的map，
+不过由于entry的value部分是一个完整的配置文件，显得比较复杂。
+kind: ConfigMap  
+apiVersion: v1  
+metadata:  
+  name: test-conf 
+data:   
+  test.conf: |  
+    env = plex-test  
+    endpoint = 0.0.0.0:31001  
+    char = utf8  
+    vault = PLEX/test  
+    log-size = 512M
+这个YAML中在entry的key之后有一个管道符号（|）。它告诉
+Kubernetes这个符号之后的所有内容都需要被作为一个字面值来看
+待。因此，这个名为test-config的ConfigMap对象包含一个entry。
+●key: test.conf。
+●value: env=plex-test endpoint=0.0.0.0:31001 char=utf8
+vault= PLEX/test log-size=512M。
+使用下面的kubectl命令可以部署ConfigMap。命令假定本地有一
+个名为singlemap.yml的文件。
+$ kubectl apply -f singlemap.yml 
+configmap/test-conf created
+更多IT书籍请关注：www.cmsblogs.cn
+
+查看刚刚创建的multimap和test-conf两个ConfigMap。以下是使
+用kubectl describe命令来查看test-conf的结果。
+$ kubectl describe cm test-conf  
+Name:         test-conf  
+Namespace:    default  
+Labels:       <none>  
+Annotations:  kubectl.kubernetes.io/last-applied-
+configuration:  
+                {"apiVersion":"v1","data":
+{"test.config":"env =  
+                plex-test\nendpoint = 0.0.0.0:31001\nchar 
+= utf8 
+                \nvault = PLEX/test\nlog-size = 
+512M\n"},"...   
+Data  
+====  
+test.config:  
+----  
+env = plex-test  
+endpoint = 0.0.0.0:31001  
+char = utf8  
+vault = PLEX/test  
+log-size = 512M  
+  
+Events:  <none>
+ConfigMap非常灵活，可以被用来向运行中的Pod注入复杂的配置
+文件，比如JSON文件，甚至脚本。
+9.3.4 将ConfigMap数据注入Pod和容器
+前面介绍了如何通过命令式或声明式的方法创建ConfigMap对象。
+下面探讨一下如何将其中的数据注入运行的容器中。
+目前有3种将ConfigMap数据注入容器的途径。
+●作为环境变量。
+更多IT书籍请关注：www.cmsblogs.cn
+
+●作为容器启动命令的参数。
+●作为某个卷上的文件。
+下面依次来介绍它们。
+1.ConfigMap与环境变量
+把ConfigMap数据注入容器的常见方式是通过环境变量。首先，创
+建ConfigMap；然后，将其entity映射到位于Pod template的
+container部分的环境变量中。当容器启动的时候，环境变量会以标准
+Linux或Windows环境变量的形式出现在容器中。
+如图9.2所示。
+图9.2
+从图中可知，目前有一个ConfigMap multimap，它有两个值。
+●given=Nigel。
+●family=Poulton。
+中间Pod template定义了两个将会出现在容器中的环境变量。
+●FIRSTNAME: 与ConfigMap multimap的given entry映射。
+更多IT书籍请关注：www.cmsblogs.cn
+
+●LASTNAME: 与ConfigMap multimap的family entry映射。
+在Pod被调度、容器被创建之后，FIRSTNAME和LASTNAME会作为标
+准的Linux环境变量出现在容器中。从而可以被运行在容器中的应用使
+用。
+本书GitHub库的configmaps目录下有一个名为evnPod.yml的部署
+文件。执行下面的命令来部署该Pod，然后列出包含字符串name的环境
+变量——可以看到FIRSTNAME和LASTNAME两个环境变量。它们是来自
+ConfigMap multimap的值。
+$ kubectl apply -f envPod.yml  
+Pod/envPod created   
+  
+$ kubectl exec envPod -- env | grep NAME 
+HOSTNAME=envPod  
+FIRSTNAME=Nigel  
+LASTNAME=Poulton
+将ConfigMap作为环境变量来使用是有缺点的，即环境变量是静态
+的。也就是说，所有对ConfigMap的更新操作并不会影响到运行中的容
+器。比如，即使更新了 ConfigMap 中given和family的值，容器中的
+环境变量也并不会有变化。
+2.ConfigMap与容器启动命令
+将ConfigMap用于容器启动命令的思路是比较简单的。总体来说，
+容器是允许定义启动命令的，而我们又可以借助变量来自定义启动命
+令。
+下面的Pod模板（template，YAML文件中定义Pod及其容器的部
+分）定义了一个名为args1的容器。容器基于busybox镜像，并且执
+更多IT书籍请关注：www.cmsblogs.cn
+
+行/bin/sh命令（第5行）。
+spec:  
+  containers:  
+    - name: args1  
+      image: busybox  
+      command: [ "/bin/sh", "-c", "echo First name 
+$(FIRSTNAME) last name $(LASTNAME)" ]  
+      env:   
+        - name: FIRSTNAME   
+          valueFrom:   
+            configMapKeyRef: 
+              name: multimap  
+              key: given  
+        - name: LASTNAME   
+          valueFrom:   
+            configMapKeyRef:  
+              name: multimap  
+              key: family 
+仔细看启动命令会发现，其中有两个变量：FIRSTNAME和
+LASTNAME。它们是在env部分进行的具体定义。
+●FIRSTNAME基于ConfigMap multimap的given entry。
+●LASTNAME基于同一个ConfigMap的family entry。
+其关系如图9.3所示。
+更多IT书籍请关注：www.cmsblogs.cn
+
+图9.3
+运行以上YAML部署的Pod时，将会打印“First name Nigel last
+name Poulton”到容器的日志文件。因此，可以通过执行kubectl
+logs <Pod-name> -c args1来查看容器日志。
+若执行describe命令，则会得到以下描述Pod环境变量的内容。
+Environment:  
+  FIRSTNAME:  <set to the key 'given' of config map 
+'multimap'>  
+  LASTNAME:  <set to the key 'family' of config map 
+'multimap'>
+在容器的启动命令中使用ConfigMap，也会遇到和作为环境变量使
+用的时候同样的限制——对ConfigMap的更新不会同步到已运行的容器
+中。
+更多IT书籍请关注：www.cmsblogs.cn
+
+3.ConfigMap与卷
+将ConfigMap与卷结合是最灵活的方式。这种方式是对整个配置文
+件的应用，因此对ConfigMap进行更新也会同步到运行的容器中。也就
+是说，我们可以在部署完容器之后再去更新ConfigMap中的值，这些变
+动对容器中运行的应用来说是可见的。
+通过卷导入ConfigMap的步骤大体如下。
+1.创建一个ConfigMap。
+2.在Pod模板中创建一个ConfigMap卷。
+3.将ConfigMap卷挂载到容器中。
+4.ConfigMap中的entry会分别作为单独的文件出现在容器中。如
+图9.4所示。
+图9.4
+如此仍然会得到ConfigMap multimap的两个值。
+●given=Nigel。
+●family=Poulton。
+下面的YAML创建了一个名为cmoul的Pod，其中配置项如下。
+更多IT书籍请关注：www.cmsblogs.cn
+
+●spec.volumes创建了一个基于ConfigMap multimap的名为
+volmap的卷。
+●spec.containers.volumeMounts将volmap卷挂载到/etc/name。
+apiVersion: v1  
+kind: Pod  
+metadata:  
+  name: cmvol  
+spec:  
+  volumes:  
+    - name: volmap  
+      configMap:  
+        name:multimap 
+  containers:  
+    - name: ctr  
+      image: nginx 
+      volumeMounts:  
+        - name: volmap  
+          mountPath: /etc/name 
+我们来细细研究一下。
+spec.volumes创建了一个特殊类型的卷，称为ConfigMap卷。卷的
+名称是volmap，它基于ConfigMap multimap。这意味着卷中的内容将
+来自ConfigMap的data部分定义的各个entry。这个例子的卷中有两个
+文件：given和family。given文件的内容是Nigel，family文件的内容
+是Poulton。
+在spec.containers中将volmap卷挂载到了容器的/etc/name。也
+就是说在容器中，两个文件的路径如下。
+●/etc/name/given。
+●/etc/name/family。
+执行下面的命令来部署这个容器（来自cmvol.yml部署文件），然
+后执行kubectl exec命令来列出/etc/name目录下的文件。
+更多IT书籍请关注：www.cmsblogs.cn
+
+$ kubectl apply -f cmPod.yml  
+Pod/cmvol created  
+  
+$ kubectl exec volPod -- ls /etc/name 
+family  
+given 
+9.4 总结
+ConfigMap是Kubernetes提供的用于将应用和配置进行解耦的机
+制。
+ConfigMap是Kubernetes API中的一等对象，可通过kubectl
+create、kubectl get和kubectl describe命令来进行创建和管理。它
+可用于保存应用的配置参数，甚至完整的配置文件，但不应被用于保
+存敏感数据。
+ConfigMap是在容器运行时注入的，它可以通过环境变量、容器启
+动命令和卷这3种途径注入容器。卷的方式是最灵活的，容器能够以文
+件的形式获取配置，同时还可将对ConfigMap的更新同步到已运行的容
+器中。
+更多IT书籍请关注：www.cmsblogs.cn

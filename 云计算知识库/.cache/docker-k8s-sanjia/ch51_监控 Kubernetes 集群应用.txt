@@ -1,0 +1,223 @@
+53. 监控 Kubernetes 集群应⽤
+上⼀节我们和⼤家介绍了 Prometheus 的数据指标是通过⼀个公开的 HTTP(S) 数据接⼝获取到的，我
+们不需要单独安装监控的 agent，只需要暴露⼀个 metrics 接⼝，Prometheus 就会定期去拉取数据；
+对于⼀些普通的 HTTP 服务，我们完全可以直接重⽤这个服务，添加⼀个 /metrics 接⼝暴露给
+Prometheus；⽽且获取到的指标数据格式是⾮常易懂的，不需要太⾼的学习成本。
+现在很多服务从⼀开始就内置了⼀个 /metrics 接⼝，⽐如 Kubernetes 的各个组件、istio 服务⽹格都
+直接提供了数据指标接⼝。有⼀些服务即使没有原⽣集成该接⼝，也完全可以使⽤⼀些 exporter 来获
+取到指标数据，⽐如 mysqld_exporter、node_exporter，这些 exporter 就有点类似于传统监控服务中
+的 agent，作为⼀直服务存在，⽤来收集⽬标服务的指标数据然后直接暴露给 Prometheus。
+普通应⽤监控
+前⾯我们已经和⼤家学习了 ingress 的使⽤，我们采⽤的是 Traefik 作为我们的 ingress-controller，
+是我们 Kubernetes 集群内部服务和外部⽤户之间的桥梁。Traefik 本身内置了⼀个 /metrics 的接⼝，
+但是需要我们在参数中配置开启:
+[metrics]
+  [metrics.prometheus]
+    entryPoint = "traefik"
+    buckets = [0.1, 0.3, 1.2, 5.0]
+之前的版本中是通过 --web 和 --web.metrics.prometheus 两个参数进⾏开启的，要注意查看对
+应版本的⽂档。
+我们需要在 traefik.toml 的配置⽂件中添加上上⾯的配置信息，然后更新 ConfigMap 和 Pod 资源对
+象即可，Traefik Pod 运⾏后，我们可以看到我们的服务 IP：
+$ kubectl get svc -n kube-system
+NAME                      TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)              
+         AGE
+......
+traefik-ingress-service   NodePort    10.101.33.56     <none>        80:31692/TCP,8080:321
+15/TCP   63d
+然后我们可以使⽤ curl 检查是否开启了 Prometheus 指标数据接⼝，或者通过 NodePort 访问也可
+以：
+$ curl 10.101.33.56:8080/metrics
+# HELP go_gc_duration_seconds A summary of the GC invocation durations.
+# TYPE go_gc_duration_seconds summary
+go_gc_duration_seconds{quantile="0"} 0.000121036
+go_gc_duration_seconds{quantile="0.25"} 0.000210328
+go_gc_duration_seconds{quantile="0.5"} 0.000279974
+go_gc_duration_seconds{quantile="0.75"} 0.000420738
+go_gc_duration_seconds{quantile="1"} 0.001191494
+监控 Kubernetes 集群应⽤
+348
+
+go_gc_duration_seconds_sum 0.004353914
+go_gc_duration_seconds_count 12
+# HELP go_goroutines Number of goroutines that currently exist.
+# TYPE go_goroutines gauge
+go_goroutines 63
+......
+从这⾥可以看到 Traefik 的监控数据接⼝已经开启成功了，然后我们就可以将这个 /metrics 接⼝配置
+到 prometheus.yml 中去了，直接加到默认的 prometheus 这个 job 下⾯：(prome-cm.yaml)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: kube-ops
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 30s
+      scrape_timeout: 30s
+    scrape_configs:
+    - job_name: 'prometheus'
+      static_configs:
+        - targets: ['localhost:9090']
+    - job_name: 'traefik'
+      static_configs:
+        - targets: ['traefik-ingress-service.kube-system.svc.cluster.local:8080']
+当然，我们这⾥只是⼀个很简单的配置，scrape_configs 下⾯可以⽀持很多参数，例如：
+basic_auth 和 bearer_token：⽐如我们提供的 /metrics 接⼝需要 basic 认证的时候，通过传统
+的⽤户名/密码或者在请求的header中添加对应的 token 都可以⽀持
+kubernetes_sd_configs 或 consul_sd_configs：可以⽤来⾃动发现⼀些应⽤的监控数据
+由于我们这⾥ Traefik 对应的 servicename 是 traefik-ingress-service ，并且在 kube-system 这个
+namespace 下⾯，所以我们这⾥的 targets 的路径配置则需要使⽤ FQDN 的形式： traefik-ingress-
+service.kube-system.svc.cluster.local ，当然如果你的 Traefik 和 Prometheus 都部署在同⼀个命名
+空间的话，则直接填  servicename:serviceport 即可。然后我们重新更新这个 ConfigMap 资源对象：
+$ kubectl delete -f prome-cm.yaml
+configmap "prometheus-config" deleted
+$ kubectl create -f prome-cm.yaml
+configmap "prometheus-config" created
+现在 Prometheus 的配置⽂件内容已经更改了，隔⼀会⼉被挂载到 Pod 中的 prometheus.yml ⽂件也
+会更新，由于我们之前的 Prometheus 启动参数中添加了 --web.enable-lifecycle 参数，所以现在我
+们只需要执⾏⼀个 reload 命令即可让配置⽣效：
+$ kubectl get svc -n kube-ops
+NAME         TYPE       CLUSTER-IP     EXTERNAL-IP   PORT(S)                          AGE
+监控 Kubernetes 集群应⽤
+349
+
+prometheus   NodePort   10.102.74.90   <none>        9090:30358/TCP                   3d
+$ curl -X POST "http://10.102.74.90:9090/-/reload"
+由于 ConfigMap 通过 Volume 的形式挂载到 Pod 中去的热更新需要⼀定的间隔时间才会⽣效，
+所以需要稍微等⼀⼩会⼉。
+reload 这个 url 是⼀个 POST 请求，所以这⾥我们通过 service 的 CLUSTER-IP:PORT 就可以访问到
+这个重载的接⼝，这个时候我们再去看 Prometheus 的 Dashboard 中查看采集的⽬标数据： 
+可以看到我们刚刚添加的 traefik 这个任务已经出现了，然后同样的我们可以切换到 Graph 下⾯去，
+我们可以找到⼀些 Traefik 的指标数据，⾄于这些指标数据代表什么意义，⼀般情况下，我们可以去查
+看对应的 /metrics 接⼝，⾥⾯⼀般情况下都会有对应的注释。
+到这⾥我们就在 Prometheus 上配置了第⼀个 Kubernetes 应⽤。
+使⽤ exporter 监控应⽤
+上⾯我们也说过有⼀些应⽤可能没有⾃带 /metrics 接⼝供 Prometheus 使⽤，在这种情况下，我们就
+需要利⽤ exporter 服务来为 Prometheus 提供指标数据了。Prometheus 官⽅为许多应⽤就提供了对
+应的 exporter 应⽤，也有许多第三⽅的实现，我们可以前往官⽅⽹站进⾏查看：exporters
+⽐如我们这⾥通过⼀个redis-exporter的服务来监控 redis 服务，对于这类应⽤，我们⼀般会以 sidecar
+的形式和主应⽤部署在同⼀个 Pod 中，⽐如我们这⾥来部署⼀个 redis 应⽤，并⽤ redis-exporter 的⽅
+式来采集监控数据供 Prometheus 使⽤，如下资源清单⽂件：（prome-redis.yaml）
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: kube-ops
+spec:
+  template:
+监控 Kubernetes 集群应⽤
+350
+
+    metadata:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9121"
+      labels:
+        app: redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:4
+        resources:
+          requests:
+            cpu: 100m
+            memory: 100Mi
+        ports:
+        - containerPort: 6379
+      - name: redis-exporter
+        image: oliver006/redis_exporter:latest
+        resources:
+          requests:
+            cpu: 100m
+            memory: 100Mi
+        ports:
+        - containerPort: 9121
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: redis
+  namespace: kube-ops
+spec:
+  selector:
+    app: redis
+  ports:
+  - name: redis
+    port: 6379
+    targetPort: 6379
+  - name: prom
+    port: 9121
+    targetPort: 9121
+可以看到上⾯我们在 redis 这个 Pod 中包含了两个容器，⼀个就是 redis 本身的主应⽤，另外⼀个容器
+就是 redis_exporter。现在直接创建上⾯的应⽤：
+$ kubectl create -f prome-redis.yaml
+deployment.extensions "redis" created
+service "redis" created
+创建完成后，我们可以看到 redis 的 Pod ⾥⾯包含有两个容器：
+$ kubectl get pods -n kube-ops
+NAME                          READY     STATUS    RESTARTS   AGE
+prometheus-8566cd9699-gt9wh   1/1       Running   0          3d
+redis-544b6c8c54-8xd2g        2/2       Running   0          3m
+$ kubectl get svc -n kube-ops
+NAME         TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)                          AG
+E
+监控 Kubernetes 集群应⽤
+351
+
+prometheus   NodePort    10.102.74.90    <none>        9090:30358/TCP                   3d
+redis        ClusterIP   10.104.131.44   <none>        6379/TCP,9121/TCP                5m
+我们可以通过 9121 端⼝来校验是否能够采集到数据：
+$ curl 10.104.131.44:9121/metrics
+# HELP go_gc_duration_seconds A summary of the GC invocation durations.
+# TYPE go_gc_duration_seconds summary
+go_gc_duration_seconds{quantile="0"} 0
+go_gc_duration_seconds{quantile="0.25"} 0
+go_gc_duration_seconds{quantile="0.5"} 0
+go_gc_duration_seconds{quantile="0.75"} 0
+go_gc_duration_seconds{quantile="1"} 0
+go_gc_duration_seconds_sum 0
+go_gc_duration_seconds_count 0
+......
+# HELP redis_used_cpu_user_children used_cpu_user_childrenmetric
+# TYPE redis_used_cpu_user_children gauge
+redis_used_cpu_user_children{addr="redis://localhost:6379",alias=""} 0
+同样的，现在我们只需要更新 Prometheus 的配置⽂件：
+- job_name: 'redis'
+  static_configs:
+  - targets: ['redis:9121']
+由于我们这⾥的 redis 服务和 Prometheus 处于同⼀个 namespace，所以我们直接使⽤
+servicename 即可。
+配置⽂件更新后，重新加载：
+$ kubectl delete -f prome-cm.yaml
+configmap "prometheus-config" deleted
+$ kubectl create -f prome-cm.yaml
+configmap "prometheus-config" created
+# 隔⼀会⼉执⾏reload操作
+$ curl -X POST "http://10.102.74.90:9090/-/reload"
+监控 Kubernetes 集群应⽤
+352
+
+这个时候我们再去看 Prometheus 的 Dashboard 中查看采集的⽬标数据： 
+监控 Kubernetes 集群应⽤
+353
+
+可以看到配置的 redis 这个 job 已经⽣效了。切换到 Graph 下⾯可以看到很多关于 redis 的指标数据：
+监控 Kubernetes 集群应⽤
+354
+
+我们选择任意⼀个指标，⽐如 redis_exporter_scrapes_total ，然后点击执⾏就可以看到对应的数据
+图表了： 
+注意，如果时间有问题，我们需要⼿动在 Graph 下⾯调整下时间
+除了监控群集中部署的服务之外，我们下节课再和⼤家学习怎样监视 Kubernetes 群集本身。
+点击查看本⽂视频
+扫描下⾯的⼆维码(或微信搜索 k8s技术圈 )关注我们的微信公众帐号，在微信公众帐号中回复 加群 即
+可加⼊到我们的 kubernetes 讨论群⾥⾯共同学习。
+监控 Kubernetes 集群应⽤
+355
+
+k8s技术圈⼆维码
+Copyright © qikqiak.com 2018 all right reserved，powered by GitbookUpdated: 2019-03-12 13:05:35
+监控 Kubernetes 集群应⽤
+356

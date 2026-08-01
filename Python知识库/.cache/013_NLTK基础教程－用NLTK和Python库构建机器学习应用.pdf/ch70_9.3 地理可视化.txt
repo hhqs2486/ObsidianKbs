@@ -1,0 +1,239 @@
+134 第9 章  Python 中的社交媒体挖掘 
+>>> import nltk 
+>>> from nltk import word_tokenize,sent_tokenize 
+>>> from nltk import FreqDist 
+>>> tweet_tokens = [] 
+>>> for tweet in tweet_text: 
+>>>     tweet_tokens.append(word_tokenize(tweet)) 
+>>> Topic_distribution = nltk.FreqDist(tweet_tokens) 
+>>> Freq_dist_nltk.plot(50, cumulative=False) 
+除此之外，还有一个更复杂一些的方法，就是利用第3 章“词性标注”中所学到的词
+性标注器。其原理是：主题在大多数情况下都是一些名词或实体项，所以，可以对其执行
+相同的处理。上面的代码已经读取了每个tweet 并对其进行了标识化，下面以POS 为过滤
+器，只选取其中的名词来充当主题：
+>>> import nltk 
+>>> Topics = []  
+>>> for tweet in tweet_text: 
+>>>     tagged = nltk.pos_tag(word_tokenize(tweet)) 
+>>>     Topics_token = [word for word,pos in ] in tagged if pos in ['NN','NNP'] 
+>>>     print Topics_token 
+如果想让这个例子再酷炫一点，还可以跨时段地收集一些tweet，然后为其生成绘制图。
+这样就会得到一份含义非常清楚的热门报告。例如，之前正在寻找的是与“Apple Watch”
+相关的数据。这个词应该会在苹果推出Apple Watch 的那一天，以及该产品开始销售的那
+一天达到高峰。但更感兴趣的是那几天除了这些主题，还出现了什么样的主题，这些主题
+随着时间呈现出了何种讨论趋势。
+9.3  地理可视化 
+地理位置的可视化也是社交媒体的常见应用之一。在tweet 结构中，会看到geo、
+longitude 和latitude 这三个与之相关的属性。通过访问这些属性，就能利用像D3 这样的可
+视化程序库做出图9-1 所示的内容。 
+在这个例子中看到的只是其中一种可视化实现，它呈现的是全美tweet 的可视化分布。
+从中可以清楚地看出纽约这些东部地区的使用强度正在增长。现在，公司可以通过对客户
+进行类似的分析来厘清其客户群喜欢待在哪些地方。除此之外，还能根据情绪来对tweet
+进行文本挖掘，以此来推断哪几个州的客户对公司不太满意等情况。
+
+9.3  地理可视化 135 
+图9-1 
+9.3.1  影响力检测 
+在社交图语境中，对具有重要影响力的社交图中的重要节点进行检测也是一个很重要
+的问题。因此，如果我们手里有数百万条关于我们公司的tweet，那么其中一个重要用例就
+是要收集该社交媒体中最有影响力的那些客户，然后针对他们进行品牌推广、营销或改善
+他们的参与度。
+如果具体到Twitter 的情况，就得回到图论和PageRank 的概念上来，其中对于一个给
+定的节点，如果其出度（outdegree）比例比入度（indegree）高，该节点就是具有影响力的。
+原因非常直观，拥有较多关注者的人显然通常要比他们所关注的人有影响力。有一家名为
+KLOUT（https://klout.com/）的公司一直很专注于这类问题。所以下面就来写一个最基本而
+且直观的算法来为这些公司评个分：
+>>> klout_scores = [ (tweet['user']['followers_count]/tweet['user'] 
+['friends_count'],tweet['user']) for tweet in tweet ] 
+当然在这些以Twitter 为基础的例子中，我们所修改的字段内容始终是完全相同的。其
+实也可以用Facebook 帖子来示范如何构建热门话题。同样地，也可以示范如何对Facebook
+用户、所发帖的地理位置及其影响力进行可视化处理。事实上，下一节就要来看看这些应
+用在Facebook 中会有哪些变化。 
+9.3.2  Facebook 
+Facebook 的私人化程度要更高一些，有些接近于私人式的社交网络。Facebook 出于隐
+
+136 第9 章  Python 中的社交媒体挖掘 
+私和安全方面的考虑，通常不会允许我们收集用户的订阅内容/帖子。因此，Facebook 的图
+结构API 只能以有限的方式来反馈给定页面，关于这方面的内容，推荐读者去阅读一下
+https://developers.facebook.com/docs/graph-api/using-graph-api/v2.3 中的说明，以加深理解。 
+接下来要解决的一个问题是如何用Python 来访问这些图结构API 并加以应用。业界围
+绕着Facebook API 编写了很多封装器，这里使用的是最常见的Facebook SDK： 
+$ pip install facebook-sdk 
+小技巧： 
+也可以到以下链接中获取相应的安装包：
+https://github.com/Pythonforfacebook/facebook-sdk。 
+然后，下一步就是要获取应用程序的访问令牌了。Facebook 会将每个API 调用都视为
+一个应用程序。因此即使是数据收集这一步骤，也需要将其伪装成一个应用程序。
+提示： 
+如果想要获得属于自己的访问令牌，请访问：
+https://developers.facebook.com/tools/explorer。 
+现在所有设置都完成了！下面先来试试一个使用度最高的Facebook 的图结构API。在
+该API 中，Facebook 提供的是一个针对页面、用户、事件、地点等信息的基于图结构的搜
+索功能。这种情况下，获得相关帖子的过程变成了两个阶段，必须先找到与自己感兴趣的
+主题相关的pageid / userid，然后才能访问到该页面的订阅内容。下面就要来实现一个简单
+的用例，就是在某公司的官方页面上寻找客户投诉。其具体做法如下：
+>>> import facebook 
+>>> import json 
+>>> fo = open("fdump.txt",'w') 
+>>> ACCESS_TOKEN = 'XXXXXXXXXXX' # https://developers.facebook.com/tools/explorer 
+>>> fb = facebook.GraphAPI(ACCESS_TOKEN) 
+>>> company_page = "326249424068240" 
+>>> content = fb.get_object(company_page) 
+>>> fo.write(json.dumps(content)) 
+这段代码要将访问令牌附加到Facebook 的图结构API 中，这样才能通过该API 对
+Facebook 做一个REST 调用。但前提是必须要先获得给定页面的ID。下面来看看要附加的
+访问令牌，其代码如下：
+"website":"www.dimennachildrenshistorymuseum.org", 
+"can_post":true, 
+
+9.3  地理可视化 137 
+"category_list":[ 
+{ 
+"id":"244600818962350", 
+"name":"History Museum" 
+}, 
+{ 
+"id":"187751327923426", 
+"name":"Educational Organization" 
+} 
+], 
+"likes":1793, 
+}, 
+"id":"326249424068240", 
+"category":"Museum/art gallery", 
+"has_added_app":false, 
+"talking_about_count":8, 
+"location":{ 
+"city":"New York", 
+"zip":"10024", 
+"country":"United States", 
+"longitude":-73.974413, 
+"state":"NY", 
+"street":"170 Central Park W", 
+"latitude":40.779236 
+}, 
+"is_community_page":false, 
+"username":"nyhistorykids", 
+"description":"The first-ever museum bringing American history to life  
+through the eyes of children, where kids plus history equals serious  
+fun! Kids of all ages can practice their History Detective skills at  
+the DiMenna Children's History Museum and:\n\n\u2022 discover the past  
+through six historic figure pavilions\n\n\u2022!",  
+"hours":{ 
+""thu_1_close":"18:00" 
+}, 
+"phone":"(212) 873-3400", 
+"link":"https://www.facebook.com/nyhistorykids", 
+"price_range":"$ (0-10)", 
+"checkins":1011, 
+"about":"The DiMenna Children' History Museum is the first-ever museum  
+bringing American history to life through the eyes of children. Visit it 
+inside the New-York Historical Society!",  
+"name":"New-York Historical Society DiMenna Children's History Museum", 
+"cover":{ 
+"source":"https://scontent.xx.fbcdn.net/hphotos-xpf1/t31.0-8/s720x720/104 
+
+138 第9 章  Python 中的社交媒体挖掘 
+9166_672951706064675_339973295_o.jpg", 
+"cover_id":"672951706064675", 
+"offset_x":0, 
+"offset_y":54, 
+"id":"672951706064675" 
+}, 
+"were_here_count":1011, 
+"is_published":true 
+}, 
+如你所见，这里所展现的Facebook 数据模式与Twitter 非常类似。接下来，可以来看看这
+个用例究竟请求到了怎样的信息。在大多数情况下，用户的post、category、name、about 和likes
+都是它的重要字段。当然，这个例子所演示的是一个博物馆的页面，而在更商业化的用例中，
+公司页面上应该会有一个长长的帖子列表和其他有用的信息，它们都可以提供很好的观察点。 
+假设组织xyz.org 在Facebook 上有一个专属页面，而现在想要了解有哪些用户在页面
+上投诉了我们。这对于投诉分类这样的应用来说也是一个很好的用例。目前实现这一应
+用的方式非常简单。需要先在fdump.txt 中查找一组关键字，然后其操作的复杂程度就与
+第6 章使用文本分类算法来进行评分的方法差不多了。 
+现在来看另一个用例：查找感兴趣的主题，并在其结果页面中查看开放性帖子及其评
+论。这个功能与直接用Facebook 主页上的图形搜索栏来搜索非常类似。但用编程的方式来
+做这件事的好处是可以自行主导这些搜索，并可以对每个页面上的用户评论进行递归搜索。
+下面来看看搜索用户数据的代码：
+User search 
+>>> fb.request("search", {'q' : 'nitin', 'type' : 'user'})  
+Place based on the nearest location. 
+>>> fb.request("search", {'q' : 'starbucks', 'type' : 'place'})  
+Look for open pages. 
+>>> fb.request("search", {'q' : 'Stanford university', 'type' : page}) 
+Look for event matching to the key word. 
+>>> fb.request("search", {'q' : 'beach party', 'type' : 'event'}) 
+一旦将所有的相关数据都转换成了结构化格式，接下来就可以运用在探讨NLP 和机器
+学习这些主题时所学到的那些概念了。下面选择用同一个用例来查找帖子，不过这回主要找
+到的是该Facebook 页面上的投诉信息。 
+假设现在得到了以下格式的数据
+①： 
+①译者注：考虑到原文讨论的是英文环境下的文本处理，其处理逻辑跟中文大不相同，所以数据文本还是不翻译为好。
+
+9.3  地理可视化 139 
+Userid
+FB Post
+XXXX0001 
+The product was pathetic and I tried reaching out to your customer care, but nobody responded 
+XXXX002 
+Great work guys 
+XXXX003 
+Where can I call to get my account activated ??? Really bad service 
+在这里，我们等于是回到了第6 章所用过的那个示例中，当时构建了一个文本分类
+器，并用它来检测某段SMS（消息文本）是否为垃圾邮件。类似地，在这里也可以利用
+这些帖子中的数据来创建训练数据，在这里需要这些手动标注器标注出那些带投诉内容
+的评论，其他则一概忽略。一旦得到了这些重要的训练数据，就可以构建出相同的文本
+分类器了：
+fb_classification.py  
+>>> from sklearn.feature_extraction.text import TfidfVectorizer 
+>>> vectorizer = TfidfVectorizer(min_df=2, ngram_range=(1, 2), stop_  
+words='english',  strip_accents='unicode',  norm='l2')  
+>>> X_train = vectorizer.fit_transform(x_train) 
+>>> X_test = vectorizer.transform(x_test) 
+>>> from sklearn.linear_model import SGDClassifier 
+>>> clf = SGDClassifier(alpha=.0001, n_iter=50).fit(X_train, y_train) 
+>>> y_pred = clf.predict(X_test) 
+接下来，假设这里只有三种样本。将其中的第一种和第三种标注为投诉类信息，第二
+种则是非投诉类信息。尽管是以相同的方式构建了一个单元或二元模型的向量化器，但事
+实上这里是可以用相同的处理过程来构建一个分类器的，因为忽略了这里的一些预处理步
+骤。你可以在这里执行与第6 章中相同的处理过程。当然在某些情况下，想要得到像上面
+这样的训练数据是非常困难或者代价高昂的。所以对于其中的一些情况，也可以采用像文
+本聚类或主题建模这样的无监督型算法。除此之外，另一种做法是采用一些开放使用的不
+同数据集，然后用它来构建模型并应用。例如在同一个用例中，也可以直接以Web 的方式
+来抓取一些可用的客户投诉，并将其用作模型中的训练数据。这也是一种很好的获取相关
+标签数据的替代做法。
+9.3.3  有影响力的朋友 
+找出你社交关系图中最有影响力的人也是社交媒体中一个常见的用例。对于我们来说
+这个问题就是要找出一个在图结构中拥有大量入向链接和外向链接的节点，它就被认为是
+有影响力的节点。
+
+140 第9 章  Python 中的社交媒体挖掘 
+在商业背景下，相同的问题可能就是要找出最有影响力的客户，并以他们为目标来推
+销产品。
+下面就来看一下寻找有影响力的朋友的代码：
+>>> friends = fb.get_connections("me", "friends")["data"] 
+>>> print friends  
+>>> for frd in friends: 
+>>>     print fb.get_connections(frd["id"],"friends") 
+一旦手里有了一个包含自身所有朋友以及这些朋友的共同朋友的列表，就可以创建一
+个这样的数据结构：
+源节点
+目标节点
+存在链接数
+朋友1 
+朋友2 
+1 
+朋友1 
+朋友3 
+1 
+朋友2 
+朋友3 
+0 
+朋友1 
+朋友4 
+1 
+这是一种可用来生成某种网络关系的数据结构，它非常有利于对社交关系图进行可视
+化。这里使用的D3 库，但Python 社区中还有一个名为NetworkX（https://networkx.
+github.io/）的库，也可以用来生成可视化的图结构，如图9-2 所示。要想生成可视化的图
+结构，首先要基于之前的信息弄清楚谁是谁的朋友，以此来创建一个邻接矩阵。
+图9-2 

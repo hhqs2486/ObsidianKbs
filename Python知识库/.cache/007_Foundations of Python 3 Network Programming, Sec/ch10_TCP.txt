@@ -1,0 +1,765 @@
+C H A P T E R   3 
+ 
+■ ■ ■ 
+35
+TCP 
+The Transmission Control Protocol (TCP) is the workhorse of the Internet. First defined in 1974, it lets 
+applications send one another streams of data that, if they arrive at all—that is, unless a connection dies 
+because of a network problem—are guaranteed to arrive intact, in order, and without duplication. 
+Protocols that carry documents and files nearly always ride atop TCP, including HTTP and all the 
+major ways of transmitting e-mail. It is also the foundation of choice for protocols that carry on long 
+conversations between people or computers, like SSH and many popular chat protocols. 
+When the Internet was younger, it was sometimes possible to squeeze a little more performance out 
+of a network by building your application atop UDP and choosing the size and timing of each individual 
+packet yourself. But modern TCP implementations tend to be very smart, having benefited from more 
+than 30 years of improvement, innovation, and research, and these days even very performance-critical 
+applications like message queues (Chapter 8) often choose TCP as their medium. 
+How TCP Works 
+As we learned in Chapter 2, real networks are fickle things that sometimes drop the packets you transmit 
+across them, occasionally create extra copies of a packet instead, and are also known to deliver packets 
+out of order. With a bare-packet facility like UDP, your own application code has to worry about whether 
+messages arrived, and have a plan for recovering if they did not. But with TCP, the packets themselves 
+are hidden and your application can simply stream data toward its destination, confident that it will be 
+re-transmitted until it finally arrives. 
+The classic definition of TCP is RFC 793 from 1981, though many subsequent RFCs have detailed 
+extensions and improvements. 
+How does TCP provide a reliable connection? It starts by combining two mechanisms that we 
+discussed in Chapter 2. There, we had to implement them ourselves because we were using UDP. But 
+with TCP they come built in, and are performed by the operating system’s network stack without your 
+application even being involved. 
+First, every packet is given a sequence number, so that the system on the receiving end can put 
+them back together in the right order, and so that it can notice missing packets in the sequence and ask 
+that they be re-transmitted. 
+Instead of using sequential integers (1,2,…) to mark packets, TCP uses a counter that counts the 
+number of bytes transmitted. So a 1,024-byte packet with a sequence number of 7,200 would be followed 
+by a packet with a sequence number of 8,224. This means that a busy network stack does not have to 
+remember how it broke a data stream up into packets; if asked for a re-transmission, it can break the 
+stream up into packets some other way (which might let it fit more data into a packet if more bytes are 
+now waiting for transmission), and the receiver can still put the packets back together. 
+The initial sequence number, in good TCP implementations, is chosen randomly so villains cannot 
+assume that every connection starts at byte zero and easily craft forged packets by guessing how far a 
+transmission that they want to interrupt has proceeded. 
+
+CHAPTER 3 ■ TCP 
+36 
+Rather than running very slowly in lock-step by needing every packet to be acknowledged before it 
+sends the next one, TCP sends whole bursts of packets at a time before expecting a response. The 
+amount of data that a sender is willing to have on the wire at any given moment is called the size of the 
+TCP “window.” 
+The TCP implementation on the receiving end can regulate the window size of the transmitting end, 
+and thus slow or pause the connection. This is called “flow control.” This lets it forbid the transmission 
+of additional packets in cases where its input buffer is full and it would have to discard any more data if it 
+were to arrive right now. 
+Finally, if TCP sees that packets are being dropped, it assumes that the network is becoming 
+congested and stops sending as much data every second. This can be something of a disaster on wireless 
+networks and other media where packets are sometimes simply lost because of noise. It can also ruin 
+connections that are running fine until a router reboots and the endpoints cannot talk for, say, 20 
+seconds; by the time the network comes back up, the two TCP peers will have determined that the 
+network is quite extraordinarily overloaded with traffic, and will for some time afterward refuse to send 
+each other data at anything other than a trickle. 
+The protocol involves many other nuances and details beyond the behaviors just described, but 
+hopefully this description gives you a good feel for how it will work—even though, you will remember, all 
+your application will see is a stream of data, with the actual packets and sequence numbers cleverly 
+hidden away by your operating system network stack. 
+When to Use TCP 
+If your network programs are at all like mine, then most of the network communications you perform 
+from Python will use TCP. You might, in fact, spend an entire career without ever deliberately generating 
+a UDP packet from your code. (Though, as we will see in Chapter 5, UDP is probably involved every time 
+your program needs to use a DNS hostname!) 
+Because TCP has very nearly become a universal default when two programs need to communicate, 
+we should look at a few instances in which its behavior is not optimal for certain kinds of data, in case an 
+application you are writing ever falls into one of these categories. 
+First, TCP is unwieldy for protocols where clients want to send single, small requests to a server, and 
+then are done and will not talk to it further. It takes three packets for two hosts to set up a TCP 
+connection—the famous sequence of SYN, SYN-ACK, and ACK (which mean “I want to talk, here is the 
+packet sequence number I will be starting with”; “okay, here’s mine”; “okay!”)—and then another three 
+or four to shut the connection back down (either a quick FIN, FIN-ACK, ACK, or a slightly longer pair of 
+separate FIN and ACK packets). That is six packets just to send a single request! Protocol designers 
+quickly turn to UDP in such cases. 
+One question to ask, though, is whether a client might want to open a TCP connection and then use 
+it over several minutes or hours to make many separate requests to the same server. Once the 
+connection was going and the cost of the handshake had been paid, each actual request and response 
+would only require a single packet in each direction—and they would benefit from all of TCP’s 
+intelligence about re-transmitting, exponential backing off, and flow control. 
+Where UDP really shines, then, is where such a long-term relationship does not pertain between 
+client and server, and especially where there are so many clients that a typical TCP implementation 
+would run out of port numbers if it had to keep up with a separate data stream for each active client. 
+The second situation where TCP is inappropriate is when an application can do something much 
+smarter than simply re-transmit data when a packet has been lost. Imagine an audio chat conversation, 
+for example: if a second’s worth of data is lost because of a dropped packet, then it will do little good to 
+simply re-send that same second of audio, over and over, until it finally arrives. 
+Instead, the client should just paper over that awkward second with whatever audio it can piece 
+together from the packets that did arrive (a clever audio protocol will begin and end each packet with a 
+bit of heavily-compressed audio from the preceding and following moments of time for exactly this 
+
+CHAPTER 3 ■ TCP 
+37
+situation), and then keep going after the interruption as though it did not occur. This is impossible with 
+TCP, and so UDP is often the foundation of live-streaming multimedia over the Internet. 
+What TCP Sockets Mean 
+As was the case with UDP in Chapter 2, TCP uses port numbers to distinguish different applications 
+running at the same IP address, and follows exactly the same conventions regarding well-known and 
+ephemeral port numbers. Re-read the section “Addresses and Port Numbers” if you want to review the 
+details. 
+As we saw in the previous chapter, it takes only a single socket to speak UDP: a server can open a 
+datagram port and then receive packets from thousands of different clients. While it is possible to 
+connect() a datagram socket to a particular conversation partner so that you always send() to one 
+address and only recv() packets sent back from that address, the idea of a connection is just a 
+convenience. The effect of connect() is exactly the same as your application simply deciding to send to 
+only one address with sendto() calls, and then ignoring responses from any but that same address. 
+But with a stateful stream protocol like TCP, the connect() call becomes the fundamental act upon 
+which all other network communication hinges. It is, in fact, the moment when your operating system’s 
+network stack kicks off the handshake protocol just described that—if successful—will make both ends 
+of the TCP stream ready for use. 
+And this means that a TCP connect() can fail. The remote host might not answer; it might refuse the 
+connection; or more obscure protocol errors might occur like the immediate receipt of a RST (“reset”) 
+packet. Because a stream connection involves setting up a persistent connection between two hosts, the 
+other host needs to be listening and ready to accept your connection. 
+On the “server side”—which, for the purpose of this chapter, is the conversation partner not doing 
+the connect() call but receiving the SYN packet that it initiates—an incoming connection generates an 
+even more momentous event, the creation of a new socket! This is because the standard POSIX interface 
+to TCP actually involves two completely different kinds of sockets: “passive” listening sockets and active 
+“connected” ones. 
+• 
+A passive socket holds the “socket name”—the address and port number—at 
+which the server is ready to receive connections. No data can ever be received or 
+sent by this kind of port; it does not represent any actual network conversation. 
+Instead, it is how the server alerts the operating system to its willingness to receive 
+incoming connections in the first place. 
+• 
+An active, connected socket is bound to one particular remote conversation 
+partner, who has their own IP address and port number. It can be used only for 
+talking back and forth with that partner, and can be read and written to without 
+worrying about how the resulting data will be split up into packets—in many 
+cases, a connected socket can be passed to another POSIX program that expects to 
+read from a normal file, and the program will never even know that it is talking to 
+the network! 
+Note that while a passive socket is made unique by the interface address and port number at which 
+it is listening (so that no one else is allowed to grab that same address and port), there can be many 
+active sockets that all share the same local socket name. A busy web server to which a thousand clients 
+have all made HTTP connections, for example, will have a thousand active sockets all bound to its public 
+IP address at port 80. What makes an active socket unique is, rather, the four-part coordinate: 
+(local_ip, local_port, remote_ip, remote_port) 
+
+CHAPTER 3 ■ TCP 
+38 
+It is this four-tuple by which the operating system names each active TCP connection, and 
+incoming TCP packets are examined to see whether their source and destination address associate them 
+with any of the currently active sockets on the system. 
+A Simple TCP Client and Server 
+Take a look at Listing 3–1. As I did in the last chapter, I have here combined what could have been two 
+separate programs into a single listing, both so that they can share a bit of common code (you can see 
+that both the client and server create their TCP socket in the same way), and so that the client and server 
+code are directly adjacent here in the book and you can read them together more easily. 
+Listing 3–1. Simple TCP Server and Client 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 3 - tcp_sixteen.py 
+# Simple TCP client and server that send and receive 16 octets 
+ 
+import socket, sys 
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM) 
+ 
+HOST = sys.argv.pop() if len(sys.argv) == 3 else '127.0.0.1' 
+PORT = 1060 
+ 
+def recv_all(sock, length): 
+»   data = '' 
+»   while len(data) < length: 
+»   »   more = sock.recv(length - len(data)) 
+»   »   if not more: 
+»   »   »   raise EOFError('socket closed %d bytes into a %d-byte message' 
+»   »   »                  % (len(data), length)) 
+»   »   data += more 
+»   return data 
+ 
+if sys.argv[1:] == ['server']: 
+»   s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) 
+»   s.bind((HOST, PORT)) 
+»   s.listen(1) 
+»   while True: 
+»   »   print 'Listening at', s.getsockname() 
+»   »   sc, sockname = s.accept() 
+»   »   print 'We have accepted a connection from', sockname 
+»   »   print 'Socket connects', sc.getsockname(), 'and', sc.getpeername() 
+»   »   message = recv_all(sc, 16) 
+»   »   print 'The incoming sixteen-octet message says', repr(message) 
+»   »   sc.sendall('Farewell, client') 
+»   »   sc.close() 
+»   »   print 'Reply sent, socket closed' 
+ 
+elif sys.argv[1:] == ['client']: 
+»   s.connect((HOST, PORT)) 
+»   print 'Client has been assigned socket name', s.getsockname() 
+»   s.sendall('Hi there, server') 
+
+CHAPTER 3 ■ TCP 
+39
+»   reply = recv_all(s, 16) 
+»   print 'The server said', repr(reply) 
+»   s.close() 
+ 
+else: 
+»   print >>sys.stderr, 'usage: tcp_local.py server|client [host]' 
+In Chapter 2, we approached the subject of bind() quite carefully, since the address we provide as 
+its argument makes a very important choice: it determines whether remote hosts can try connecting to 
+our server, or whether our server is protected against outside connections and will be contacted only by 
+other programs running on the same machine. So Chapter 2 started with safe program listings that used 
+only the localhost’s loopback interface, which always has the IP address 127.0.0.1, and then progressed 
+to more dangerous listings that allowed hosts anywhere on the Internet to connect to our sample code. 
+Here, we have combined both possibilities into a single listing. By default, this server code makes 
+the safe choice of binding to 127.0.0.1, but we can supply a command-line argument to bind to one of 
+our machine’s external IP addresses instead—or we can even supply a blank string to indicate that we 
+will accept connections at any of our machine’s IP addresses whatever. Again, review Chapter 2 if you 
+want to remember all the rules, which apply equally to TCP and UDP connections and sockets. 
+Our choice of port number is also the same as the one we made for our UDP port in Chapter 2 and, 
+again, the symmetry between TCP and UDP on the subject of port numbers is close enough that you can 
+simply apply the reasoning we used there to understand why the same choice has been used here in this 
+chapter. 
+So what are the differences between our earlier efforts with UDP, and this new client and server that 
+are instead built atop TCP? 
+The client actually looks much the same. It creates a socket, runs connect() with the address of the 
+server with which it wants to communicate, and then is free to send and receive data. But notice that 
+there are several differences. 
+First, the TCP connect() call—as we discussed a moment ago—is not the innocuous bit of local 
+socket configuration that it is in the case of UDP, where it merely sets a default address used with any 
+subsequent send() calls, and places a filter on packets arriving at our socket. Here, connect() is a real live 
+network operation that kicks off the three-way handshake between the client and server machine so that 
+they are ready to communicate. This means that connect() can fail, as you can verify quite easily by 
+executing this script when the server is not running: 
+$ python tcp_sixteen.py client 
+Traceback (most recent call last): 
+  File "tcp_sixteen.py", line 29, in <module> 
+    s.connect((HOST, PORT)) 
+  File "<string>", line 1, in connect 
+socket.error: [Errno 111] Connection refused 
+Second, you will see that this TCP client is in one way much simpler than our UDP client, because it 
+does not need to make any provision for missing data. Because of the assurances that TCP provides, it 
+can send() data without checking whether the remote end receives it, and run recv() without having to 
+consider the possibility of re-transmitting its request. The client can rest assured that the network stack 
+will perform any necessary re-transmission to get its data through. 
+Third, there is a direction in which this program is actually more complicated than the equivalent 
+UDP code—and this might surprise you, because with all of its guarantees it sounds like TCP streams 
+would be uniformly simpler to program with than UDP datagrams. But precisely because TCP considers 
+your outgoing and incoming data to be, simply, streams, with no beginning or end, it feels free to split 
+them up into packets however it wants. And this means that send() and recv() mean different things 
+than they meant before. In the case of UDP, they simply meant “send this data in a packet” or “receive a 
+single data packet,” and so each datagram was atomic: it either succeeded or failed as an entire unit. You 
+
+CHAPTER 3 ■ TCP 
+40 
+will, at the application level, never see UDP packets that are only half-sent or half-received; only fully
+intact datagrams are delivered to the application. 
+But TCP might split data into several pieces during transmission and then gradually reassemble it
+on the receiving end. Although this is vanishingly unlikely with the small sixteen-octet messages in
+Listing 3–1, our code still needs to be prepared for the possibility. What are the consequences of TCP
+streaming for both our send() and our recv() calls? 
+When we perform a TCP send(), our operating system’s networking stack will face one of three
+situations: 
+•
+The data can be immediately accepted by the system, either because the network
+card is immediately free to transmit, or because the system has room to copy the
+data to a temporary outgoing buffer so that your program can continue running.
+In these cases, send() returns immediately, and it will return the length of your
+data string because the whole string was transmitted. 
+•
+Another possibility is that the network card is busy and that the outgoing data
+buffer for this socket is full and the system cannot—or will not—allocate any more
+space. In this case, the default behavior of send() is simply to block, pausing your
+program until the data can be accepted. 
+•
+There is a final, hybrid possibility: that the outgoing buffers are almost full, but not
+quite, and so part of the data you are trying to send can be immediately queued,
+but the rest will have to wait. In this case, send() completes immediately and
+returns the number of bytes accepted from the beginning of your data string, but
+leaves the rest of the data unprocessed. 
+Because of this last possibility, you cannot simply call send() on a stream socket without checking
+the return value. Instead, you have to put a send() call inside a loop like this one, that—in the case of a
+partial transmission—keeps trying to send the remaining data until the entire string has been sent: 
+bytes_sent = 0 
+while bytes_sent < len(message): 
+»   message_remaining = message[bytes_sent:]
+»   bytes_sent += s.send(message_remaining) 
+Fortunately, Python does not force us to do this dance ourselves every time we have a block of data
+to send: the Standard Library socket implementation provides a friendly sendall() method, which
+Listing 3–1 uses instead. Not only is sendall() faster than doing it ourselves because it is implemented in
+C, but (for those readers who know what this means) it releases the Global Interpreter Lock during its
+loop so that other Python threads can run without contention until all of the data has been transmitted. 
+Unfortunately, no equivalent is provided for the recv() call, despite the fact that it might return only
+part of the data that is on the way from the client. Internally, the operating system implementation of
+recv() uses logic very close to that used when sending: 
+•
+If no data is available, then recv() blocks and your program pauses until data
+arrives. 
+•
+If plenty of data is available already in the incoming buffer, then you are given as
+many bytes as you asked recv() for. 
+•
+But if the buffer contains a bit of data, but not as much as you are asking for, then
+you are immediately returned what does happen to be there, even if it is not as
+much as you have asked for. 
+That is why our recv() call has to be inside a loop: the operating system has no way of knowing that
+this simple client and server are using fixed-width sixteen-octet messages, and so the system cannot 
+Download from www.eBookTM.Com
+
+CHAPTER 3 ■ TCP 
+41
+guess when the incoming data might finally add up to what your program will consider a complete 
+message. 
+Why does the Python Standard Library include sendall() but no equivalent for the recv() method? 
+Probably because fixed-length messages are so uncommon these days. Most protocols have far more 
+complicated rules about how part of an incoming stream is delimited than a simple decision that “the 
+message is always 16 bytes long.” 
+So, in most real-world programs, the loop that runs recv() is actually much more complicated than 
+the one in Listing 3–1, because it often has to read or process part of the message before it can guess how 
+much more is coming. For example, an HTTP request often consists of headers, a blank line, and then 
+however many further bytes of data were specified in the Content-length header. You would not know 
+how many times to keep running recv() until you had at least received the headers and then parsed 
+them to find out the content length! 
+One Socket per Conversation 
+Turning to the server code in Listing 3–1, we see a very different pattern than we have seen before—and 
+it is a difference that hinges on the very meaning of a TCP stream socket. Recall from our foregoing 
+discussion that there are two very different kinds of stream sockets: listening sockets, with which servers 
+make a port available for incoming connections, and connected sockets, which represent the 
+conversation that a server is having with a particular client. 
+In Listing 3–1, you can see how this distinction is carried through in actual server code. The link, 
+which might strike you as odd at first, is that a listening socket actually produces new connected sockets 
+as the return value that you get by listening! Follow the steps in the program listing to see the order in 
+which the socket operations occur. 
+First, the server runs bind() to claim a particular port. Note that this does not yet decide whether the 
+socket will be a client or server socket—that is, whether it will be actively making a connection or 
+passively waiting to receive incoming connections. It simply claims a particular port, either on a 
+particular interface or all interfaces, for the use of this socket. Clients can use this call if, for some reason, 
+they want to reach out to a server from a particular port on their machine rather than simply accepting 
+whatever ephemeral port number they would otherwise be assigned. 
+The real moment of decision comes with the next method call, when the server announces that it 
+wants to use the socket to listen(). Running this on a TCP socket utterly transforms its character: after 
+listen() has been called, the socket is irrevocably changed and can never, from this point on, be used to 
+send or receive data. That particular socket object will now never be connected to any specific client. 
+Instead, the socket can now be used only to receive incoming connections through its accept() 
+method—a method that we have not seen yet in this book, because its purpose is solely to support 
+listening TCP sockets—and each of these calls waits for a new client to connect and then returns an 
+entirely new socket that governs the new conversation that has just started with them! 
+As you can see from the code, getsockname() works fine against both listening and connected 
+sockets, and in both cases lets you find out what local TCP port the socket is occupying. To learn the 
+address of the client to which a connected socket is connected, you can at any time run the 
+getpeername() method, or you can store the socket name that is returned as the second return value 
+from accept(). When we run this server, we see that both values give us the same address: 
+$ python tcp_sixteen.py server 
+Listening at ('127.0.0.1', 1060) 
+We have accepted a connection from ('127.0.0.1', 58185) 
+Socket connects ('127.0.0.1', 1060) and ('127.0.0.1', 58185) 
+The incoming sixteen-octet message says 'Hi there, server' 
+Reply sent, socket closed 
+Listening at ('127.0.0.1', 1060) 
+
+CHAPTER 3 ■ TCP 
+42 
+The foregoing example output is produced by having the client make one connection to the server, 
+like this: 
+$ python tcp_sixteen.py client 
+Client has been assigned socket name ('127.0.0.1', 58185) 
+The server said 'Farewell, client' 
+You can see from the rest of the server code that, once a connected socket has been returned by 
+accept(), it works exactly like a client socket with no further asymmetries evident in their pattern of 
+communication. The recv() call returns data as it becomes available, and sendall() is the best way to 
+send a new string of data when you want to make sure that it all gets transmitted. 
+You will note that an integer argument was provided to listen() when it was called on the server 
+socket. This number indicates how many waiting connections, which have not yet had sockets created 
+for them by accept() calls, should be allowed to stack up before the operating system starts turning new 
+connections away by returning connection errors. We are using the very small value 1 here in our 
+examples because we support only one example client connecting at a time; but we will consider larger 
+values for this call when we talk about network server design in Chapter 7. 
+Once the client and server have said everything that they need to, they close() their end of the 
+socket, which tells the operating system to transmit any remaining data still left in their output buffer 
+and then conclude the TCP session with the shutdown procedure mentioned previously. 
+Address Already in Use 
+There is one last detail in Listing 3–1 that you might be curious about: why is the server careful to set the 
+socket option SO_REUSEADDR before trying to bind to its port? 
+You can see the consequences of failing to set this option if you comment out that line and then try 
+running the server. At first, you might think that it has no consequence. If all you are doing is stopping 
+and starting the server, then you will see no effect at all: 
+$ python tcp_sixteen.py server 
+Listening at ('127.0.0.1', 1060) 
+^C 
+Traceback (most recent call last): 
+  ... 
+KeyboardInterrupt 
+$ python tcp_sixteen.py server 
+Listening at ('127.0.0.1', 1060) 
+But you will see a big difference if you bring up the server, run the client against it, and then try 
+killing and re-running the server. When the server starts back up, you will get an error: 
+$ python tcp_sixteen.py server 
+Traceback (most recent call last): 
+  ... 
+socket.error: [Errno 98] Address already in use 
+How mysterious! Why would a bind() that can be repeated over and over again at one moment 
+suddenly become impossible the next? If you keep trying to run the server without the SO_REUSEADDR 
+option, you will find that the address does not become available again until several minutes after your 
+last client connection! 
+The answer is that, from the point of view of your operating system’s network stack, a socket that is 
+merely listening can immediately be shut down and forgotten about, but a connected TCP socket—that is 
+actually talking to a client—cannot immediately disappear when both ends have closed their connection 
+and initiated the FIN handshakes in each direction. Why? Because after it sends the very last ACK packet, 
+
+CHAPTER 3 ■ TCP 
+43
+the system has no way to ever be sure that it was received. If it was dropped by the network somewhere 
+along its route, then the remote end might at any moment wonder what is taking the last ACK packet so 
+long and re-transmit its FIN packet in the hope of finally receiving an answer. 
+A reliable protocol like TCP obviously has to have some point like this where it stops talking; some 
+final packet must, logically, be left hanging with no acknowledgment, or systems would have to commit 
+to an endless exchange of “okay, we both agree that we are all done, right?” messages until the machines 
+were finally powered off. Yet even the final packet might get lost and need to be re-transmitted a few 
+times before the other end finally receives it. What is the solution? 
+The answer is that once a connected TCP connection is finally closed from the point of view of your 
+application, the operating system’s network stack actually keeps it around for up to four minutes in a 
+waiting state (the RFC names these states CLOSE-WAIT and TIME-WAIT) so that any final FIN packets 
+can be properly replied to. If instead the TCP implementation just forgot about the connection, then it 
+could not reply to the FIN with a proper ACK. 
+So a server that tries claiming a port on which a live connection was running within the last few 
+minutes is, really, trying to claim a port that is in some sense still in use. That is why you are returned an 
+error if you try a bind() to that address. By specifying the socket option SO_REUSEADDR, you are indicating 
+that your application is okay about owning a port whose old connections might still be shutting down 
+out on some client on the network. In practice, I always use SO_REUSEADDR when writing server code 
+without putting thought into it, and have never had any problems. 
+Binding to Interfaces 
+As was explained in Chapter 2 when we discussed UDP, the IP address that you pair with a port number 
+when you perform a bind() operation tells the operating system which network interfaces you are 
+willing to receive connections from. The example invocations of Listing 3–1 used the localhost IP address 
+127.0.0.1, which protects your code from connections originating on other machines. 
+You can verify this by running Listing 3–1 in server mode as shown previously, and trying to connect 
+with a client from another machine: 
+$ python tcp_sixteen.py client 192.168.5.130 
+Traceback (most recent call last): 
+  ... 
+socket.error: [Errno 111] Connection refused 
+You will see that the server Python code does not even react; the operating system does not even 
+inform it that an incoming connection to its port was refused. (Note that if you have a firewall running 
+on your machine, the client might just hang when it tries connecting, rather than getting a friendly 
+“Connection refused” that tells it what is going on!) 
+But if you run the server with an empty string for the hostname, which tells the Python bind() 
+routine that you are willing to accept connections through any of your machine’s active network 
+interfaces, then the client can connect successfully from another host (the empty string is supplied by 
+giving the shell these two double-quotes at the end of the command line): 
+$ python tcp_sixteen.py server "" 
+Listening at ('0.0.0.0', 1060) 
+We have accepted a connection from ('192.168.5.10', 46090) 
+Socket connects ('192.168.5.130', 1060) and ('192.168.5.10', 46090) 
+The incoming sixteen-octet message says 'Hi there, server' 
+Reply sent, socket closed 
+Listening at ('0.0.0.0', 1060) 
+
+CHAPTER 3 ■ TCP 
+44 
+As before, my operating system uses the special IP address 0.0.0.0 to mean “accept connections on 
+any interface,” but that may vary with operating system, and Python hides this fact by letting you use the 
+empty string instead. 
+Deadlock 
+The term “deadlock” is used for all sorts of situations in computer science where two programs, sharing 
+limited resources, can wind up waiting on each other forever because of poor planning. It turns out that 
+it can happen fairly easily when using TCP. 
+I mentioned previously that typical TCP stacks use buffers, both so that they have somewhere to 
+place incoming packet data until an application is ready to read it, and so that they can collect outgoing 
+data until the network hardware is ready to transmit an outgoing packet. These buffers are typically 
+quite limited in size, and the system is not generally willing to let programs fill all of RAM with unsent 
+network data. After all, if the remote end is not yet ready to process the data, it makes little sense to 
+expend system resources on the generating end trying to produce more of it. 
+This limitation will generally not trouble you if you follow the client-server pattern shown in Listing 
+3–1, where each end always reads its partner’s complete message before turning around and sending 
+data in the other direction. But you can run into trouble very quickly if you design a client and server 
+that leave too much data waiting without having some arrangement for promptly reading it. 
+Take a look at Listing 3–2 for an example of a server and client that try to be a bit too clever without 
+thinking through the consequences. Here, the server author has done something that is actually quite 
+intelligent. His job is to turn an arbitrary amount of text into uppercase. Recognizing that its client’s 
+requests can be arbitrarily large, and that one could run out of memory trying to read an entire stream of 
+input before trying to process it, the server reads and processes small blocks of 1,024 bytes at a time. 
+Listing 3–2. TCP Server and Client That Deadlock 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 3 - tcp_deadlock.py 
+# TCP client and server that leave too much data waiting 
+ 
+import socket, sys 
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM) 
+ 
+HOST = '127.0.0.1' 
+PORT = 1060 
+ 
+if sys.argv[1:] == ['server']: 
+»   s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) 
+»   s.bind((HOST, PORT)) 
+»   s.listen(1) 
+»   while True: 
+»   »   print 'Listening at', s.getsockname() 
+»   »   sc, sockname = s.accept() 
+»   »   print 'Processing up to 1024 bytes at a time from', sockname 
+»   »   n = 0 
+»   »   while True: 
+»   »   »   message = sc.recv(1024) 
+»   »   »   if not message: 
+»   »   »   »   break 
+»   »   »   sc.sendall(message.upper())  # send it back uppercase 
+»   »   »   n += len(message) 
+
+CHAPTER 3 ■ TCP 
+45
+»   »   »   print '\r%d bytes processed so far' % (n,), 
+»   »   »   sys.stdout.flush() 
+»   »   print 
+»   »   sc.close() 
+»   »   print 'Completed processing' 
+ 
+elif len(sys.argv) == 3 and sys.argv[1] == 'client' and sys.argv[2].isdigit(): 
+ 
+»   bytes = (int(sys.argv[2]) + 15) // 16 * 16  # round up to // 16 
+»   message = 'capitalize this!'  # 16-byte message to repeat over and over 
+ 
+»   print 'Sending', bytes, 'bytes of data, in chunks of 16 bytes' 
+»   s.connect((HOST, PORT)) 
+ 
+»   sent = 0 
+»   while sent < bytes: 
+»   »   s.sendall(message) 
+»   »   sent += len(message) 
+»   »   print '\r%d bytes sent' % (sent,), 
+»   »   sys.stdout.flush() 
+ 
+»   print 
+»   s.shutdown(socket.SHUT_WR) 
+ 
+»   print 'Receiving all the data the server sends back' 
+ 
+»   received = 0 
+»   while True: 
+»   »   data = s.recv(42) 
+»   »   if not received: 
+»   »   »   print 'The first data received says', repr(data) 
+»   »   received += len(data) 
+»   »   if not data: 
+»   »   »   break 
+»   »   print '\r%d bytes received' % (received,), 
+ 
+»   s.close() 
+ 
+else: 
+»   print >>sys.stderr, 'usage: tcp_deadlock.py server | client <bytes>' 
+It can split the work up so easily, by the way, because it is merely trying to run the upper() string 
+method on plain ASCII characters—an operation that can be performed separately on each block of 
+input, without worrying about the blocks that came before or after. Things would not be this simple for 
+the server if it were trying to run a more sophisticated string operation like title(), which would 
+capitalize a letter in the middle of a word if the word happened to be split across a block boundary. For 
+example, if a message got split into16-byte blocks, then errors would creep in like this: 
+>>> message = 'the tragedy of macbeth' 
+>>> blocks = message[:16], message[16:] 
+>>> ''.join( b.upper() for b in blocks )   # works fine 
+'THE TRAGEDY OF MACBETH' 
+>>> ''.join( b.title() for b in blocks )   # whoops 
+'The Tragedy Of MAcbeth' 
+
+CHAPTER 3 ■ TCP 
+46 
+Processing text while splitting on fixed-length blocks will also not work for UTF-8 encoded Unicode 
+data, since a multi-byte character could get split across a boundary between two of the binary blocks. In 
+both cases, the server would have to be more careful, and carry some state between one block of data 
+and the next. 
+In any case, handling input a block at a time like this is quite smart for the server, even if the 1,024-
+byte block size, used here for illustration, is actually a very small value for today’s servers and networks. 
+By handling the data in pieces and immediately sending out responses, the server limits the amount of 
+data that it actually has to keep in memory at any one time. Servers designed like this could handle 
+hundreds of clients at once, each sending streams totaling gigabytes, without taxing the memory 
+resources of the server machine. 
+And, for small data streams, the client and server in Listing 3–2 seem to work fine. If you start the 
+server and then run the client with a command-line argument specifying a modest number of bytes—
+say, asking it to send 32 bytes of data (for simplicity, it will round whatever value you supply up to a 
+multiple of 16 bytes)—then it will get its text back in all uppercase: 
+$ python tcp_deadlock.py client 32 
+Sending 32 bytes of data, in chunks of 16 bytes 
+32 bytes sent 
+Receiving all the data the server sends back 
+The first data received says 'CAPITALIZE THIS!CAPITALIZE THIS!' 
+32 bytes received 
+The server (which, by the way, needs to be running on the same machine—this script uses the 
+localhost IP address to make the example as simple as possible) will report that it indeed processed 32 
+bytes on behalf of its recent client: 
+$ python tcp_deadlock.py server 
+Processing up to 1024 bytes at a time from ('127.0.0.1', 46400) 
+32 bytes processed so far 
+Completed processing 
+Listening at ('127.0.0.1', 1060) 
+So this code works well for small amounts of data. In fact, it might also work for larger amounts; try 
+running the client with hundreds or thousands of bytes, and see whether it continues to work. 
+This first example exchange of data, by the way, shows you the behavior of recv() that I have 
+previously described: even though the server asked for 1,024 bytes to be received, recv(1024) was quite 
+happy to return only 16 bytes, if that was the amount of data that became available and no further data 
+had yet arrived from the client. 
+But if you try a large enough value, then disaster strikes! Try using the client to send a very large 
+stream of data, say, one totaling a gigabyte: 
+$ python tcp_deadlock.py client 1073741824 
+You will see both the client and the server furiously updating their terminal windows as they 
+breathlessly update you with the amount of data they have transmitted and received. The numbers will 
+climb and climb until, quite suddenly, both connections freeze. Actually, if you watch carefully, you will 
+see the server stop first, and then the client will grind to a halt soon afterward. The amount of data 
+processed before they seize up varies on the Ubuntu laptop on which I am typing this chapter, but on 
+the test run that I just completed here on my laptop, the Python script stopped with the server saying: 
+$ python tcp_deadlock.py server 
+Listening at ('127.0.0.1', 1060) 
+Processing up to 1024 bytes at a time from ('127.0.0.1', 46411) 
+602896 bytes processed so far 
+And the client is frozen about 100,000  bytes farther ahead in writing its outgoing data stream: 
+
+CHAPTER 3 ■ TCP 
+47
+$ python tcp_deadlock.py client 1073741824 
+Sending 1073741824 bytes of data, in chunks of 16 bytes 
+734816 bytes sent 
+Why have both client and server been brought to a halt? 
+The answer is that the server’s output buffer and the client’s input buffer have both finally filled, and 
+TCP has used its window adjustment protocol to signal this fact and stop the socket from sending more 
+data that would have to be discarded and later re-sent. 
+Consider what happens as each block of data travels. The client sends it with sendall(). Then the 
+server accepts it with recv(), processes it, and then transmits its capitalized version back out with 
+another sendall() call. And then what? Well, nothing! The client is never running any recv() calls—not 
+while it still has data to send—so more and more capitalized data backs up, until the operating system is 
+not willing to accept any more. 
+During the run shown previously, about 600KB was buffered by the operating system in the client’s 
+incoming queue before the network stack decided that it was full. At that point, the server blocks in its 
+sendall() call, and is paused there by the operating system until the logjam clears and it can send more 
+data. With the server no longer processing data or running any more recv() calls, it is now the client’s 
+turn to have data start backing up. The operating system seems to have placed a limit of around 130KB 
+to the amount of data it would queue up in that direction, because the client got roughly another 130KB 
+into producing the stream before finally being brought to a halt as well. 
+On a different system, you will probably find that different limits are reached. So the foregoing 
+numbers are arbitrary and based on the mood of my laptop at the moment; they are not at all inherent in 
+the way TCP works. 
+And the point of this example is to teach you two things—besides, of course, showing that 
+recv(1024) indeed returns fewer bytes than 1,024 if a smaller number are immediately available! 
+First, this example should make much more concrete the idea that there are buffers sitting inside 
+the TCP stacks on each end of a network connection. These buffers can hold data temporarily so that 
+packets do not have to be dropped and eventually re-sent if they arrive at a moment that their reader 
+does not happen to be inside of a recv() call. But the buffers are not limitless; eventually, a TCP routine 
+trying to write data that is never being received or processed is going to find itself no longer able to write, 
+until some of the data is finally read and the buffer starts to empty. 
+Second, this example makes clear the dangers involved in protocols that do not alternate lock-step 
+between the client requesting and the server acknowledging. If a protocol is not strict about the server 
+reading a complete request until the client is done sending, and then sending a complete response in the 
+other direction, then a situation like that created here can cause both of them to freeze without any 
+recourse other than killing the program manually, and then rewriting it to improve its design! 
+But how, then, are network clients and servers supposed to process large amounts of data without 
+entering deadlock? There are, in fact, two possible answers: either they can use socket options to turn off 
+blocking, so that calls like send() and recv() return immediately if they find that they cannot send any 
+data yet. We will learn more about this option in Chapter 7, where we look in earnest at the possible 
+ways to architect network server programs. 
+Or, the programs can use one of several techniques to process data from several inputs at a time, 
+either by splitting into separate threads or processes—one tasked with sending data into a socket, 
+perhaps, and another tasked with reading data back out—or by running operating system calls like 
+select() or poll() that let them wait on busy outgoing and incoming sockets at the same time, and 
+respond to whichever is ready. 
+Finally, note carefully that the foregoing scenario cannot ever happen when you are using UDP! This 
+is because UDP does not implement flow control. If more datagrams are arriving up than can be 
+processed, then UDP can simply discard some of them, and leave it up to the application to discover that 
+they went missing. 
+
+CHAPTER 3 ■ TCP 
+48 
+Closed Connections, Half-Open Connections 
+There are two more points that should be made, on a different subject, from the foregoing example. 
+First, Listing 3–2 shows us how a Python socket object behaves when an end-of-file is reached. Just 
+like a Python file object returns an empty string upon a read() when there is no more data left, a socket 
+simply returns an empty string when the socket is closed. 
+We never worried about this in Listing 3–1 because in that case we had imposed a strict enough 
+structure on our protocol—exchanging a pair of messages of exactly 16 bytes—that we did not need to 
+close the socket to signal when communication was done. The client and server simply sent their 
+messages, and then could close their sockets separately without needing to do any further checks. 
+But in Listing 3–2, the client sends—and thus the server also processes and sends back—an arbitrary 
+amount of data whose length is not decided until the user enters a number of bytes on the command 
+line. And so you can see in the code, twice, the same pattern: a while loop that runs until it finally sees an 
+empty string returned from recv(). Note that this normal Pythonic pattern will not work once we reach 
+Chapter 7 and explore non-blocking sockets—in that case, recv() might return an empty string simply 
+because no data is available at the moment, and other techniques are used to determine whether the 
+socket has closed. 
+Second, you will see that the client makes a shutdown() call on the socket after it finishes sending its 
+transmission. This solves an important problem: if the server is going to read forever until it sees end-of-
+file, then how will the client avoid having to do a full close() on the socket and thus forbid itself from 
+doing the many recv() calls that it still needs to make to receive the server’s response? The solution is to 
+“half-close” the socket—that is, to permanently shut down communication in one direction but without 
+destroying the socket itself—so that the server can no longer read any data, but can still send any 
+remaining reply back in the other direction, which will still be open. 
+The shutdown() call can be used to end either direction of communication in a two-way socket like 
+this; its argument can be one of three symbols: 
+• 
+SHUT_WR: This is the most common value used, since in most cases a program 
+knows when its own output is finished but not about when its conversation 
+partner will be done. This value says that the caller will be writing no more data 
+into the socket, and that reads from its other end should act like it is closed. 
+• 
+SHUT_RD: This is used to turn off the incoming socket stream, so that an end-of-file 
+error is encountered if your peer tries to send any more data to you on the socket. 
+• 
+SHUT_RDWR: This closes communication in both directions on the socket. It might 
+not, at first, seem useful, because you can also just perform a close() on the 
+socket and communication is similarly ended in both directions. The difference is 
+a rather advanced one: if several programs on your operating system are allowed 
+to share a single socket, then close() just ends your process’s relationship with 
+the socket, but keeps it open as long as another process is still using it; but 
+shutdown() will always immediately disable the socket for everyone using it. 
+Since you are not allowed to create unidirectional sockets through a standard socket() call, many 
+programmers who need to send information only in one direction over a socket will first create the 
+socket, then—as soon as it is connected—immediately run shutdown() for the direction that they do not 
+need. This means that no operating system buffers will be needlessly filled if the peer with which they 
+are communicating accidentally tries to send data in a direction that it should not. 
+Running shutdown() immediately on sockets that should really be unidirectional also provides a 
+more obvious error message for a peer that does get confused and tries to send data. Otherwise their 
+data will either simply be ignored, or might even fill a buffer and cause a deadlock because it will never 
+be read. 
+
+CHAPTER 3 ■ TCP 
+49
+Using TCP Streams like Files 
+Since TCP supports streams of data, they might have already reminded you of normal files, which also 
+support reading and writing as fundamental operations. Python does a very good job of keeping these 
+concepts separate: file objects can read() and write(), sockets can send() and recv(), and no kind of 
+object can do both. This is actually a substantially cleaner conceptual split than is achieved by the 
+underlying POSIX interface, which lets a C programmer call read() and write() on a socket 
+indiscriminately as though it were a normal file descriptor! 
+But sometimes you will want to treat a socket like a normal Python file object—often because you 
+want to pass it into code like that of the many Python modules such as pickle, json, and zlib that can 
+read and write data directly from a file. For this purpose, Python provides a makefile() method on every 
+socket that returns a Python file object that is really calling recv() and send() behind the scenes: 
+>>> import socket 
+>>> s = socket.socket(socket.AF_INET, socket.SOCK_STREAM) 
+>>> hasattr(s, 'read') 
+False 
+>>> f = s.makefile() 
+>>> hasattr(f, 'read') 
+True 
+Sockets, like normal Python files, also have a fileno() method that lets you discover their file 
+descriptor number in case you need to supply it to lower-level calls; we will find this very helpful when 
+we explore select() and poll() in Chapter 7. 
+Summary 
+The TCP-powered “stream” socket does whatever is necessary—including re-transmitting lost packets, 
+reordering the ones that arrive out of sequence, and splitting very large data streams into optimally sized 
+packets for your network in the first place—to support the transmission and reception of streams of data 
+over the network between two sockets. 
+As with UDP, port numbers are used by TCP to distinguish the many stream endpoints that might 
+exist on a single machine. A program that wants to accept incoming TCP connections needs to bind() to 
+a port, run listen() on the socket, and then go into a loop that runs accept() over and over to receive a 
+new socket for each incoming connection with which it can talk to each particular client that connects. 
+Programs that want to connect to existing server ports need only create a socket and connect() to an 
+address. 
+Servers will usually want to set the SO_REUSEADDR option on the sockets they bind(), lest old 
+connections still closing down on the same port from the last time the server was run prevent the 
+operating system from allowing the binding. 
+Data is actually sent and received with send() and recv(). Some protocols will mark up their data so 
+that clients and servers know automatically when a communication is complete. Other protocols will 
+treat the TCP socket as a true stream and send and receive until end-of-file is reached. The shutdown() 
+socket method can be used to produce end-of-file in one direction on a socket (all sockets are 
+bidirectional by nature) while leaving the other direction open. 
+Deadlock can occur if two peers are written such that the socket fills with more and more data that 
+never gets read. Eventually, one direction will no longer be able to send() and might hang forever 
+waiting for the backlog to clear. 
+If you want to pass a socket to a Python routine that knows how to read to or write from a normal 
+file object, the makefile() socket method will give you a Python object that calls recv() and send() 
+behind the scenes when the caller needs to read and write. 
+
+CHAPTER 3 ■ TCP 
+50 
+Download from www.eBookTM.Com

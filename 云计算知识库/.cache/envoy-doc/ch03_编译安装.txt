@@ -1,0 +1,614 @@
+编译安装
+编译&安装
+编译
+要求
+预编译二进制
+参考配置
+配置生成器
+烟雾测试配置
+沙箱
+前端代理
+Zipkin跟踪
+Jaeger跟踪
+gRPC桥接
+构建Envoy Docker镜像
+工具
+配置加载检测工具
+路由表检查工具
+模式验证工具
+返回
+首页目录
+编译安装
+- 78 -
+本文档使用 看云 构建
+
+编译
+构建
+Envoy使用Bazel工具构建系统。为了简化初次构建以及快速入门，我们提供了一个基于Ubuntu16的
+Docker容器镜像，其中包含了构建静态链接Envoy所需的所有内容，请参阅ci/README.md。
+如果需要手动构建，请按照bazel/README.md中的说明进行操作。
+要求
+Envoy最初是在Ubuntu 14 LTS上开发和部署的。它也可以在任何的最新Linux上运行，包括Ubuntu 16
+LTS。
+构建Envoy需要满足以下要求：
+GCC 5+（用于支持C++14）。
+预构建的第三方依赖。
+依赖本地Bazel工具。
+有关手动构建的更多信息操作，请参阅CI和Bazel文档链接。
+预构建的二进制文件
+在每个主提交上，我们创建一组包含Envoy二进制文件的轻量级Docker镜像。 当我们正式发布的时候，
+我们还会用发布版本标记Docker镜像。
+envoyproxy/envoy：基于Ubuntu Xenial存放带有符号的二进制文件版本。
+envoyproxy/envoy-alpine：基于glibc alpine无符号二进制文件版本。
+envoyproxy/envoy-alpine-debug：基于glibc alpine可调试的二进制文件版本。
+我们也会考虑通过社区化运作，发挥大家兴趣来帮助CI，包装和提供额外的二进制类型。如果需要，请在
+GitHub中添加一个issue。
+返回
+上一级
+首页目录
+编译
+- 79 -
+本文档使用 看云 构建
+
+参考配置
+参考配置
+Envoy的源代码发行版中，包含三个主要部署类型的配置模板范例：
+服务间
+前端代理
+双重代理
+本文的目标展示Envoy在复杂部署场景下的全部功能。不适用于所有功能。有关完整的文档，请参阅配置
+参考。
+配置生成器
+可能配置Envoy已经变的相对复杂。在Lyft中，我们使用jinja模板来让创建和管理配置更容易。源代码发
+行版包含一个的配置生成器，它大致上与我们在Lyft中使用的版本相似。我们还为以上三种情况提供了三
+个示例配置模板。
+配置生成器脚本：configs/configgen.py
+服务模板：configs/envoy_service_to_service.template.json
+前端代理模板：configs/envoy_front_proxy.template.json
+双重代理模板：configs/envoy_double_proxy.template.json
+若要生成示例配置，请在repo根目录运行以下命令：
+mkdir -p generated/configs
+bazel build //configs:example_configs
+tar xvf $PWD/bazel-genfiles/configs/example_configs.tar -C generated/configs
+上一个命令将使用configgen.py 中定义的一些变量，展开生成三个完全的配置。 请参阅
+configgen.py 中的注释，以获取有关详细扩展配置。
+关于示例配置的一些注意事项：
+假定服务发现服务的实例正在discovery.yourcompany.net 上运行。
+假定您的company.net 的DNS设置了各种各样的东西。在配置模板中修改以支持不同的示例。
+跟踪默认配置LightStep。要禁用此功能或启用Zipkin跟踪，请删除或更改相应跟踪配置。
+该配置示例使用全局限速服务。若要禁用此功能，请删除速限相关的配置。
+配置路由发现的服务，以便服务间引用该配置，并假定它正在rds.yourcompany.net 上运行。
+配置集群发现的服务，作为配置参考，假定在cds.yourcompany.net 上运行。
+配置冒烟测试
+参考配置
+- 80 -
+本文档使用 看云 构建
+
+configs/google_com_proxy.json中提供了一个非常简单的Envoy配置，可用于验证基本纯HTTP代理场
+景。但并不代表一个实际的Envoy部署。只是用这个来冒烟测试Envoy，如下运行：
+build/source/exe/envoy -c configs/google_com_proxy.json -l debug
+curl -v localhost:10000
+返回
+上一级
+首页目录
+参考配置
+- 81 -
+本文档使用 看云 构建
+
+演示沙箱
+沙箱演示
+docker-compose 沙箱可以让你在不同的环境上来测试Envoy的功能。我们会根据大家的兴趣，将会添加
+更多的沙箱来展示不同的功能。以下开箱即用：
+前端代理
+Zipkin跟踪
+Jaeger跟踪
+gRPC桥接
+构建Envoy Docker镜像
+返回
+上一级
+首页目录
+演示沙箱
+- 82 -
+本文档使用 看云 构建
+
+前端代理
+前端代理
+为让大家尽快了解Envoy如何作为前端代理，我们发布了一个docker compose沙箱，这个沙箱部署了一
+个前端Envoy代理和几个后端服务（简单的flask应用），并与一个正在运行的合作的Envoy服务。这三个
+容器将部署在名为envoymesh 的虚拟网格中。
+该Docker compose的部署图如下所示：
+所有传入的请求都通过前端Envoy进行路由，该Envoy充当位于envoymesh 网络边缘的反向代理。端口
+80 通过docker compose映射到端口8000 （请参阅/examples/front-proxy/docker-
+compose.yml）。此外，请注意，由前端Envoy路由到容器内的服务，实际上所有流量都是路由到服务的
+Envoy代理（在/examples/front-proxy/front-envoy.json中设置的路由）。反过来，服务的Envoy通过
+环回地址（/examples/front-proxy/service-envoy.json中的路由设置）将请求路由到flask应用程序。此
+阐述了Envoy与您服务搭配的优势：所有请求都由Envoy代理，并有效地路由到您的服务。
+运行沙箱
+以下文档将按照上图中所述的envoy集群进行运行设置。
+第1步：安装Docker工具集
+请您确保已经安装了最新版本的docker ，docker-compose 和docker-machine 。
+前端代理
+- 83 -
+本文档使用 看云 构建
+
+Docker工具箱提供了简单的方法来获取这些工具。
+第2步：设置Docker Machine
+首先让我们创建一个新的机器来容纳容器：
+$ docker-machine create --driver virtualbox default
+$ eval $(docker-machine env default)
+第3步：建立本地Envoy克隆仓库，并启动所有的容器
+如果你还没有克隆Envoy仓库，请用git克隆git clone git@github.com:envoyproxy/envoy 或
+者git clone https://github.com/envoyproxy/envoy.git ：
+$ pwd
+envoy/examples/front-proxy
+$ docker-compose up --build -d
+$ docker-compose ps
+        Name                       Command               State      Ports
+-------------------------------------------------------------------------------------------------------
+------
+example_service1_1      /bin/sh -c /usr/local/bin/ ...    Up       80/tcp
+example_service2_1      /bin/sh -c /usr/local/bin/ ...    Up       80/tcp
+example_front-envoy_1   /bin/sh -c /usr/local/bin/ ...    Up       0.0.0.0:8000->80/tcp, 0.0.0.0:8001->
+8001/tcp
+第4步：测试Envoy的路由功能
+您现在可以通过前端Envoy向两个服务发送请求。
+对于service1：
+$ curl -v $(docker-machine ip default):8000/service/1
+*   Trying 192.168.99.100...
+* Connected to 192.168.99.100 (192.168.99.100) port 8000 (#0)
+> GET /service/1 HTTP/1.1
+> Host: 192.168.99.100:8000
+> User-Agent: curl/7.43.0
+> Accept: */*
+>
+< HTTP/1.1 200 OK
+< content-type: text/html; charset=utf-8
+< content-length: 89
+< x-envoy-upstream-service-time: 1
+< server: envoy
+< date: Fri, 26 Aug 2016 19:39:19 GMT
+< x-envoy-protocol-version: HTTP/1.1
+<
+Hello from behind Envoy (service 1)! hostname: f26027f1ce28 resolvedhostname: 172.19.0.6
+* Connection #0 to host 192.168.99.100 left intact
+前端代理
+- 84 -
+本文档使用 看云 构建
+
+对于service2：
+$ curl -v $(docker-machine ip default):8000/service/2
+*   Trying 192.168.99.100...
+* Connected to 192.168.99.100 (192.168.99.100) port 8000 (#0)
+> GET /service/2 HTTP/1.1
+> Host: 192.168.99.100:8000
+> User-Agent: curl/7.43.0
+> Accept: */*
+>
+< HTTP/1.1 200 OK
+< content-type: text/html; charset=utf-8
+< content-length: 89
+< x-envoy-upstream-service-time: 2
+< server: envoy
+< date: Fri, 26 Aug 2016 19:39:23 GMT
+< x-envoy-protocol-version: HTTP/1.1
+<
+Hello from behind Envoy (service 2)! hostname: 92f4a3737bbc resolvedhostname: 172.19.0.2
+* Connection #0 to host 192.168.99.100 left intact
+请注意，每个请求在发送给前端Envoy时，已正确路由到相应的应用程序。
+第5步：测试Envoy的负载均衡能力
+现在扩展我们的service1节点来演示Envoy的集群能力。
+$ docker-compose scale service1=3
+Creating and starting example_service1_2 ... done
+Creating and starting example_service1_3 ... done
+现在，如果我们多次向service1发送请求，前端Envoy会将请求通过负载均衡发给三个service1服务：
+$ curl -v $(docker-machine ip default):8000/service/1
+*   Trying 192.168.99.100...
+* Connected to 192.168.99.100 (192.168.99.100) port 8000 (#0)
+> GET /service/1 HTTP/1.1
+> Host: 192.168.99.100:8000
+> User-Agent: curl/7.43.0
+> Accept: */*
+>
+< HTTP/1.1 200 OK
+< content-type: text/html; charset=utf-8
+< content-length: 89
+< x-envoy-upstream-service-time: 1
+< server: envoy
+< date: Fri, 26 Aug 2016 19:40:21 GMT
+< x-envoy-protocol-version: HTTP/1.1
+<
+Hello from behind Envoy (service 1)! hostname: 85ac151715c6 resolvedhostname: 172.19.0.3
+* Connection #0 to host 192.168.99.100 left intact
+$ curl -v $(docker-machine ip default):8000/service/1
+*   Trying 192.168.99.100...
+* Connected to 192.168.99.100 (192.168.99.100) port 8000 (#0)
+> GET /service/1 HTTP/1.1
+前端代理
+- 85 -
+本文档使用 看云 构建
+
+> Host: 192.168.99.100:8000
+> User-Agent: curl/7.43.0
+> Accept: */*
+>
+< HTTP/1.1 200 OK
+< content-type: text/html; charset=utf-8
+< content-length: 89
+< x-envoy-upstream-service-time: 1
+< server: envoy
+< date: Fri, 26 Aug 2016 19:40:22 GMT
+< x-envoy-protocol-version: HTTP/1.1
+<
+Hello from behind Envoy (service 1)! hostname: 20da22cfc955 resolvedhostname: 172.19.0.5
+* Connection #0 to host 192.168.99.100 left intact
+$ curl -v $(docker-machine ip default):8000/service/1
+*   Trying 192.168.99.100...
+* Connected to 192.168.99.100 (192.168.99.100) port 8000 (#0)
+> GET /service/1 HTTP/1.1
+> Host: 192.168.99.100:8000
+> User-Agent: curl/7.43.0
+> Accept: */*
+>
+< HTTP/1.1 200 OK
+< content-type: text/html; charset=utf-8
+< content-length: 89
+< x-envoy-upstream-service-time: 1
+< server: envoy
+< date: Fri, 26 Aug 2016 19:40:24 GMT
+< x-envoy-protocol-version: HTTP/1.1
+<
+Hello from behind Envoy (service 1)! hostname: f26027f1ce28 resolvedhostname: 172.19.0.6
+* Connection #0 to host 192.168.99.100 left intact
+第6步：进入容器开启curl服务
+除了使用主机上的curl外，您还可以自己输入容器并从里面curl。要输入一个容器镜像，你可以使用
+docker-compose exec <container_name> /bin/bash 。例如，我们可以进入front-envoy
+容器，并在执行本地的curl服务：
+$ docker-compose exec front-envoy /bin/bash
+root@81288499f9d7:/# curl localhost:80/service/1
+Hello from behind Envoy (service 1)! hostname: 85ac151715c6 resolvedhostname: 172.19.0.3
+root@81288499f9d7:/# curl localhost:80/service/1
+Hello from behind Envoy (service 1)! hostname: 20da22cfc955 resolvedhostname: 172.19.0.5
+root@81288499f9d7:/# curl localhost:80/service/1
+Hello from behind Envoy (service 1)! hostname: f26027f1ce28 resolvedhostname: 172.19.0.6
+root@81288499f9d7:/# curl localhost:80/service/2
+Hello from behind Envoy (service 2)! hostname: 92f4a3737bbc resolvedhostname: 172.19.0.2
+第7步：进入容器和使用curl管理
+当Envoy运行时，它也将admin 连接到所需的端口。在示例配置admin 被绑定到8001 端口.我们可以
+curl 它获得有用的信息。例如，您可以curl /server_info 来获取有关您正在运行的Envoy版本
+信息。另外，你可以·curl· ·/stats·得到统计数据。例如在frontenvoy 里面我们可以得到：
+前端代理
+- 86 -
+本文档使用 看云 构建
+
+$ docker-compose exec front-envoy /bin/bash
+root@e654c2c83277:/# curl localhost:8001/server_info
+envoy 10e00b/RELEASE live 142 142 0
+root@e654c2c83277:/# curl localhost:8001/stats
+cluster.service1.external.upstream_rq_200: 7
+...
+cluster.service1.membership_change: 2
+cluster.service1.membership_total: 3
+...
+cluster.service1.upstream_cx_http2_total: 3
+...
+cluster.service1.upstream_rq_total: 7
+...
+cluster.service2.external.upstream_rq_200: 2
+...
+cluster.service2.membership_change: 1
+cluster.service2.membership_total: 1
+...
+cluster.service2.upstream_cx_http2_total: 1
+...
+cluster.service2.upstream_rq_total: 2
+...
+请注意，我们还可以获得上游群集的成员数量，完成的请求数量，有关http入站的信息以及其他大量有用
+的统计信息。
+返回
+上一级
+首页目录
+前端代理
+- 87 -
+本文档使用 看云 构建
+
+Zipkin跟踪
+Zipkin跟踪
+Zipkin跟踪演示使用Zipkin作为跟踪服务端，提供跟踪Envoy请求记录展示的功能。这个沙箱与上面描述
+的前端代理架构非常类似，但有一点不同：在响应返回之前，service1 对service2 进行API调用。
+这三个容器将被部署在名为envoymesh 的虚拟网络中。
+所有的请求都经过前端Envoy进行路由，该Envoy充当位于envoymesh 网络边缘的反向代理。端口80
+通过docker compose映射到端口8000 （请参阅/examples/zipkin-tracing/docker-compose.yml）。
+请注意，所有Envoy都配置请求跟踪收集（例如，/examples/zipkin-tracing/front-envoy-zipkin.json中
+的http_connection_manager/config/tracing 设置），并将Zipkin设置为跟踪所生成的spans收
+集器，将发送到Zipkin群集（在/examples/zipkin-tracing/front-envoy-zipkin.json中跟踪驱动程序设
+置）。
+在将请求路由到相应的Envoy服务或应用程序之前，Envoy将负责为跟踪生成适当的spans（父/子/span
+上下文共享）。在高级别，每个span记录上行API调用的延迟以及将span与其他相关span（例如跟踪ID）
+关联所需的信息。
+从Envoy跟踪的最重要的特点是，它会将调用轨迹发送到Zipkin服务群集。但是，为了充分利用跟踪，应
+用程序必须传播Envoy生成的跟踪头，同时调用其他服务。在我们提供的沙箱中，service1 充当了简
+单flask 应用程序（请参阅/examples/front-proxy/service.py中的跟踪函数）跟踪传播头，同时对
+service2 进行远程调用。
+运行沙箱
+以下文档将按照上图中所述组织的envoy集群的进行设置和运行。
+第1步：构建沙箱
+若构建这个沙箱示例，并启动示例应用程序，请运行以下命令：
+$ pwd
+envoy/examples/zipkin-tracing
+$ docker-compose up --build -d
+$ docker-compose ps
+        Name                       Command               State      Ports
+-------------------------------------------------------------------------------------------------------
+------
+zipkintracing_service1_1      /bin/sh -c /usr/local/bin/ ...    Up       80/tcp
+zipkintracing_service2_1      /bin/sh -c /usr/local/bin/ ...    Up       80/tcp
+zipkintracing_front-envoy_1   /bin/sh -c /usr/local/bin/ ...    Up       0.0.0.0:8000->80/tcp, 0.0.0.0:
+8001->8001/tcp
+第2步：产生一些请求负载
+Zipkin跟踪
+- 88 -
+本文档使用 看云 构建
+
+您现在可以通过前端Envoy向service1 发送一个请求，如下所示：
+$ curl -v $(docker-machine ip default):8000/trace/1
+*   Trying 192.168.99.100...
+* Connected to 192.168.99.100 (192.168.99.100) port 8000 (#0)
+> GET /trace/1 HTTP/1.1
+> Host: 192.168.99.100:8000
+> User-Agent: curl/7.43.0
+> Accept: */*
+>
+< HTTP/1.1 200 OK
+< content-type: text/html; charset=utf-8
+< content-length: 89
+< x-envoy-upstream-service-time: 1
+< server: envoy
+< date: Fri, 26 Aug 2016 19:39:19 GMT
+< x-envoy-protocol-version: HTTP/1.1
+<
+Hello from behind Envoy (service 1)! hostname: f26027f1ce28 resolvedhostname: 172.19.0.6
+* Connection #0 to host 192.168.99.100 left intact
+第3步：通过Zipkin UI查看跟踪记录
+使用您的浏览器打开http://192.168.99.100:9411 。你应该看到Zipkin仪表板。 如果这个IP地址
+不正确，可以通过运行$ docker-machine ip default 找到正确的地址。将服务设置为“前端代
+理”，并将开始时间设置为测试的前几分钟（如：第2步），然后按回车。你应该看到来自前端代理的跟
+踪记录。单击一个跟踪记录，就可以查看从前端代理到service1 到service2 的请求所经过的路径，
+以及每个调用所产生的延迟。
+返回
+上一级
+首页目录
+Zipkin跟踪
+- 89 -
+本文档使用 看云 构建
+
+Jaeger跟踪
+Jaeger跟踪
+Jaeger跟踪沙箱演示使用Jaeger作为跟踪服务程序，为Envoy请求跟踪提供能力。这个沙盒与上面描述的
+前端代理架构非常类似，但有一点不同：在返回请求响应之前，service1 对service2 进行API调
+用。这三个容器将被部署在名为envoymesh 的虚拟网络中。
+所有的请求都通过前端Envoy代理进行路由，该Envoy充当位于envoymesh 网络边缘的反向代理角色。
+通过docker compose将端口80 映射到端口8000 （请参阅/examples/jaeger-tracing/docker-
+compose.yml）。请注意，所有Envoy都配置为请求跟踪收集（例如，/examples/jaeger-tracing/front-
+envoy-jaeger.json中的http_connection_manager/config/tracing 设置），并将Jaeger设置为
+跟踪所生成的span收集服务集群（在/examples/jaeger-tracing/front-envoy-jaeger.json中设置跟踪驱
+动程序）。
+在将请求路由到相应的Envoy服务或应用程序之前，Envoy将负责为跟踪生成适当的span（父/子上下文
+span）。在高级别，每个span会记录上行API调用的延迟以及将span与其他相关span（例如跟踪ID）关
+联所需的信息。
+Envoy跟踪最重要的好处之一是它能够将生成的跟踪记录发送到Jaeger服务集群。但是，为了充分利用跟
+踪功能，在调用其他服务时，应用程序也必须传递Envoy生成的跟踪头。在我们提供的沙箱中，充当
+service1 简单的flask 应用程序（请参阅/examples/front-proxy/service.py中的跟踪函数）传播跟
+踪头，同时对service2 进行远程调用。
+运行沙箱
+以下文档将按照上图中所述组织的envoy集群的设置运行。
+第1步：建立沙箱
+要构建这个沙箱示例，并启动示例应用程序，请运行以下命令：
+$ pwd
+envoy/examples/jaeger-tracing
+$ docker-compose up --build -d
+$ docker-compose ps
+        Name                       Command               State      Ports
+-------------------------------------------------------------------------------------------------------
+------
+jaegertracing_service1_1      /bin/sh -c /usr/local/bin/ ...    Up       80/tcp
+jaegertracing_service2_1      /bin/sh -c /usr/local/bin/ ...    Up       80/tcp
+jaegertracing_front-envoy_1   /bin/sh -c /usr/local/bin/ ...    Up       0.0.0.0:8000->80/tcp, 0.0.0.0:
+8001->8001/tcp
+第2步：产生一些负载请求
+Jaeger跟踪
+- 90 -
+本文档使用 看云 构建
+
+您现在可以通过前端Envoy向service1 发送一个请求，如下所示：
+$ curl -v $(docker-machine ip default):8000/trace/1
+*   Trying 192.168.99.100...
+* Connected to 192.168.99.100 (192.168.99.100) port 8000 (#0)
+> GET /trace/1 HTTP/1.1
+> Host: 192.168.99.100:8000
+> User-Agent: curl/7.43.0
+> Accept: */*
+>
+< HTTP/1.1 200 OK
+< content-type: text/html; charset=utf-8
+< content-length: 89
+< x-envoy-upstream-service-time: 1
+< server: envoy
+< date: Fri, 26 Aug 2016 19:39:19 GMT
+< x-envoy-protocol-version: HTTP/1.1
+<
+Hello from behind Envoy (service 1)! hostname: f26027f1ce28 resolvedhostname: 172.19.0.6
+* Connection #0 to host 192.168.99.100 left intact
+第3步：通过Jaeger UI查看跟踪记录
+使用浏览器打开http://localhost:16686 。您应该可以看到Jaeger仪表板。将服务设置为“前端代
+理”，然后点击“查找跟踪”。你应该看到来自前端代理的跟踪信息。单击一个跟踪，就可以查看从前端
+代理到service1 到service2 的请求所经过的路径，以及每个调用产生的延迟。
+返回
+上一级
+首页目录
+Jaeger跟踪
+- 91 -
+本文档使用 看云 构建
+
+gRPC桥接
+gRPC桥接
+Envoy gRPC
+gRPC桥接沙箱是展示Envoy gRPC桥接过滤器的一个例子。其中包含带有Python HTTP客户端的gRPC内
+存Key/Value存储。Python客户端通过Envoy代理进程发出HTTP/1请求，并将其升级为HTTP/2的gRPC
+请求。响应随后缓冲，并作为HTTP/1报文负载有效信息发送回客户端。
+本例还演示Envoy另一个功能，就是通过Envoy路由配置，具有基础鉴权的路由能力。
+构建Go服务
+构建&运行Go gRPC服务：
+$ pwd
+envoy/examples/grpc-bridge
+$ script/bootstrap
+$ script/build
+注意：构建需要的Envoy代码库（或其工作副本）位于
+$GOPATH/src/github.com/envoyproxy/envoy 中。
+Docker Compose
+运行docker compose 文件，并设置Python和gRPC在容器中运行：
+$ pwd
+envoy/examples/grpc-bridge
+$ docker-compose up --build
+发送请求到Key/Value存储
+要使用Python服务并发送gRPC请求：
+$ pwd
+envoy/examples/grpc-bridge
+# set a key
+$ docker-compose exec python /client/client.py set foo bar
+setf foo to bar
+# get a key
+$ docker-compose exec python /client/client.py get foo
+bar
+# modify an existing key
+$ docker-compose exec python /client/client.py set foo baz
+setf foo to baz
+gRPC桥接
+- 92 -
+本文档使用 看云 构建
+
+# get the modified key
+$ docker-compose exec python /client/client.py get foo
+baz
+在正在运行的docker-compose 容器中，您应该可以看到gRPC服务打印其运行的记录：
+grpc_1    | 2017/05/30 12:05:09 set: foo = bar
+grpc_1    | 2017/05/30 12:05:12 get: foo
+grpc_1    | 2017/05/30 12:05:18 set: foo = baz
+返回
+上一级
+首页目录
+gRPC桥接
+- 93 -
+本文档使用 看云 构建
+
+构建Envoy Docker镜像
+构建Envoy Docker镜像
+以下步骤指导您构建自己的Envoy二进制文件，并将其放入干净的Ubuntu容器中。
+第1步：构建Envoy
+使用envoyproxy/envoy-build 编译Envoy。该镜像具有构建Envoy所需的全部软件。在您的Envoy
+目录中执行如下命令：
+$ pwd
+src/envoy
+$ ./ci/run_envoy_docker.sh './ci/do_ci.sh bazel.release'
+执行该命令需要一些时间，因为它会在编译一个Envoy二进制文件之后，运行相关测试。
+有关构建和差异化构建的更多详细信息，请参阅ci/README.md。
+步骤2：仅使用Envoy二进制生成映像
+在这一步中，我们将构建一个只有Envoy二进制文件的映像，而不是用来构建它的软件。
+$ pwd
+src/envoy/
+$ docker build -f ci/Dockerfile-envoy-image -t envoy .
+现在，可以在任何Dockerfile 中更改FROM ，则可以使用此Envoy镜像来构建任何沙箱。
+如果您有兴趣，欢迎您修改Envoy并测试，这将特别有用。
+返回
+上一级
+首页目录
+构建Envoy Docker镜像
+- 94 -
+本文档使用 看云 构建
+
+工具
+工具
+配置加载检查工具
+配置加载检查工具校验JSON格式的配置文件，是否符合JSON编码规范，并符合Envoy JSON模式。 该工
+具利用test/config_test/config_test.cc 中的配置进行校验。在服务配置初始化中加载JSON配
+置是，会使用到它进行校验。
+输入
+该工具需要一个PATH做为根目录配置，用于保存JSON Envoy配置文件。该工具将以递归方式遍历文件目
+录结构，并对每个文件运行配置测试。请记住，该工具将尝试所加载路径中的所有文件。
+输出
+该工具将输出Envoy日志，用它正在测试的配置初始化服务器配置。如果存在JSON文件格式不正确或不
+符合Envoy JSON模式的配置文件，则该工具将以状态EXIT_FAILURE 退出。如果该工具成功加载所有
+找到的配置文件，它将以状态EXIT_SUCCESS 退出。
+构建
+使用Bazel在本地构建该工具。
+bazel build //test/tools/config_load_check:config_load_check_tool
+运行
+使用该工具时，如上所述加上PATH路径。
+bazel-bin/test/tools/config_load_check/config_load_check_tool PATH
+路由表检查工具
+路由表检查工具检查路由器返回的路由参数是否与预期相符。该工具还可用于检查重定向路径，路径重写
+或主机重写是否与预期相符。
+输入
+该工具需要两个输入JSON文件：
+1. 路由JSON配置文件。配置中找到路由配置JSON文件模式。
+2. 工具JSON配置文件。配置中找到工具配置JSON文件模式。工具配置输入文件指定URL（由权限和路
+径组成）和期望的路由参数值。以及额外可选的参数，如附加标题。
+工具
+- 95 -
+本文档使用 看云 构建
+
+输出
+如果任何测试用例与期望的路由参数值不匹配，则程序以EXIT_FAILURE 状态退出。
+添加--details 选项可以打印出每个测试的详细信息。第一行表示测试名称。
+如果测试失败，则打印失败的测试用例的详细信息。第一个字段是预期的路由参数值。第二个字段是实际
+的路由参数值。第三个字段表示比较的参数。在下面的示例中，Test_2和Test_5在其他测试通过时失败。
+该测试案例中，将打印冲突详细信息。
+Test_1
+Test_2
+default other virtual_host_name
+Test_3
+Test_4
+Test_5
+locations ats cluster_name
+Test_6
+目前不支持使用有效的运行时值进行测试，这可能会在未来添加该功能。
+构建
+使用Bazel在本地构建该工具。
+bazel build //test/tools/router_check:router_check_tool
+运行
+该工具需要输入两个json文件和一个可选的命令行选项--details 。命令行参数期望的顺序是：
+1.路由器配置json文件；
+2.工具配置json文件；
+3.可选的详细信息标识；
+bazel-bin/test/tools/router_check/router_check_tool router_config.json tool_c
+bazel-bin/test/tools/router_check/router_check_tool router_config.json tool_c
+测试
+通过bash的shell脚本，使用bazel运行测试。该测试使用不同的路由和工具的配置json文件，进行比较。
+这些配置json文件可以在bazel test //test/tools/router_check/... 中找到。
+bazel test //test/tools/router_check/...
+模式验证检查工具
+模式验证程序工具验证传入的JSON是否符合配置规范。要验证整个配置，请参阅上述配置加载检查工具
+章节。目前只支持路由配置模式验证。
+工具
+- 96 -
+本文档使用 看云 构建
+
+输入
+该工具需要两个输入：
+1. 检查在JSON中传递的模式类型。支持的类型是：
+route - 用于路由配置验证；
+2. JSON的路径；
+输出
+如果JSON符合模式，则该工具将以状态EXIT_SUCCESS 退出。 如果JSON不符合模式，则会输出错误
+消息，详细说明不符合模式的内容。该工具将以状态EXIT_FAILURE 退出。
+构建
+使用Bazel在本地构建该工具。
+bazel build //test/tools/schema_validator:schema_validator_tool
+运行
+该工具如上所述采取路径。
+bazel-bin/test/tools/schema_validator/schema_validator_tool  --schema-type SC
+返回
+上一级
+首页目录
+工具
+- 97 -
+本文档使用 看云 构建

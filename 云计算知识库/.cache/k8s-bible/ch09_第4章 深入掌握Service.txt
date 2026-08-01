@@ -1,0 +1,1200 @@
+第4章　深入掌握Service
+Service是Kubernetes实现微服务架构的核心概念，通过创建
+Service，可以为一组具有相同功能的容器应用提供一个统一的入口地
+址，并且将请求负载分发到后端的各个容器应用上。本章对Service的概
+念和应用进行详细说明，包括：Service的定义、概念和原理；DNS服务
+搭建和配置指南；Node的本地DNS缓存；Pod的DNS域名相关特性、
+Ingress7层路由机制等。
+4.1　Service定义详解
+Service用于为一组提供服务的Pod抽象一个稳定的网络访问地址，
+是Kubernetes实现微服务的核心概念。通过Service的定义设置的访问地
+址是DNS域名格式的服务名称，对于客户端应用来说，网络访问方式并
+没有改变（DNS域名的作用等价于主机名、互联网域名或IP地址）。
+Service还提供了负载均衡器功能，将客户端请求负载分发到后端提供具
+体服务的各个Pod上。
+Service的YAML格式的定义文件的完整内容如下：
+
+
+对各属性的说明如表4.1所示。
+表4.1　对Service的定义文件模板的各属性的说明
+
+
+续表
+4.2　Service的概念和原理
+Service主要用于提供网络服务，通过Service的定义，能够为客户端
+应用提供稳定的访问地址（域名或IP地址）和负载均衡功能，以及屏蔽
+后端Endpoint的变化，是Kubernetes实现微服务的核心资源。本节对
+Service的概念、负载均衡机制、多端口号、外部服务、暴露到集群外、
+支持的网络协议、服务发现机制、Headless Service、端点分片和服务拓
+扑等内容进行详细说明。
+
+4.2.1　Service的概念
+在应用Service概念之前，我们先看看如何访问一个多副本的应用容
+器组提供的服务。
+如下所示为一个提供Web服务的Pod集合，由两个Tomcat容器副本
+组成，每个容器提供的服务端口号都为8080：
+
+创建该Deployment：
+查看每个Pod的IP地址：
+
+客户端应用可以直接通过这两个Pod的IP地址和端口号8080访问
+Web服务：
+
+但是，提供服务的容器应用通常是分布式的，通过多个Pod副本共
+同提供服务。而Pod副本的数量可能在运行过程中动态改变（例如执行
+了水平扩缩容），另外，单个Pod的IP地址也可能发生了变化（例如发
+生了故障恢复）。
+对于客户端应用来说，要实现动态感知服务后端实例的变化，以及
+将请求发送到多个后端实例的负载均衡机制，都会大大增加客户端系统
+实现的复杂度。Kubernetes的Service就是用于解决这些问题的核心组
+件。通过Service的定义，可以对客户端应用屏蔽后端Pod实例数量及Pod
+IP地址的变化，通过负载均衡策略实现请求到后端Pod实例的转发，为
+客户端应用提供一个稳定的服务访问入口地址。Service实现的是微服务
+架构中的几个核心功能：全自动的服务注册、服务发现、服务负载均衡
+等。
+以前面创建的webapp应用为例，为了让客户端应用访问到两个
+Tomcat Pod实例，需要创建一个Service来提供服务。Kubernetes提供了
+一种快速的方法，即通过kubectl expose命令来创建Service：
+查看新创建的Service，可以看到系统为它分配了一个虚拟IP地址
+（ClusterIP地址），Service的端口号则从Pod中的containerPort复制而
+来：
+
+接下来就可以通过Service的IP地址和Service的端口号访问该Service
+了：
+客户端应用对Service地址169.169.140.242：8080的访问被自动负载
+分发到了后端两个Pod之一：10.0.95.22：8080或10.0.95.23：8080。
+除了使用kubectl expose命令创建Service，更便于管理的方式是通过
+YAML文件来创建Service，代码如下：
+
+Service定义中的关键字段是ports和selector。
+本例中的ports定义部分指定了Service本身的端口号为8080，
+targetPort则用来指定后端Pod的容器端口号，selector定义部分设置的是
+后端Pod所拥有的label：app=webapp。
+创建该Service并查看系统为其分配的ClusterIP地址：
+
+通过Service的IP地址和Service的端口号进行访问：
+在提供服务的Pod副本集运行过程中，如果Pod列表发生了变化，则
+Kubernetes的Service控制器会持续监控后端Pod列表的变化，实时更新
+Service对应的后端Pod列表。
+一个Service对应的“后端”由Pod的IP和容器端口号组成，即一个完
+整的“IP：Port”访问地址，这在Kubernetes系统中叫作Endpoint。通过查
+看Service的详细信息，可以看到其后端Endpoint列表：
+
+实际上，Kubernetes自动创建了与Service关联的Endpoint资源对
+象，这可以通过查询Endpoint对象进行查看：
+Service不仅具有标准网络协议的IP地址，还以DNS域名的形式存
+在。Service的域名表示方法为<servicename>.<namespace>.svc.
+<clusterdomain>，servicename为服务的名称，namespace为其所在
+namespace的名称，clusterdomain为Kubernetes集群设置的域名后缀。服
+
+务名称的命名规则遵循RFC 
+1123规范，对服务名的DNS解析机制详见
+4.3节对DNS服务的详细说明。
+在客户端访问Service的地址时，Kubernetes自动完成了将客户端请
+求转发到后端多个Endpoint的负载分发工作，接下来对Service的负载均
+衡机制进行详细说明。
+4.2.2　Service的负载均衡机制
+当一个Service对象在Kubernetes集群中被定义出来时，集群内的客
+户端应用就可以通过服务IP访问到具体的Pod容器提供的服务了。从服
+务IP到后端Pod的负载均衡机制，则是由每个Node上的kube-proxy负责
+实现的。本节对kube-proxy的代理模式、会话保持机制和基于拓扑感知
+的服务路由机制（EndpointSlices）进行说明。
+1.kube-proxy的代理模式
+目前kube-proxy提供了以下代理模式（通过启动参数--proxy-mode设
+置）。
+◎　userspace模式：用户空间模式，由kube-proxy完成代理的实
+现，效率最低，不再推荐使用。
+◎　iptables模式：kube-proxy通过设置Linux Kernel的iptables规则，
+实现从Service到后端Endpoint列表的负载分发规则，效率很高。但是，
+如果某个后端Endpoint在转发时不可用，此次客户端请求就会得到失败
+的响应，相对于userspace模式来说更不可靠。此时应该通过为Pod设置
+readinessprobe（服务可用性健康检查）来保证只有达到ready状态的
+Endpoint才会被设置为Service的后端Endpoint。
+◎　ipvs模式：在Kubernetes 
+1.11版本中达到Stable阶段，kube-
+proxy通过设置Linux Kernel的netlink接口设置IPVS规则，转发效率和支
+持的吞吐率都是最高的。ipvs模式要求Linux Kernel启用IPVS模块，如果
+操作系统未启用IPVS内核模块，kube-proxy则会自动切换至iptables模
+式。同时，ipvs模式支持更多的负载均衡策略，如下所述。
+·　rr：round-robin，轮询。
+
+·　lc：least connection，最小连接数。
+·　dh：destination hashing，目的地址哈希。
+·　sh：source hashing，源地址哈希。
+·　sed：shortest expected delay，最短期望延时。
+·　nq：never queue，永不排队。
+◎　kernelspace模式：Windows Server上的代理模式。
+2.会话保持机制
+Service支持通过设置sessionAffinity实现基于客户端IP的会话保持机
+制，即首次将某个客户端来源IP发起的请求转发到后端的某个Pod上，
+之后从相同的客户端IP发起的请求都将被转发到相同的后端Pod上，配
+置参数为service.spec.sessionAffinity，例如：
+
+同时，用户可以设置会话保持的最长时间，在此时间之后重置客户
+端来源IP的保持规则，配置参数为
+service.spec.sessionAffinityConfig.clientIP.timeoutSeconds。例如下面的服
+务将会话保持时间设置为 10800s（3h）：
+
+通过Service的负载均衡机制，Kubernetes实现了一种分布式应用的
+统一入口，免去了客户端应用获知后端服务实例列表和变化的复杂度。
+4.2.3　Service的多端口设置
+一个容器应用可以提供多个端口的服务，在Service的定义中也可以
+相应地设置多个端口号。
+
+在下面的例子中，Service设置了两个端口号来分别提供不同的服
+务，如web服务和management服务（下面为每个端口号都进行了命名，
+以便区分）：
+另一个例子是同一个端口号使用的协议不同，如TCP和UDP，也需
+要设置为多个端口号来提供不同的服务：
+
+4.2.4　将外部服务定义为Service
+
+普通的Service通过Label Selector对后端Endpoint列表进行了一次抽
+象，如果后端的Endpoint不是由Pod副本集提供的，则Service还可以抽
+象定义任意其他服务，将一个Kubernetes集群外部的已知服务定义为
+Kubernetes内的一个Service，供集群内的其他应用访问，常见的应用场
+景包括：
+◎　已部署的一个集群外服务，例如数据库服务、缓存服务等；
+◎　其他Kubernetes集群的某个服务；
+◎　迁移过程中对某个服务进行Kubernetes内的服务名访问机制的
+验证。
+对于这种应用场景，用户在创建Service资源对象时不设置Label
+Selector（后端Pod也不存在），同时再定义一个与Service关联的
+Endpoint资源对象，在Endpoint中设置外部服务的IP地址和端口号，例
+如：
+
+如图4.1所示，访问没有标签选择器的Service和带有标签选择器的
+
+Service一样，请求将被路由到由用户自定义的后端Endpoint上。
+图4.1　Service指向外部服务
+4.2.5　将Service暴露到集群外部
+Kubernetes为Service创建的ClusterIP地址是对后端Pod列表的一层抽
+象，对于集群外部来说并没有意义，但有许多Service是需要对集群外部
+提供服务的，Kubernetes提供了多种机制将Service暴露出去，供集群外
+部的客户端访问。这可以通过Service资源对象的类型字段“type”进行设
+置。
+目前Service的类型如下。
+◎　ClusterIP：Kubernetes默认会自动设置Service的虚拟IP地址，
+仅可被集群内部的客户端应用访问。当然，用户也可手工指定一个
+ClusterIP地址，不过需要确保该IP在Kubernetes集群设置的ClusterIP地址
+范围内（通过kube-apiserver服务的启动参数--service-cluster-ip-range设
+置），并且没有被其他Service使用。
+◎　NodePort：将Service的端口号映射到每个Node的一个端口号
+上，这样集群中的任意Node都可以作为Service的访问入口地址，即
+
+NodeIP：NodePort。
+◎　LoadBalancer：将Service映射到一个已存在的负载均衡器的IP
+地址上，通常在公有云环境中使用。
+◎　ExternalName：将Service映射为一个外部域名地址，通过
+externalName字段进行设置。
+接下来对以上几种对外暴露服务的类型进行说明。
+1.NodePort类型
+下面的例子设置Service的类型为NodePort，并且设置具体的
+nodePort端口号为8081：
+创建这个Service：
+
+然后就可以通过任意一个Node的IP地址和NodePort 8081端口号访问
+服务了：
+在默认情况下，Node的kube-proxy会在全部网卡（0.0.0.0）上绑定
+NodePort端口号。
+在很多数据中心环境中，一台主机会配置多块网卡，作用各不相同
+（例如存在业务网卡和管理网卡等）。从Kubernetes 
+1.10版本开始，
+kube-proxy可以通过设置特定的IP地址将NodePort绑定到特定的网卡
+上，而无须绑定在全部网卡上，其设置方式为配置启动参数“--nodeport-
+addresses”，指定需要绑定的网卡IP地址，多个地址之间使用逗号分隔。
+例如仅在10.0.0.0和192.168.18.0对应的网卡上绑定NodePort端口号，对
+其他IP地址对应的网卡不会进行绑定，配置如下：
+另外，如果用户在Service定义中不设置具体的nodePort端口号，则
+Kubernetes会自动分配一个NodePort范围内的可用端口号。
+
+2.LoadBalancer类型
+通常在公有云环境中设置Service的类型为“LoadBalancer”，可以将
+Service映射到公有云提供的某个负载均衡器的IP地址上，客户端通过负
+载均衡器的IP和Service的端口号就可以访问到具体的服务，无须再通过
+kube-proxy提供的负载均衡机制进行流量转发。公有云提供的
+LoadBalancer可以直接将流量转发到后端Pod上，而负载分发机制依赖于
+公有云服务商的具体实现。
+下面的例子设置Service的类型为LoadBalancer：
+在服务创建成功之后，云服务商会在Service的定义中补充
+LoadBalancer的IP地址（status字段）：
+
+3.ExternalName类型
+ExternalName类型的服务用于将集群外的服务定义为Kubernetes的
+集群的Service，并且通过externalName字段指定外部服务的地址，可以
+使用域名或IP格式。集群内的客户端应用通过访问这个Service就能访问
+外部服务了。这种类型的Service没有后端Pod，所以无须设置Label
+Selector。例如：
+在本例中设置的服务名为my-service，所在namespace为prod，客户
+端访问服务地址my-service.prod.svc.cluster.local时，系统将自动指向外
+部域名my.database.example.com。
+我们还可以通过Ingress将服务暴露到集群外部，关于Ingress，详见
+
+4.6节的说明。
+4.2.6　Service支持的网络协议
+目前Service支持的网络协议如下。
+◎　TCP：Service的默认网络协议，可用于所有类型的Service。
+◎　UDP：可用于大多数类型的Service，LoadBalancer类型取决于
+云服务商对UDP的支持。
+◎　HTTP：取决于云服务商是否支持HTTP和实现机制。
+◎　PROXY：取决于云服务商是否支持HTTP和实现机制。
+◎　SCTP：从Kubernetes 1.12版本引入，到1.19版本时达到Beta阶
+段，默认启用，如需关闭该特性，则需要设置kube-apiserver的启动参
+数--feature-gates=SCTPSupport=false进行关闭。
+Kubernetes从1.17版本开始，可以为Service和Endpoint资源对象设置
+一个新的字段“AppProtocol”，用于标识后端服务在某个端口号上提供的
+应用层协议类型，例如HTTP、HTTPS、SSL、DNS等，该特性在
+Kubernetes 1.19版本时达到Beta阶段，计划于Kubernetes 1.20 版本时达到
+GA阶段。要使用AppProtocol，需要设置kube-apiserver的启动参数--
+feature-gates=ServiceAppProtocol=true进行开启，然后在Service或
+Endpoint的定义中设置AppProtocol字段指定应用层协议的类型，例如：
+
+4.2.7　Kubernetes的服务发现机制
+服务发现机制指客户端应用在一个Kubernetes集群中如何获知后端
+服务的访问地址。Kubernetes提供了两种机制供客户端应用以固定的方
+式获取后端服务的访问地址：环境变量方式和DNS方式。
+1.环境变量方式
+在一个Pod运行起来的时候，系统会自动为其容器运行环境注入所
+有集群中有效Service的信息。Service的相关信息包括服务IP、服务端口
+号、各端口号相关的协议等，通过{SVCNAME}_SERVICE_HOST和
+{SVCNAME}_SERVICE_PORT格式进行设置。其中，SVCNAME的命
+名规则为：将Service的name字符串转换为全大写字母，将中横线“-”替
+换为下画线“_”。
+以webapp服务为例：
+
+在一个新创建的Pod（客户端应用）中，可以看到系统自动设置的
+环境变量如下：
+
+然后，客户端应用就能够根据Service相关环境变量的命名规则，从
+环境变量中获取需要访问的目标服务的地址了，例如：
+2.DNS方式
+Service在Kubernetes系统中遵循DNS命名规范，Service的DNS域名
+表示方法为<servicename>.<namespace>.svc.<clusterdomain>，其中
+servicename为服务的名称，namespace为其所在namespace的名称，
+clusterdomain为Kubernetes集群设置的域名后缀（例如cluster.local），服
+务名称的命名规则遵循RFC 1123规范的要求。
+对于客户端应用来说，DNS域名格式的Service名称提供的是稳定、
+不变的访问地址，可以大大简化客户端应用的配置，是Kubernetes集群
+中推荐的使用方式。
+当Service以DNS域名形式进行访问时，就需要在Kubernetes集群中
+存在一个DNS服务器来完成域名到ClusterIP地址的解析工作了，经过多
+年的发展，目前由CoreDNS作为Kubernetes集群的默认DNS服务器提供
+域名解析服务。详细的DNS服务搭建操作请参见4.3节的说明。
+另外，Service定义中的端口号如果设置了名称（name），则该端口
+号也会拥有一个DNS域名，在DNS服务器中以SRV记录的格式保存：
+_<portname>._<protocol>.<servicename>.<namespace>.svc.
+<clusterdomain>，其值为端口号的数值。
+以webapp服务为例，将其端口号命名为“http”：
+
+解析名为“http”端口的DNS 
+SRV记
+录“_http._tcp.webapp.default.svc.cluster.local”，可以查询到其端口号的值
+为8080：
+
+4.2.8　Headless Service的概念和应用
+在某些应用场景中，客户端应用不需要通过Kubernetes内置Service
+实现的负载均衡功能，或者需要自行完成对服务后端各实例的服务发现
+机制，或者需要自行实现负载均衡功能，此时可以通过创建一种特殊的
+名为“Headless”的服务来实现。
+Headless Service的概念是这种服务没有入口访问地址（无ClusterIP
+地址），kube-proxy不会为其创建负载转发规则，而服务名（DNS域
+名）的解析机制取决于该Headless Service是否设置了Label Selector。
+1.Headless Service设置了Label Selector
+如果Headless 
+Service设置了Label 
+Selector，Kubernetes则将根据
+Label 
+Selector查询后端Pod列表，自动创建Endpoint列表，将服务名
+（DNS域名）的解析机制设置为：当客户端访问该服务名时，得到的是
+全部Endpoint列表（而不是一个确定的IP地址）。
+以下面的Headless Service为例，其设置了Label Selector：
+
+创建该Headless Service：
+假设在集群中已经运行了3个副本的nginx deployment，查看它们的
+Pod IP地址：
+查看该Headless Service的详细信息，可以看到后端Endpoint列表：
+
+用nslookup工具对Headless 
+Service名称尝试域名解析，将会看到
+DNS系统返回的全部Endpoint的IP地址，例如：
+
+当客户端通过DNS服务名“nginx”（或其FQDN全限定域名“nginx.
+<namespace>.svc.cluster.local”）和服务端口号访问该Headless服务
+（URL=nginx：80）时，将得到Service后端Endpoint列表“10.0.95.12：
+80，10.0.95.13：80，10.0.95.14：80”，然后由客户端程序自行决定如何
+操作，例如通过轮询机制访问各个Endpoint。
+2.Headless Service没有设置Label Selector
+如果Headless Service没有设置Label Selector，则Kubernetes将不会
+自动创建对应的Endpoint列表。DNS系统会根据下列条件尝试对该服务
+名设置DNS记录：
+◎　如果Service的类型为ExternalName，则对服务名的访问将直接
+被DNS系统转换为Service设置的外部名称（externalName）；
+◎　如果系统中存在与Service同名的Endpoint定义，则服务名将被
+解析为Endpoint定义中的列表，适用于非ExternalName类型的Service。
+4.2.9　端点分片与服务拓扑
+我们知道，Service的后端是一组Endpoint列表，为客户端应用提供
+了极大的便利。但是随着集群规模的扩大及Service数量的增加，特别是
+Service后端Endpoint数量的增加，kube-proxy需要维护的负载分发规则
+（例如iptables规则或ipvs规则）的数量也会急剧增加，导致后续对
+
+Service后端Endpoint的添加、删除等更新操作的成本急剧上升。举例来
+说，假设在Kubernetes集群中有10000个Endpoint运行在大约5000个Node
+上，则对单个Pod的更新将需要总计约5GB的数据传输，这不仅对集群
+内的网络带宽浪费巨大，而且对Master的冲击非常大，会影响
+Kubernetes集群的整体性能，在Deployment不断进行滚动升级操作的情
+况下尤为突出。
+Kubernetes从1.16版本开始引入端点分片（Endpoint Slices）机制，
+包括一个新的EndpointSlice资源对象和一个新的EndpointSlice控制器，
+在1.17版本时达到Beta阶段。EndpointSlice通过对Endpoint进行分片管理
+来实现降低Master和各Node之间的网络传输数据量及提高整体性能的目
+标。对于Deployment的滚动升级，可以实现仅更新部分Node上的
+Endpoint信息，Master与Node之间的数据传输量可以减少100倍左右，能
+够大大提高管理效率。EndpointSlice根据Endpoint所在Node的拓扑信息
+进行分片管理，示例如图4.2所示。
+
+图4.2　通过EndpointSlice将Endpoint分片管理
+Endpoint Slices要实现的第2个目标是为基于Node拓扑的服务路由提
+供支持，这需要与服务拓扑（Service Topology）机制共同实现。
+1.端点分片（Endpoint Slices）
+我们先看看系统自动完成的EndpointSlice管理机制。从Kubernetes
+1.17版本开始，EndpointSlice机制默认是启用的（在1.16版本中需要通过
+设置kube-apiserver和kube-proxy服务的启动参数--feature-
+gates="EndpointSlice=true"进行启用）。
+另外，kube-proxy默认仍然使用Endpoint对象，为了提高性能，可
+以设置kube-proxy启动参数--feature-
+gates="EndpointSliceProxying=true"让kube-proxy使用EndpointSlice，这样
+
+可以减少kube-proxy与master之间的网络通信并提高性能。Kubernetes从
+1.19版本开始默认开启该特性。
+以一个3副本的webapp服务为例，Pod列表如下：
+服务和Endpoint的信息如下：
+查看EndpointSlice，可以看到系统自动创建了一个名称前缀
+
+为“webapp-”的EndpointSlice：
+查看其详细信息，可以看到3个Endpoint的IP地址和端口号信息，同
+时为Endpoint补充设置了Topology相关信息：
+
+
+默认情况下，在由EndpointSlice控制器创建的EndpointSlice中最多
+包含100个Endpoint，如需修改，则可以通过kube-controller-manager服务
+的启动参数--max-endpoints-per-slice设置，但上限不能超过1000。
+EndpointSlice的关键信息如下。
+
+（1）关联的服务名称：将EndpointSlice与Service的关联信息设置为
+一个标签kubernetes.io/service-name=webapp，该标签标明了服务名称。
+（2）地址类型AddressType：包括以下3种取值类型。
+◎　IPv4：IPv4格式的IP地址。
+◎　IPv6：IPv6格式的IP地址。
+◎　FQDN：全限定域名。
+（3）在Endpoints列表中列出的每个Endpoint的信息。
+◎　Addresses：Endpoint的IP地址。
+◎　Conditions：Endpoint状态信息，作为EndpointSlice的查询条
+件。
+◎　Hostname：在Endpoint中设置的主机名hostname。
+◎　TargetRef：Endpoint对应的Pod名称。
+◎　Topology：拓扑信息，为基于拓扑感知的服务路由提供数据。
+目前EndpointSlice控制器自动设置的拓扑信息如下。
+◎　kubernetes.io/hostname：Endpoint所在Node的名称。
+◎　topology.kubernetes.io/zone：Endpoint所在的Zone信息，使用
+Node标签topology.kubernetes.io/zone的值，例如上例中的Node拥
+有“topology.kubernetes.io/zone：north”标签。
+◎　topology.kubernetes.io/region：Endpoint所在的Region信息，使
+用Node标签topology.kubernetes.io/region的值。
+在大规模集群中，管理员应对不同地域或不同区域的Node设置相关
+的topology标签，用于为Node设置拓扑信息。
+（4）EndpointSlice的管理控制器：通过
+endpointslice.kubernetes.io/managed-by标签进行设置，用于存在多个管理
+控制器的应用场景中，例如某个Service 
+Mesh管理工具也可以对
+EndpointSlice进行管理。为了支持多个管理工具对EndpointSlice同时进
+行管理并且互不干扰，可以通过endpointslice.kubernetes.io/managed-by标
+签设置管理控制器的名称，Kubernetes内置的EndpointSlice控制器自动
+
+设置该标签的值为endpointslice-controller.k8s.io，其他管理控制器应设
+置唯一名称用于标识。
+下面对EndpointSlice的复制功能和数据分布管理机制进行说明。
+（1）EndpointSlice复制（Mirroring）功能。应用程序有时可能会创
+建自定义的Endpoint资源，为了避免应用程序在创建Endpoint资源时再
+去创建EndpointSlice资源，Kubernetes控制平面会自动完成将Endpoint资
+源复制为EndpointSlice资源的操作，从Kubernetes 
+1.19版本开始默认启
+用。但在以下几种情况下，不会执行自动复制操作。
+◎　Endpoint资源设置了Label：endpointslice.kubernetes.io/skip-
+mirror=true。
+◎　Endpoint资源设置了Annotation：control-
+plane.alpha.kubernetes.io/leader。
+◎　Endpoint资源对应的Service资源不存在。
+◎　Endpoint资源对应的Service资源设置了非空的Selector。
+一个Endpoint资源同时存在IPv4和IPv6地址类型时，会被复制为多
+个EndpointSlice资源，每种地址类型最多会被复制为1000个
+EndpointSlice资源。
+（2）EndpointSlice的数据分布管理机制。如上例所示，我们可以看
+到每个EndpointSlice资源都包含一组作用于全部Endpoint的端口号
+（Ports）。如果Service定义中的端口号使用了字符串名称，则对于相同
+name的端口号，目标Pod的targetPort可能是不同的，结果是
+EndpointSlice资源将会不同。这与Endpoint资源设置子集（subset）的逻
+辑是相同的。
+Kubernetes控制平面对于EndpointSlice中数据的管理机制是尽可能
+填满，但不会在多个EndpointSlice数据不均衡的情况下主动执行重新平
+衡（rebalance）操作，其背后的逻辑也很简单，步骤如下。
+（1）遍历当前所有EndpointSlice资源，删除其中不再需要的
+Endpoint，更新已更改的匹配Endpoint。
+（2）遍历第1步中已更新的EndpointSlice资源，将需要添加的新
+Endpoint填充进去。
+
+（3）如果还有新的待添加Endpoint，则尝试将其放入之前未更新的
+EndpointSlice中，或者尝试创建新的EndpointSlice并添加。
+重要的是，第3步优先考虑创建新的EndpointSlice而不是更新原
+EndpointSlice。例如，如果要添加10个新的Endpoint，则当前有两个
+EndpointSlice各有5个剩余空间可用于填充，系统也会创建一个新的
+EndpointSlice用来填充这10个新Endpoint。换句话说，单个EndpointSlice
+的创建优于对多个EndpointSlice的更新。
+以上主要是由于在每个节点上运行的kube-proxy都会持续监控
+EndpointSlice的变化，对EndpointSlice每次更新成本都很高，因为每次
+更新都需要Master将更新数据发送到每个kube-proxy。上述管理机制旨
+在限制需要发送到每个节点的更新数据量，即使可能导致最终有许多
+EndpointSlice资源未能填满。
+实际上，这种不太理想的数据分布情况应该是罕见的。Master的
+EndpointSlice控制器处理的大多数更新所带来的数据量都足够小，使得
+对已存在（仍有空余空间）EndpointSlice的数据填充都没有问题。如果
+实在无法填充，则无论如何都需要创建新的EndpointSlice资源。此外对
+Deployment执行滚动升级操作时，由于后端Pod列表和相关Endpoint列表
+全部会发生变化，所以也会很自然地对EndpointSlice资源的内容全部进
+行更新。
+2.服务拓扑（Service Topology）
+服务拓扑机制从Kubernetes 1.17版本开始引入，目前为Alpha阶段，
+目标是实现基于Node拓扑的流量路由，例如将发送到某个服务的流量优
+先路由到与客户端相同Node的Endpoint上，或者路由到与客户端相同
+Zone的那些Node的Endpoint上。
+在默认情况下，发送到一个Service的流量会被均匀转发到每个后端
+Endpoint，但无法根据更复杂的拓扑信息设置复杂的路由策略。服务拓
+扑机制的引入就是为了实现基于Node拓扑的服务路由，允许Service创建
+者根据来源Node和目标Node的标签来定义流量路由策略。
+通过对来源（source）Node和目标（destination）Node标签的匹
+配，用户可以根据业务需求对Node进行分组，设置有意义的指标值来标
+识“较近”或者“较远”的属性。例如，对于公有云环境来说，通常有区域
+
+（Zone或Region）的划分，云平台倾向于把服务流量限制在同一个区域
+内，这通常是因为跨区域网络流量会收取额外的费用。另一个例子是把
+流量路由到由DaemonSet管理的当前Node的Pod上。又如希望把流量保
+持在相同机架内的Node上，以获得更低的网络延时。
+服务拓扑机制需要通过设置kube-apiserver和kube-proxy服务的启动
+参数--feature-gates="ServiceTopology=true，EndpointSlice=true"进行启用
+（需要同时启用EndpointSlice功能），然后就可以在Service资源对象上
+通过定义topologyKeys字段来控制到Service的流量路由了。
+topologyKeys字段设置的是一组Node标签列表，按顺序匹配Node完
+成流量的路由转发，流量会被转发到标签匹配成功的Node上。如果按第
+1个标签找不到匹配的Node，就尝试匹配第2个标签，以此类推。如果全
+部标签都没有匹配的Node，则请求将被拒绝，就像Service没有后端
+Endpoint一样。
+将topologyKeys配置为“*”表示任意拓扑，它只能作为配置列表中的
+最后一个才有效。如果完全不设置topologyKeys字段，或者将其值设置
+为空，就相当于没有启用服务拓扑功能。
+对于需要使用服务拓扑机制的集群，管理员需要为Node设置相应的
+拓扑标签，包括kubernetes.io/hostname、topology.kubernetes.io/zone和
+topology.kubernetes.io/region。
+然后为Service设置topologyKeys的值，就可以实现如下流量路由策
+略。
+◎　配置为["kubernetes.io/hostname"]：流量只会被路由到相同Node
+的Endpoint上，如果Node的Endpoint不存在，则将请求丢弃。
+◎　配置为["kubernetes.io/hostname""topology.kubernetes.io/zone"
+"topology.kubernetes.io/region"]：流量优先被路由到相同Node的Endpoint
+上，如果Node没有Endpoint，流量则被路由到同zone的Endpoint，如果
+在zone中没有Endpoint，流量则被路由到通region中的Endpoint上。
+◎　配置为["topology.kubernetes.io/zone"，"*"]：流量优先被路由到
+同zone的Endpoint上，如果在zone中没有可用的Endpoint，流量则被路由
+到任意可用的Endpoint上。
+
+目前使用服务拓扑有以下几个约束条件。
+◎　服务拓扑和externalTrafficPolicy=Local是不兼容的，所以一个
+Service不能同时使用这两种特性。在同一个Kubernetes集群中，启用服
+务拓扑的Service和设置externalTrafficPolicy=Local特性的Service是可以
+同时存在的。
+◎　topologyKeys目前可以设置的标签只有3个：
+kubernetes.io/hostname、topology.kubernetes.io/zone和
+topology.kubernetes.io/region，未来会增加更多的标签。
+◎　topologyKeys必须是有效的标签格式，并且最多定义16个。
+◎　如需使用通配符“*”，则它必须是最后一个值。
+下面通过Service的YAML文件对几种常见的服务拓扑应用实例进行
+说明。
+（1）只将流量路由到相同Node的Endpoint上，如果Node没有可用
+的Endpoint，则将请求丢弃：
+
+（2）优先将流量路由到相同Node的Endpoint上，如果Node没有可
+用的Endpoint，则将请求路由到任意可用的Endpoint：
+（3）只将流量路由到相同zone或同region的Endpoint上，如果没有
+可用的Endpoint，则将请求丢弃：
+
+（4）按同Node、同zone、同region的优先级顺序路由流量，如果
+Node、zone、region都没有可用的Endpoint，则将请求路由到集群内任
+意可用的Endpoint上：
+
+4.3　DNS服务搭建和配置指南
+作为服务发现机制的基本功能，在集群内需要能够通过服务名对服
+务进行访问，这就需要一个集群范围内的DNS服务来完成从服务名到
+ClusterIP地址的解析。DNS服务在Kubernetes的发展过程中经历了3个阶
+段，接下来进行讲解。
+在Kubernetes 1.2版本时，DNS服务是由SkyDNS提供的，它由4个容
+器组成：kube2sky、skydns、etcd和healthz。kube2sky容器监控
+Kubernetes中Service资源的变化，根据Service的名称和IP地址信息生成
+DNS记录，并将其保存到etcd中；skydns容器从etcd中读取DNS记录，并
+
+为客户端容器应用提供DNS查询服务；healthz容器提供对skydns服务的
+健康检查功能。
+图4.3展现了SkyDNS的总体架构。
+图4.3　SkyDNS的总体架构
+从Kubernetes 1.4版本开始，SkyDNS组件便被KubeDNS替换，主要
+考虑的是SkyDNS组件之间通信较多，整体性能不高。KubeDNS由3个
+容器组成：kubedns、dnsmasq和sidecar，去掉了SkyDNS中的etcd存储，
+将DNS记录直接保存在内存中，以提高查询性能。kubedns容器监控
+Kubernetes中Service资源的变化，根据Service的名称和IP地址生成DNS
+记录，并将DNS记录保存在内存中；dnsmasq容器从kubedns中获取DNS
+记录，提供DNS缓存，为客户端容器应用提供DNS查询服务；sidecar提
+供对kubedns和dnsmasq服务的健康检查功能。图4.4展现了KubeDNS的
+总体架构。
+
+图4.4　KubeDNS的总体架构
+从Kubernetes 
+1.11版本开始，Kubernetes集群的DNS服务便由
+CoreDNS提供。CoreDNS是CNCF基金会孵化的一个项目，是用Go语言
+实现的高性能、插件式、易扩展的DNS服务端，目前已毕业。CoreDNS
+解决了KubeDNS的一些问题，例如dnsmasq的安全漏洞、externalName
+不能使用stubDomains进行设置，等等。CoreDNS支持自定义DNS记录
+及配置upstream DNS Server，可以统一管理Kubernetes基于服务的内部
+DNS和数据中心的物理DNS。它没有使用多个容器的架构，只用一个容
+器便实现了KubeDNS内3个容器的全部功能。图4.5展现了CoreDNS的总
+体架构。
+
+图4.5　CoreDNS的总体架构
+接下来以CoreDNS为例，说明Kubernetes集群DNS服务的搭建过
+程。
+4.3.1　修改每个Node上kubelet的DNS启动参数
+修改每个Node上kubelet的启动参数，在其中加上以下两个参数。
+◎　--cluster-dns=169.169.0.100：为DNS服务的ClusterIP地址。
+◎　--cluster-domain=cluster.local：为在DNS服务中设置的域名。
+然后重启kubelet服务。
+4.3.2　部署CoreDNS服务
+部署CoreDNS服务时需要创建3个资源对象：1个ConfigMap、1个
+Deployment和1个Service。在启用了RBAC的集群中，还可以设置
+ServiceAccount、ClusterRole、ClusterRoleBinding对CoreDNS容器进行权
+
+限设置。
+ConfigMap“coredns”主要设置CoreDNS的主配置文件Corefile的内
+容，其中可以定义各种域名的解析方式和使用的插件，示例如下
+（Corefile的详细配置说明参见4.3.4节）：
+
+
+Deployment“coredns”主要设置CoreDNS容器应用的内容，其中，
+replicas副本的数量通常应该根据集群的规模和服务数量确定，如果单个
+CoreDNS进程不足以支撑整个集群的DNS查询，则可以通过水平扩展提
+高查询能力。由于DNS服务是Kubernetes集群的关键核心服务，所以建
+议为其Deployment设置自动扩缩容控制器，自动管理其副本数量。
+另外，对资源限制部分（CPU限制和内存限制）的设置也应根据实
+际环境进行调整：
+
+
+
+
+
+
+Service“kube-dns”是DNS服务的配置，这个服务需要设置固定的
+ClusterIP地址，也需要将所有Node上的kubelet启动参数--cluster-dns都设
+置为这个ClusterIP地址：
+
+通过kubectl create命令完成CoreDNS服务的创建：
+查看Deployment、Pod和Service，确保容器成功启动：
+
+4.3.3　服务名的DNS解析
+接下来使用一个带有nslookup工具的Pod来验证DNS服务能否正常
+工作：
+
+运行kubectl create-f busybox.yaml即可完成创建。
+在该容器成功启动后，通过kubectl exec <container_id>--nslookup进
+行测试：
+可以看到，通过DNS服务器169.169.0.100成功解析了redis-master服
+务的IP地址169.169.8.10。
+
+如果某个Service属于不同的命名空间，那么在进行Service查找时，
+需要补充Namespace的名称，将其组合成完整的域名。下面以查找kube-
+dns服务为例，将其所在Namespace“kube-system”补充在服务名之后，
+用“.”连接为“kube-dns.kube-system”，即可查询成功：
+如果仅使用“kube-dns”进行查找，则会失败：
+4.3.4　CoreDNS的配置说明
+CoreDNS的主要功能是通过插件系统实现的。CoreDNS实现了一种
+链式插件结构，将DNS的逻辑抽象成了一个个插件，能够灵活组合使
+用。
+常用的插件如下。
+◎　loadbalance：提供基于DNS的负载均衡功能。
+◎　loop：检测在DNS解析过程中出现的简单循环问题。
+◎　cache：提供前端缓存功能。
+◎　health：对Endpoint进行健康检查。
+◎　kubernetes：从Kubernetes中读取zone数据。
+
+◎　etcd：从etcd中读取zone数据，可用于自定义域名记录。
+◎　file：从RFC1035格式文件中读取zone数据。
+◎　hosts：使用/etc/hosts文件或者其他文件读取zone数据，可用于
+自定义域名记录。
+◎　auto：从磁盘中自动加载区域文件。
+◎　reload：定时自动重新加载Corefile配置文件的内容。
+◎　forward：转发域名查询到上游DNS服务器上。
+◎　prometheus：为Prometheus系统提供采集性能指标数据的
+URL。
+◎　pprof：在URL路径/debug/pprof下提供运行时的性能数据。
+◎　log：对DNS查询进行日志记录。
+◎　errors：对错误信息进行日志记录。
+在下面的示例中为域名“cluster.local”设置了一系列插件，包括
+errors、health、ready、kubernetes、prometheus、forward、cache、
+loop、reload和loadbalance，在进行域名解析时，这些插件将以从上到下
+的顺序依次执行：
+
+另外，etcd和hosts插件都可以用于用户自定义域名记录。
+下面是使用etcd插件的配置示例，将以“.com”结尾的域名记录配置
+为从etcd中获取，并将域名记录保存在/skydns路径下：
+
+如果用户在etcd中插入一条“10.1.1.1 mycompany.com”DNS记录：
+客户端应用就能访问域名“mycompany.com”了：
+
+forward插件用于配置上游DNS服务器或其他DNS服务器，当在
+CoreDNS中查询不到域名时，会到其他DNS服务器上进行查询。在实际
+环境中，可以将Kubernetes集群外部的DNS纳入CoreDNS，进行统一的
+DNS管理。
+4.4　Node本地DNS缓存
+由于在Kubernetes集群中配置的DNS服务是一个名为“kube-dns”的
+Service，所以容器应用都通过其ClusterIP地址（例如169.169.0.100）去
+执行服务名的DNS域名解析。这对于大规模集群可能引起以下两个问
+题。
+（1）集群DNS服务压力增大（这可以通过自动扩容缓解）。
+（2）由于DNS服务的IP地址是Service的ClusterIP地址，所以会通过
+kube-proxy设置的iptables规则进行转发，可能导致域名解析性能很差，
+原因是Netfilter在做DNAT转换时可能会引起conntrack冲突，从而导致
+DNS查询产生5s的延时。
+为了解决这两个问题，Kubernetes引入了Node本地DNS缓存
+（NodeLocal DNSCache）来提高整个集群的DNS域名解析的性能，这在
+1.18版本时达到Stable阶段。使用Node本地DNS缓存的好处如下。
+
+◎　在没有本地DNS缓存时，集群DNS服务的Pod很可能在其他节
+点上，跨主机访问会增加网络延时，使用Node本地DNS缓存可显著减少
+跨主机查询的网络延时。
+◎　跳过iptables DNAT和连接跟踪将有助于减少conntrack竞争，并
+避免UDP DNS记录填满conntrack表。
+◎　本地缓存到集群DNS服务的连接协议可以升级为TCP。TCP
+conntrack条目将在连接关闭时被删除；默认使用UDP时，conntrack条目
+只能等到超时时间过后才被删除，操作系统的默认超时时间
+（nf_conntrack_udp_timeout）为30s。
+◎　将DNS查询从UDP升级为TCP，将减少由于丢弃的UDP数据包
+和DNS超时而引起的尾部延迟（tail latency），UDP超时时间可能会长
+达30s（3次重试，每次10s）。
+◎　提供Node级别DNS解析请求的度量（Metrics）和可见性
+（visibility）。
+◎　可以重新启用负缓存（Negative 
+caching）功能，减少对集群
+DNS服务的查询数量。
+Node本地DNS缓存（NodeLocal DNSCache）的工作流程如图4.6所
+示，客户端Pod首先会通过本地DNS缓存进行域名解析，当缓存中不存
+在域名时，会将请求转发到集群DNS服务进行解析。
+
+图4.6　Node本地DNS缓存的工作流程
+下面对如何部署Node本地DNS缓存工具进行说明。
+配置文件nodelocaldns.yaml的内容如下，主要包括ServiceAccount、
+Daemonset、ConfigMap和Service几个资源对象。
+Service Account的定义如下：
+
+Service的定义如下：
+
+ConfigMap的定义如下：
+
+
+
+DaemonSet的定义如下：
+
+
+
+
+ConfigMap Corefile的主要配置参数如下。
+◎　bind 169.254.20.10：node-local-dns需要绑定的本地IP地址，建
+议将其设置为169.254.0.0/16范围，确保不与集群内的其他IP冲突。
+◎　forward 
+.169.169.0.100：在node-local-dns缓存中不存在域名记
+录时，将转发到的上游DNS服务器IP设置为Kubernetes集群DNS服务
+（kube-dns）的IP，例如169.169.0.100。
+◎　health 
+169.254.20.10：8081：健康检查端口号设置，与
+Daemonset的livenessProbe一致，需要注意，node-local-dns网络模式设置
+了hostNetwork=true，这个端口号也会被直接绑定到宿主机上，需要确
+保不与宿主机的其他应用冲突。
+Daemonset node-local-dns的主要配置参数如下。
+◎　args：["-localip"，"169.254.20.10"，"-conf"，"/etc/Corefile"，"-
+upstreamsvc"，"kube-dns-upstream"]：将-localip参数设置为node-local-
+dns绑定的本地IP地址，对其他参数无须修改。
+◎　livenessProbe中的健康检查端口号与ConfigMap中的一致。
+另外，如果kube-proxy代理模式（--proxy-mode）使用的是ipvs模
+式，则还需要修改kubelet的启动参数--cluster-dns为node-local-dns绑定的
+本地IP地址169.254.20.10。
+通过kubectl create命令创建node-local-dns服务：
+
+确认在每个Node上都运行了一个node-local-dns Pod：
+在客户端Pod内对服务名的解析没有变化，仍然可以直接通过服务
+名访问其他服务，例如：
+
+4.5　Pod的DNS域名相关特性
+Pod作为集群中提供具体服务的实体，也可以像Service一样设置
+DNS域名。另外，系统为客户端应用Pod需要使用的DNS策略提供了多
+种选择。
+4.5.1　Pod的DNS域名
+对Pod来说，Kubernetes会为其设置一个<pod-ip>.<namespace>.pod.
+<cluster-domain>格式的DNS域名，其中Pod 
+IP部分需要用“-”替换“.”符
+号，例如下面Pod的IP地址为10.0.95.63：
+
+系统为这个Pod设置的DNS域名为10-0-95-
+63.default.pod.cluster.local，用nslookup进行验证，便可以成功解析该域
+名的IP地址为10.0.95.63：
+对于以Deployment或Daemonset类型创建的Pod，Kubernetes会为每
+个Pod都以其IP地址和控制器名称设置一个DNS域名，格式为<pod-ip>.
+<deployment/daemonset-name>.<namespace>.svc.<cluster-domain>，其中
+Pod 
+IP地址段字符串需要用“-”替换“.”符号，例如下面Pod的IP地址为
+10.0.95.48：
+系统为这个Pod设置的DNS域名为10-0-95-48.demo-
+app.default.svc.cluster.local，用nslookup进行验证，便可以成功解析该域
+名的IP地址为10.0.95.48：
+
+4.5.2　为Pod自定义hostname和subdomain
+在默认情况下，Pod的名称将被系统设置为容器环境内的主机名称
+（hostname），但通过副本控制器创建的Pod名称会有一段随机后缀
+名，无法固定，此时可以通过在Pod yaml配置中设置hostname字段定义
+容器环境的主机名。同时，可以设置subdomain字段定义容器环境的子
+域名。
+通过下面的Pod定义，将会在Pod容器环境中设置主机名为“webapp-
+1”，子域名为“mysubdomain”：
+
+创建这个Pod：
+查看Pod的IP地址：
+
+在Pod创建成功之后，Kubernetes系统为其设置的DNS域名
+（FQDN）为“webapp-1.mysubdomain.default.svc.cluster.local”，可以通过
+登录Pod“webapp1”查看/etc/hosts文件的记录：
+为了使集群内的其他应用能够访问Pod的DNS域名，还需要部署一
+个Headless Service，其服务名称为Pod的子域名（subdomain），这样系
+统就会在DNS服务器中自动创建相应的DNS记录。
+Headless 
+Service的定义如下，名称（name）被设置为Pod的子域
+
+名“mysubdomain”：
+创建该Headless Service：
+查看该Service的详情，可见其Endpoint为Pod的IP：
+
+此时，其他应用就可以通过Pod的DNS域名“webapp-
+1.mysubdomain.default.svc.cluster.local”访问Pod的服务了：
+
+4.5.3　Pod的DNS策略
+Kubernetes可以在Pod级别通过dnsPolicy字段设置DNS策略。目前支
+持的DNS策略如下。
+◎　Default：继承Pod所在宿主机的域名解析设置。
+◎　ClusterFirst：优先使用Kubernetes环境的DNS服务（如
+CoreDNS提供的域名解析服务），将无法解析的域名转发到系统配置的
+上游DNS服务器。
+◎　ClusterFirstWithHostNet：适用于以hostNetwork模式运行的
+Pod。
+◎　None：忽略Kubernetes集群的DNS配置，需要手工通过
+dnsConfig自定义DNS配置。这个选项在Kubernetes 
+1.9版本中开始引
+入，到Kubernetes 1.10版本时升级为Beta，到Kubernetes 1.14版本时达到
+稳定版本。自定义DNS配置详见下节的说明。
+下面是一个使用了hostNetwork的Pod，其dnsPolicy设置
+为“ClusterFirstWithHostNet”：
+
+4.5.4　Pod中的自定义DNS配置
+在默认情况下，系统会自动为Pod配置好域名服务器等DNS参数，
+此外Kubernetes也提供在Pod定义中由用户自定义DNS相关配置的方法。
+这可以通过在Pod定义中设置dnsConfig字段进行DNS相关配置。该字段
+是可选字段，在dnsPolicy为任意策略时都可以设置，但是当
+dnsPolicy="None"时必须设置。该特性在Kubernetes的1.9版本中被提
+出，在1.10版本时达到Beta阶段并被默认启用，到1.14版本时达到Stable
+阶段。
+自定义DNS可以设置以下内容。
+◎　nameservers：用于域名解析的DNS服务器列表，最多可以设置
+3个。当Pod的dnsPolicy="None"时，该nameserver列表必须包含至少一个
+IP地址。配置的nameserver列表会与系统自动设置的nameserver进行合并
+和去重。
+◎　searches：用于域名搜索的DNS域名后缀，最多可以设置6个，
+也会与系统自动设置的search列表进行合并和去重。
+
+◎　options：配置其他可选DNS参数，例如ndots、timeout等，以
+name或name/value对的形式表示，也会与系统自动设置的option列表进
+行合并和去重。
+以下面的dnsConfig为例：
+
+
+在Pod成功创建后，容器内DNS配置文件/etc/resolv.conf的内容将被
+系统设置如下：
+在IPv6环境中，Pod内/etc/resolv.conf文件中nameserver的IP地址也会
+以IPv6格式进行表示，例如：
+4.6　Ingress 7层路由机制
+根据前面对Service概念的说明，我们知道Service的表现形式为IP地
+址和端口号（ClusterIP：Port），即工作在TCP/IP层。而对于基于HTTP
+的服务来说，不同的URL地址经常对应到不同的后端服务或者虚拟服务
+器（Virtual Host），这些应用层的转发机制仅通过Kubernetes的Service
+机制是无法实现的。Kubernetes从1.1版本开始引入Ingress资源对象，用
+于将Kubernetes集群外的客户端请求路由到集群内部的服务上，同时提
+供7层（HTTP和HTTPS）路由功能。Ingress在Kubernetes 1.19版本时达
+到v1稳定版本。
+Kubernetes使用了一个Ingress策略定义和一个具体提供转发服务的
+Ingress Controller，两者结合，实现了基于灵活Ingress策略定义的服务路
+由功能。如果是对Kubernetes集群外部的客户端提供服务，那么Ingress
+
+Controller实现的是类似于边缘路由器（Edge Router）的功能。需要注意
+的是，Ingress只能以HTTP和HTTPS提供服务，对于使用其他网络协议
+的服务，可以通过设置Service的类型（type）为NodePort或LoadBalancer
+对集群外部的客户端提供服务。
+使用Ingress进行服务路由时，Ingress Controller基于Ingress规则将客
+户端请求直接转发到Service对应的后端Endpoint（Pod）上，这样会跳
+过kube-proxy设置的路由转发规则，以提高网络转发效率。
+图4.7显示了一个典型的HTTP层路由的例子。
+图4.7　一个典型的HTTP层路由的例子
+其中：
+
+◎　对http：//mywebsite.com/api的访问将被路由到后端名为api的
+Service上；
+◎　对http：//mywebsite.com/web的访问将被路由到后端名为web的
+Service上；
+◎　对http：//mywebsite.com/docs的访问将被路由到后端名为docs
+的Service上。
+下面先通过一个完整的例子对Ingress Controller的部署、Ingress策略
+的配置，以及客户端如何通过Ingress Controller访问服务对Ingress的原理
+和应用进行说明，然后对Ingress资源的概念、策略配置、TLS安全设置
+进行详细说明。
+4.6.1　一个完整的例子（Ingress
+Controller+Ingress策略+客户端访问）
+1.部署Ingress Controller
+Ingress Controller需要实现基于不同HTTP URL向后转发的负载分发
+规则，并可以灵活设置7层负载分发策略。目前Ingress Controller已经有
+许多实现方案，包括Nginx、HAProxy、Kong、Traefik、Skipper、Istio
+等开源软件的实现，以及公有云GCE、Azure、AWS等提供的Ingress应
+用网关，用户可以参考官方网站根据业务需求选择适合的Ingress
+Controller。
+在Kubernetes中，Ingress Controller会持续监控API Server的/ingress
+接口（即用户定义的到后端服务的转发规则）的变化。当/ingress接口后
+端的服务信息发生变化时，Ingress Controller会自动更新其转发规则。
+本例基于Nginx提供的Ingress 
+Controller进行说明。Nginx 
+Ingress
+Controller可以以Daemonset或Deployment模式进行部署，通常可以考虑
+通过设置nodeSelector或亲和性调度策略将其调度到固定的几个Node上
+提供服务。
+对于客户端应用如何通过网络访问Ingress 
+Controller，本例中通过
+在容器级别设置hostPort，将80和443端口号映射到宿主机上，这样客户
+
+端应用可以通过URL地址“http：//<NodeIP>：
+80”或“https：//<NodeIP>：443”访问Ingress 
+Controller。也可以配置Pod
+使用hostNetwork模式直接监听宿主机网卡的IP地址和端口号，或者使用
+Service的NodePort将端口号映射到宿主机上。
+下面是Nginx 
+Ingress 
+Controller的YAML定义，其中将Pod创建在
+namespace“nginx-ingress”中，通过nodeSelector“role=ingress-nginx-
+controller”设置了调度的目标Node，并设置了hostPort将端口号映射到宿
+主机上供集群外部的客户端访问。该配置文件包含了Namespace、
+ServiceAccount、RBAC、Secret、ConfigMap和Deployment等资源对象的
+配置，示例如下。
+Namespace的定义如下：
+ServiceAccount的定义如下：
+
+RBAC相关资源的定义如下：
+
+
+
+
+Secret的定义如下：
+
+
+对ConfigMap的定义如下：
+对Deployment的定义如下：
+
+
+
+
+通过kubectl create命令创建nginx-ingress-controller：
+查看nginx-ingress-controller容器，确认其正常运行：
+用curl访问Nginx Ingress Controller所在宿主机的80端口，验证其服
+务是否正常，在没有配置后端服务时Nginx会返回404应答：
+
+2.创建Ingress策略
+本例对域名mywebsite.com的访问设置Ingress策略，定义对其/demo
+路径的访问转发到后端webapp Service的规则：
+
+通过该Ingress定义设置的效果：客户端对目标地址
+http：//mywebsite.com/demo的访问将被转发到集群内的服
+务“webapp”上，完整的URL为“http：//webapp：8080/demo”。
+在Ingress策略生效之前，需要先确保webapp服务正确运行。同时注
+意Ingress中对路径的定义需要与后端webapp服务提供的访问路径一致，
+否则将被转发到一个不存在的路径上，引发错误。这里以第1章的
+
+webapp服务（使用kubeguide/tomcat-app：v1镜像）为例，假设myweb服
+务已经部署完毕且正常运行，myweb提供的Web服务的路径也
+为/demo。
+创建上述Ingress资源对象：
+一旦Ingress资源成功创建，Ingress Controller就会监控到其配置的路
+由策略，并更新到Nginx的配置文件中生效。以本例中的Nginx
+Controller为例，它将更新其配置文件的内容为在Ingress中设定的路由策
+略。
+登录一个nginx-ingress-controller 
+Pod，在/etc/nginx/conf.d目录下可
+以看到Nginx Ingress Controller自动生成的配置文件default-mywebsite-
+ingress.conf，查看其内容，可以看到对mywebsite.com/demo的转发规则
+的正确配置：
+
+
+3.客户端通过Ingress Controller访问后端webapp服务
+由于Ingress Controller容器通过hostPort将服务端口号80映射到了宿
+主机上，所以客户端可以通过Ingress 
+Controller所在的Node访问
+mywebsite.com提供的服务。
+需要说明的是，客户端只能通过域名mywebsite.com访问服务，这
+时要求客户端或者DNS将mywebsite.com域名解析到Node的真实IP地址
+上。
+通过curl访问mywebsite.com提供的服务（可以用--resolve参数模拟
+DNS解析，目标地址为域名；也可以用-H 'Host：mywebsite.com'参数设
+置在HTTP头中要访问的域名，目标地址为IP地址），可以正确访问到
+myweb服务/demo/的页面内容。
+或
+
+
+
+如果需要使用浏览器进行访问，那么需要先在本机上设置域名
+mywebsite.com对应的IP地址，再到浏览器上进行访问。以Windows为
+例，修改C：\Windows\System32\drivers\ etc\hosts文件，加入一行记录：
+然后在浏览器的地址栏中输入“http：//mywebsite.com/demo/”，就能
+够访问Ingress提供的服务了，如图4.8所示。
+图4.8　通过浏览器访问Ingress服务
+4.6.2　Ingress资源对象详解
+一个Ingress资源对象的定义示例如下：
+
+Ingress资源主要用于定义路由转发规则，可以包含多条转发规则的
+定义，通过spec.rules进行设置。下面对其中的关键配置进行说明。
+1.规则（rules）相关设置
+◎　host（可选配置）：基于域名的访问，客户端请求将作用于指
+定域名的客户端请求。
+◎　http.paths：一组根据路径进行转发的规则设置，每个路径都应
+配置相应的后端服务信息（服务名称和服务端口号）。只有客户端请求
+
+中的host和path都匹配之后，才会进行转发。
+◎　backend：目标后端服务，包括服务的名称和端口号。
+Ingress Controller将根据每条rule中path定义的URL路径将客户端请
+求转发到backend定义的后端服务上。
+如果一个请求同时被在Ingress中设置的多个URL路径匹配，则系统
+将以最长的匹配路径为优先。如果有两条同等长度的匹配路径，则精确
+匹配类型（Exact）优先于前缀匹配类型（Prefix）。
+2.后端（Backend）设置
+后端通常被设置为目标服务（Service），通常还应该为不匹配任何
+路由规则（rule）的请求设置一个默认的后端，以返回HTTP 404响应码
+来表示没有匹配的规则。
+默认的后端服务可以由Ingress Controller提供，也可以在Ingress资源
+对象中设置。
+另外，如果后端不是以Kubernetes的Service提供的，则也可以设置
+为提供服务的资源对象，在这种情况下使用resource字段进行设置。
+例如，下例中的Ingress设置的后端地址为通过
+CRD“StorageBucket”定义的某个服务，同时设置为默认的后端：
+
+通过这个Ingress的定义，客户端对路径/icons的访问将会被路由转
+
+发到后端名为“icon-assets”的StorageBucket服务上。不匹配任何规则的请
+求则被路由转发到默认的后端（defaultBackend）上。
+3.路径类型（pathType）
+对于每条规则（rule）中的路径（path），都必须设置一个相应的
+路径类型，目前支持以下3种类型。
+◎　ImplementationSpecific：系统默认，由IngressClass控制器提供
+具体实现。
+◎　Exact：精确匹配URL路径，区分大小写。
+◎　Prefix：匹配URL路径的前缀，区分大小写，路径由“/”符号分
+隔为一个个元素，匹配规则为逐个元素进行前缀匹配。如果路径中的最
+后一个元素是请求路径中最后一个元素的子字符串，则不会判断为匹
+配，例如/foo/bar是路径/foo/bar/baz的前缀，但不是路径/foo/barbaz的前
+缀。
+如表4.2所示是常见的路径类型匹配规则示例。
+表4.2　常见的路径类型匹配规则示例
+
+续表
+
+在某些情况下，Ingress中的多个路径都会匹配一个请求路径。在这
+种情况下，将优先考虑最长的匹配路径。如果两个匹配的路径仍然完全
+相同，则Exact类型的规则优先于Prefix类型的规则生效。
+4.host通配符设置
+在规则（rule）中设置的host用于匹配请求中的域名（虚拟主机
+名），设置为完整的字符串表示精确匹配，例如“foo.bar.com”。
+Kubernetes从1.18版本开始支持为host设置通配符“*”，例
+如“*.foo.com”。
+精确匹配要求HTTP请求头中host参数的值必须与Ingress host设置的
+
+值完全一致。
+通配符匹配要求HTTP请求头中host参数的值需要与Ingress host设置
+的值的后缀一致，并且仅支持一层DNS匹配。
+如表4.3所示是常见的一些host通配符匹配规则示例。
+表4.3　常见的一些host通配符匹配规则示例
+下例中的Ingress包含精确匹配host“foo.bar.com”和通配符匹配
+host“*.foo.com”两条规则：
+
+
+5.ingressClassName和IngressClass资源对象
+在一个Kubernetes集群内，用户可以部署多个不同类型的Ingress
+Controller同时提供服务，此时需要在Ingress资源上注明该策略由哪个
+Controller管理。Kubernetes在1.18版本之前，可以在Ingress资源上设置
+一个名为“kubernetes.io/ingress.class”的annotation进行声明。但annotation
+的定义没有标准规范，Kubernetes从1.18版本开始引入一个新的资源对
+象IngressClass对其进行规范定义。在IngressClass中除了可以设置Ingress
+的管理Controller，还可以配置更加丰富的参数信息（通过parameters字
+段进行设置）。
+例如下面的IngressClass定义了一个名为“example.com/ingress-
+controller”的Controller和一组参数：
+然后在Ingress资源对象的定义中通过ingressClassName字段引用该
+IngressClass，标明使用其中指定的Ingress Controller和相应的参数：
+
+6.集群默认的IngressClass
+如果在一个集群中有多个IngressClass资源，则还可以设置某个
+IngressClass为集群范围内默认的IngressClass，通过设置一个
+Annotation“ingressclass.kubernetes.io/is-default-class=true”进行标明。这
+样，如果某个Ingress资源没有通过ingressClassName字段指定需要使用
+的IngressClass，则系统将自动为其设置默认的IngressClass。
+
+需要注意的是，如果在系统中存在多个默认的IngressClass，则在创
+建Ingress资源时必须指定ingressClassName，否则系统将无法判断使用
+哪个默认的IngressClass。管理员通常应确保在一个集群中只有一个默认
+的IngressClass。
+7.逐渐弃用旧版本的Annotation“kubernetes.io/ingress.class”
+随着IngressClass资源对象的逐步成熟，
+Annotation“kubernetes.io/ingress.class”将被逐渐弃用。而对IngressClass资
+源对象的支持需要各个Ingress 
+Controller实现，用户需要持续关注
+Controller的支持进度，才能明确在新版本的Ingress 
+Controller推出之后
+如何使用IngressClass。
+4.6.3　Ingress策略配置详解
+为了实现灵活的路由转发策略，Ingress策略可以按多种方式进行配
+置，下面对几种常见的Ingress转发策略进行说明。
+1.转发到单个后端服务
+基于这种设置，客户端发送到Ingress 
+Controller的访问请求都将被
+转发到后端的唯一服务，在这种情况下，Ingress无须定义任何rule，只
+需设置一个默认的后端服务（defaultBackend）。
+通过如下所示的设置，对Ingress 
+Controller的访问请求都将被转发
+到“myweb：8080”这个服务：
+
+通过kubectl create命令创建该Ingress：
+查看该Ingress的详细信息，可以看到系统为其设置了正确的后端目
+标地址：
+
+2.将同一域名的不同URL路径转发到不同的服务（Simple
+Fanout）
+这种配置常用于一个网站通过不同的路径提供不同的服务的场景，
+例如/web表示访问Web页面，/api表示访问API接口，对应到后端的两个
+服务，只需在Ingress规则定义中设置将同一域名的不同URL路径转发到
+不同的后端服务，如图4.9所示。
+
+图4.9　将同一域名的不同URL路径转发到不同的后端服务
+通过如下所示的设置，对“mywebsite.com/web”的访问请求将被转发
+到“web-service：80”服务；对“mywebsite.com/api”的访问请求将被转发
+到“api-service：80”服务：
+
+
+通过kubectl create命令创建该Ingress：
+查看该Ingress的详细信息，可以看到系统为不同path设置的转发规
+则：
+
+3.将不同的域名（虚拟主机名）转发到不同的服务
+这里指基于host域名的Ingress规则将客户端发送到同一个IP地址的
+HTTP请求，根据不同的域名转发到后端不同的服务，例如foo.bar.com
+域名由service1 
+提供服务，bar.foo.com域名由service2提供服务，如图
+4.10所示。
+图4.10　将HTTP请求根据不同的域名（虚拟主机名）转发到后端不同的服务
+通过如下所示的设置，请求头中host=foo.bar.com的访问请求将被转
+发到“service1：80”服务，请求头中host=bar.foo.com的访问请求将被转
+发到“service2：80”服务：
+
+
+4.不使用域名的转发规则
+如果在Ingress中不定义任何host域名，Ingress Controller则将所有客
+户端请求都转发到后端服务。例如下面的配置为将“<ingress-controller-
+ip>/demo”的访问请求转发到“webapp：8080/demo”服务：
+
+注意，是否支持不设置host的Ingress策略取决于Ingress Controll的实
+现。
+4.6.4　Ingress的TLS安全设置
+Kubernetes支持为Ingress设置TLS安全访问机制，通过为Ingress的
+host（域名）配置包含TLS私钥和证书的Secret进行支持。
+Ingress资源仅支持单个TLS端口号443，并且假设在Ingress访问点
+（Ingress Controller）结束TLS安全机制，向后端服务转发的流量将以明
+
+文形式发送。
+如果Ingress中的TLS配置部分指定了不同的host，那么它们将根据
+通过SNI 
+TLS扩展指定的虚拟主机名（这要求Ingress 
+Controller支持
+SNI）在同一端口进行复用。
+TLS Secret中的文件名必须为“tls.crt”和“tls.key”，它们分别包含用于
+TLS的证书和私钥，例如：
+然后，需要在Ingress资源对象中引用该Secret，这将通知Ingress
+Controller使用TLS加密客户端到负载均衡器的网络通道。用户需要确保
+在TLS证书（tls.crt）中包含相应host的全限定域名（FQDN）被包含在
+其CN（Common Name）配置中。
+TLS的功能特性依赖于Ingress 
+Controller的具体实现，不同Ingress
+Controller的实现机制可能不同，用户需要参考各个Ingress 
+Controller的
+文档。
+下面以Nginx 
+Ingress为例，对Ingress的TLS配置进行说明，步骤如
+下。
+（1）创建自签名的密钥和SSL证书文件。
+
+（2）将证书保存到Kubernetes的Secret资源对象中。
+（3）在Ingress资源中引用该Secret。
+下面通过OpenSSL工具生成密钥和证书文件，将参数-subj中的/CN
+设置为host全限定域名（FQDN）“mywebsite.com”：
+通过以上命令将生成tls.key和tls.crt两个文件。
+然后根据tls.key和tls.crt文件创建secret资源对象，有以下两种方
+法。
+方法一：使用kubectl create secret tls命令直接通过tls.key和tls.crt文
+件创建secret对象。
+方法二：编辑mywebsite-ingress-secret.yaml文件，将tls.key和tls.crt
+文件的内容经过BASE64编码的结果复制进去，使用kubectl create命令进
+行创建。
+
+
+
+如果需要配置TLS的host域名有多个，例如前面第3种Ingress策略配
+置方式，则SSL证书需要使用额外的一个x509 v3配置文件辅助完成，在
+[alt_names]段中完成多个DNS域名的设置。
+首先编写openssl.cnf文件，内容如下：
+接着使用OpenSSL工具完成密钥和证书的创建。生成自签名CA证
+书：
+
+基于openssl.cnf和CA证书生成Ingress TLS证书：
+
+然后根据ingress.key和ingress.crt文件创建secret资源对象，同样可以
+通过kubectl create secret tls命令或YAML文件生成。这里通过命令行直
+接生成：
+至此，Ingress的TLS证书和密钥就成功创建到Secret对象中了。
+
+下面创建Ingress对象，在tls段引用刚刚创建好的Secret对象：
+
+通过kubectl create命令创建该Ingress：
+成功创建该Ingress资源之后，就可以通过HTTPS安全访问Ingress
+了。
+以使用curl命令行工具为例，访问Ingress 
+Controller的
+
+URL“https：//192.168.18.3/demo/”：
+
+如果是通过浏览器访问的，则在浏览器的地址栏输
+入“https：//mywebsite.com/demo/”来访问Ingress HTTPS服务，浏览器会
+给出警告信息，如图4.11所示。
+
+图4.11　通过浏览器访问Ingress HTTPS服务的警告信息
+单击“继续前往mywebsite.com（不安全）”标签，访问后可看到
+Ingress HTTPS服务提供的页面，如图4.12所示。
+
+图4.12　使用浏览器访问Ingress HTTPS服务

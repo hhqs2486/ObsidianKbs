@@ -1,0 +1,60 @@
+ceph.file.layout="stripe_unit=4194304
+stripe_count=4 object_size=4194304
+pool=cephfs_data"
+把数据存储池加入MDS
+要把存储池当CephFS 用，你必须把它加入元数据服务器。
+$ ceph mds add_data_pool cephfs_data_ssd
+# 现在应该能看到存储池了
+$ ceph fs ls
+.... data pools: [cephfs_data
+cephfs_data_ssd ]
+确保你的cephx 密钥允许客户端访问新存储池。
+CEPH 文件系统客户端的驱逐
+当某个文件系统客户端不响应或者有其它异常行为时，有必要强制切断它到文件系统的访问，
+这个过程就叫做驱逐。
+这个过程有点过头，它是为了防止异常客户端导致数据不一致。
+OSD 黑名单机制
+首先，把此客户端加入黑名单以防止此它在RADOS 级再操作任何数据。你可能熟悉这个概念，
+它在其它存储系统里叫做隔离栏（fencing ）。
+找出要从MDS 会话列表中驱逐的客户端：
+# ceph daemon mds.a session ls
+
+[
+{ "id": 4117,
+"num_leases": 0,
+"num_caps": 1,
+"state": "open",
+"replay_requests": 0,
+"reconnecting": false,
+"inst": "client.4117 172.16.79.251:0\/3271",
+"client_metadata": { "entity_id": "admin",
+"hostname": "fedoravm.localdomain",
+"mount_point": "\/home\/user\/mnt"}}]
+本例中，‘fedoravm’ 客户端的地址是172.16.79.251:0/3271 ，所以这样加黑名单：
+# ceph osd blacklist add 172.16.79.251:0/3271
+blacklisting 172.16.79.251:0/3271 until 2014-12-09
+13:09:56.569368 (3600 sec)
+OSD 元图屏蔽
+被驱逐的客户端已在OSD 图的中央（mon ）副本中标记为进黑名单了，现在有必要确认一
+下本次OSD 图更新已经传递给了后续文件系统I/O 会涉及的所有守护进程。可以
+用osdmap barrier 这个MDS 管理套接字命令。
+首先读出最新的OSD 元图：
+
+# ceph osd dump
+epoch 12
+fsid fd61ca96-53ff-4311-826c-f36b176d69ea
+created 2014-12-09 12:03:38.595844
+modified 2014-12-09 12:09:56.619957
+...
+本例中它是12 ，让MDS 屏蔽此元图：
+# ceph daemon mds.a osdmap barrier 12
+MDS 会话驱逐
+最后就可以安全地驱逐此客户端的MDS 会话了，这样它持有的所有能力就可以发行给其它客
+户端了。这里的ID 是session ls 输出里的id 属性：
+# ceph daemon mds.a session evict 4117
+好了！这个客户端现在已经被驱逐了，而且它持有的资源也可以重分配给其它客户端了。
+背景：OSD 元图屏蔽
+此屏蔽的目的是为了确保当我们分配出这些能力后，别的客户端就有可能触碰同样的RADOS
+对象，接受分配能力的客户端们必须有足够新的OSD 图，这样它们才不会与取消的操作（来
+自ENOSPC ）或进了黑名单的客户端（来自驱逐过程）竞争。
+更具体些，我们设置元图屏蔽的情形有：

@@ -1,0 +1,1640 @@
+ 
+ 
+国国 
+15 
+第2 章 
+通过性能分析找到瓶颈 
+读完本章之后你将能够回答下列问题 
+• 
+如何找到代码中速度和RAM 的瓶颈？ 
+• 
+如何分析CPU 和内存使用情况？ 
+• 
+我应该分析到什么深度？ 
+• 
+如何分析一个长期运行的应用程序？ 
+• 
+在CPython 台面下发生了什么？ 
+• 
+如何在调整性能的同时确保功能的正确？ 
+性能分析帮助我们找到瓶颈，让我们在性能调优方面做到事半功倍。性能调优包括
+在速度上巨大的提升以及减少资源的占用，也就是说让你的代码能够跑得“足够快”
+以及“足够瘦”。性能分析能够让你用最小的代价做出最实用的决定。 
+任何可以测量的资源都可以被分析（不仅是CPU！）。我们在本章将分析CPU 的时
+间和内存的占用。你也可以将同样的技术用于分析网络带宽和磁盘I/O。 
+如果一个程序跑得太慢或占用了太多RAM，那么你一定希望把有问题的代码修正。
+当然，你完全可以跳过性能分析，修正你认为可能有问题的地方——但是小心，你
+很有可能“修正了”错误的地方。比起依靠你的直觉，更有效率的做法是先进行性
+能分析，做出一个假设，然后再改动你的代码结构。 
+人有时候懒点比较好。先进行性能分析让你能够迅速定位需要被解决的瓶颈，
+
+16 
+第2 章 
+然后你就可以用最小的改动获得你需要的性能提升。如果你回避性能分析直接
+进行优化，那么你很有可能最终付出了更多的努力。优化应该总是基于性能分
+析的结果。 
+2.1  高效地分析性能 
+性能分析的首要目标是对受测系统进行测试来发现哪里太慢（或占用太多RAM，
+或导致太多磁盘I/O 或网络I/O）。性能分析一般会导致额外的性能开销（一般会慢
+10 到100 倍），但你依然希望你的代码尽可能像是在真正的环境中一样运行。所以
+要以测试用例的方式将你需要测试的那部分系统独立出来。最好这个测试用例已经
+使用了一套自己的模块。 
+本章介绍的第一个基本技术包括IPython 的%timeit 魔法函数，time.time()，
+以及一个计时修饰器。你可以使用这些技术来了解语句和函数的行为。 
+然后我们会学习cProfile（2.6 节），告诉你如何使用这个内建工具来了解代码中
+哪些函数耗时最长。这将让你站在高处俯瞰你的问题，使你能够将注意力集中到关
+键函数上。 
+接下来，我们会去看line_profiler（2.8 节），这个工具能够对你选定的函数进
+行逐行分析。其结果将包含每行被调用的次数以及每行花费的时间百分比。这恰能
+让你知道是哪里跑得慢以及为什么。 
+有了line_profiler 的结果，你就有了足够的信息去使用编译器（第7 章）。 
+在第6 章（例6-8），你将学到如何使用perf stat 命令来了解最终执行于CPU
+上的指令的个数以及CPU 缓存的利用率。这让你能够进一步调优矩阵操作。读完
+本章后你应该去看看那个例子。 
+line_profiler 之后，我们会演示heapy（2.10 节），它可以追踪Python 内存中
+所有的对象—这对于消灭奇怪的内存泄漏特别有用。如果你的系统需要持续运
+行，那么你会对dowser（2.11 节）感兴趣，它让你能够通过一个Web 浏览器界面
+审查一个持续运行的进程中的实时对象。 
+为了帮助你了解为什么你的RAM 占用特别高，我们会给你演示memory_profiler
+（2.9 节）。它能以图的形式展示RAM 的使用情况随时间的变化，这样你就可以向你
+的同事们解释为什么某个函数占用了比预期更多的RAM。 
+
+ 
+图通过性能分析找到瓶颈 
+17 
+ 
+ 
+备忘 
+无论你用什么方法分析代码性能，都必须记得用足够的单元测试覆盖
+你的代码。单元测试能帮助你避免愚蠢的错误并让你的结果可重现。
+没有单元测试风险极大。 
+在编译或重写你的算法之前始终进行性能分析。你需要证据来决定最
+有效的优化手段。 
+ 
+最后，我们还会给你介绍CPython 中的Python 字节码（2.12 节），这样你就能够了
+解在其台面下发生了什么。具体来说，了解基于栈的Python 虚拟机如何运行将帮
+助你明白为什么某个编程风格会跑得比别人慢。 
+在结束本章之前，我们会回顾如何在性能分析中集成单元测试（2.13 节），让代码
+跑得更有效的同时维持正确。 
+最后我们将讨论性能分析的策略（2.14 节），这样你就能够可靠地分析你的代码并
+收集正确的数据来验证你的假设。在这里，你将了解到动态CPU 频率以及
+TurboBoost 等特性能够如何歪曲你的性能分析结果以及如何禁用这些功能。 
+为了讲解所有这些步骤，我们需要以一个便于分析的函数为例。下一节我们介绍
+Julia 集合。这是一个对RAM 有一点饥渴的CPU 密集型函数，而且它还具有非线
+性的行为（这样我们就无法轻易预测其结果），这意味着我们需要在运行时分析其
+性能而没法进行线下调查。 
+2.2  Julia 集合的介绍 
+让我们从Julia 集合这个有趣的CPU 密集型问题开始。这是一个可以产生复杂的输
+出图像的分形数列，以数学家Gaston Julia 的名字命名。 
+函数的代码相当长，你不会想要自己实现一个。它包含一个CPU 密集型的组件
+和一个显式的输入集合。这一配置允许我们分析CPU 和RAM 的使用情况以帮
+助我们了解代码中哪部分过多地消耗了这两项计算资源。将代码故意做成非最优
+的实现，这样我们就可以检查耗内存的操作和慢的语句。我们在本章后面将修正
+一个慢的语句和一个耗内存的语句，然后在第7 章，我们还将显著提升整个函数
+的执行时间。 
+我们将分析一段能够生成一个伪灰阶图（图2-1）和一个纯灰阶变种（图2-3）的
+代码，设Julia 集合的复数点c=-0.62772-0.42193j。一个Julia 集合可以通过
+
+18 
+第2 章 
+独立计算每一个像素点得到，也就是说这是一个“完美并行计算的问题”，每个点
+之间没有任何数据共享。 
+ 
+ 
+图2-1  Julia 集合的伪灰阶图，细节高亮 
+如果我们选择一个不同的c，就会得到一个不同的图像。根据我们的选择，有些区
+域算起来较快而另一些会较慢，这有助于我们的分析。 
+问题的有趣之处在于我们对每一个像素的计算都需要进行一个次数不定的循环。每
+一次迭代都需要计算坐标值是趋于无穷，还是收敛。那些经过少数迭代就能算出结
+果的坐标在图2-1 上为黑色，而那些需要大量迭代才能算出结果的坐标为白色。白
+色区域需要更多计算，因此生成时间更长。 
+让我们定义一个z 的坐标函数进行计算。函数会计算复数z 的平方加c： 
+
+ 
+图通过性能分析找到瓶颈 
+19 
+2
+( )
+f z
+z
+c
+=
++
+ 
+我们迭代调用该函数并用abs 计算逃逸条件。如果逃逸值为False，那么我们终
+止循环并在该坐标上记录下迭代的次数。如果逃逸条件始终不满足，那么我们在经
+过maxiter 次迭代后终止，并将该z 坐标转化为一个彩色像素点。 
+伪代码如下： 
+for z in coordinates: 
+    for iteration in range(maxiter): # limited iterations per point 
+        if abs(z) < 2.0: # has the escape condition been broken? 
+            z = z*z + c 
+        else: 
+            break 
+    # store the iteration count for each z and draw later 
+ 
+让我们试算两个坐标来解释这个函数。 
+首先，我们将使用图的左上角坐标-1.8-1.8j。在坐标更新前我们就必须首先计
+算逃逸条件abs(z) < 2： 
+z = -1.8-1.8j 
+print abs(z) 
+ 
+2.54558441227 
+ 
+我们可以看到第0 次迭代逃逸条件即为False，于是我们不需要更新坐标。该坐
+标的输出值就是0。 
+现在让我们跳到图中央的z = 0 + 0j 并尝试几次迭代： 
+c = -0.62772-0.42193j 
+z = 0+0j 
+for n in range(9): 
+    z = z*z + c 
+    print "{}: z={:33}, abs(z)={:0.2f}, c={}".format(n, z, abs(z), c) 
+ 
+0: z= (-0.62772-0.42193j),              abs(z)=0.76, c=(-0.62772-0.42193j) 
+1: z= (-0.4117125265+0.1077777992j),    abs(z)=0.43, c=(-0.62772-0.42193j) 
+2: z=(-0.469828849523-0.510676940018j), abs(z)=0.69, c=(-0.62772-0.42193j) 
+3: z=(-0.667771789222+0.057931518414j), abs(z)=0.67, c=(-0.62772-0.42193j) 
+4: z=(-0.185156898345-0.499300067407j), abs(z)=0.53, c=(-0.62772-0.42193j) 
+5: z=(-0.842737480308-0.237032296351j), abs(z)=0.88, c=(-0.62772-0.42193j) 
+6: z=(0.026302151203-0.0224179996428j), abs(z)=0.03, c=(-0.62772-0.42193j) 
+7: z= (-0.62753076355-0.423109283233j), abs(z)=0.76, c=(-0.62772-0.42193j) 
+8: z=(-0.412946606356+0.109098183144j), abs(z)=0.43, c=(-0.62772-0.42193j) 
+ 
+
+20 
+第2 章 
+我们可以看到，每次迭代都令abs(z) < 2 为True。我们可以对该坐标迭代300
+次依然为True。我们无法得知需要多少次迭代才能令条件为False，可能是个无
+穷数列。最大迭代次数（maxiter）会确保我们不至于永远迭代下去。 
+我们在图2-2 中可以看到前50 个迭代结果。0+0j 的结果数列（带圆形标记的实线）
+似乎每8 个迭代出现一次循环，但是每个循环都跟前一个有微小的区别——我们无
+法得知该坐标是会永远迭代下去，还是将要迭代很长时间，还是马上就会超出边界
+条件。短划线cutoff 表示+2 的边界线。 
+ 
+图2-2  Julia 集合的两个坐标例的演化结果 
+对于-0.82+0j 的结果数列（带菱形标记的短划线），我们可以看到第9 次迭代后
+绝对值结果就超出了+2 的cutoff 边界线，于是迭代终止。 
+2.3  计算完整的Julia 集合 
+我们在本节分解Julia 集合的生成代码。我们将在本章以各种方法分析它。如例2-1
+所示，在模块的一开始，我们导入time 模块作为我们的第一种分析手段并定义一
+些坐标常量。 
+
+ 
+图通过性能分析找到瓶颈 
+21 
+例2-1  定义空间坐标的全局常量 
+"""Julia set generator without optional PIL-based image drawing""" 
+import time 
+ 
+# area of complex space to investigate 
+x1, x2, y1, y2 = -1.8, 1.8, -1.8, 1.8 
+c_real, c_imag = -0.62772, -.42193 
+ 
+为了生成图像，我们创建两列输入数据。第一列zs（复数z 的坐标），第二列cs
+（复数的初始条件）。这两列数据都不会发生变化，且cs 列表可以被优化成一个c
+常量。建立两列输入的理由是之后当我们在本章分析RAM 使用情况时可以有一些
+看上去合理的数据来进行分析。 
+为了创建zs列表和cs列表，我们需要知道每个z的坐标。例2-2中，我们用xcoord
+和ycoord 以及指定的x_step 和y_step 创建了这些坐标。这样一个冗长的设
+定方式有助于将代码移植到其他工具（如numpy）或Python 环境上，因为它将一
+切都明确定义下来，方便除错。 
+例2-2  建立坐标列表作为计算函数的输入 
+def calc_pure_python(desired_width, max_iterations): 
+    """Create a list of complex coordinates (zs) and complex 
+    parameters (cs), build Julia set, and display""" 
+    x_step = (float(x2 - x1) / float(desired_width)) 
+    y_step = (float(y1 - y2) / float(desired_width)) 
+    x = [] 
+    y = [] 
+    ycoord = y2 
+    while ycoord > y1: 
+        y.append(ycoord) 
+        ycoord += y_step 
+    xcoord = x1 
+    while xcoord < x2: 
+        x.append(xcoord) 
+        xcoord += x_step 
+    # Build a list of coordinates and the initial condition for each cell. 
+    # Note that our initial condition is a constant and could easily be removed; 
+    # we use it to simulate a real-world scenario with several inputs to 
+    # our function. 
+    zs = [] 
+    cs = [] 
+    for ycoord in y: 
+        for xcoord in x: 
+            zs.append(complex(xcoord, ycoord)) 
+            cs.append(complex(c_real, c_imag)) 
+ 
+
+22 
+第2 章 
+    print "Length of x:", len(x) 
+    print "Total elements:", len(zs) 
+    start_time = time.time() 
+    output = calculate_z_serial_purepython(max_iterations, zs, cs) 
+    end_time = time.time() 
+    secs = end_time - start_time 
+    print calculate_z_serial_purepython.func_name + " took", secs, "seconds" 
+ 
+    # This sum is expected for a 1000^2 grid with 300 iterations. 
+    # It catches minor errors we might introduce when we're 
+    # working on a fixed set of inputs. 
+    assert sum(output) == 33219980 
+ 
+创建了zs列表和cs列表后，我们输出一些有关列表长度的信息并用calculate_ 
+z_serial_purepython 计算output 列表。最后我们对output 的内容求和并
+断言它符合预期的输出值。Ian 靠它来确保本书此处不至于出现错误。 
+既然代码已经确定，我们只需要对所有计算出的值求和就可以验证函数是否如我们
+预期的那样工作。这叫完整性检查——当我们对计算代码进行修改时，很有必要进
+行这样的检查来确保我们没有破坏算法的正确性。理想情况下，我们会使用单元测
+试且对该问题的多个不同配置进行测试。 
+接下来，在例2-3 中，我们定义calculate_z_serial_purepython 函数，它
+扩展了我们之前讨论的算法。注意，我们同时还在函数开头定义了一个output
+列表，其长度跟zs 和cs 列表相同。你可能会奇怪为什么我们使用range 而不是
+xrange—这里就先这样，在2.9 节，我们会告诉你range 有多浪费。 
+例2-3  我们的CPU 密集型计算函数 
+def calculate_z_serial_purepython(maxiter, zs, cs): 
+    """Calculate output list using Julia update rule""" 
+    output = [0] * len(zs) 
+    for i in range(len(zs)): 
+        n = 0 
+        z = zs[i] 
+        c = cs[i] 
+        while abs(z) < 2 and n < maxiter: 
+            z = z * z + c 
+            n += 1 
+        output[i] = n 
+    return output 
+ 
+现在我们可以在例2-4 中调用整个计算逻辑。只要将它包入一个__main__检查块，
+我们就可以安全地为某些性能分析手段导入这个模块而不是直接开始计算。注意，
+将输出画成图像的方法我们这里没有显示出来。 
+
+ 
+图通过性能分析找到瓶颈 
+23 
+例2-4  我们代码的main 函数 
+if __name__ == "__main__": 
+    # Calculate the Julia set using a pure Python solution with 
+    # reasonable defaults for a laptop 
+    calc_pure_python(desired_width=1000, max_iterations=300) 
+ 
+一旦我们运行这段代码，就能够看到一些关于问题复杂度的输出： 
+# running the above produces: 
+Length of x: 1000 
+Total elements: 1000000 
+calculate_z_serial_purepython took 12.3479790688 seconds 
+ 
+图2-1 所示的伪灰阶图中，高对比的颜色变化给我们一个该函数运行快慢的直观感
+受。在此处的图2-3 中，我们有一个线性的灰阶图：黑色是算得快的地方而白色是
+计算开销大的地方。通过对同一数据的两种表达，我们能够看到线性图上丢失了很
+多细节。有时，当我们调查一个函数的开销时，多种表达方式有助于我们查清问题。 
+ 
+ 
+图2-3  Julia 集合的纯灰阶图 
+
+24 
+第2 章 
+2.4  计时的简单方法——打印和修饰 
+运行例2-4，我们看到的输出是由代码中几句print 语句生成的。在Ian 的笔记本
+上用CPython 2.7 跑这段代码要花大约12 秒。运行时间一般都会有一些波动。你必
+须在计时的同时观察这些正常的变化，否则你可能会误把某个随机的运行时间的变
+化当作是由于某次代码的改进造成的。 
+你的计算机在运行你的代码时还会进行其他任务，比如访问网络、磁盘或RAM，
+这些因素都会导致程序运行时间的变化。 
+Ian 的笔记本是一台Dell E6420，拥有一个Intel Core I7-2720QM 的CPU（2.20GHz，
+6MB 缓存，4 核）以及8GB 的RAM，操作系统是Ubuntu 13.10。 
+在calc_pure_python 中（例2-2），我们能看到一些print 语句。这是最简单的
+在函数内部测量一段代码执行时间的方法。这个基本方法既快且脏，是在你刚开始
+着手调查代码时非常有用的手段。 
+在代码除错和性能分析上使用print 语句是常用的手段。虽然它很快就会变得无
+法管理，但适用于简短的调查。用完它们以后要记得收拾干净，否则它们会搞乱你
+的stdout。 
+一个稍微干净一点的方法是使用修饰器—在需要调查的函数上面增加一行代码。
+我们的修饰器十分简单，仅仅复制了print 语句的功能。后面我们会让它变得更
+加高级。 
+在例2-5 中，我们定义了一个新函数timefn，它以一个函数fn 为参数。它的内
+嵌函数measure_time 接受*args（数量可变的位置参数）以及**kwargs（数
+量可变的键值对参数）等参数并将其传入fn 执行。在执行fn 前后，我们抓取
+time.time()并将结果和fn.func_name 一起打印出来。使用这个修饰器的开
+销很小，但如果你调用上千万次fn，开销就会变得引人注意。我们用@wraps(fn)
+将函数名和docstring 暴露给fn 的调用者（否则调用者看到的将是修饰器自身的函
+数名和docstring，而不是被修饰的函数的）。 
+例2-5  定义一个修饰器来自动测量时间 
+from functools import wraps 
+ 
+def timefn(fn): 
+    @wraps(fn) 
+    def measure_time(*args, **kwargs): 
+        t1 = time.time() 
+
+ 
+图通过性能分析找到瓶颈 
+25 
+        result = fn(*args, **kwargs) 
+        t2 = time.time() 
+        print ("@timefn:" + fn.func_name + " took " + str(t2 - t1) + " seconds") 
+        return result 
+    return measure_time 
+ 
+ 
+@timefn 
+def calculate_z_serial_purepython(maxiter, zs, cs): 
+    ... 
+ 
+当我们运行这个版本的代码时（之前的print 语句依然保留），我们会看到修饰器
+打印的执行时间要略快于calc_pure_python 打印的时间。这是由于函数的调用
+带来了额外开销（差异非常小）： 
+Length of x: 1000 
+Total elements: 1000000 
+@timefn:calculate_z_serial_purepython took 12.2218790054 seconds 
+calculate_z_serial_purepython took 12.2219250043 seconds 
+ 
+ 
+备忘 
+额外的分析信息不可避免地降低了代码的执行速度—某些性能分
+析选项非常详细以至于带来了巨大的性能代价。分析信息的细节程度
+和运行速度是你必须要进行权衡的。 
+我们可以用timeit 模块作为另一种测量执行速度的方法。通常来说，你会在解决问
+题的过程中用它来为各种简单的语句计时。 
+ 
+警告 
+注意，timeit 模块暂时禁用了垃圾收集器。如果你的操作会调用
+到垃圾收集器，那么它有可能影响到你实际操作的速度。更多信息
+请参见Python 文档：http://bit.ly/timeit_doc。 
+你可以从命令行运行timeit 如下： 
+$ python -m timeit -n 5 -r 5 -s "import julia1" 
+   "julia1.calc_pure_python(desired_width=1000, 
+   max_iterations=300)" 
+ 
+注意你必须以-s 命令在设置阶段导入julia1 模块，因为calc_pure_python
+来自那个模块。timeit 有一些合理的默认值适用于一段简短的代码，但对于要长
+期运行的代码来说，最好指定循环次数（-n 5）以及重复次数（-r 5）。timeit
+会对语句循环执行n 次并计算平均值作为一个结果，重复r 次并选出最好的那个
+结果。 
+
+26 
+第2 章 
+如果我们不指定-n 和-r 运行timeit，默认是循环10 次重复5 次，需要6 分钟。
+改变默认值可以让你更快获得结果。 
+我们只关注最好的那个结果，平均值以及最差结果可能是由于其他进程的影响。选
+择循环5 次重复5 次应该能给我们一个较为公正的结果： 
+5 loops, best of 5: 13.1 sec per loop 
+ 
+试着多运行几次，看看我们会不会得到不同的结果——你可能需要更多的重复次数
+来获得一个稳定的最佳结果时间。在这一点上不存在“正确”的配置，所以如果你
+发现你的计时结果变动范围很广，你就要选择更高的重复次数，直到获得稳定的最
+终结果。 
+我们的结果显示调用calc_pure_python 的总体开销是13.1 秒（最佳情况），而
+@timefn 修饰器测算的单次调用calculate_z_serial_purepython 耗时
+12.2 秒。中间的差别主要是用于创建zs 和cs 列表的时间。 
+在IPython 内部，我们可以用同样的方式使用%timeit 魔法函数。如果你在
+IPython 中用互动的方式开发你的代码且函数在本地名字空间（可能是因为你正在
+使用%run），那么你可以用： 
+%timeit calc_pure_python(desired_width=1000, max_iterations=300) 
+ 
+还有一点值得考虑的是一台计算机上的负载变化。很多后台运行的任务（如
+Dropbox、备份等）都会随机影响CPU 和磁盘资源。网页上的脚本也会导致不可预
+测的资源使用。图2-4 显示了我们刚刚进行的计时过程中某个CPU 的使用率达到
+了100%，机器中的其他核心都在轻松处理其他的任务。 
+ 
+图2-4  Ubuntu 的系统监视器显示了当我们对程序计时的时候后台CPU 的使用情况 
+系统监视器会时不时地显示这台机器上的活动峰值。有必要检查会不会有其他事件
+发生影响了你的关键资源（CPU、磁盘、网络）。 
+
+ 
+图通过性能分析找到瓶颈 
+27 
+2.5  用UNIX 的time 命令进行简单的计时 
+现在让我们脱离Python 使用类UNIX 操作系统的标准系统功能。下面这条命令会
+记录程序执行所耗费的的各方面时间，且不在意代码的内部结构： 
+$ /usr/bin/time -p python julia1_nopil.py 
+Length of x: 1000 
+Total elements: 1000000 
+calculate_z_serial_purepython took 12.7298331261 seconds 
+real 13.46 
+user 13.40 
+sys 0.04 
+ 
+注意我们特地使用了/usr/bin/time 而不是time，也就是说我们使用的是系统
+命令的time 而不是那个更加简单而没用的shell 内建版本的time。如果你用time 
+--verbose，结果得到了一个错误，那么你使用的可能就是shell 内建的time 而
+不是系统命令的time。 
+通过使用-p 开关，我们得到了3 个结果： 
+• 
+real 记录了整体的耗时。 
+• 
+user 记录了CPU 花在任务上的时间，但不包括内核函数耗费的时间。 
+• 
+sys 记录了内核函数耗费的时间。 
+对user 和sys 相加就得到了CPU 总共花费的时间。而这个时间和real 的差则
+有可能是花费在等待IO 上，也可能是你的系统正在忙着运行其他任务因此影响了
+你的测量。 
+time 并不是专为Python 脚本使用的。它还包括了启动python 解释器的时间，如
+果你会启动很多新进程（而不是一个长期运行的单一进程），这个时间可能会很长。
+如果你会经常跑一些临时脚本，它们的启动时间占了整体运行时间的很大一部分，
+那么time 更适合测量这种情况。 
+我们可以打开--verbose 开关来获得更多输出信息： 
+$ /usr/bin/time --verbose python julia1_nopil.py 
+Length of x: 1000 
+Total elements: 1000000 
+calculate_z_serial_purepython took 12.3145110607 seconds 
+        Command being timed: "python julia1_nopil.py" 
+        User time (seconds): 13.46 
+
+28 
+第2 章 
+        System time (seconds): 0.05 
+        Percent of CPU this job got: 99% 
+        Elapsed (wall clock) time (h:mm:ss or m:ss): 0:13.53 
+        Average shared text size (kbytes): 0 
+        Average unshared data size (kbytes): 0 
+        Average stack size (kbytes): 0 
+        Average total size (kbytes): 0 
+        Maximum resident set size (kbytes): 131952 
+        Average resident set size (kbytes): 0 
+        Major (requiring I/O) page faults: 0 
+        Minor (reclaiming a frame) page faults: 58974 
+        Voluntary context switches: 3 
+        Involuntary context switches: 26 
+        Swaps: 0 
+        File system inputs: 0 
+        File system outputs: 1968 
+        Socket messages sent: 0 
+        Socket messages received: 0 
+        Signals delivered: 0 
+        Page size (bytes): 4096 
+        Exit status: 0 
+ 
+这里最有用的指标可能是Major (requiring I/O) page faults，因为它指
+示了操作系统是否由于RAM 中的数据不存在而需要从磁盘上读取页面。而这会带
+来速度上的惩罚。 
+我们的例子中对于代码和数据的需求较少，所以不会发生内存缺页错误。如果你有
+一个内存密集型进程，或多个需要分配和使用大量RAM 的进程，你就会发现这个
+命令可以告诉你哪个进程会因为一部分RAM 被交换到磁盘上这一额外的操作系统
+级别的磁盘访问而导致速度的下降。 
+2.6  使用cProfile 模块 
+cProfile 是一个标准库内建的分析工具。它钩入CPython 的虚拟机来测量其每一
+个函数运行所花费的时间。这一技术会引入一个巨大的开销，但你会获得更多的信
+息。有时这些额外的信息会给你的代码带来令人惊讶的发现。 
+cProfile 是标准库内建的三个分析工具之一，另外两个是hotshot 和profile。
+hotshot 还处于实验阶段，profile 则是原始的纯Python 分析器。cProfile 具
+有跟profile 一样的接口，且是默认的分析工具。如果你对这些库的历史感兴趣，
+你可以去看一下Armin Rigo 在2005 年要求将cProfile 包含进标准库的请求
+（http://bit.ly/cProfile_request）。 
+
+ 
+图通过性能分析找到瓶颈 
+29 
+分析工作的一个好的实践是在开始分析之前先对你的代码各部分的运行速度进行
+假设。Ian 喜欢将有问题的代码打印出来并加以标注。提前生成一个假设意味着有
+可能测出你错的有多离谱（而且真的会测出！）并提升你对于某种编程风格的直觉。 
+ 
+警告 
+永远不要忽视靠直觉进行的性能分析（虽然你一定会犯错！）。在
+分析前先进行假设是绝对值得的，因为这样可以帮助你学习如何
+定位你代码中可能有问题的地方，而且你应该始终用证据来证明
+你的选择。 
+始终基于你的测量结果，用一些既快且脏的分析手段确保你正在分析正确的地方。
+没有什么比在聪明地优化了一段代码之后（可能过了几小时或几天）才意识到你其
+实漏掉了进程最慢的部分且根本没有找到真正的问题所在更令人羞愧的了。 
+那么我们的假设是什么呢？我们知道calculate_z_serial_purepython 可
+能是代码最慢的部分。我们在那个函数里做了大量的解引用并多次调用基本的算术
+操作和abs 函数。这些可能都是耗CPU 资源的大户。 
+这里，我们用cProfile 模块运行我们的代码的一个变种。其输出是格式化的，
+方便我们搞清去哪里做进一步分析。 
+-s cumulative 开关告诉cProfile 对每个函数累计花费的时间进行排序，这
+能让我们看到代码最慢的部分。cProfile 会将输出直接打印到屏幕： 
+$ python -m cProfile -s cumulative julia1_nopil.py 
+... 
+         36221992 function calls in 19.664 seconds 
+ 
+  Ordered by: cumulative time 
+ 
+  Ncalls tottime percall cumtime percall filename:lineno(function) 
+       1   0.034   0.034  19.664  19.664 julia1_nopil.py:1(<module>) 
+       1   0.843   0.843  19.630  19.630 julia1_nopil.py:23 
+                                         (calc_pure_python) 
+       1  14.121  14.121  18.627  18.627 julia1_nopil.py:9 
+                                         (calculate_z_serial_purepython) 
+34219980   4.487   0.000   4.487   0.000 {abs} 
+ 2002000   0.150   0.000   0.150   0.000 {method 'append' of 'list' objects} 
+       1   0.019   0.019   0.019   0.019 {range} 
+       1   0.010   0.010   0.010   0.010 {sum} 
+       2   0.000   0.000   0.000   0.000 {time.time} 
+       4   0.000   0.000   0.000   0.000 {len} 
+       1   0.000   0.000   0.000   0.000 {method 'disable' of 
+                                          '_lsprof.Profiler' objects} 
+ 
+
+30 
+第2 章 
+对累计时间排序能告诉我们大部分的执行时间花在了哪。这个结果显示出在仅仅
+19 秒的时间里一共发生了36 221 992 次函数调用（这个时间包括了使用cProfile
+的开销）。之前我们的代码需要13 秒执行时间——为了测量每个函数执行所花费的
+时间，我们增加了一个5 秒的惩罚。 
+我们可以看到第一行，julia1_cprofile.py 的代码入口点总共花费了19 秒。
+这是通过__main__调用calc_pure_python。ncalls 为1,意味着这行仅执行
+了一次。 
+在calc_pure_python 内部，calculate_z_serial_purepython 的调用花
+费了18.6 秒。这两个函数都只执行了一次。我们可以推测出有大约1 秒的时间花
+在了calc_pure_python 内部，是调用calculate_z_serial_purepython
+以外的代码。不过我们用cProfile 没法知道是哪些行花掉了这些时间。 
+在calculate_z_serial_purepython 内部，花在（那些没有调用其他函数的）
+代码行上的时间是14.1 秒。该函数调用了34 219 980 次abs，总共花了4.4 秒，另
+外还有其他一些不怎么花时间的调用。 
+那个{abs}是什么东西？这一行测量的是calculate_z_serial_purepython
+对abs 函数的调用。per-call 的代价可以忽略（0.000 秒），34219980 次调用总共花
+了4.4 秒。我们无法预测会调用多少次abs，因为Julia 函数具有不可预测的动态
+特性（这也是为什么对它的分析如此有趣）。 
+我们只能说它最少会被调用1 000 000 次，因为我们需要计算1000×1000 个像素
+点。它最多会被调用300 000 000 次，因为我们对1 000 000 个像素点最多进行300
+次迭代。所以三千四百万次调用仅是最差情况的10%。 
+如果我们看原始的灰阶图（图2-3），并在想象中将白色部分挤压进角落，我们可以
+估算出耗时的白色区域大概占了全图的10%。 
+接下来的分析输出，{method 'append' of 'list' objects}，表示了对
+2 002 000 个列表项的创建。 
+ 
+问题 
+为什么是2 002 000 个项目？在你读下去之前，先思考一下总共需要
+创建多少个项目。 
+2 002 000 个列表项的创建发生在calc_pure_python 的设置阶段。 
+
+ 
+图通过性能分析找到瓶颈 
+31 
+列表zs 和cs 分别有1000×1000 个项目，而它们是根据1000 个x 坐标和1000
+个y 坐标创建的。所以总共要调用2 002 000 次append。 
+需要注意的是cProfile 的输出并不以父函数排序，它总结了执行代码块的全部
+函数。用cProfile 很难搞清楚函数内的每一行发生了什么，因为我们只拿到了
+函数自身调用的分析信息，而不是函数内的每一行。 
+在calculate_z_serial_purepython 内，我们可以对{abs}和{range}进行分
+析，这两个函数总计花了大约4.5 秒。我们知道calculate_z_serial_purepython
+自身总共花费了18.6 秒。 
+性能分析输出的最后一行提到了lsprof，这是本工具进化到cProfile 之前的
+原始名字，可以忽略。 
+为了获得对cProfile 结果的更多控制，我们可以生成一个统计文件然后通过
+Python 进行分析： 
+$ python -m cProfile -o profile.stats julia1.py 
+ 
+我们可以这样将其调入Python，它会输出跟之前一样的累计时间报告： 
+In [1]: import pstats 
+In [2]: p = pstats.Stats("profile.stats") 
+In [3]: p.sort_stats("cumulative") 
+Out[3]: <pstats.Stats instance at 0x177dcf8> 
+In [4]: p.print_stats() 
+Tue Jan 7 21:00:56 2014 profile.stats 
+ 
+        36221992 function calls in 19.983 seconds 
+ 
+  Ordered by: cumulative time 
+ 
+  ncalls tottime percall cumtime percall filename:lineno(function) 
+       1   0.033   0.033  19.983  19.983 julia1_nopil.py:1(<module>) 
+       1   0.846   0.846  19.950  19.950 julia1_nopil.py:23 
+                                         (calc_pure_python) 
+       1  13.585  13.585  18.944  18.944 julia1_nopil.py:9 
+                                         (calculate_z_serial_purepython) 
+34219980   5.340   0.000   5.340   0.000 {abs} 
+ 2002000   0.150   0.000   0.150   0.000 {method 'append' of 'list' objects} 
+       1   0.019   0.019   0.019   0.019 {range} 
+       1   0.010   0.010   0.010   0.010 {sum} 
+       2   0.000   0.000   0.000   0.000 {time.time} 
+       4   0.000   0.000   0.000   0.000 {len} 
+
+32 
+第2 章 
+       1   0.000   0.000   0.000   0.000 {method 'disable' of 
+                                          '_lsprof.Profiler' objects} 
+ 
+为了追溯我们分析的函数，我们可以打印调用者的信息。在下面的两个列表中，我
+们可以看到calculate_z_serial_purepython 是最耗时的函数，且只在一个
+地方被调用。如果它被多个地方调用，这些列表也许能帮助我们定位到最耗时的父
+函数： 
+In [5]: p.print_callers() 
+   Ordered by: cumulative time 
+ 
+Function                          was called by... 
+                                           ncalls tottime cumtime 
+julia1_nopil.py:1(<module>)              <- 
+julia1_nopil.py:23(calc_pure_python)     <-     1    0.846  19.950 
+                                           julia1_nopil.py:1(<module>) 
+julia1_nopil.py:9(calculate_z_serial_purepython) <- 1 13.585 18.944 
+                                           julia1_nopil.py:23 
+                                           (calc_pure_python) 
+{abs}                                  <- 34219980    5.340    5.340 
+                                           julia1_nopil.py:9 
+                                           (calculate_z_serial_purepython) 
+{method 'append' of 'list' objects}    <- 2002000    0.150   0.150 
+                                           julia1_nopil.py:23 
+                                           (calc_pure_python) 
+{range}                                <-       1    0.019   0.019 
+                                           julia1_nopil.py:9 
+                                           (calculate_z_serial_purepython) 
+{sum}                                  <-       1     0.010  0.010 
+                                           julia1_nopil.py:23 
+                                           (calc_pure_python) 
+{time.time}                            <-       2    0.000    0.000 
+                                           julia1_nopil.py:23 
+                                           (calc_pure_python) 
+{len}                                  <-       2    0.000    0.000 
+                                           julia1_nopil.py:9 
+                                           (calculate_z_serial_purepython) 
+                                                2    0.000    0.000 
+                                           julia1_nopil.py:23 
+                                           (calc_pure_python) 
+{method 'disable' of '_lsprof.Profiler' objects} <- 
+ 
+我们还可以反过来显示哪个函数调用了其他函数： 
+In [6]: p.print_callees() 
+   Ordered by: cumulative time 
+ 
+Function                               called... 
+
+ 
+图通过性能分析找到瓶颈 
+33 
+                                           ncalls tottime cumtime 
+julia1_nopil.py:1(<module>)             ->      1   0.846  19.950 
+                                           julia1_nopil.py:23 
+                                           (calc_pure_python) 
+julia1_nopil.py:23(calc_pure_python)    ->      1  13.585  18.944 
+                                           julia1_nopil.py:9 
+                                           (calculate_z_serial_purepython) 
+                                                2   0.000   0.000 
+                                           {len} 
+                                          2002000   0.150   0.150 
+                                           {method 'append' of 'list' 
+                                            objects} 
+                                                1   0.010   0.010 
+                                           {sum} 
+                                                2   0.000   0.000 
+                                           {time.time} 
+julia1_nopil.py:9(calculate_z_serial_purepython) -> 34219980 5.340 5.340 
+                                           {abs} 
+                                                2   0.000   0.000 
+                                           {len} 
+                                                1   0.019   0.019 
+                                           {range} 
+{abs}                                      -> 
+{method 'append' of 'list' objects}        -> 
+{range}                                    -> 
+{sum}                                      -> 
+{time.time}                                -> 
+{len}                                      -> 
+{method 'disable' of '_lsprof.Profiler' objects} -> 
+ 
+cProfile 输出的信息很多，你需要有一个副屏幕才能避免整字换行。它是内建的
+用于快速定位瓶颈的便利工具。然后我们在本章后面讨论的line_profiler、
+heapy 和memory_profiler 等工具才能帮助你深入定位到需要你加以注意的具
+体代码行。 
+2.7  用runsnakerun 对cProfile 的输出进行可视化 
+runsnake 是一个可视化工具，用于显示cProfile 创建的统计文件—你只需
+要看它生成的图像就可以快速意识到哪个函数开销最大。 
+运行runsnake 可以让你从上层了解一个cProfile 统计文件的内容，特别是当
+你在调查一个陌生而又庞大的代码库时。它会让你感觉到应该将注意力集中在哪些
+区域。它可能会揭示一些你根本就没有意识到会有问题的区域，帮助你定位出潜在
+的快速优化机会。 
+
+34 
+第2 章 
+你也可以在组内讨论代码性能时使用它，因为它的结果很容易用来讨论。 
+输入命令pip install runsnake 来安装runsnake。 
+注意它的安装需要wxPython，而在一个virtualenv 下安装它会非常痛苦。仅
+仅为了分析一个统计文件，Ian 不止一次地选择宁可在全局环境下安装它，也不愿
+意尝试让它在virtualenv 下跑起来。 
+图2-5 显示了之前cProfile 的数据。图形化的显示可以帮助我们更快地了解
+calculate_z_serial_purepython 花费了最多的时间，且只有很小一部分执
+行时间是在调用其他函数（abs 是其中唯一一个比较花时间的）。你可以看到你不
+需要花时间去调查设置阶段，因为大多数执行时间是在计算阶段。 
+在runsnake 中点击函数可以显示出复杂的嵌套调用。在你跟组员分析性能时，
+这一功能是无价之宝。 
+ 
+图2-5  用runsnakerun 展示cProfile 的分析结果 
+2.8  用line_profiler 进行逐行分析 
+根据Ian 的观点，Robert Kern 的line_profiler 是调查Python 的CPU 密集型性
+能问题最强大的工具。它可以对函数进行逐行分析，你应该先用cProfile 找到
+需要分析的函数，然后用line_profiler 对函数进行分析。 
+
+当你修改你的代码时，值得打印出这个工具的输出以及代码的版本，这样你就拥有
+一个代码变化（无论有没有用）的记录，让你可以随时查阅。当你在进行逐行改变
+时，不要依赖你的记忆。 
+输入命令pip install line_profiler 来安装line_profiler。 
+用修饰器（@profile）标记选中的函数。用kernprof.py 脚本运行你的代码，
+被选函数每一行花费的CPU 时间以及其他信息就会被记录下来。 
+ 
+备忘 
+需要修改源代码这点比较讨厌，因为额外的修饰器会影响你的单元测
+试，除非你创建一个伪修饰器—见2.13 节中的No-op 的@profile
+修饰器。 
+运行时参数-l 代表逐行分析而不是逐函数分析，-v 用于显示输出。没有-v，你会
+得到一个.lprof 的输出文件，回头你可以用line_profiler 模块对其进行分
+析。例2-6 中，我们会完整运行一遍我们的CPU 密集型函数。 
+例2-6  运行kernprof 逐行分析被修饰函数的CPU 开销 
+$ kernprof -l -v julia1_lineprofiler.py 
+... 
+Wrote profile results to julia1_lineprofiler.py.lprof 
+Timer unit: 1e-06 s 
+ 
+File: julia1_lineprofiler.py 
+Function: calculate_z_serial_purepython at line 9 
+Total time: 100.81 s 
+ 
+Line #      Hits   Per Hit  % Time  Line Contents 
+================================================== 
+     9                              @profile 
+    10                              def calculate_z_serial_purepython(maxiter, 
+                                                              zs, cs): 
+11                                      """Calculate output list using 
+                                        Julia update rule""" 
+12             1    6870.0     0.0      output = [0] * len(zs) 
+13       1000001       0.8     0.8      for i in range(len(zs)): 
+14       1000000       0.8     0.8          n = 0 
+15       1000000       0.8     0.8          z = zs[i] 
+16       1000000       0.8     0.8          c = cs[i] 
+17      34219980       1.1    36.2          while abs(z) < 2 and n < maxiter: 
+18      33219980       1.0    32.6             z = z * z + c 
+19      33219980       0.8    27.2             n += 1 
+20       1000000       0.9     0.9          output[i] = n 
+21             1       4.0     0.0      return output 
+ 
+ 
+图通过性能分析找到瓶颈 
+35 
+
+36 
+第2 章 
+引入kernprof.py 导致了额外的运行时间。本例的calculate_z_serial_ 
+purepython 花费了100 秒，远高于使用print 语句的13 秒和cProfile 的19
+秒。获得的好处则是我们现在得到了一个函数内部每一行花费时间的分析结果。 
+%Time 列最有用——我们可以看到36%的时间花在了while 测试上。不过我们不
+知道是第一条语句（abs(z) < 2）还是第二条语句（n < maxiter）更花时间。
+循环内，我们可以看到更新z 也颇花时间。甚至n += 1 都很贵！每次循环时，
+Python 的动态查询机制都在工作，即使每次循环中我们使用的变量都是同样的类型
+——在这一点上，编译和类型指定（第7 章）可以给我们带来巨大的好处。创建
+output 列表以及第20 行上的更新相对整个while 循环来说相当便宜。 
+对while 语句更进一步的分析明显就是将两个判断拆开。Python 社区中有一些讨
+论关于是否需要重写.pyc 文件中对于一行语句中多个部分的具体信息，但目前还
+没有一个工具提供比line_profiler 更细粒度的分析。 
+在例2-7 中，我们将while 语句分拆成多个语句。这一额外的复杂度会增加函数的
+运行时间，因为我们有了更多行代码需要执行，但它可能可以帮助我们了解这部分
+代码的开销。 
+ 
+问题 
+在你看代码之前，你是否认为我们可以用这种方式了解基本操作的
+开销？其他因素会不会让分析变得更复杂？ 
+例2-7  将组合式while 语句拆成单个语句来记录每一部分的开销 
+$ kernprof.py -l -v julia1_lineprofiler2.py 
+... 
+Wrote profile results to julia1_lineprofiler2.py.lprof 
+Timer unit: 1e-06 s 
+ 
+File: julia1_lineprofiler2.py 
+Function: calculate_z_serial_purepython at line 9 
+Total time: 184.739 s 
+ 
+Line #     Hits    Per Hit  % Time  Line  Contents 
+=================================================== 
+     9                              @profile 
+    10                              def calculate_z_serial_purepython(maxiter, 
+                                                               zs, cs): 
+    11                                 """Calculate output list using 
+                                       Julia update rule""" 
+    12         1   6831.0      0.0     output = [0] * len(zs) 
+
+ 
+图通过性能分析找到瓶颈 
+37 
+    13   1000001      0.8      0.4     for i in range(len(zs)): 
+    14   1000000      0.8      0.4         n = 0 
+    15   1000000      0.9      0.5         z = zs[i] 
+    16   1000000      0.8      0.4         c = cs[i] 
+    17  34219980      0.8      14.9        while True: 
+    18  34219980      1.0      19.0            not_yet_escaped = abs(z) < 2 
+    19  34219980      0.8      15.5            iterations_left = n < maxiter 
+    20  34219980      0.8      15.1            if not_yet_escaped 
+                                                   and iterations_left: 
+    21   33219980     1.0      17.5                z = z * z + c 
+    22   33219980     0.9      15.3                n += 1 
+    23                                         else: 
+    24   1000000      0.8       0.4                break 
+    25   1000000      0.9       0.5            output[i] = n 
+    26         1      5.0       0.0        return output 
+ 
+这个版本花了184 秒执行，而之前的仅100 秒。其他因素确实让分析变得更复杂。
+本例中每一条额外语句都执行了34219980 次，拖慢了代码。如果不是通过
+kernprof.py 调查了每行的影响，我们可能会在缺乏证据的情况下得出是其他原
+因导致了变慢的结论。 
+此时有必要回到之前的timeit 技术来测试每个单独表达式的开销： 
+>>> z = 0+0j # a point in the middle of our image 
+>>> %timeit abs(z) < 2 # tested inside IPython 
+ 
+10000000 loops, best of 3: 119 ns per loop 
+ 
+>>> n = 1 
+>>> maxiter = 300 
+>>> %timeit n < maxiter 
+ 
+10000000 loops, best of 3: 77 ns per loop 
+ 
+从这一简单分析上来看，对n 的逻辑测试的速度几乎是abs 函数调用的两倍。既
+然Python 语句的评估次序是从左到右且支持短路，那么我们应该将最便宜的测试
+放在左边。每301 次测试就有1 次n < maxiter 的值为False，这样Python 就
+不必评估and 操作符右边的语句了。 
+在评估前我们永远无法知道abs(z) < 2 的值何时为False，而我们之前对复数
+平面的观察告诉我们300 次迭代中大约10%的可能是True。如果我们想要更进一
+步了解这段代码的时间复杂度，有必要继续进行数值分析。不过在目前的情况下，
+我们只是想要看看有没有快速提高的机会。 
+我们可以做一个新的假设声明，“通过交换while 语句的次序，我们会获得一个可
+
+38 
+第2 章 
+靠的速度提升。”我们可以用kernprof.py 测试这个假设，但是其额外的开销   
+可能会给我们的结果带来太多噪声。所以我们用一个之前版本的代码，测试比较
+while abs(z) < 2 and n < maxiter:和while n < maxiter and abs(z) 
+< 2:之间的区别。 
+结果显示出大约0.4 秒的稳定提升。这一结果显然很无足轻重且局限性太强，使用
+另一个更合适的方法（如换用第7 章描述的Cython 或PyPy）来解决问题会带来更
+高的收益。 
+我们对自己的结果有信心，是因为： 
+• 
+我们声明的假设易于测试。 
+• 
+我们对代码的改动仅局限于假设的测试（永远不要一次测试两件事！）。 
+• 
+我们收集了足够的证据支持我们的结论。 
+为了保持完整性，我们可以在包含了我们优化的两个主要函数上最后运行一次
+kernprof.py 来确认我们代码整体的复杂度。例2-8 交换了第17 行while 测试的
+语句，我们可以看到原来占用的36.1%的执行时间现在仅占用35.9%（这一结果在
+多次运行中稳定存在）。 
+例2-8  交换while 语句的次序提升测试的速度 
+$ kernprof.py -l -v julia1_lineprofiler3.py 
+... 
+Wrote profile results to julia1_lineprofiler3.py.lprof 
+Timer unit: 1e-06 s 
+ 
+File: julia1_lineprofiler3.py 
+Function: calculate_z_serial_purepython at line 9 
+Total time: 99.7097 s 
+ 
+Line #     Hits   PerHit   %Time   Line Contents 
+================================================== 
+     9                             @profile 
+    10                             def calculate_z_serial_purepython(maxiter, 
+                                                                   zs, cs): 
+    11                                 """Calculate output list using 
+                                       Julia update rule""" 
+    12        1   6831.0     0.0       output = [0] * len(zs) 
+    13  1000001      0.8     0.8       for i in range(len(zs)): 
+    14  1000000      0.8     0.8           n = 0 
+    15  1000000      0.9     0.9           z = zs[i] 
+    16  1000000      0.8     0.8           c = cs[i] 
+    17 34219980      1.0    35.9           while n < maxiter and abs(z) < 2: 
+
+ 
+图通过性能分析找到瓶颈 
+39 
+    18 33219980      1.0    32.0               z = z * z + c 
+    19 33219980      0.8    27.9               n += 1 
+    20  1000000      0.9    0.9            output[i] = n 
+    21    1          5.0    0.0        return output 
+ 
+和预期的一样，我们可以看例2-9 的输出中，calculate_z_serial_purepython
+占用了其父函数97%的时间。创建列表的步骤相对来说无足轻重。 
+例2-9  逐行测试设置阶段的开销 
+File: julia1_lineprofiler3.py 
+Function: calc_pure_python at line 24 
+Total time: 195.218 s 
+ 
+Line #     Hits   Per Hit   % Time  Line Contents 
+================================================= 
+    24                              @profile 
+    25                              def calc_pure_python(draw_output, 
+                                                         desired_width, 
+                                                         max_iterations): 
+... 
+    44        1       1.0      0.0     zs = [] 
+    45        1       1.0      0.0     cs = [] 
+    46     1001       1.1      0.0     for ycoord in y: 
+    47  1001000       1.1      0.5         for xcoord in x: 
+    48  1000000       1.5      0.8             zs.append( 
+                                                      complex(xcoord, ycoord)) 
+    49  1000000       1.6      0.8             cs.append( 
+                                                      complex(c_real, c_imag)) 
+    50 
+    51        1      51.0      0.0      print "Length of x:", len(x) 
+    52        1      11.0      0.0      print "Total elements:", len(zs) 
+    53        1       6.0      0.0      start_time = time.time() 
+    54        1 191031307.0      97.9   output = 
+                                          calculate_z_serial_purepython 
+                                          (max_iterations, zs, cs) 
+    55        1       4.0      0.0      end_time = time.time() 
+    56        1       2.0      0.0      secs = end_time - start_time 
+    57        1      58.0      0.0      print calculate_z_serial_purepython 
+                                          .func_name + " took", secs, "seconds" 
+    58 
+                                     # this sum is expected for 1000^2 grid... 
+    59        1     9799.0     0.0   assert sum(output) == 33219980 
+2.9  用memory_profiler 诊断内存的用量 
+和Rober Kern 实现的line_profiler 包测量CPU 占用率类似，Fabian Pedregosa
+和Philippe Gervais 实现的memory_profiler 模块能够逐行测量内存占用率。了
+解代码的内存使用情况允许你问自己两个问题： 
+
+40 
+第2 章 
+• 
+我们能不能重写这个函数让它使用更少的RAM 来工作得更有效率？ 
+• 
+我们能不能使用更多RAM 缓存来节省CPU 周期？ 
+memory_profiler 的操作和line_profiler 十分类似，但是运行速度要慢的
+多。如果你安装了psutil 包（强烈推荐），memory_profiler 会跑得快一点。
+内存分析可以轻易让你的代码慢上10 到100 倍。所以实际操作时你可能只是偶尔
+使用memory_profiler 而更多地使用line_profiler 来进行CPU 分析。 
+用命令pip install memory_profiler 来安装memory_profiler（可选装
+pip install psutil）。 
+之前说过，memory_profiler 的实现可能并不如line_profiler 那么有效率。
+所以你最好将测试局限在一个较小的问题上，这样才能在一个可容忍的时间内结
+束。最终验证可以用一整夜来跑，但你需要一个迅速而合理的迭代周期用来分析问
+题并验证假设。例2-10 的代码使用了完整的1000×1000 网格，在Ian 的笔记本电
+脑上花了1.5 个小时来收集数据。 
+ 
+备忘 
+需要修改源代码这点比较讨厌。和line_profiler 一样，修饰器
+（@profile）被用来标记选中的函数。这会影响你的单元测试，除非
+你创建一个伪修饰器—见第57 页No-op 的@profile 修饰器。 
+在处理内存分配时，你必须意识到情况不像CPU 占用率那么直截了当。通常让一
+个进程将内存超额分配给本地内存池并在空闲时使用会更有效率，因为内存分配操
+作非常昂贵。另外，垃圾收集不会立即进行，所以对象可能在被销毁后依然存在于
+垃圾收集池中一段时间。 
+使用这些技术的后果就是很难真正了解一个Python 程序内部的内存使用和释放的
+情况，因为当从进程外部观察时，某一行代码可能不会分配固定数量的内存。观察
+多行代码的内存占用趋势可能比只观察一行代码更具有洞察力。 
+让我们看看memory_profiler 在例2-10 中的输出。在第12 行的calculate_ 
+z_serial_purepython 中，我们看到分配1000000 个项目导致大约7MB 的
+RAM
+①被加入这个进程。这不意味着output 列表的大小就是7MB，只是进程在列
+表内部分配时增长了大约7MB。第13 行，我们看到进程在循环内又增长了32MB。
+                        
+① Memory_profiler 测量内存的单位是国际电工委员会的MiB（mebibyte）为2^20 字节，这跟更广为人
+知但也更有歧义的MB（megabyte 同时有两个广为人知的定义）有轻微的区别。1 MiB 等于1.048576（大
+约1.05）MB。为了讨论方便，除非特别指明，我们将两者视作相等。 
+
+ 
+图通过性能分析找到瓶颈 
+41 
+这可能是由于调用了range。（例11-1 进一步讨论了内存追溯，7MB 和32MB 的
+区别源于两个列表的内容。）在第46 行的父进程中，我们看到zs 和cs 列表的分
+配占用了大约79MB。再强调一遍，这个数字不一定是数组的真实大小，只是进程
+在创建这些列表的过程中增长的大小。 
+例2-10  memory_profiler 对我们两个主要函数的分析结果，在calculate_z_serial_ 
+purepython 上显示出预料外的内存使用 
+$ python -m memory_profiler julia1_memoryprofiler.py 
+... 
+Line#    Mem usage   Increment   Line Contents 
+================================================ 
+     9   89.934 MiB   0.000 MiB   @profile 
+    10                            def calculate_z_serial_purepython(maxiter, 
+                                                                  zs, cs): 
+ 
+    11                                """Calculate output list using... 
+    12   97.566 MiB    7.633 MiB       output = [0] * len(zs) 
+    13  130.215 MiB   32.648 MiB       for i in range(len(zs)): 
+    14  130.215 MiB    0.000 MiB           n = 0 
+    15  130.215 MiB    0.000 MiB           z = zs[i] 
+    16  130.215 MiB    0.000 MiB           c = cs[i] 
+    17  130.215 MiB    0.000 MiB           while n < maxiter and abs(z) < 2: 
+    18  130.215 MiB    0.000 MiB               z = z * z + c 
+    19  130.215 MiB    0.000 MiB               n += 1 
+    20  130.215 MiB    0.000 MiB           output[i] = n 
+    21  122.582 MiB   -7.633 MiB       return output 
+ 
+Line #     Mem usage   Increment   Line Contents 
+================================================ 
+    24   10.574 MiB -112.008 MiB   @profile 
+    25                              def calc_pure_python(draw_output, 
+                                                    desired_width, 
+                                                    max_iterations): 
+    26                                 """Create a list of complex ... 
+    27   10.574 MiB    0.000 MiB       x_step = (float(x2 - x1) / ... 
+    28   10.574 MiB    0.000 MiB       y_step = (float(y1 - y2) / ... 
+    29   10.574 MiB    0.000 MiB       x = [] 
+    30   10.574 MiB    0.000 MiB       y = [] 
+    31   10.574 MiB    0.000 MiB       ycoord = y2 
+    32   10.574 MiB    0.000 MiB       while ycoord > y1: 
+    33   10.574 MiB    0.000 MiB           y.append(ycoord) 
+    34   10.574 MiB    0.000 MiB           ycoord += y_step 
+    35   10.574 MiB    0.000 MiB       xcoord = x1 
+    36   10.582 MiB    0.008 MiB       while xcoord < x2: 
+    37   10.582 MiB    0.000 MiB           x.append(xcoord) 
+    38   10.582 MiB    0.000 MiB           xcoord += x_step 
+    ... 
+
+42 
+第2 章 
+    44   10.582 MiB    0.000 MiB       zs = [] 
+    45   10.582 MiB    0.000 MiB       cs = [] 
+    46   89.926 MiB   79.344 MiB       for ycoord in y: 
+    47   89.926 MiB    0.000 MiB          for xcoord in x: 
+    48   89.926 MiB    0.000 MiB              zs.append(complex(xcoord, ycoord)) 
+    49   89.926 MiB    0.000 MiB              cs.append(complex(c_real, c_imag)) 
+    50 
+    51   89.934 MiB    0.008 MiB        print "Length of x:", len(x) 
+    52   89.934 MiB    0.000 MiB        print "Total elements:", len(zs) 
+    53   89.934 MiB    0.000 MiB        start_time = time.time() 
+    54                                  output = calculate_z_serial... 
+    55  122.582 MiB   32.648 MiB        end_time = time.time() 
+    ... 
+ 
+另一种展示内存使用变化的方式是随时间采样并画图。memory_profiler 有一
+个功能叫mprof，用于对内存使用情况进行采样和画图。它的采样基于时间而不
+是代码行，因而不会影响代码的运行时间。 
+图2-6 是mprof 运行julia1_memoryprofiler.py 生成的。它会首先生成一
+个统计文件，然后再用mprof 画图。图中展示了我们的两个主要函数的执行开始
+时间以及运行时RAM 的增长情况。在calculate_z_serial_purepython 内，
+我们可以看到RAM 在函数的整个执行时间内都平稳增长，这是为了生成那些小对
+象（int 和float 类型）。 
+ 
+ 
+图2-6  mprof 生成的memory_profiler 报告 
+
+ 
+图通过性能分析找到瓶颈 
+43 
+除了在函数层面上观察行为以外，我们还可以使用环境管理器添加标签。例2-11
+的代码用于生成图2-7。我们可以看到create_output_list 标签：它在
+calculate_z_serial_purepython 之后出现，并导致进程分配更多RAM。
+然后，为了让图更便于理解，我们用time.sleep(1)暂停1 秒。 
+在create_range_of_zs 标签之后，我们看到RAM 的使用出现了一个猛增；
+在例2-11 的代码中，你可以看到这个标签出现在创建iterations 列表时。
+我们创建列表用的是range 而不是xrange—图显示的很清楚，为了创建
+一个索引，一个具有1 000 000 个项目的大列表被实例化。这个方法很没有效
+率，一旦遇到更大的列表，扩展性也不好（我们的RAM 会耗尽！）。用于创建
+这个列表的内存分配操作本身也占用了一点时间，却没有为这个函数带来什么
+有用的贡献。 
+ 
+备忘 
+在Python 3 中range 的行为改变了，它跟Python 2 的xrange 一样。
+xrange 在Python 3 中已被淘汰，2to3 转换工具会自动帮你进行这一
+转换。 
+ 
+例2-11  用环境管理器给mprof 图像添加标签 
+@profile 
+def calculate_z_serial_purepython(maxiter, zs, cs): 
+    """Calculate output list using Julia update rule""" 
+    with profile.timestamp("create_output_list"): 
+        output = [0] * len(zs) 
+    time.sleep(1) 
+    with profile.timestamp("create_range_of_zs"): 
+        iterations = range(len(zs)) 
+        with profile.timestamp("calculate_output"): 
+            for i in iterations: 
+                n = 0 
+                z = zs[i] 
+                c = cs[i] 
+                while n < maxiter and abs(z) < 2: 
+                    z = z * z + c 
+                    n += 1 
+                output[i] = n 
+    return output 
+ 
+对于占据了图像大部分时间的calculate_output，我们可以看到RAM 有一个非常缓
+慢的线性增长，这是用于分配给内部循环中所有用到的临时数字。使用标签确实可
+以帮助我们细粒度地了解内存的使用情况。 
+
+44 
+第2 章 
+ 
+图2-7  带标签的mprof 报告 
+最后，我们可将range 调用替换成xrange。在图2-8 中，我们可以看到内部循
+环的RAM 使用情况相应降低了。 
+ 
+ 
+图2-8  用xrange 替换range 之后的效果报告 
+
+ 
+图通过性能分析找到瓶颈 
+45 
+如果我们想要测量某些语句的RAM 使用情况，我们可以用IPython 的%memit 魔
+法函数，其工作方式类似于%timeit。第11 章会详细讨论%memit 的用法以及各
+种增进RAM 使用效率的方法。 
+2.10  用heapy 调查堆上的对象 
+Guppy 项目有一个内存堆的调查工具叫作heapy，可以让你查看Python 堆中对象的
+数量以及每个对象的大小。当你需要知道某一时刻有多少对象被使用以及它们是否
+被垃圾收集时，你尤其需要这种深入解释器内部去了解内存中实际内容的能力。如
+果你受困于内存泄漏（可能由于你的对象的引用隐藏于一个复杂系统中），那么这
+个工具能帮你找到问题的关键点。 
+当你在审查你的代码，看它是否如你预期那样生成对象时，你会发现这个工具非常
+有用—结果很可能令你吃惊，并为你带来新的优化方向。 
+为了使用heapy，你需要用命令pip install guppy 安装guppy 包。 
+例2-12 的代码是Julia 代码的一个略有修改的版本。calc_pure_python 使用了
+堆对象hpy，我们在三个地方打印堆的内容。 
+例2-12  用heapy 查看代码运行时对象数量的变化 
+def calc_pure_python(draw_output, desired_width, max_iterations): 
+    ... 
+    while xcoord < x2: 
+        x.append(xcoord) 
+        xcoord += x_step 
+ 
+    from guppy import hpy; hp = hpy() 
+    print "heapy after creating y and x lists of floats" 
+    h = hp.heap() 
+    print h 
+    print 
+ 
+    zs = [] 
+    cs = [] 
+    for ycoord in y: 
+        for xcoord in x: 
+            zs.append(complex(xcoord, ycoord)) 
+            cs.append(complex(c_real, c_imag)) 
+ 
+    print "heapy after creating zs and cs using complex numbers" 
+    h = hp.heap() 
+    print h 
+
+46 
+第2 章 
+    print 
+ 
+    print "Length of x:", len(x) 
+    print "Total elements:", len(zs) 
+    start_time = time.time() 
+    output = calculate_z_serial_purepython(max_iterations, zs, cs) 
+    end_time = time.time() 
+    secs = end_time - start_time 
+    print calculate_z_serial_purepython.func_name + " took", secs, "seconds" 
+ 
+    print 
+    print "heapy after calling calculate_z_serial_purepython" 
+    h = hp.heap() 
+    print h 
+    print 
+ 
+例2-13 的输出显示了内存的使用在创建zs 和cs 列表后变得有趣：它增长了大约
+80MB，因为2000000 个复数对象消耗了64000000 字节。这些复数对象占据了目前
+使用的大多数内存。如果你想要优化这个程序的内存用量，这个结果可用于揭示目
+前保存的对象数量以及它们总共占用的空间。 
+例2-13  heapy 输出显示了我们代码执行时每一个主要阶段的对象总数 
+$ python julia1_guppy.py 
+heapy after creating y and x lists of floats 
+Partition of a set of 27293 objects. Total size = 3416032 bytes. 
+ Index   Count  %    Size    % Cumulative  % Kind (class / dict of class) 
+     0   10960 40 1050376   31   1050376  31 str 
+     1    5768 21  465016   14   1515392  44 tuple 
+     2     199  1  210856    6   1726248  51 dict of type 
+     3      72  0  206784    6   1933032  57 dict of module 
+     4    1592  6  203776    6   2136808  63 types.CodeType 
+     5     313  1  201304    6   2338112  68 dict (no owner) 
+     6    1557  6  186840    5   2524952  74 function 
+     7     199  1  177008    5   2701960  79 type 
+     8     124  0  135328    4   2837288  83 dict of class 
+     9    1045  4   83600    2   2920888  86 __builtin__.wrapper_descriptor 
+<91 more rows. Type e.g. '_.more' to view.> 
+ 
+heapy after creating zs and cs using complex numbers 
+Partition of a set of 2027301 objects. Total size = 83671256 bytes. 
+ Index   Count  %     Size    % Cumulative  % Kind (class / dict of class) 
+     0 2000000  99  6400000  76   64000000  76 complex 
+     1    185   0 16295368   19  80295368   96 list 
+     2  10962   1  1050504    1  81345872   97 str 
+     3   5767   0   464952    1  81810824   98 tuple 
+     4    199   0   210856    0  82021680   98 dict of type 
+     5     72   0   206784    0  82228464   98 dict of module 
+ 
+
+ 
+图通过性能分析找到瓶颈 
+47 
+     6   1592   0   203776   0  82432240  99 types.CodeType 
+     7    319   0   202984   0  82635224  99 dict (no owner) 
+     8   1556   0   186720   0  82821944  99 function 
+     9    199   0   177008   0  82998952  99 type 
+<92 more rows. Type e.g. '_.more' to view.> 
+ 
+Length of x: 1000 
+Total elements: 1000000 
+calculate_z_serial_purepython took 13.2436609268 seconds 
+ 
+heapy after calling calculate_z_serial_purepython 
+Partition of a set of 2127696 objects. Total size = 94207376 bytes. 
+ Index  Count   %     Size   % Cumulative  % Kind (class / dict of class) 
+     0 2000000  94 64000000  68  64000000  68 complex 
+     1    186   0 24421904  26  88421904  94 list 
+     2 100965   5  2423160   3  90845064  96 int 
+     3  10962   1  1050504   1  91895568  98 str 
+     4   5767   0   464952   0  92360520  98 tuple 
+     5    199   0   210856   0  92571376  98 dict of type 
+     6     72   0   206784   0  92778160  98 dict of module 
+     7   1592   0   203776   0  92981936  99 types.CodeType 
+     8    319   0   202984   0  93184920  99 dict (no owner) 
+     9   1556   0   186720   0  93371640  99 function 
+<92 more rows. Type e.g. '_.more' to view.> 
+ 
+第三段显示了在计算完Julia 集合后，我们占用了94MB 的内存。除了之前的复数，
+我们现在还保存了大量的整数，列表中的项目也变多了。 
+hpy.setrelheap()可以用来创建一个内存断点，当后续调用hpy.heap()时就
+会产生一个跟这个断点的差额。这样你就可以略过断点前由Python 内部操作导致
+的内存分配。 
+2.11  用dowser 实时画出变量的实例 
+Robert Brewer 的dowser 可以在代码运行时钩入名字空间并通过CherryPy 接口在一
+个Web 服务器上提供一个实时的变量实例图。每个被追踪对象都有一个走势图，
+让你可以看到某个对象的数量是否在增长。这在分析长期运行的进程时很有用。 
+如果你有一个长期运行的进程且你预计程序的不同操作会带来不同的内存变化（比
+如你可能想对一台web 服务器上传一些数据或跑一些复杂的查询），那么你可以实
+时确认这些变化，见图2-9。 
+要使用它，我们需要在Julia 代码中加入辅助函数（例2-14）用来启动CherryPy
+服务器。 
+
+48 
+第2 章 
+ 
+图2-9  dowser 通过CherryPy 显示的三张走势图 
+例2-14  在应用中启动dowser 的辅助函数 
+def launch_memory_usage_server(port=8080): 
+    import cherrypy 
+    import dowser 
+ 
+    cherrypy.tree.mount(dowser.Root()) 
+    cherrypy.config.update({ 
+        'environment': 'embedded', 
+        'server.socket_port': port 
+    }) 
+ 
+    cherrypy.engine.start() 
+ 
+在开始计算之前，我们需要首先启动CherryPy 服务器，如例2-15 所示。完成计算
+后，我们可以调用time.sleep 维持控制台打开——这会让CheeryPy 进程保持运
+行，让我们可以继续审查名字空间的状态。 
+例2-15  在正确的时机启动dowser，这会启动一个Web 服务器 
+... 
+        for xcoord in x: 
+            zs.append(complex(xcoord, ycoord)) 
+            cs.append(complex(c_real, c_imag)) 
+ 
+    launch_memory_usage_server() 
+ 
+... 
+    output = calculate_z_serial_purepython(max_iterations, zs, cs) 
+... 
+    print "now waiting..." 
+while True: 
+    time.sleep(1) 
+ 
+点击图2-9 中的TRACE 链接，我们就可以看到每个list 对象的内容（图2-10）。我
+们还可以继续深入每个list 内部 ——这就像在IDE 中使用一个交互调试器一样，
+
+ 
+图通过性能分析找到瓶颈 
+49 
+但是你可以在一台服务器上进行而不需要一个IDE。 
+ 
+图2-10  dowser 显示某个列表中有1 000 000 个项目 
+ 
+备忘 
+我们当然更希望在可控的情况下直接分析代码块。但是有时这不一定
+做得到，或者有时你只是想要简单地分析一下情况。查看一个正在运
+行的进程的内部细节会是一种折中的方案，不需要进行太多的工作就
+可以提供足够的证据。 
+2.12  用dis 模块检查CPython 字节码 
+到目前为止我们已经展示了很多测量Python 代码开销的方法（包括CPU 和RAM
+的开销）。不过，我们还没有看到在底层虚拟机的字节码层面发生的事情。了解“台
+面下”发生的事情有助于在脑海中对运行慢的函数建立一个模型，并能帮助你编译
+你的代码。所以现在让我们来看一些字节码。 
+dis 模块让我们能够看到基于栈的CPython 虚拟机中运行的字节码。在你的Python
+代码运行的时候，了解虚拟机中发生了什么可以帮助你了解为什么某些编码风格会
+比其他的更快。同时还能帮助你使用Cython 这样的工具，它跳出了Python 的范畴，
+能够生成C 代码。 
+dis 模块是内建的。你可以传给它一段代码或者一个模块，它会打印出分解的字节
+码。在例2-16 中我们分解了函数的外层循环。 
+ 
+问题 
+你应该试着分解一个你自己的函数并将每一个分解的代码和分解的
+输出匹配起来。你能匹配下面的dis 输出和原始函数吗？ 
+
+50 
+第2 章 
+例2-16  使用内建的dis 模块来了解运行代码的虚拟机 
+In [1]: import dis 
+In [2]: import julia1_nopil 
+ 
+In [3]: dis.dis(julia1_nopil.calculate_z_serial_purepython) 
+ 11           0 LOAD_CONST               1 (0) 
+              3 BUILD_LIST               1 
+              6 LOAD_GLOBAL              0 (len) 
+              9 LOAD_FAST                1 (zs) 
+             12 CALL_FUNCTION            1 
+             15 BINARY_MULTIPLY 
+             16 STORE_FAST               3 (output) 
+ 
+ 12          19 SETUP_LOOP             123 (to 145) 
+             22 LOAD_GLOBAL              1 (range) 
+             25 LOAD_GLOBAL              0 (len) 
+             28 LOAD_FAST                1 (zs) 
+             31 CALL_FUNCTION            1 
+             34 CALL_FUNCTION            1 
+             37 GET_ITER 
+          >> 38 FOR_ITER               103 (to 144) 
+             41 STORE_FAST               4 (i) 
+ 
+ 13          44 LOAD_CONST               1 (0) 
+             47 STORE_FAST               5 (n) 
+# ... 
+# We'll snip the rest of the inner loop for brevity! 
+# ... 
+ 
+ 19     >> 131 LOAD_FAST                 5 (n) 
+           134 LOAD_FAST                 3 (output) 
+           137 LOAD_FAST                 4 (i) 
+           140 STORE_SUBSCR 
+           141 JUMP_ABSOLUTE            38 
+        >> 144 POP_BLOCK 
+ 
+ 20     >> 145 LOAD_FAST                 3 (output) 
+           148 RETURN_VALUE 
+ 
+这个输出非常的直白简明。第一列包含了原始文件的行数。第二列包含了一些>>
+标志，它们是指向其他代码的跳转点。第三列是操作的地址和操作名。第四列包含
+了操作的参数。第五列的标记可用来帮助对照字节码和原始Python 的参数。 
+对照字节码和例2-3 中的Python 代码。字节码首先将常数0 放到栈上，然后创建
+了一个具有一个项目的列表。接下来，它搜索了名字空间来查询len 函数，将它
+放到栈上，再次搜索名字空间找到zs，放到栈上。在第12 行，它从栈上调用len
+函数，且弹出了栈上的zs 作为参数；然后对最后两个参数调用二进制乘法（zs
+
+ 
+图通过性能分析找到瓶颈 
+51 
+的长度和那个单项目列表）将结果保存在output 中。这就是我们那个Python 函
+数的第一行干的事情。你可以继续查看下一段字节码来了解Python 代码第二行的
+行为（外层for 循环）。 
+ 
+问题 
+跳转点（>>）匹配JUMP_ABSOLUTE 以及POP_JUMP_IF_FALSE
+等指令。过一遍你自己的函数分解结果并对照跳转点和跳转指令。 
+介绍完字节码，我们现在要问：要完成同样的任务，显式编写的函数和使用内建函
+数在字节码和时间开销上的对比是什么。 
+不同的方法，不同的复杂度 
+应该有一种—而且最好只有唯一的一种—明显的方式去完成它。虽然
+这种方式可能一开始并不明显，除非你是荷兰人…… 
+—Tim Peters 
+Python 之禅 
+通过Python 你有无数种方式表达你的意思。一般来说最优的那个选择十分明显，
+但是如果你的经验主要来自一个老版本的Python 或另一门编程语言，那么在你的
+脑海里可能就是另外的选择。某些表达的方式可能就比别的要慢。 
+对于你大多数的代码，你可能更关心可读性而不是速度，这能让你的团队更有效地
+写代码，而不是被高效而难懂的代码所迷惑。但是，有些时候你会更追求性能（且
+不牺牲可读性），那么你需要的可能是一些速度测试。 
+看看例2-17 的两段代码。它们都做了相同的工作，但是第一个会产生大量额外的
+Python 字节码，带来更大的开销。 
+例2-17  一个单纯的和一个高效的手段解决同一个求和问题 
+def fn_expressive(upper = 1000000): 
+    total = 0 
+    for n in xrange(upper): 
+        total += n 
+    return total 
+ 
+def fn_terse(upper = 1000000): 
+    return sum(xrange(upper)) 
+ 
+print "Functions return the same result:", fn_expressive() == fn_terse() 
+
+52 
+第2 章 
+ 
+Functions return the same result: 
+True  
+两个函数都对一批整数求和。一个简单的经验法则（但是你一定要进行性能分析！）
+是字节码越多执行的速度越慢。内建函数使用了更少的字节码行数来完成同样的工
+作。我们在例2-18 中使用IPython 的%timeit 魔法函数测量它们的最快运行时间。 
+例2-18  用%timeit 验证我们的假设：内建函数应该比自己写函数要快（译注：
+原著中未给出fn_terse()的结果） 
+%timeit fn_expressive() 
+ 
+10 loops, best of 3: 42 ms per loop 
+100 loops, best of 3: 12.3 ms per loop 
+ 
+%timeit fn_terse() 
+ 
+如果我们用dis 模块调查每个函数的字节码，如例2-19 所示，我们能看到虚拟机
+用了17 行来执行更有表现力的函数，而仅用了6 行来执行非常可读但更简洁的第
+二个函数。 
+例2-19  用dis 查看两个函数的字节码指令行数 
+import dis 
+print fn_expressive.func_name 
+dis.dis(fn_expressive) 
+ 
+fn_expressive 
+  2            0 LOAD_CONST             1 (0) 
+               3 STORE_FAST             1 (total) 
+ 
+  3            6 SETUP_LOOP            30 (to 39) 
+               9 LOAD_GLOBAL            0 (xrange) 
+              12 LOAD_FAST              0 (upper) 
+              15 CALL_FUNCTION          1 
+              18 GET_ITER 
+           >> 19 FOR_ITER              16 (to 38) 
+              22 STORE_FAST             2 (n) 
+ 
+  4           25 LOAD_FAST              1 (total) 
+              28 LOAD_FAST              2 (n) 
+              31 INPLACE_ADD 
+              32 STORE_FAST             1 (total) 
+              35 JUMP_ABSOLUTE         19 
+           >> 38 POP_BLOCK 
+ 
+  5        >> 39 LOAD_FAST              1 (total) 
+              42 RETURN_VALUE 
+
+ 
+图通过性能分析找到瓶颈 
+53 
+ 
+print fn_terse.func_name 
+dis.dis(fn_terse) 
+ 
+fn_terse 
+  8            0 LOAD_GLOBAL            0 (sum) 
+               3 LOAD_GLOBAL            1 (xrange) 
+               6 LOAD_FAST              0 (upper) 
+               9 CALL_FUNCTION          1 
+              12 CALL_FUNCTION          1 
+              15 RETURN_VALUE 
+ 
+两段代码的区别很明显。在fn_expressive()内部，我们维护了两个本地变量
+并用for 循环遍历了一个列表。for 循环会在每次循环时检查StopIteration 异常是
+否被引发。每次迭代都会调用total.__add__函数，这个函数会检查第二个变量
+（n）的类型。所有这些检查都会带来一些开销。 
+在fn_terse()内部，我们调用了一个用C 编写的优化的列表操作函数，它知道
+如何生成最后的结果而无须创建中间的Python 对象。这样会快很多，即使每次迭
+代仍然必须检查被求和对象的类型（我们会在第4 章看到一些将类型固定的方法，
+这样就不需要在每次迭代时都检查它）。 
+之前提过，你一定要对你的代码进行性能分析——但如果你只依靠性能分析来试
+错，那你必然会在某些时候写出较慢的代码。学习Python 是否已经存在一个内建
+的更短且依然可读的方式来解决你的问题是绝对值得的。如果已经存在，那么它可
+能更容易被另一个开发人员理解且可能运行得会更快。 
+2.13  在优化期间进行单元测试保持代码的正确性 
+如果你不对你的代码进行单元测试，那么从长远来看你可能正在损害你的生产力。
+Ian（脸红）十分尴尬地提到有一次他花了一整天的时间优化他的代码，因为嫌麻
+烦所以他禁用了单元测试，最后却发现那个显著的速度提升只是因为他破坏了需要
+优化的那段算法。这样的错误你一次都不要犯。 
+除了单元测试，你还应该坚定地考虑使用coverage.py。它会检查有哪些代码行
+被你的测试所覆盖并找出那些没有被覆盖的代码。这可以让你迅速知道你是否测试
+了你想要优化的代码，那么在优化过程中可能潜伏的任何错误都会被迅速抓出来。 
+No-op 的@profile 修饰器 
+如果你的代码使用了line_profiler 或者memory_profiler 的@profile 修
+
+54 
+第2 章 
+饰器，那么你的单元测试会引发一个NameError 异常并失败。原因是单元测试框
+架不会将@profile 修饰器注入本地名字空间。no-op 修饰器可以在这种时候解决
+问题。在你测试时把它加入你的代码块，并在你结束测试后移除它是在方便不过的
+事情了。 
+使用no-op 修饰器，你可以运行你的测试而不需要修改你的代码。这意味着你可以
+在每次优化之后都运行你的测试，你将永远不会倒在一个出问题的优化步骤上。 
+如例2-20 所示，假设我们有一个ex.py 模块，它有一个测试用例（基于nosetests 框
+架）和一个函数，这个函数我们正在用line_profiler 或者memory_profiler
+进行性能分析。 
+例2-20  一个简单的函数和一个测试用例需要用到@profile 
+# ex.py 
+import unittest 
+ 
+@profile 
+def some_fn(nbr): 
+    return nbr * 2 
+ 
+ 
+class TestCase(unittest.TestCase): 
+    def test(self): 
+        result = some_fn(2) 
+        self.assertEquals(result, 4) 
+ 
+如果我们运行nosetests 测试我们的代码就会得到一个NameError： 
+$ nosetests ex.py 
+E 
+====================================================================== 
+ERROR: Failure: NameError (name 'profile' is not defined) 
+... 
+NameError: name 'profile' is not defined 
+Ran 1 test in 0.001s 
+ 
+FAILED (errors=1) 
+ 
+解决方法是在ex.py 开头添加一个no-op 修饰器（你可以在完成性能分析之后移
+除它）。如果在名字空间中寻找不到@profile 修饰器（因为没有使用
+line_profiler 或者memory_profiler），那么我们写的no-op 版本的修饰器
+就会被加入名字空间。如果line_profiler 或者memory_profiler 已经将新
+的函数加入名字空间，那么我们no-op 版本的修饰器就会被忽略。 
+对于line_profiler，我们可以加入例2-21 的代码。 
+
+ 
+图通过性能分析找到瓶颈 
+55 
+例2-21  在单元测试时在名字空间中加入针对line_profiler 的no-op@profile 修
+饰器 
+# line_profiler 
+if '__builtin__' not in dir() or not hasattr(__builtin__, 'profile'): 
+    def profile(func): 
+        def inner(*args, **kwargs): 
+            return func(*args, **kwargs) 
+        return inner 
+ 
+__builtin__检查是针对nosetests 的，hasattr 则用来检查@profile 修饰
+器是否已经被加入名字空间。现在可以在我们的代码上成功运行nosetests 了： 
+$ kernprof.py -v -l ex.py 
+Line #      Hits        Time   Per %%HTMLit   % Time   Line Contents 
+============================================================== 
+    11                                          @profile 
+    12                                          def some_fn(nbr): 
+    13         1           3       3.0    100.0     return nbr * 2 
+ 
+ 
+$ nosetests ex.py 
+. 
+Ran 1 test in 0.000s 
+ 
+对于memory_profiler，我们使用例2-22 的代码。 
+例2-22  在单元测试时在名字空间中加入针对memory_profiler 的no-op@profile
+修饰器 
+# memory_profiler 
+if 'profile' not in dir(): 
+    def profile(func): 
+        def inner(*args, **kwargs): 
+            return func(*args, **kwargs) 
+        return inner 
+ 
+期望产生的输出如下： 
+python -m memory_profiler ex.py 
+... 
+Line #    Mem usage    Increment   Line Contents 
+================================================ 
+    11   10.809 MiB    0.000 MiB   @profile 
+    12                             def some_fn(nbr): 
+    13   10.809 MiB    0.000 MiB       return nbr * 2 
+ 
+ 
+$ nosetests ex.py 
+. 
+Ran 1 test in 0.000 
+ 
+
+56 
+第2 章 
+不使用这些修饰器可以节省你几分钟，但是一旦你在一个破坏你代码的错误优化上
+失去了好几个小时，你就会想要把这个加入你的工作流程了。 
+2.14  确保性能分析成功的策略 
+性能分析需要一些时间和精力。如果你把需要测试的代码段跟你代码的主体分离，
+你会有一个更好的机会去了解你的代码。然后你可以用单元测试来保证正确性，你
+还可以传入精心编造的真实数据来测试算法的有效性。 
+记得关闭任何基于BIOS 的加速器，因为它们只会混淆你的结果。Ian 的笔记本电
+脑使用的Intel TurboBoost 功能可以在温度足够低的时候将CPU 暂时加至极速。这
+意味着低温时运行同一段代码的速度可能比高温时要快。你的操作系统也许还控制
+了时钟的速度——使用电池电源的笔记本可能比插了主电源时更积极地控制CPU
+的速度。为了建立一个更加稳定的测试配置，我们： 
+• 
+在BIOS 上禁用了TurboBoost。 
+• 
+禁用了操作系统改写SpeedStep（如果你有权限，你可以在你的BIOS 中找到它）
+的能力。 
+• 
+只使用主电源（从不使用电池电源）。 
+• 
+运行实验时禁用后台工具如备份和Dropbox。 
+• 
+多次运行实验来获得一个稳定的测量结果。 
+• 
+如果可能，降至run level 1（UNIX），确保没有其他任务运行。 
+• 
+重启并重跑实验来二次验证结果。 
+试着假设你代码的行为并用性能分析的结果来证实（或证伪）你的假设。你的选择
+不会改变（因为你的决定只能基于性能分析后的结果），但是你对代码的直觉了解
+会提升，而这会在今后的项目中带来好处，因为你会变得更能做出高效的决定。当
+然，你依然需要性能分析来验证这些高效的决定。 
+不要克扣准备工作。如果你在测试一段深入大型项目的代码前不先将代码分离，你
+很有可能会因为一些副作用而让你的努力偏离正轨。当你进行细粒度的改动时，对
+大型项目进行单元测试往往会更困难，而这又会更进一步妨碍你的努力。副作用可
+能包括其他线程或进程影响了CPU 和内存的使用以及网络和磁盘的活动，这些都
+会歪曲你的结果。 
+
+ 
+图通过性能分析找到瓶颈 
+57 
+对于Web 服务器，推荐dowser 和dozer；你可以用它们来将名字空间中的对象
+行为实时可视化。如果可能，一定要将你想测试的代码从Web 应用的主体上分离
+出来，这会让性能分析方便太多。 
+确保你的单元测试覆盖了所有你想要分析的代码路径。任何你没有测过的东西都
+有可能带来细微的错误拖慢你的进度。使用coverage.py 来确认你的测试覆盖
+了所有的代码路径。 
+对一个生成很多数字输出的复杂代码段进行单元测试可能会很困难。不要害怕将结
+果输出到一个文本文件来运行diff 或者使用一个pickled 对象。对于数字优化
+的问题，Ian 喜欢创建一个包含了大量浮点数的长文本文件并使用diff—细小
+的取整问题会立刻显现，哪怕它们在输出中很罕见。 
+如果你的代码容易受到数字取整问题的影响，那么你最好有一个大的输出可以用来
+进行前后对比。取整错误的一个原因是CPU 寄存器和主存之间的浮点精度不同。
+你的代码在不同的代码路径上运行可能导致细微的取整错误并在之后给你带来困
+扰—所以最好在它们刚发生的时候就尽早意识到这点。 
+显然，在性能分析和优化时使用源代码控制工具是很有意义的。创建新的代码分支
+代价很低，而且它能让你保持头脑清醒。 
+2.15  小结 
+看过各种性能分析技术以后，你应该已经有了所有必需的工具来验证你的代码中的
+CPU 和RAM 瓶颈。接下来我们要去看看Python 是如何实现最常用的容器的，这
+样你就能明智地决定使用哪种容器来存放大数据的集合。 
+ 

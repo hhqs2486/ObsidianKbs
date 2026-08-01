@@ -1,0 +1,1734 @@
+手工部署
+部署附加组件
+常见应用部署
+部署指南
+- 14 -
+本文档使用 书栈(BookStack.CN) 构建
+
+各组件版本:
+kubernetes 1.16.1
+containerd 1.3.0
+coredns v1.6.2
+cni v0.8.2
+flannel v0.11.0
+etcd v3.4.1
+特点:
+kubelet 证书自动签发并轮转
+kube-proxy 以 daemonset 方式部署，无需为其手动签发管理证书
+运行时没有 docker 直接使用 containerd，绕过 dockerd 的许多 bug
+部署前的准备工作
+部署 ETCD
+部署 Master
+部署 Worker 节点
+部署关键附加组件
+手工部署
+部署详情
+部署步骤
+手工部署
+- 15 -
+本文档使用 书栈(BookStack.CN) 构建
+
+使用 Linux 发行版，本教程主要以 Ubuntu 18.04 为例
+部署 K8S 控制面组件，推荐三台以上数量的机器
+部署 ETCD，可以跟 Master 节点用相同的机器，也可以用单独的机器，推荐三台以上数量的机器
+实际运行工作负载的节点，Master 节点也可以作为 Worker 节点，可以通过 kubelet 参数  --
+kube-reserved  多预留一些资源给系统组件。
+通常会给 Master 节点打标签，让关键的 Pod 跑在 Master 节点上，比如集群 DNS 服务。
+我们需要用  cfssl  和  kubectl  来为各个组件生成证书和 kubeconfig，所以先将这两个工
+具在某个机器下载安装好。
+1. curl -L https://pkg.cfssl.org/R1.2/cfssl_linux-amd64 -o cfssl
+2. curl -L https://pkg.cfssl.org/R1.2/cfssljson_linux-amd64 -o cfssljson
+3. curl -L https://pkg.cfssl.org/R1.2/cfssl-certinfo_linux-amd64 -o cfssl-certinfo
+4. 
+5. chmod +x cfssl cfssljson cfssl-certinfo
+6. sudo mv cfssl cfssljson cfssl-certinfo /usr/local/bin/
+部署前的准备工作
+准备节点
+操作系统
+Master 节点
+ETCD 节点
+Worker 节点
+准备客户端工具
+" class="reference-link">安装 cfssl
+安装 kubectl
+部署前的准备工作
+- 16 -
+本文档使用 书栈(BookStack.CN) 构建
+
+1. wget -q --show-progress --https-only --timestamping \
+2. 
+  https://storage.googleapis.com/kubernetes-
+release/release/v1.16.1/bin/linux/amd64/kubectl
+3. 
+4. chmod +x kubectl
+5. mv kubectl /usr/local/bin/
+由于各个组件都需要配置证书，并且依赖 CA 证书来签发证书，所以我们首先要生成好 CA 证书以及
+后续的签发配置文件:
+1. cat > ca-csr.json <<EOF
+2. {
+3.   "CN": "Kubernetes",
+4.   "key": {
+5.     "algo": "rsa",
+6.     "size": 2048
+7.   },
+8.   "names": [
+9.     {
+10.       "C": "CN",
+11.       "ST": "SiChuan",
+12.       "L": "ChengDu",
+13.       "O": "Kubernetes",
+14.       "OU": "CA"
+15.     }
+16.   ]
+17. }
+18. EOF
+19. 
+20. cfssl gencert -initca ca-csr.json | cfssljson -bare ca
+21. 
+22. cat > ca-config.json <<EOF
+23. {
+24.   "signing": {
+25.     "default": {
+26.       "expiry": "8760h"
+27.     },
+28.     "profiles": {
+" class="reference-link">生成 CA 证书
+部署前的准备工作
+- 17 -
+本文档使用 书栈(BookStack.CN) 构建
+
+29.       "kubernetes": {
+30. 
+        "usages": ["signing", "key encipherment", "server auth", "client 
+auth"],
+31.         "expiry": "8760h"
+32.       }
+33.     }
+34.   }
+35. }
+36. EOF
+生成的文件中有下面三个后面会用到:
+ ca-key.pem : CA 证书密钥
+ ca.pem : CA 证书
+ ca-config.json : 证书签发配置
+csr 文件字段解释:
+ CN :  Common Name ，apiserver 从证书中提取该字段作为请求的用户名 (User Name)
+ Organization ，apiserver 从证书中提取该字段作为请求用户所属的组 (Group)
+由于这里是 CA 证书，是签发其它证书的根证书，这个证书密钥不会分发出去作为 client 证书，所有组件使
+用的 client 证书都是由 CA 证书签发而来，所以 CA 证书的 CN 和 O 的名称并不重要，后续其它签发出
+来的证书的 CN 和 O 的名称才是有用的
+部署前的准备工作
+- 18 -
+本文档使用 书栈(BookStack.CN) 构建
+
+这里证书可以只创建一次，所有 etcd 实例都公用这里创建的证书:
+1. cat > etcd-csr.json <<EOF
+2. {
+3.     "CN": "etcd",
+4.     "hosts": [
+5.       "127.0.0.1",
+6.       "10.200.16.79",
+7.       "10.200.17.6",
+8.       "10.200.16.70"
+9.     ],
+10.     "key": {
+11.         "algo": "rsa",
+12.         "size": 2048
+13.     },
+14.     "names": [
+15.         {
+16.             "C": "CN",
+17.             "ST": "SiChuan",
+18.             "L": "Chengdu",
+19.             "O": "etcd",
+20.             "OU": "etcd"
+21.         }
+22.     ]
+23. }
+24. EOF
+25. 
+26. cfssl gencert \
+27.   -ca=ca.pem \
+28.   -ca-key=ca-key.pem \
+29.   -config=ca-config.json \
+30.   -profile=kubernetes \
+31.   etcd-csr.json | cfssljson -bare etcd
+hosts 需要包含 etcd 每个实例所在节点的内网 IP
+部署 ETCD
+为 ETCD 签发证书
+部署 ETCD
+- 19 -
+本文档使用 书栈(BookStack.CN) 构建
+
+会生成下面两个重要的文件:
+ etcd-key.pem : kube-apiserver 证书密钥
+ etcd.pem : kube-apiserver 证书
+下载 release 包:
+1. wget -q --show-progress --https-only --timestamping \
+2. 
+  "https://github.com/etcd-io/etcd/releases/download/v3.4.1/etcd-v3.4.1-linux-
+amd64.tar.gz"
+解压安装  etcd  和  etcdctl  到 PATH:
+1. tar -xvf etcd-v3.4.1-linux-amd64.tar.gz
+2. sudo mv etcd-v3.4.1-linux-amd64/etcd* /usr/local/bin/
+创建配置相关目录，放入证书文件:
+1. sudo mkdir -p /etc/etcd /var/lib/etcd
+2. sudo cp ca.pem etcd-key.pem etcd.pem /etc/etcd/
+etcd 集群每个成员都需要一个名字，这里第一个成员名字用 infra0，第二个可以用 infra1，以此
+类推，你也可以直接用节点的 hostname:
+1. NAME=infra0
+记当前部署 ETCD 的节点的内网 IP 为 INTERNAL_IP:
+1. INTERNAL_IP=10.200.16.79
+记所有 ETCD 成员的名称和成员间通信的 https 监听地址为 ETCD_SERVERS (注意是 2380 端
+口，不是 2379):
+1. ETCD_SERVERS="infra0=https://10.200.16.79:2380,infra1=https://10.200.17.6:2380,in
+下载安装 ETCD
+配置
+部署 ETCD
+- 20 -
+本文档使用 书栈(BookStack.CN) 构建
+
+创建 systemd 配置:
+1. cat <<EOF | sudo tee /etc/systemd/system/etcd.service
+2. [Unit]
+3. Description=etcd
+4. Documentation=https://github.com/coreos
+5. 
+6. [Service]
+7. Type=notify
+8. ExecStart=/usr/local/bin/etcd \\
+9.   --name ${NAME} \\
+10.   --cert-file=/etc/etcd/etcd.pem \\
+11.   --key-file=/etc/etcd/etcd-key.pem \\
+12.   --peer-cert-file=/etc/etcd/etcd.pem \\
+13.   --peer-key-file=/etc/etcd/etcd-key.pem \\
+14.   --trusted-ca-file=/etc/etcd/ca.pem \\
+15.   --peer-trusted-ca-file=/etc/etcd/ca.pem \\
+16.   --peer-client-cert-auth \\
+17.   --client-cert-auth \\
+18.   --initial-advertise-peer-urls https://${INTERNAL_IP}:2380 \\
+19.   --listen-peer-urls https://${INTERNAL_IP}:2380 \\
+20.   --listen-client-urls https://${INTERNAL_IP}:2379,https://127.0.0.1:2379 \\
+21.   --advertise-client-urls https://${INTERNAL_IP}:2379 \\
+22.   --initial-cluster-token etcd-cluster-0 \\
+23.   --initial-cluster ${ETCD_SERVERS} \\
+24.   --initial-cluster-state new \\
+25.   --data-dir=/var/lib/etcd
+26. Restart=on-failure
+27. RestartSec=5
+28. 
+29. [Install]
+30. WantedBy=multi-user.target
+31. EOF
+1. sudo systemctl daemon-reload
+2. sudo systemctl enable etcd
+3. sudo systemctl start etcd
+启动
+部署 ETCD
+- 21 -
+本文档使用 书栈(BookStack.CN) 构建
+
+等所有 etcd 成员安装启动成功后，来验证下是否可用:
+1. sudo ETCDCTL_API=3 etcdctl member list \
+2.   --endpoints=https://127.0.0.1:2379 \
+3.   --cacert=/etc/etcd/ca.pem \
+4.   --cert=/etc/etcd/etcd.pem \
+5.   --key=/etc/etcd/etcd-key.pem
+输出:
+1. 
+a7f995caeeaf7a59, started, infra1, https://10.200.17.6:2380, 
+https://10.200.17.6:2379, false
+2. 
+b90901a06e9aec53, started, infra2, https://10.200.16.70:2380, 
+https://10.200.16.70:2379, false
+3. 
+ba126eb695f5ba71, started, infra0, https://10.200.16.79:2380, 
+https://10.200.16.79:2379, false
+验证
+部署 ETCD
+- 22 -
+本文档使用 书栈(BookStack.CN) 构建
+
+Master 节点的准备证书操作只需要做一次，将生成的证书拷到每个 Master 节点上以复用。
+前提条件:
+签发证书需要用到 生成 CA 证书 时创建的 CA 证书及其密钥文件，确保它们在当前目录
+确保 cfssl 在当前环境已安装，安装方法参考 这里
+kube-apiserver 是 k8s 的访问核心，所有 K8S 组件和用户 kubectl 操作都会请求 kube-
+apiserver，通常启用 tls 证书认证，证书里面需要包含 kube-apiserver 可能被访问的地址，
+这样 client 校验 kube-apiserver 证书时才会通过，集群内的 Pod 一般通过 kube-
+apiserver 的 Service 名称访问，可能的 Service 名称有:
+ kubernetes 
+ kubernetes.default 
+ kubernetes.default.svc 
+ kubernetes.default.svc.cluster 
+ kubernetes.default.svc.cluster.local 
+通过集群外也可能访问 kube-apiserver，比如使用 kubectl，或者部署在集群外的服务会连
+kube-apiserver (比如部署在集群外的 Promethues 采集集群指标做监控)，这里列一下通过集群
+外连 kube-apiserver 有哪些可能地址:
+ 127.0.0.1 : 在 Master 所在机器通过 127.0.0.1 访问本机 kube-apiserver
+Service CIDR 的第一个 IP，比如 flanneld 以 daemonset 部署在每个节点，使用
+hostNetwork 而不是集群网络，这时无法通过 service 名称访问 apiserver，因为使用
+hostNetwork 无法解析 service 名称 (使用的 DNS 不是集群 DNS)，它会使用
+apiserver 内部的 CLUSTER IP 去请求 apiserver。 kube-controller-manager 的
+ --service-cluster-ip-range  启动参数是  10.32.0.0/16 ，那么第一个 IP 就是
+ 10.32.0.1 
+自定义域名: 配了 DNS，通过域名访问 kube-apiserver，也要将域名写入证书
+LB IP: 如果 Master 节点前面挂了一个负载均衡器，外界可以通过 LB IP 来访问 kube-
+apiserver
+Master 节点 IP: 如果没有 Master 负载均衡器，管理员在节点上执行 kubectl 通常使用
+Master 节点 IP 访问 kube-apiserver
+部署 Master
+" class="reference-link">准备证书
+" class="reference-link">为 kube-apiserver 签发证书
+部署 Master
+- 23 -
+本文档使用 书栈(BookStack.CN) 构建
+
+准备 CSR 文件:
+1. cat > apiserver-csr.json <<EOF
+2. {
+3.     "CN": "kubernetes",
+4.     "hosts": [
+5.       "127.0.0.1",
+6.       "10.32.0.1",
+7.       "10.200.16.79",
+8.       "kubernetes",
+9.       "kubernetes.default",
+10.       "kubernetes.default.svc",
+11.       "kubernetes.default.svc.cluster",
+12.       "kubernetes.default.svc.cluster.local"
+13.     ],
+14.     "key": {
+15.         "algo": "rsa",
+16.         "size": 2048
+17.     },
+18.     "names": [
+19.         {
+20.             "C": "CN",
+21.             "ST": "SiChuan",
+22.             "L": "Chengdu",
+23.             "O": "Kubernetes",
+24.             "OU": "Kube API Server"
+25.         }
+26.     ]
+27. }
+28. EOF
+hosts 这里只准备了必要的，根据需求可增加，通常 Master 节点 IP 也都要加进去，你可以执行了上面的
+命令后再编辑一下  apiserver-csr.json ，将需要 hosts 都加进去。
+1. cfssl gencert \
+2.   -ca=ca.pem \
+3.   -ca-key=ca-key.pem \
+4.   -config=ca-config.json \
+5.   -profile=kubernetes \
+6.   apiserver-csr.json | cfssljson -bare apiserver
+会生成下面两个重要的文件:
+部署 Master
+- 24 -
+本文档使用 书栈(BookStack.CN) 构建
+
+ apiserver-key.pem : kube-apiserver 证书密钥
+ apiserver.pem : kube-apiserver 证书
+1. cat > kube-controller-manager-csr.json <<EOF
+2. {
+3.   "CN": "system:kube-controller-manager",
+4.   "key": {
+5.     "algo": "rsa",
+6.     "size": 2048
+7.   },
+8.   "names": [
+9.     {
+10.       "C": "CN",
+11.       "ST": "SiChuan",
+12.       "L": "Chengdu",
+13.       "O": "system:kube-controller-manager",
+14.       "OU": "Kube Controller Manager"
+15.     }
+16.   ]
+17. }
+18. EOF
+19. 
+20. cfssl gencert \
+21.   -ca=ca.pem \
+22.   -ca-key=ca-key.pem \
+23.   -config=ca-config.json \
+24.   -profile=kubernetes \
+25.   kube-controller-manager-csr.json | cfssljson -bare kube-controller-manager
+生成以下两个文件:
+ kube-controller-manager-key.pem : kube-controller-manager 证书密钥
+ kube-controller-manager.pem : kube-controller-manager 证书
+1. cat > kube-scheduler-csr.json <<EOF
+2. {
+" class="reference-link">为 kube-controller-manager
+签发证书
+" class="reference-link">为 kube-scheduler 签发证书
+部署 Master
+- 25 -
+本文档使用 书栈(BookStack.CN) 构建
+
+3.   "CN": "system:kube-scheduler",
+4.   "key": {
+5.     "algo": "rsa",
+6.     "size": 2048
+7.   },
+8.   "names": [
+9.     {
+10.       "C": "CN",
+11.       "ST": "SiChuan",
+12.       "L": "Chengdu",
+13.       "O": "system:kube-scheduler",
+14.       "OU": "Kube Scheduler"
+15.     }
+16.   ]
+17. }
+18. EOF
+19. 
+20. cfssl gencert \
+21.   -ca=ca.pem \
+22.   -ca-key=ca-key.pem \
+23.   -config=ca-config.json \
+24.   -profile=kubernetes \
+25.   kube-scheduler-csr.json | cfssljson -bare kube-scheduler
+生成以下两个文件:
+ kube-scheduler-key.pem : kube-scheduler 证书密钥
+ kube-scheduler.pem : kube-scheduler 证书公钥
+ kube-controller-manager  会使用此密钥对来给 service account 签发 token，更多详情参
+考官方文档: https://kubernetes.io/docs/reference/access-authn-authz/service-
+accounts-admin/
+1. cat > service-account-csr.json <<EOF
+2. {
+3.   "CN": "service-accounts",
+4.   "key": {
+5.     "algo": "rsa",
+6.     "size": 2048
+7.   },
+" class="reference-link">签发 Service Account 密钥对
+部署 Master
+- 26 -
+本文档使用 书栈(BookStack.CN) 构建
+
+8.   "names": [
+9.     {
+10.       "C": "CN",
+11.       "ST": "SiChuan",
+12.       "L": "Chengdu",
+13.       "O": "Kubernetes",
+14.       "OU": "Service Account"
+15.     }
+16.   ]
+17. }
+18. EOF
+19. 
+20. cfssl gencert \
+21.   -ca=ca.pem \
+22.   -ca-key=ca-key.pem \
+23.   -config=ca-config.json \
+24.   -profile=kubernetes \
+25.   service-account-csr.json | cfssljson -bare service-account
+生成以下两个文件:
+ service-account-key.pem : service account 证书公钥
+ service-account.pem : service account 证书私钥
+为最高权限管理员证书:
+1. cat > admin-csr.json <<EOF
+2. {
+3.   "CN": "admin",
+4.   "key": {
+5.     "algo": "rsa",
+6.     "size": 2048
+7.   },
+8.   "names": [
+9.     {
+10.       "C": "CN",
+11.       "ST": "SiChuan",
+12.       "L": "Chengdu",
+13.       "O": "system:masters",
+14.       "OU": "System"
+" class="reference-link">为管理员签发证书
+部署 Master
+- 27 -
+本文档使用 书栈(BookStack.CN) 构建
+
+15.     }
+16.   ]
+17. }
+18. EOF
+19. 
+20. cfssl gencert \
+21.   -ca=ca.pem \
+22.   -ca-key=ca-key.pem \
+23.   -config=ca-config.json \
+24.   -profile=kubernetes \
+25.   admin-csr.json | cfssljson -bare admin
+生成一下两个文件:
+ admin-key.pem : 管理员证书密钥
+ admin.pem : 管理员证书
+给用户签发证书后，用户访问 kube-apiserver 的请求就带上此证书，kube-apiserver 校验成
+功后表示认证成功，但还需要授权才允许访问，kube-apiserver 会提取证书中字段  CN  作为用
+户名，这里用户名叫  admin ，但这只是个名称标识，它有什么权限呢？ admin  是预置最高权限
+的用户名吗？不是的！不过 kube-apiserver 确实预置了一个最高权限的  ClusterRole ，叫做
+ cluster-admin ，还有个预置的  ClusterRoleBinding  将  cluster-admin  这个
+ ClusterRole  与  system:masters  这个用户组关联起来了，所以说我们给用户签发证书只要在
+ system:masters  这个用户组就拥有了最高权限。
+以此类推，我们签发证书时也可以将用户设置到其它用户组，然后为其创建 RBAC 规则来细粒度的控
+制权限，减少安全隐患。
+更多 K8S 预置的 Role 与 RoleBinding 请参考:
+https://kubernetes.io/docs/reference/access-authn-authz/rbac/#default-
+roles-and-role-bindings
+部署 Master 的准备 kubeconfig 操作只需要做一次，将生成的 kubeconfig 拷到每个 Master
+节点上以复用。
+ kubeconfig  主要是各组件以及用户访问 apiserver 的必要配置，包含 apiserver 地址、
+client 证书与 CA 证书等信息。下面介绍为各个组件生成  kubeconfig  的方法。
+前提条件:
+我们使用  kubectl  来辅助生成 kubeconfig，确保 kubectl 已安装。
+" class="reference-link">准备 kubeconfig
+部署 Master
+- 28 -
+本文档使用 书栈(BookStack.CN) 构建
+
+生成 kubeconfig 会用到之前准备证书时创建的证书与密钥，确保这些生成的文件在当前目
+录。
+所有组件都会去连 apiserver，所以首先需要确定你的 apiserver 访问入口的地址:
+如果所有 master 组件都部署在一个节点，它们可以通过 127.0.0.1 这个 IP访问
+apiserver。
+如果 master 有多个节点，但 apiserver 只有一个实例，可以直接写 apiserver 所在机
+器的内网 IP 访问地址。
+如果做了高可用，有多个 apiserver 实例，前面挂了负载均衡器，就可以写负载均衡器的访问
+地址。
+入口地址的域名或IP必须是在之前 为 kube-apiserver 签发证书 的 hosts 列表里。
+这里我们用  APISERVER  这个变量表示 apiserver 的访问地址，其它组件都需要配置这个地址，
+根据自身情况改下这个变量的值:
+1. APISERVER="https://10.200.16.79:6443"
+1. APISERVER="https://10.200.16.79:6443"
+1. kubectl config set-cluster roc \
+2.   --certificate-authority=ca.pem \
+3.   --embed-certs=true \
+4.   --server=${APISERVER} \
+5.   --kubeconfig=kube-controller-manager.kubeconfig
+6. 
+7. kubectl config set-credentials system:kube-controller-manager \
+8.   --client-certificate=kube-controller-manager.pem \
+9.   --client-key=kube-controller-manager-key.pem \
+10.   --embed-certs=true \
+11.   --kubeconfig=kube-controller-manager.kubeconfig
+12. 
+13. kubectl config set-context default \
+14.   --cluster=roc \
+15.   --user=system:kube-controller-manager \
+16.   --kubeconfig=kube-controller-manager.kubeconfig
+确定 apiserver 访问入口
+" class="reference-link">为 kube-controller-manager
+创建 kubeconfig
+部署 Master
+- 29 -
+本文档使用 书栈(BookStack.CN) 构建
+
+17. 
+18. 
+kubectl config use-context default --kubeconfig=kube-controller-
+manager.kubeconfig
+生成文件:
+1. kube-controller-manager.kubeconfig
+1. APISERVER="https://10.200.16.79:6443"
+1. kubectl config set-cluster roc \
+2.   --certificate-authority=ca.pem \
+3.   --embed-certs=true \
+4.   --server=${APISERVER} \
+5.   --kubeconfig=kube-scheduler.kubeconfig
+6. 
+7. kubectl config set-credentials system:kube-scheduler \
+8.   --client-certificate=kube-scheduler.pem \
+9.   --client-key=kube-scheduler-key.pem \
+10.   --embed-certs=true \
+11.   --kubeconfig=kube-scheduler.kubeconfig
+12. 
+13. kubectl config set-context default \
+14.   --cluster=roc \
+15.   --user=system:kube-scheduler \
+16.   --kubeconfig=kube-scheduler.kubeconfig
+17. 
+18. kubectl config use-context default --kubeconfig=kube-scheduler.kubeconfig
+生成文件:
+1. kube-scheduler.kubeconfig
+这里为管理员生成 kubeconfig，方便使用 kubectl 来管理集群:
+" class="reference-link">为 kube-scheduler 创建
+kubeconfig
+" class="reference-link">为管理员创建 kubeconfig
+部署 Master
+- 30 -
+本文档使用 书栈(BookStack.CN) 构建
+
+1. APISERVER="https://10.200.16.79:6443"
+1. kubectl config set-cluster roc \
+2.   --certificate-authority=ca.pem \
+3.   --embed-certs=true \
+4.   --server=${APISERVER} \
+5.   --kubeconfig=admin.kubeconfig
+6. 
+7. kubectl config set-credentials admin \
+8.   --client-certificate=admin.pem \
+9.   --client-key=admin-key.pem \
+10.   --embed-certs=true \
+11.   --kubeconfig=admin.kubeconfig
+12. 
+13. kubectl config set-context default \
+14.   --cluster=roc \
+15.   --user=admin \
+16.   --kubeconfig=admin.kubeconfig
+17. 
+18. kubectl config use-context default --kubeconfig=admin.kubeconfig
+生成文件:
+1. admin.kubeconfig
+将  admin.kubeconfig  放到需要执行 kubectl 的机器的  ~/.kube/config  这个目录，这是
+kubectl 读取 kubeconfig 的默认路径，执行 kubectl 时就不需要指定 kubeconfig 路径了:
+1. mv admin.kubeconfig ~/.kube/config
+1. wget -q --show-progress --https-only --timestamping \
+2. 
+  https://storage.googleapis.com/kubernetes-release/release/v1.16.1/bin/linux/amd
+apiserver \
+3. 
+  https://storage.googleapis.com/kubernetes-release/release/v1.16.1/bin/linux/amd
+manager \
+4. 
+  https://storage.googleapis.com/kubernetes-release/release/v1.16.1/bin/linux/amd
+scheduler
+5. 
+下载安装控制面组件
+部署 Master
+- 31 -
+本文档使用 书栈(BookStack.CN) 构建
+
+6. chmod +x kube-apiserver kube-controller-manager kube-scheduler
+7. mv kube-apiserver kube-controller-manager kube-scheduler /usr/local/bin/
+准备配置相关目录:
+1. sudo mkdir -p /etc/kubernetes/config
+2. sudo mkdir -p /var/lib/kubernetes
+确定集群的集群网段 (Pod IP 占用网段)和 serivce 网段 (service 的 cluster ip 占用网
+段)，它们可以没有交集。
+记集群网段为 CLUSTER_CIDR:
+1. CLUSTER_CIDR=10.10.0.0/16
+记 service 网段为 SERVICE_CIDR:
+1. SERVICE_CIDR=10.32.0.0/16
+放入证书文件:
+1. sudo cp ca.pem ca-key.pem apiserver-key.pem apiserver.pem \
+2.   service-account-key.pem service-account.pem /var/lib/kubernetes/
+记所有 ETCD 实例的访问地址为  ETCD_SERVERS  (替换 IP 为所有 ETCD 节点内网 IP):
+1. ETCD_SERVERS="https://10.200.16.79:2379,https://10.200.17.6:2379,https://10.200.1
+记当前节点内网 IP 为 INTERNAL_IP:
+1. INTERNAL_IP=10.200.16.79
+配置 systemd:
+1. cat <<EOF | sudo tee /etc/systemd/system/kube-apiserver.service
+" class="reference-link">配置控制面组件
+" class="reference-link">配置 kube-apiserver
+部署 Master
+- 32 -
+本文档使用 书栈(BookStack.CN) 构建
+
+2. [Unit]
+3. Description=Kubernetes API Server
+4. Documentation=https://github.com/kubernetes/kubernetes
+5. 
+6. [Service]
+7. ExecStart=/usr/local/bin/kube-apiserver \\
+8.   --enable-bootstrap-token-auth=true \\
+9.   --advertise-address=${INTERNAL_IP} \\
+10.   --allow-privileged=true \\
+11.   --apiserver-count=3 \\
+12.   --audit-log-maxage=30 \\
+13.   --audit-log-maxbackup=3 \\
+14.   --audit-log-maxsize=100 \\
+15.   --audit-log-path=/var/log/audit.log \\
+16.   --authorization-mode=Node,RBAC \\
+17.   --bind-address=0.0.0.0 \\
+18.   --client-ca-file=/var/lib/kubernetes/ca.pem \\
+19. 
+  --enable-admission-
+plugins=NamespaceLifecycle,NodeRestriction,LimitRanger,ServiceAccount,DefaultStor
+20.   --etcd-cafile=/var/lib/kubernetes/ca.pem \\
+21.   --etcd-certfile=/var/lib/kubernetes/apiserver.pem \\
+22.   --etcd-keyfile=/var/lib/kubernetes/apiserver-key.pem \\
+23.   --etcd-servers=${ETCD_SERVERS} \\
+24.   --event-ttl=1h \\
+25.   --kubelet-certificate-authority=/var/lib/kubernetes/ca.pem \\
+26.   --kubelet-client-certificate=/var/lib/kubernetes/apiserver.pem \\
+27.   --kubelet-client-key=/var/lib/kubernetes/apiserver-key.pem \\
+28.   --kubelet-https=true \\
+29.   --runtime-config=api/all \\
+30.   --service-account-key-file=/var/lib/kubernetes/service-account.pem \\
+31.   --service-cluster-ip-range=${SERVICE_CIDR} \\
+32.   --service-node-port-range=30000-32767 \\
+33.   --tls-cert-file=/var/lib/kubernetes/apiserver.pem \\
+34.   --tls-private-key-file=/var/lib/kubernetes/apiserver-key.pem \\
+35.   --v=2
+36. Restart=on-failure
+37. RestartSec=5
+38. 
+39. [Install]
+40. WantedBy=multi-user.target
+41. EOF
+部署 Master
+- 33 -
+本文档使用 书栈(BookStack.CN) 构建
+
+ --enable-bootstrap-token-auth=true  启用 bootstrap token 方式为 kubelet 签发
+证书
+放入 kubeconfig:
+1. sudo cp kube-controller-manager.kubeconfig /var/lib/kubernetes/
+准备 systemd 配置  kube-controller-manager.service :
+1. CLUSTER_CIDR=10.10.0.0/16
+2. SERVICE_CIDR=10.32.0.0/16
+1. cat <<EOF | sudo tee /etc/systemd/system/kube-controller-manager.service
+2. [Unit]
+3. Description=Kubernetes Controller Manager
+4. Documentation=https://github.com/kubernetes/kubernetes
+5. 
+6. [Service]
+7. ExecStart=/usr/local/bin/kube-controller-manager \\
+8.   --address=0.0.0.0 \\
+9.   --cluster-cidr=${CLUSTER_CIDR} \\
+10.   --allocate-node-cidrs \\
+11.   --cluster-name=kubernetes \\
+12.   --cluster-signing-cert-file=/var/lib/kubernetes/ca.pem \\
+13.   --cluster-signing-key-file=/var/lib/kubernetes/ca-key.pem \\
+14.   --kubeconfig=/var/lib/kubernetes/kube-controller-manager.kubeconfig \\
+15.   --leader-elect=true \\
+16.   --root-ca-file=/var/lib/kubernetes/ca.pem \\
+17. 
+  --service-account-private-key-file=/var/lib/kubernetes/service-account-
+key.pem \\
+18.   --service-cluster-ip-range=${SERVICE_CIDR} \\
+19.   --use-service-account-credentials=true \\
+20.   --v=2
+21. Restart=on-failure
+22. RestartSec=5
+23. 
+24. [Install]
+25. WantedBy=multi-user.target
+26. EOF
+" class="reference-link">配置 kube-controller-manager
+部署 Master
+- 34 -
+本文档使用 书栈(BookStack.CN) 构建
+
+所有 kube-controller-manager 实例都使用相同的 systemd service 文件，可以直接将这里创建好的
+拷贝给其它 Master 节点
+放入 kubeconfig:
+1. sudo cp kube-scheduler.kubeconfig /var/lib/kubernetes/
+准备启动配置文件  kube-scheduler.yaml :
+1. cat <<EOF | sudo tee /etc/kubernetes/config/kube-scheduler.yaml
+2. apiVersion: kubescheduler.config.k8s.io/v1alpha1
+3. kind: KubeSchedulerConfiguration
+4. clientConnection:
+5.   kubeconfig: "/var/lib/kubernetes/kube-scheduler.kubeconfig"
+6. leaderElection:
+7.   leaderElect: true
+8. EOF
+准备 systemd 配置  kube-scheduler.service :
+1. cat <<EOF | sudo tee /etc/systemd/system/kube-scheduler.service
+2. [Unit]
+3. Description=Kubernetes Scheduler
+4. Documentation=https://github.com/kubernetes/kubernetes
+5. 
+6. [Service]
+7. ExecStart=/usr/local/bin/kube-scheduler \\
+8.   --config=/etc/kubernetes/config/kube-scheduler.yaml \\
+9.   --v=2
+10. Restart=on-failure
+11. RestartSec=5
+12. 
+13. [Install]
+14. WantedBy=multi-user.target
+15. EOF
+" class="reference-link">配置 kube-scheduler
+启动
+部署 Master
+- 35 -
+本文档使用 书栈(BookStack.CN) 构建
+
+1. sudo systemctl daemon-reload
+2. sudo systemctl enable kube-apiserver kube-controller-manager kube-scheduler
+3. sudo systemctl start kube-apiserver kube-controller-manager kube-scheduler
+kube-apiserver 有些情况也会访问 kubelet，比如获取 metrics、查看容器日志或登录容器，
+这是 kubelet 作为 server， kube-apiserver 作为 client，kubelet 监听的 https，
+kube-apiserver 经过证书认证访问 kubelet，但还需要经过授权才能成功调用接口，我们通过创
+建 RBAC 规则授权 kube-apiserver 访问 kubelet:
+1. cat <<EOF | kubectl apply -f -
+2. apiVersion: rbac.authorization.k8s.io/v1beta1
+3. kind: ClusterRole
+4. metadata:
+5.   annotations:
+6.     rbac.authorization.kubernetes.io/autoupdate: "true"
+7.   labels:
+8.     kubernetes.io/bootstrapping: rbac-defaults
+9.   name: system:kube-apiserver-to-kubelet
+10. rules:
+11.   - apiGroups:
+12.       - ""
+13.     resources:
+14.       - nodes/proxy
+15.       - nodes/stats
+16.       - nodes/log
+17.       - nodes/spec
+18.       - nodes/metrics
+19.     verbs:
+20.       - "*"
+21. EOF
+22. 
+23. cat <<EOF | kubectl apply -f -
+24. apiVersion: rbac.authorization.k8s.io/v1beta1
+25. kind: ClusterRoleBinding
+26. metadata:
+27.   name: system:kube-apiserver
+28.   namespace: ""
+29. roleRef:
+30.   apiGroup: rbac.authorization.k8s.io
+RBAC 授权 kube-apiserver 访问 kubelet
+部署 Master
+- 36 -
+本文档使用 书栈(BookStack.CN) 构建
+
+31.   kind: ClusterRole
+32.   name: system:kube-apiserver-to-kubelet
+33. subjects:
+34.   - apiGroup: rbac.authorization.k8s.io
+35.     kind: User
+36.     name: kubernetes
+37. EOF
+节点 kubelet 通过 Bootstrap Token 调用 apiserver CSR API 请求签发证书，kubelet
+通过 bootstrap token 认证后会在  system:bootstrappers  用户组里，我们还需要给它授权
+调用 CSR API，为这个用户组绑定预定义的  system:node-bootstrapper  这个 ClusterRole
+就可以:
+1. cat <<EOF | kubectl apply -f -
+2. # enable bootstrapping nodes to create CSR
+3. apiVersion: rbac.authorization.k8s.io/v1
+4. kind: ClusterRoleBinding
+5. metadata:
+6.   name: create-csrs-for-bootstrapping
+7. subjects:
+8. - kind: Group
+9.   name: system:bootstrappers
+10.   apiGroup: rbac.authorization.k8s.io
+11. roleRef:
+12.   kind: ClusterRole
+13.   name: system:node-bootstrapper
+14.   apiGroup: rbac.authorization.k8s.io
+15. EOF
+这里的 CSR API 主要用于 kubelet 发起 client 和 server 证书签发请求
+给 kubelet 授权自动审批通过 client 证书的 CSR 请求权限以实现自动创建新的 client 证书
+(之前没创建过 client 证书，通过 bootstrap token 认证后在  system:bootstrappers  用
+户组里):
+1. cat <<EOF | kubectl apply -f -
+2. # Approve all CSRs for the group "system:bootstrappers"
+" class="reference-link">RBAC 授权 kubelet
+创建 CSR 与自动签发和更新证书
+部署 Master
+- 37 -
+本文档使用 书栈(BookStack.CN) 构建
+
+3. apiVersion: rbac.authorization.k8s.io/v1
+4. kind: ClusterRoleBinding
+5. metadata:
+6.   name: auto-approve-csrs-for-group
+7. subjects:
+8. - kind: Group
+9.   name: system:bootstrappers
+10.   apiGroup: rbac.authorization.k8s.io
+11. roleRef:
+12.   kind: ClusterRole
+13.   name: system:certificates.k8s.io:certificatesigningrequests:nodeclient
+14.   apiGroup: rbac.authorization.k8s.io
+15. EOF
+给已启动过的 kubelet 授权自动审批通过 server 证书的 CSR 请求权限以实现自动轮转 client
+证书 (之前创建过证书，在证书还未过期前通过证书认证后在  system:nodes  用户组里):
+1. cat <<EOF | kubectl apply -f -
+2. # Approve renewal CSRs for the group "system:nodes"
+3. apiVersion: rbac.authorization.k8s.io/v1
+4. kind: ClusterRoleBinding
+5. metadata:
+6.   name: auto-approve-renewals-for-nodes
+7. subjects:
+8. - kind: Group
+9.   name: system:nodes
+10.   apiGroup: rbac.authorization.k8s.io
+11. roleRef:
+12.   kind: ClusterRole
+13.   name: system:certificates.k8s.io:certificatesigningrequests:selfnodeclient
+14.   apiGroup: rbac.authorization.k8s.io
+15. EOF
+注意上面两个授权都只是针对于 client 证书签发的自动审批权限，server 证书目前不支持自动审批，需要
+管理员通过  kubectl certificate approve <csr name>  来人工审批或者自己写外部
+controller 来实现自动审批 (kubelet 访问 apiserver 使用 client 证书, apiserver 主动访问
+kubelet 时才会用到 server 证书，通常用于获取 metrics 的场景)
+" class="reference-link">创建 Bootstrap
+Token 与 bootstrap-kubeconfig
+部署 Master
+- 38 -
+本文档使用 书栈(BookStack.CN) 构建
+
+bootstrap token 用于 kubelet 自动请求签发证书，以 Secret 形式存储，不需要事先给
+apiserver 配置静态 token，这样也易于管理。
+创建了 bootstrap token 后我们利用它使用它来创建 bootstrap-kubeconfig 以供后面部署
+Worker 节点用 (kubelet 使用 bootstrap-kubeconfig 自动创建证书)，下面是创建方法:
+1. APISERVER="https://10.200.16.79:6443"
+1. # token id should match regex: [a-z0-9]{6}
+2. TOKEN_ID=$(head -c 16 /dev/urandom | od -An -t x | tr -d ' ' | head -c 6)
+3. # token secret should match regex: [a-z0-9]{16}
+4. TOKEN_SECRET=$(head -c 16 /dev/urandom | od -An -t x | tr -d ' ' | head -c 16)
+5. 
+6. cat <<EOF | kubectl apply -f -
+7. apiVersion: v1
+8. kind: Secret
+9. metadata:
+10.   # Name MUST be of form "bootstrap-token-<token id>", 
+11.   name: bootstrap-token-${TOKEN_ID}
+12.   namespace: kube-system
+13. 
+14. # Type MUST be 'bootstrap.kubernetes.io/token'
+15. type: bootstrap.kubernetes.io/token
+16. stringData:
+17.   # Human readable description. Optional.
+18.   description: "The default bootstrap token used for signing certificates"
+19. 
+20.   # Token ID and secret. Required.
+21.   token-id: "${TOKEN_ID}"
+22.   token-secret: "${TOKEN_SECRET}"
+23. 
+24.   # Expiration. Optional.
+25.   # expiration: 2020-03-10T03:22:11Z
+26. 
+27.   # Allowed usages.
+28.   usage-bootstrap-authentication: "true"
+29.   usage-bootstrap-signing: "true"
+30. 
+31. 
+  # Extra groups to authenticate the token as. Must start with 
+"system:bootstrappers:"
+32.   # auth-extra-groups: system:bootstrappers:worker,system:bootstrappers:ingress
+33. EOF
+部署 Master
+- 39 -
+本文档使用 书栈(BookStack.CN) 构建
+
+34. 
+35. 
+kubectl config --kubeconfig=bootstrap-kubeconfig set-cluster bootstrap --
+server="${APISERVER}" --certificate-authority=ca.pem --embed-certs=true
+36. 
+kubectl config --kubeconfig=bootstrap-kubeconfig set-credentials kubelet-
+bootstrap --token=${TOKEN_ID}.${TOKEN_SECRET}
+37. 
+kubectl config --kubeconfig=bootstrap-kubeconfig set-context bootstrap --
+user=kubelet-bootstrap --cluster=bootstrap
+38. kubectl config --kubeconfig=bootstrap-kubeconfig use-context bootstrap
+bootstrap token 的 secret 格式参考: https://kubernetes.io/docs/reference/access-
+authn-authz/bootstrap-tokens/#bootstrap-token-secret-format
+生成文件:
+1. bootstrap-kubeconfig
+部署 Master
+- 40 -
+本文档使用 书栈(BookStack.CN) 构建
+
+Worker 节点主要安装 kubelet 来管理、运行工作负载 (Master 节点也可以部署为特殊 Worker
+节点来部署关键服务)
+1. sudo apt-get update
+2. sudo apt-get -y install socat conntrack ipset
+默认情况下，如果开启了 swap，kubelet 会启动失败，k8s 节点推荐禁用 swap。
+验证一下是否开启:
+1. sudo swapon --show
+如果输出不是空的说明开启了 swap，使用下面的命令禁用 swap:
+1. sudo swapoff -a
+为了防止开机自动挂载 swap 分区，可以注释 /etc/fstab 中相应的条目:
+1. sudo sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+关闭 SELinux，否则后续 K8S 挂载目录时可能报错 Permission denied：
+1. sudo setenforce 0
+修改配置文件，永久生效:
+1. sudo sed -i "s/SELINUX=enforcing/SELINUX=disabled/g" /etc/selinux/config
+部署 Worker 节点
+安装依赖
+禁用 Swap
+关闭 SELinux
+部署 Worker 节点
+- 41 -
+本文档使用 书栈(BookStack.CN) 构建
+
+1. sudo mkdir -p \
+2.   /etc/cni/net.d \
+3.   /opt/cni/bin \
+4.   /var/lib/kubelet \
+5.   /var/lib/kubernetes \
+6.   /var/run/kubernetes
+下载二进制:
+1. wget -q --show-progress --https-only --timestamping \
+2. 
+  https://github.com/opencontainers/runc/releases/download/v1.0.0-
+rc8/runc.amd64 \
+3. 
+  https://github.com/containerd/containerd/releases/download/v1.3.0/containerd-1.
+amd64.tar.gz \
+4. 
+  https://github.com/kubernetes-sigs/cri-tools/releases/download/v1.16.1/crictl-v
+amd64.tar.gz \
+5. 
+  https://github.com/containernetworking/plugins/releases/download/v0.8.2/cni-plu
+v0.8.2.tgz \
+6. 
+  https://storage.googleapis.com/kubernetes-
+release/release/v1.16.1/bin/linux/amd64/kubelet
+7. 
+8. sudo mv runc.amd64 runc
+安装二进制:
+1. chmod +x crictl kubelet runc
+2. tar -xvf crictl-v1.16.1-linux-amd64.tar.gz
+3. mkdir containerd
+4. tar -xvf containerd-1.3.0.linux-amd64.tar.gz -C containerd
+5. sudo cp crictl kubelet runc /usr/local/bin/
+6. sudo cp containerd/bin/* /bin/
+7. sudo tar -xvf cni-plugins-linux-amd64-v0.8.2.tgz -C /opt/cni/bin/
+准备目录
+下载安装二进制
+配置
+部署 Worker 节点
+- 42 -
+本文档使用 书栈(BookStack.CN) 构建
+
+创建 containerd 启动配置  config.toml :
+1. sudo mkdir -p /etc/containerd/
+2. cat << EOF | sudo tee /etc/containerd/config.toml
+3. [plugins]
+4.   [plugins.cri.containerd]
+5.     snapshotter = "overlayfs"
+6.     [plugins.cri.containerd.default_runtime]
+7.       runtime_type = "io.containerd.runtime.v1.linux"
+8.       runtime_engine = "/usr/local/bin/runc"
+9.       runtime_root = ""
+10. EOF
+创建 systemd 配置  containerd.service :
+1. cat <<EOF | sudo tee /etc/systemd/system/containerd.service
+2. [Unit]
+3. Description=containerd container runtime
+4. Documentation=https://containerd.io
+5. After=network.target
+6. 
+7. [Service]
+8. ExecStartPre=/sbin/modprobe overlay
+9. ExecStart=/bin/containerd
+10. Restart=always
+11. RestartSec=5
+12. Delegate=yes
+13. KillMode=process
+14. OOMScoreAdjust=-999
+15. LimitNOFILE=1048576
+16. LimitNPROC=infinity
+17. LimitCORE=infinity
+18. 
+19. [Install]
+20. WantedBy=multi-user.target
+21. EOF
+放入 这里 创建好的 CA 证书与 这里 创建好的 bootstrap-kubeconfig:
+配置 containerd
+配置 kubelet
+部署 Worker 节点
+- 43 -
+本文档使用 书栈(BookStack.CN) 构建
+
+1. sudo cp ca.pem /var/lib/kubernetes/
+2. sudo cp bootstrap-kubeconfig /var/lib/kubelet/
+事先确定好集群 DNS 的 CLUSTER IP 地址，通常可以用 service 网段的最后一个可用 IP 地
+址:
+1. DNS=10.32.0.255
+创建 kubelet 启动配置  config.yaml :
+1. cat <<EOF | sudo tee /var/lib/kubelet/config.yaml
+2. kind: KubeletConfiguration
+3. apiVersion: kubelet.config.k8s.io/v1beta1
+4. authentication:
+5.   anonymous:
+6.     enabled: false
+7.   webhook:
+8.     enabled: true
+9.   x509:
+10.     clientCAFile: "/var/lib/kubernetes/ca.pem"
+11. authorization:
+12.   mode: Webhook
+13. clusterDomain: "cluster.local"
+14. clusterDNS:
+15.   - "${DNS}"
+16. resolvConf: "/run/systemd/resolve/resolv.conf"
+17. runtimeRequestTimeout: "15m"
+18. rotateCertificates: true
+19. serverTLSBootstrap: true
+20. EOF
+用  NODE  变量表示节点名称，kube-apiserver 所在节点需要能够通过这个名称访问到节点，这
+里推荐直接使用节点内网 IP，不需要配 hosts 就能访问:
+1. NODE="10.200.16.79"
+创建 systemd 配置  kubelet.service :
+1. cat <<EOF | sudo tee /etc/systemd/system/kubelet.service
+2. [Unit]
+3. Description=Kubernetes Kubelet
+部署 Worker 节点
+- 44 -
+本文档使用 书栈(BookStack.CN) 构建
+
+4. Documentation=https://github.com/kubernetes/kubernetes
+5. After=containerd.service
+6. Requires=containerd.service
+7. 
+8. [Service]
+9. ExecStart=/usr/local/bin/kubelet \\
+10.   --config=/var/lib/kubelet/config.yaml \\
+11.   --container-runtime=remote \\
+12.   --container-runtime-endpoint=unix:///var/run/containerd/containerd.sock \\
+13.   --image-pull-progress-deadline=2m \\
+14.   --bootstrap-kubeconfig=/var/lib/kubelet/bootstrap-kubeconfig \\
+15.   --kubeconfig=/var/lib/kubelet/kubeconfig \\
+16.   --network-plugin=cni \\
+17.   --register-node=true \\
+18.   --hostname-override=${NODE} \\
+19.   --v=2
+20. Restart=on-failure
+21. RestartSec=5
+22. 
+23. [Install]
+24. WantedBy=multi-user.target
+25. EOF
+1. sudo systemctl daemon-reload
+2. sudo systemctl enable containerd kubelet
+3. sudo systemctl start containerd kubelet
+配置好 kubectl，执行下 kubectl:
+1. $ kubectl get node
+2. NAME           STATUS     ROLES    AGE   VERSION
+3. 10.200.16.79   NotReady   <none>   11m   v1.16.1
+没有装网络插件，节点状态会是  NotReady ，带  node.kubernetes.io/not-ready:NoSchedule 
+这个污点，默认是无法调度普通 Pod，这个是正常的。后面会装网络插件，通常以 Daemonset 部
+署，使用 hostNetwork，并且容忍这个污点。
+启动
+验证
+部署 Worker 节点
+- 45 -
+本文档使用 书栈(BookStack.CN) 构建
+
+由于之前做过 RBAC 授权 kubelet 创建 CSR 与自动签发和更新证书，kubelet 启动时可以发起
+client 与 server 证书的 CSR 请求，并自动审批通过 client 证书的 CSR 请求，kube-
+controller-manager 在自动执行证书签发，最后 kubelet 可以获取到 client 证书并加入集
+群，我们可以在  /var/lib/kubelet/pki  下面看到签发出来的 client 证书:
+1. ls -l /var/lib/kubelet/pki
+2. total 4
+3. -rw------- 1 root root 1277 Oct 10 20:46 kubelet-client-2019-10-10-20-46-23.pem
+4. 
+lrwxrwxrwx 1 root root   59 Oct 10 20:46 kubelet-client-current.pem -> 
+/var/lib/kubelet/pki/kubelet-client-2019-10-10-20-46-23.pem
+kubeconfig 中引用这里的  kubelet-client-current.pem  这个证书，是一个指向证书 bundle 的
+软连接，包含证书公钥与私钥
+但 server 证书默认无法自动审批，需要管理员人工审批，下面是审批方法，首先看下未审批的
+CSR:
+1. $ kubectl get csr
+2. NAME        AGE     REQUESTOR                  CONDITION
+3. csr-6gkn6   2m4s    system:bootstrap:360483    Approved,Issued
+4. csr-vf285   103s    system:node:10.200.17.6    Pending
+可以看到  system:bootstrap  开头的用户的 CSR 请求已经自动 approve 并签发证书了，这就是因为
+kubelet 使用 bootstrap token 认证后在  system:bootstrappers  用户组，而我们创建了对应
+RBAC 为此用户组授权自动 approve CSR 的权限。下面  system:node  开头的用户的 CSR 请求状态
+是 Pending，需要管理员来 approve。
+1. $ kubectl certificate approve csr-vf285
+2. certificatesigningrequest.certificates.k8s.io/csr-vf285 approved
+3. 
+4. $ ls -l /var/lib/kubelet/pki
+5. total 8
+6. -rw------- 1 root root 1277 Oct 10 20:46 kubelet-client-2019-10-10-20-46-23.pem
+7. 
+lrwxrwxrwx 1 root root   59 Oct 10 20:46 kubelet-client-current.pem -> 
+/var/lib/kubelet/pki/kubelet-client-2019-10-10-20-46-23.pem
+8. -rw------- 1 root root 1301 Oct 10 21:09 kubelet-server-2019-10-10-21-09-15.pem
+9. 
+lrwxrwxrwx 1 root root   59 Oct 10 21:09 kubelet-server-current.pem -> 
+/var/lib/kubelet/pki/kubelet-server-2019-10-10-21-09-15.pem
+签发 kubelet server 证书
+部署 Worker 节点
+- 46 -
+本文档使用 书栈(BookStack.CN) 构建
+
+和 client 证书一样， kubelet-server-current.pem  也是一个指向证书 bundle 的软连接，包含
+证书公钥与私钥，用与 kubelet 监听 10250 端口
+部署 Worker 节点
+- 47 -
+本文档使用 书栈(BookStack.CN) 构建
+
+kube-proxy 会请求 apiserver 获取 Service 及其 Endpoint，将 Service 的 ClUSTER
+IP 与对应 Endpoint 的 Pod IP 映射关系转换成 iptables 或 ipvs 规则写到节点上，实现
+Service 转发。
+部署方法参考 以 Daemonset 方式部署 kube-proxy
+参考 部署 Flannel
+集群 DNS 是 Kubernetes 的核心功能之一，被许多服务所依赖，用于解析集群内 Pod 的 DNS 请
+求，包括:
+解析 service 名称成对应的 CLUSTER IP
+解析 headless service 名称成对应 Pod IP (选取一个 endpoint 的 Pod IP 返回)
+解析外部域名(代理 Pod 请求上游 DNS)
+可以通过部署 kube-dns 或 CoreDNS 作为集群的必备扩展来提供命名服务，推荐使用 CoreDNS，
+效率更高，资源占用率更小，部署方法参考 部署 CoreDNS
+部署关键组件
+部署 kube-proxy
+部署网络插件
+部署集群 DNS
+部署附加组件
+- 48 -
+本文档使用 书栈(BookStack.CN) 构建
+
+部署 CoreDNS
+以 Daemonset 方式部署 kube-proxy
+部署附加组件
+部署附加组件
+- 49 -
+本文档使用 书栈(BookStack.CN) 构建
+
+1. $ git clone https://github.com/coredns/deployment.git
+2. $ cd deployment/kubernetes
+3. $ ls
+4. 
+CoreDNS-k8s_version.md  FAQs.md  README.md  Scaling_CoreDNS.md  
+Upgrading_CoreDNS.md  coredns.yaml.sed  corefile-tool  deploy.sh  migration  
+rollback.sh
+查看 help:
+1. $ ./deploy.sh -h
+2. 
+usage: ./deploy.sh [ -r REVERSE-CIDR ] [ -i DNS-IP ] [ -d CLUSTER-DOMAIN ] [ -t 
+YAML-TEMPLATE ]
+3. 
+4. 
+    -r : Define a reverse zone for the given CIDR. You may specifcy this option 
+more
+5. 
+         than once to add multiple reverse zones. If no reverse CIDRs are 
+defined,
+6. 
+         then the default is to handle all reverse zones (i.e. in-addr.arpa and 
+ip6.arpa)
+7. 
+    -i : Specify the cluster DNS IP address. If not specificed, the IP address 
+of
+8.          the existing "kube-dns" service is used, if present.
+9. 
+    -s : Skips the translation of kube-dns configmap to the corresponding 
+CoreDNS Corefile configuration.
+总体流程是我们使用  deploy.sh  生成 yaml 并保存成  coredns.yaml  文件并执行
+ kubectl apply -f coredns.yaml  进行部署 ，如果要卸载，执行  kubectl delete -f
+coredns.yaml 。
+ deploy.sh  脚本依赖  jq  命令，所以先确保  jq  已安装:
+部署 CoreDNS
+下载部署脚本
+部署脚本用法
+部署
+部署 CoreDNS
+- 50 -
+本文档使用 书栈(BookStack.CN) 构建
+
+1. apt install -y jq
+如果集群中没有 kube-dns 或低版本 coredns，我们直接用  -i  参数指定集群 DNS 的
+CLUSTER IP，这个 IP 是安装集群时就确定好的，示例:
+1. ./deploy.sh -i 10.32.0.255 > coredns.yaml
+2. kubectl apply -f coredns.yaml
+全新部署
+部署 CoreDNS
+- 51 -
+本文档使用 书栈(BookStack.CN) 构建
+
+kube-proxy 可以用二进制部署，也可以用 kubelet 的静态 Pod 部署，但最简单使用
+DaemonSet 部署。直接使用 ServiceAccount 的 token 认证，不需要签发证书，也就不用担心
+证书过期问题。
+先在终端设置下面的变量:
+1. APISERVER="https://10.200.16.79:6443"
+2. CLUSTER_CIDR="10.10.0.0/16"
+ APISERVER  替换为 apiserver 对外暴露的访问地址。有同学想问为什么不直接用集群内的
+访问地址( kubernetes.default  或对应的 CLUSTER IP)，这是一个鸡生蛋还是蛋生鸡的问
+题，CLSUTER IP 本身就是由 kube-proxy 来生成 iptables 或 ipvs 规则转发
+Service 对应 Endpoint 的 Pod IP，kube-proxy 刚启动还没有生成这些转发规则，生成
+规则的前提是 kube-proxy 需要访问 apiserver 获取 Service 与 Endpoint，而由于还
+没有转发规则，kube-proxy 访问 apiserver 的 CLUSTER IP 的请求无法被转发到
+apiserver。
+ CLUSTER_CIDR  替换为集群 Pod IP 的 CIDR 范围，这个在部署 kube-controller-
+manager 时也设置过
+为 kube-proxy 创建 RBAC 权限和配置文件:
+1. cat <<EOF | kubectl apply -f -
+2. apiVersion: v1
+3. kind: ServiceAccount
+4. metadata:
+5.   name: kube-proxy
+6.   namespace: kube-system
+7. 
+8. ---
+9. 
+10. apiVersion: rbac.authorization.k8s.io/v1
+11. kind: ClusterRoleBinding
+12. metadata:
+13.   name: system:kube-proxy
+14. roleRef:
+15.   apiGroup: rbac.authorization.k8s.io
+16.   kind: ClusterRole
+17.   name: system:node-proxier
+以 Daemonset 方式部署 kube-proxy
+以 Daemonset 方式部署 kube-proxy
+- 52 -
+本文档使用 书栈(BookStack.CN) 构建
+
+18. subjects:
+19. - kind: ServiceAccount
+20.   name: kube-proxy
+21.   namespace: kube-system
+22. 
+23. ---
+24. 
+25. kind: ConfigMap
+26. apiVersion: v1
+27. metadata:
+28.   name: kube-proxy
+29.   namespace: kube-system
+30.   labels:
+31.     app: kube-proxy
+32. data:
+33.   kubeconfig.conf: |-
+34.     apiVersion: v1
+35.     kind: Config
+36.     clusters:
+37.     - cluster:
+38. 
+        certificate-authority: 
+/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+39.         server: ${APISERVER}
+40.       name: default
+41.     contexts:
+42.     - context:
+43.         cluster: default
+44.         namespace: default
+45.         user: default
+46.       name: default
+47.     current-context: default
+48.     users:
+49.     - name: default
+50.       user:
+51.         tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+52.   config.conf: |-
+53.     apiVersion: kubeproxy.config.k8s.io/v1alpha1
+54.     kind: KubeProxyConfiguration
+55.     bindAddress: 0.0.0.0
+56.     clientConnection:
+57.       acceptContentTypes: ""
+58.       burst: 10
+以 Daemonset 方式部署 kube-proxy
+- 53 -
+本文档使用 书栈(BookStack.CN) 构建
+
+59.       contentType: application/vnd.kubernetes.protobuf
+60.       kubeconfig: /var/lib/kube-proxy/kubeconfig.conf
+61.       qps: 5
+62.     # 集群中 Pod IP 的 CIDR 范围
+63.     clusterCIDR: ${CLUSTER_CIDR}
+64.     configSyncPeriod: 15m0s
+65.     conntrack:
+66.       # 每个核心最大能跟踪的NAT连接数，默认32768
+67.       maxPerCore: 32768
+68.       min: 131072
+69.       tcpCloseWaitTimeout: 1h0m0s
+70.       tcpEstablishedTimeout: 24h0m0s
+71.     enableProfiling: false
+72.     healthzBindAddress: 0.0.0.0:10256
+73.     iptables:
+74.       # SNAT 所有 Service 的 CLUSTER IP
+75.       masqueradeAll: false
+76.       masqueradeBit: 14
+77.       minSyncPeriod: 0s
+78.       syncPeriod: 30s
+79.     ipvs:
+80.       minSyncPeriod: 0s
+81.       # ipvs 调度类型，默认是 rr，支持的所有类型:
+82.       # rr: round-robin
+83.       # lc: least connection
+84.       # dh: destination hashing
+85.       # sh: source hashing
+86.       # sed: shortest expected delay
+87.       # nq: never queue
+88.       scheduler: rr
+89.       syncPeriod: 30s
+90.     metricsBindAddress: 0.0.0.0:10249
+91.     # 使用 ipvs 模式转发 service
+92.     mode: ipvs
+93.     # 设置 kube-proxy 进程的 oom-score-adj 值，范围 [-1000,1000]
+94.     # 值越低越不容易被杀死，这里设置为 —999 防止发生系统OOM时将 kube-proxy 杀死
+95.     oomScoreAdj: -999
+96. EOF
+在终端设置下面的变量:
+1. ARCH="amd64"
+以 Daemonset 方式部署 kube-proxy
+- 54 -
+本文档使用 书栈(BookStack.CN) 构建
+
+2. VERSION="v1.16.1"
+ VERSION  是 K8S 版本
+ ARCH  是节点的 cpu 架构，大多数用的  amd64 ，即 x86_64。其它常见的还有:
+ arm64 ,  arm ,  ppc64le ,  s390x ，如果你的集群有不同 cpu 架构的节点，可以分别指
+定  ARCH  部署多个 daemonset (每个节点不会有多个 kube-proxy，nodeSelector 会
+根据 cpu 架构来选中节点)
+使用 hostNetwork 以 Daemonset 方式部署 kube-proxy 到每个节点:
+1. cat <<EOF | kubectl apply -f -
+2. apiVersion: apps/v1
+3. kind: DaemonSet
+4. metadata:
+5.   labels:
+6.     k8s-app: kube-proxy-ds-${ARCH}
+7.   name: kube-proxy-ds-${ARCH}
+8.   namespace: kube-system
+9. spec:
+10.   selector:
+11.     matchLabels:
+12.       k8s-app: kube-proxy-ds-${ARCH}
+13.   updateStrategy:
+14.     type: RollingUpdate
+15.   template:
+16.     metadata:
+17.       labels:
+18.         k8s-app: kube-proxy-ds-${ARCH}
+19.     spec:
+20.       priorityClassName: system-node-critical
+21.       containers:
+22.       - name: kube-proxy
+23.         image: k8s.gcr.io/kube-proxy-${ARCH}:${VERSION}
+24.         imagePullPolicy: IfNotPresent
+25.         command:
+26.         - /usr/local/bin/kube-proxy
+27.         - --config=/var/lib/kube-proxy/config.conf
+28.         - --hostname-override=\$(NODE_NAME)
+29.         securityContext:
+30.           privileged: true
+31.         volumeMounts:
+32.         - mountPath: /var/lib/kube-proxy
+以 Daemonset 方式部署 kube-proxy
+- 55 -
+本文档使用 书栈(BookStack.CN) 构建
+
+33.           name: kube-proxy
+34.         - mountPath: /run/xtables.lock
+35.           name: xtables-lock
+36.           readOnly: false
+37.         - mountPath: /lib/modules
+38.           name: lib-modules
+39.           readOnly: true
+40.         env:
+41.           - name: NODE_NAME
+42.             valueFrom:
+43.               fieldRef:
+44.                 fieldPath: spec.nodeName
+45.       hostNetwork: true
+46.       serviceAccountName: kube-proxy
+47.       volumes:
+48.       - name: kube-proxy
+49.         configMap:
+50.           name: kube-proxy
+51.       - name: xtables-lock
+52.         hostPath:
+53.           path: /run/xtables.lock
+54.           type: FileOrCreate
+55.       - name: lib-modules
+56.         hostPath:
+57.           path: /lib/modules
+58.       tolerations:
+59.       - key: CriticalAddonsOnly
+60.         operator: Exists
+61.       - operator: Exists
+62.       nodeSelector:
+63.         beta.kubernetes.io/arch: ${ARCH}
+64. EOF
+以 Daemonset 方式部署 kube-proxy
+- 56 -
+本文档使用 书栈(BookStack.CN) 构建
+
+ElasticSearch 与 Kibana
+常见应用部署
+常见应用部署
+- 57 -
+本文档使用 书栈(BookStack.CN) 构建
+
+使用 elastic-oparator 部署
+Elasticsearch 与 Kibana
+ElasticSearch 与 Kibana
+- 58 -
+本文档使用 书栈(BookStack.CN) 构建
+
+参考官方文档:
+https://www.elastic.co/cn/elasticsearch-kubernetes
+https://www.elastic.co/cn/blog/introducing-elastic-cloud-on-kubernetes-
+the-elasticsearch-operator-and-beyond
+一键安装:
+1. 
+kubectl apply -f https://download.elastic.co/downloads/eck/0.9.0/all-in-
+one.yaml
+准备一个命名空间用来部署 elasticsearch，这里我们使用  monitoring  命名空间:
+1. kubectl create ns monitoring
+创建 CRD 资源部署 Elasticsearch，最简单的部署:
+1. cat <<EOF | kubectl apply -f -
+2. apiVersion: elasticsearch.k8s.elastic.co/v1alpha1
+3. kind: Elasticsearch
+4. metadata:
+5.   name: es
+6.   namespace: monitoring
+7. spec:
+8.   version: 7.2.0
+9.   nodes:
+10.   - nodeCount: 1
+11.     config:
+12.       node.master: true
+13.       node.data: true
+14.       node.ingest: true
+15. EOF
+使用 elastic-oparator 部署 Elasticsearch 和
+Kibana
+安装 elastic-operator
+部署 Elasticsearch
+使用 elastic-oparator 部署
+- 59 -
+本文档使用 书栈(BookStack.CN) 构建
+
+多节点部署高可用 elasticsearch 集群:
+1. cat <<EOF | kubectl apply -f -
+2. apiVersion: elasticsearch.k8s.elastic.co/v1alpha1
+3. kind: Elasticsearch
+4. metadata:
+5.   name: es
+6.   namespace: monitoring
+7. spec:
+8.   version: 7.2.0
+9.   nodes:
+10.   - nodeCount: 1
+11.     config:
+12.       node.master: true
+13.       node.data: true
+14.       node.ingest: true
+15.     volumeClaimTemplates:
+16.     - metadata:
+17.         name: elasticsearch-data
+18.       spec:
+19.         accessModes:
+20.         - ReadWriteOnce
+21.         resources:
+22.           requests:
+23.             storage: 100Gi
+24.     podTemplate:
+25.       spec:
+26.         affinity:
+27.           podAntiAffinity:
+28.             requiredDuringSchedulingIgnoredDuringExecution:
+29.             - labelSelector:
+30.                 matchExpressions:
+31.                 - key: elasticsearch.k8s.elastic.co/cluster-name
+32.                   operator: In
+33.                   values:
+34.                   - es
+35.               topologyKey: "kubernetes.io/hostname"
+36.   - nodeCount: 2
+37.     config:
+38.       node.master: false
+39.       node.data: true
+使用 elastic-oparator 部署
+- 60 -
+本文档使用 书栈(BookStack.CN) 构建
+
+40.       node.ingest: true
+41.     volumeClaimTemplates:
+42.     - metadata:
+43.         name: elasticsearch-data
+44.       spec:
+45.         accessModes:
+46.         - ReadWriteOnce
+47.         resources:
+48.           requests:
+49.             storage: 80Gi
+50.     podTemplate:
+51.       spec:
+52.         affinity:
+53.           podAntiAffinity:
+54.             requiredDuringSchedulingIgnoredDuringExecution:
+55.             - labelSelector:
+56.                 matchExpressions:
+57.                 - key: elasticsearch.k8s.elastic.co/cluster-name
+58.                   operator: In
+59.                   values:
+60.                   - es
+61.               topologyKey: kubernetes.io/hostname
+62. EOF
+ metadata.name  是 elasticsearch 集群的名称
+ nodeCount  大于 1 (多副本) 并且加了 pod 反亲和性 (避免调度到同一个节点) 可避免单
+点故障，保证高可用
+ node.master  为 true 表示是 master 节点
+可根据需求调整  nodeCount  (副本数量) 和  storage  (数据磁盘容量)
+反亲和性的  labelSelector.matchExpressions.values  中写 elasticsearch 集群名称，
+更改集群名称时记得这里要也改下
+强制开启 ssl 不允许关闭: https://github.com/elastic/cloud-on-
+k8s/blob/576f07faaff4393f9fb247e58b87517f99b08ebd///pkg/controller/elas
+ticsearch/settings/fields.go#L51
+查看部署状态:
+1. $ kubectl -n monitoring get es
+2. NAME   HEALTH   NODES   VERSION   PHASE         AGE
+3. es     green    3       7.2.0     Operational   3m
+4. $
+5. $ kubectl -n monitoring get pod -o wide
+使用 elastic-oparator 部署
+- 61 -
+本文档使用 书栈(BookStack.CN) 构建
+
+6. 
+NAME                         READY   STATUS    RESTARTS   AGE    IP            
+NODE        NOMINATED NODE
+7. 
+es-es-c7pwnt5kz8             1/1     Running   0          4m3s   172.16.4.6    
+10.0.0.24   <none>
+8. 
+es-es-qpk7kkpdxh             1/1     Running   0          4m3s   172.16.5.6    
+10.0.0.48   <none>
+9. 
+es-es-vl56nv78hd             1/1     Running   0          4m3s   172.16.3.9    
+10.0.0.32   <none>
+10. $
+11. $ kubectl -n monitoring get svc
+12. NAME             TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE
+13. es-es-http       ClusterIP   172.16.15.74   <none>        9200/TCP   7m3s
+elasticsearch 的默认用户名是 elastic，获取密码:
+1. 
+$ kubectl -n monitoring get secret es-es-elastic-user -o 
+jsonpath='{.data.elastic}' | base64 -d
+2. rhd6jdw9brbj69d49k46px9j
+后续连接 elasticsearch 时就用这对用户名密码:
+username: elastic
+password: rhd6jdw9brbj69d49k46px9j
+还可以再部署一个 Kibana 集群作为 UI:
+1. cat <<EOF | kubectl apply -f -
+2. apiVersion: kibana.k8s.elastic.co/v1alpha1
+3. kind: Kibana
+4. metadata:
+5.   name: kibana
+6.   namespace: monitoring
+7. spec:
+8.   version: 7.2.0
+9.   nodeCount: 2
+10.   podTemplate:
+11.     spec:
+12.       affinity:
+13.         podAntiAffinity:
+14.           requiredDuringSchedulingIgnoredDuringExecution:
+部署 Kibana
+使用 elastic-oparator 部署
+- 62 -
+本文档使用 书栈(BookStack.CN) 构建
+
+15.           - labelSelector:
+16.               matchExpressions:
+17.               - key: kibana.k8s.elastic.co/name
+18.                 operator: In
+19.                 values:
+20.                 - kibana
+21.             topologyKey: kubernetes.io/hostname
+22.   elasticsearchRef:
+23.     name: es
+24.     namespace: monitoring
+25. EOF
+ nodeCount  大于 1 (多副本) 并且加了 pod 反亲和性 (避免调度到同一个节点) 可避免单
+点故障，保证高可用
+反亲和性的  labelSelector.matchExpressions.values  中写 kibana 集群名称，更改集群
+名称时记得这里要也改下
+ elasticsearchRef  引用已经部署的 elasticsearch 集群， name  和  namespace  分
+别填部署的 elasticsearch 集群名称和命名空间
+查看部署状态:
+1. $ kubectl -n monitoring get kb
+2. NAME     HEALTH   NODES   VERSION   AGE
+3. kibana   green    2       7.2.0     3m
+4. $
+5. $ kubectl -n monitoring get pod -o wide
+6. 
+NAME                         READY   STATUS    RESTARTS   AGE    IP            
+NODE        NOMINATED NODE
+7. 
+kibana-kb-58dc8994bf-224bl   1/1     Running   0          93s    172.16.0.92   
+10.0.0.3    <none>
+8. 
+kibana-kb-58dc8994bf-nchqt   1/1     Running   0          93s    172.16.3.10   
+10.0.0.32   <none>
+9. $
+10. $ kubectl -n monitoring get svc
+11. NAME             TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE
+12. kibana-kb-http   ClusterIP   172.16.8.71    <none>        5601/TCP   4m35s
+还需要为 Kibana 暴露一个外部地址好让我们能从从浏览器访问，可以创建 Service 或 Ingress
+来实现。
+默认也会为 Kibana 创建 ClusterIP 类型的 Service，可以在 Kibana 的 CRD spec 里加 service
+来自定义 service type 为 LoadBalancer 实现对外暴露，但我不建议这么做，因为一旦删除 CRD 对
+使用 elastic-oparator 部署
+- 63 -
+本文档使用 书栈(BookStack.CN) 构建
+
+象，service 也会被删除，在云上通常意味着对应的负载均衡器也被自动删除，IP 地址就会被回收，下次再
+创建的时候 IP 地址就变了，所以推荐对外暴露方式使用单独的 Service 或 Ingress 来维护
+先看下当前 kibana 的 service:
+1. $ kubectl -n monitoring get svc -o yaml kibana-kb-http
+2. apiVersion: v1
+3. kind: Service
+4. metadata:
+5.   creationTimestamp: 2019-09-17T09:20:04Z
+6.   labels:
+7.     common.k8s.elastic.co/type: kibana
+8.     kibana.k8s.elastic.co/name: kibana
+9.   name: kibana-kb-http
+10.   namespace: monitoring
+11.   ownerReferences:
+12.   - apiVersion: kibana.k8s.elastic.co/v1alpha1
+13.     blockOwnerDeletion: true
+14.     controller: true
+15.     kind: Kibana
+16.     name: kibana
+17.     uid: 54fd304b-d92c-11e9-89f7-be8690a7fdcf
+18.   resourceVersion: "5668802758"
+19.   selfLink: /api/v1/namespaces/monitoring/services/kibana-kb-http
+20.   uid: 55a1198f-d92c-11e9-89f7-be8690a7fdcf
+21. spec:
+22.   clusterIP: 172.16.8.71
+23.   ports:
+24.   - port: 5601
+25.     protocol: TCP
+26.     targetPort: 5601
+27.   selector:
+28.     common.k8s.elastic.co/type: kibana
+29.     kibana.k8s.elastic.co/name: kibana
+30.   sessionAffinity: None
+31.   type: ClusterIP
+32. status:
+33.   loadBalancer: {}
+仅保留端口和  selector  的配置，如果集群支持  LoadBanlancer  类型的 service，可以修
+创建 Service
+使用 elastic-oparator 部署
+- 64 -
+本文档使用 书栈(BookStack.CN) 构建
+
+改 service 的 type 为  LoadBalancer :
+1. cat <<EOF | kubectl apply -f -
+2. apiVersion: v1
+3. kind: Service
+4. metadata:
+5.   name: kibana
+6.   namespace: monitoring
+7. spec:
+8.   ports:
+9.   - port: 443
+10.     protocol: TCP
+11.     targetPort: 5601
+12.   selector:
+13.     common.k8s.elastic.co/type: kibana
+14.     kibana.k8s.elastic.co/name: kibana
+15.   type: LoadBalancer
+16. EOF
+拿到负载均衡器的 IP 地址:
+1. $ kubectl -n monitoring get svc
+2. 
+NAME             TYPE           CLUSTER-IP     EXTERNAL-IP     PORT(S)         
+AGE
+3. 
+kibana           LoadBalancer   172.16.10.71   150.109.27.60   443:32749/TCP   
+47s
+4. 
+kibana-kb-http   ClusterIP      172.16.15.39   <none>          5601/TCP        
+118s
+在浏览器访问: https://150.109.27.60:443
+输入之前部署 elasticsearch 的用户名密码进行登录
+使用 elastic-oparator 部署
+- 65 -
+本文档使用 书栈(BookStack.CN) 构建

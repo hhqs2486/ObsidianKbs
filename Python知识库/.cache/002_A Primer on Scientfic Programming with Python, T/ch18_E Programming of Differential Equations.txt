@@ -1,0 +1,3503 @@
+Programming of Diﬀerential Equations
+E
+Appendices C and D give a brief introduction diﬀerential equations,
+with a focus on a few speciﬁc equations and programs that are tailored
+to these equations. The present appendix views diﬀerential equations
+from a more abstract point of view, which allows us to formulate nu-
+merical methods and create general software that are applicable to
+a large family of widely diﬀerent problems from physics, biology, ﬁ-
+nance, and numerous other disciplines. More speciﬁcally, the abstract
+view is motivated by the slogan implement once, apply anywhere. We
+have in fact met this principle several places in the book: diﬀerenti-
+ation (f′′(x)) in Chapters 3.1.9 and 7.3.2, integration (
+ b
+a f(x)dx) in
+Chapters 3.4.2 and 7.3.3, and root ﬁnding (f(x) = 0) in Chapter 4.6.2
+and Appendix A.1.10. In all of the referred implementations, we work
+with a general function f(x) so that any problem can be solved by
+the same piece of code as long as we can deﬁne the problem in terms
+of a function f(x). This is an excellent demonstration of the power of
+mathematics, and this abstract view of problems in terms of some f(x)
+is especially powerful in numerical methods and programming. Now we
+shall formulate diﬀerential equations on the abstract form u′ = f(u, t)
+and create software that can solve any equation for which the f(u, t)
+is given.
+Before studying the present appendix, the reader should have some
+familiarity with diﬀerential equations at the level of Appendix C. Ap-
+pendix D can also be advantageous to read, although this is not strictly
+required. Fundamental programming skills corresponding to Chap-
+ters 1–5 are required for the basic material in this appendix. However,
+we also use classes to a large extent, which demands familiarity with
+the concepts in Chapter 7. The material on object-oriented program-
+ming in Appendix E.2.5 requires good knowledge of class hierarchies
+from Chapter 9.
+H.P. Langtangen, A Primer on Scientiﬁc Programming with Python,
+Texts in Computational Science and Engineering 6,
+DOI 10.1007/978-3-642-30293-0, c⃝Springer-Verlag Berlin Heidelberg 2012
+667
+
+668
+E Programming of Diﬀerential Equations
+All computer codes associated with this appendix is found in
+src/ode2.
+E.1 Scalar Ordinary Diﬀerential Equations
+We shall in this appendix work with ordinary diﬀerential equations
+(ODEs) written on the abstract form
+u′(t) = f
+
+u(t), t
+
+.
+(E.1)
+There is an inﬁnite number of solutions to such an equation, so to make
+the solution u(t) unique, we must also specify an initial condition
+u(0) = U0.
+(E.2)
+Given f(u, t) and U0, our task is to compute u(t).
+A ﬁrst sight, (E.1) is only a ﬁrst-order diﬀerential equation, since
+only u′ and not higher-order derivatives like u′′ are present in the equa-
+tion. However, equations with higher-order derivatives can also be writ-
+ten on the abstract form (E.1) by introducing auxiliary variables and
+interpreting u and f as vector functions. This rewrite of the original
+equation leads to a system of ﬁrst-order diﬀerential equations and will
+be treated in Appendix E.2. The bottom line is that a very large family
+of diﬀerential equations can be written as (E.1). Forthcoming examples
+will provide evidence.
+We shall ﬁrst assume that u(t) is a scalar function, meaning that it
+has one number as value, which can be represented as a float object
+in Python. We then refer to (E.1) as a scalar diﬀerential equation. The
+counterpart vector function means that u is a vector of scalar functions
+and the equation is known as a system of ODEs (also known as a vector
+ODE). The value of a vector function is a list or array in a program,
+not more complicated than explained in Chapter 5.
+E.1.1 Examples on Right-Hand-Side Functions
+To write a speciﬁc diﬀerential equation on the form (E.1) we need to
+identify what the f function is. Say the equation reads
+y2y′ = x,
+y(0) = Y,
+with y(x) as the unknown function. First, we need to introduce u and
+t as new symbols: u = y, t = x. This gives the equivalent equation
+u2u′ = t and the initial condition u(0) = Y . Second, the quantity u′
+must be isolated on the left-hand side of the equation in order to bring
+the equation on the form (E.1). Dividing by u2 gives
+u′ = tu−2.
+
+E.1 Scalar Ordinary Diﬀerential Equations
+669
+This ﬁts the form (E.1), and the f(u, t) function is simply the formula
+involving u and t on the right-hand side:
+f(u, t) = tu−2.
+The t parameter is very often absent on the right-hand side such that
+f involves u only.
+Below is a set of commonly arising scalar diﬀerential equations and
+their corresponding f functions.
+1. Exponential growth of money or populations:
+u′ = αu,
+(E.3)
+where α > 0 is a given constant expressing the growth rate of u.
+f(u, t) = αu.
+(E.4)
+2. Logistic growth of a population under limited resources:
+u′ = αu
+
+1 −u
+R
+
+,
+(E.5)
+where α > 0 is the initial growth rate and R is the maximum possible
+value of u.
+f(u, t) = αu
+
+1 −u
+R
+
+.
+(E.6)
+3. Radioactive decay of a substance:
+u′ = −au,
+(E.7)
+where a > 0 is the rate of decay of u.
+f(u, t) = −au.
+(E.8)
+4. Body falling in a ﬂuid:
+u′ + b|u|u = g,
+(E.9)
+where b > 0 models the ﬂuid resistance, g is the acceleration of
+gravity, and u is the body’s velocity (see Exercise E.11 on page 709).
+f(u, t) = −b|u|u + g.
+(E.10)
+5. Newton’s law of cooling:
+u′ = −h(u −s),
+(E.11)
+where u is the temperature of a body, h > 0 is a proportionality
+
+670
+E Programming of Diﬀerential Equations
+constant, normally to be estimated from experiments, and s is the
+temperature of the surroundings.
+f(u, t) = −h(u −s).
+(E.12)
+E.1.2 The Forward Euler Scheme
+Our task now is to deﬁne numerical methods for solving equations of
+the form (E.1). The simplest such method is the Forward Euler scheme.
+Equation (E.1) is to be solved for t ∈(0, T], and we seek the solution u
+at discrete time points ti = iΔt, i = 1, 2, . . . , n. Clearly, tn = nΔt = T,
+determining the number of points n as T/Δt. The corresponding values
+u(ti) are often abbreviated as ui, just for notational simplicity.
+Equation (E.1) is to be fulﬁlled at all time points t ∈(0, T]. However,
+when we solve (E.1) numerically, we only require the equation to be
+satisﬁed at the discrete time points t1, t2, . . . , tn. That is,
+u′(tk) = f
+
+u(tk), tk
+
+,
+for k = 1, . . . , n. The fundamental idea of the Forward Euler scheme is
+to approximate u′(tk) by a one-sided, forward diﬀerence:
+u′(tk) ≈u(tk+1) −u(tk)
+Δt
+= uk+1 −uk
+Δt
+.
+This removes the derivative and leaves us with the equation
+uk+1 −uk
+Δt
+= f(uk, tk).
+We assume that uk is already computed, so that the only unknown in
+this equation is uk+1, which we can solve for:
+uk+1 = uk + Δtf(uk, tk).
+(E.13)
+This is the Forward Euler scheme for a scalar ﬁrst-order diﬀerential
+equation u′ = f(u, t).
+Equation (E.13) has a recursive nature. We start with the initial
+condition, u0 = U0, and compute u1 as
+u1 = u0 + Δtf(u0, t0).
+Then we can continue with
+u2 = u1 + Δtf(u1, t1),
+and then with u3 and so forth. This recursive nature of the method
+also demonstrates that we must have an initial condition – otherwise
+the method cannot start.
+
+E.1 Scalar Ordinary Diﬀerential Equations
+671
+E.1.3 Function Implementation
+The next task is to write a general piece of code that implements
+the Forward Euler scheme (E.13). The complete original (continuous)
+mathematical problem is stated as
+u′ = f(u, t), t ∈(0, T],
+u(0) = U0,
+(E.14)
+while the discrete numerical problem reads
+uk+1 = uk+Δtf(uk, tk), tk = kΔt, k = 1, . . . , n, n = T/Δt,
+u0 = U0.
+(E.15)
+We see that the input data to the numerical problem consist of f, U0,
+T, and Δt or n. The output consists of u1, u2, . . . , un and the corre-
+sponding set of time points t1, t2, . . . , tn.
+Let us implement The Forward Euler scheme in a function
+ForwardEuler that takes f, U0, T, and n as input, and that returns
+u0, . . . , un and t0, . . . , tn:
+def ForwardEuler(f, U0, T, n):
+"""Solve u’=f(u,t), u(0)=U0, with n steps until t=T."""
+import numpy as np
+t = np.zeros(n+1)
+u = np.zeros(n+1)
+# u[k] is the solution at time t[k]
+u[0] = U0
+t[0] = 0
+dt = T/float(n)
+for k in range(n):
+t[k+1] = t[k] + dt
+u[k+1] = u[k] + dt*f(u[k], t[k])
+return u, t
+Note the close correspondence between the implementation and the
+mathematical speciﬁcation of the problem to be solved. The argument
+f to the ForwardEuler function must be a Python function f(u, t)
+implementing the f(u, t) function in the diﬀerential equation (i.e., f is
+the deﬁnition of the equation to be solved). For example, we may solve
+u′ = u for t ∈(0, 3), with u(0) = 1, and Δt = 0.1 by the following code
+utilizing the ForwardEuler function:
+def f(u, t):
+return u
+u, t = ForwardEuler(f, U0=1, T=3, n=30)
+With the u and t arrays we can easily plot the solution or perform
+data analysis on the numbers.
+E.1.4 Verifying the Implementation
+The simplest, yet very eﬀective, way to verify the implementation is to
+compute a couple of time steps by hand, say u1 and u2:
+
+672
+E Programming of Diﬀerential Equations
+u1 = 1 + 0.1 · 1 = 1.1,
+u2 = 1.1 + 0.1 · 1.1 = 1.21.
+These values are to be compared with the numbers produced by the
+code:
+u, t = ForwardEuler(f, U0=1, T=0.2, n=2)
+print u
+Another eﬀective way to verify the code, is to ﬁnd a problem that
+can be solved exactly by the numerical method we use. That is, we seek
+a problem where we do not have to deal with mathematical approxi-
+mation errors when comparing the exact solution with that produced
+by the program. It turns out that if the solution u(t) is linear in t, the
+Forward Euler method will reproduce this solution exactly. Therefore,
+we choose u(t) = at + U0, with (e.g.) a = 0.2 and U0 = 3. The cor-
+responding f is the derivative of u, i.e., f(u, t) = a. This is obviously
+a very simple right-hand side without any u or t. However, we can
+make f more complicated by adding something that is zero, e.g., some
+expression with u −(at + U0), say (u −(at + U0))4, so that
+f(u, t) = a +
+
+u −(at + U0)
+4.
+(E.16)
+We implement our special f and the exact solution in two functions
+f1 and u_solution_f1, and write out the numerical and exact solutions
+for comparison:
+def f1(u, t):
+return 0.2 + (u - u_solution_f1(t))**4
+def u_solution_f1(t):
+return 0.2*t + 3
+u, t = ForwardEuler(f1, U0=3, T=3, n=5)
+print ’Numerical:’, u
+print ’Exact:
+’, u_solution_f1(t)
+The output becomes
+Numerical: [ 3.
+3.12
+3.24
+3.36
+3.48
+3.6 ]
+Exact:
+[ 3.
+3.12
+3.24
+3.36
+3.48
+3.6 ]
+showing that the code works as it should in this example.
+E.1.5 From Discrete to Continuous Solution
+The numerical solution of an ODE is a discrete function in the sense
+that we only know the function values u0, u1, ldots, uN at some discrete
+points t0, t1, . . . , tN in time. What if we want to know u between two
+computed points? For example, what is u between ti and ti+1, say at
+the midpoint t = ti+ 1
+2Δt? One can use interpolation techniques to ﬁnd
+this value u. The simplest interpolation technique is to assume that u
+
+E.1 Scalar Ordinary Diﬀerential Equations
+673
+varies linearly on each time interval. On the interval [ti, ti+1] the linear
+variation of u becomes
+u(t) = ui + ui+1 −ui
+ti+1 −ti
+(t −ti).
+We can then evaluate, e.g., u(ti + 1
+2Δt) from this formula and show
+that it becomes (ui + ui+1)/2.
+The function scitools.std.wrap2callable can automatically convert
+a discrete function to a continuous function:
+from scitools.std import wrap2callable
+u_cont = wrap2callable((t, u))
+From the arrays t and u, wrap2callable constructs a continuous func-
+tion based on linear interpolation. The result u_cont is a Python func-
+tion that we can evaluate for any value of its argument t:
+dt = t[i+1] - t[i]
+t = t[i] + 0.5*dt
+value = u_cont(t)
+In general, the wrap2callable function is handy when you have com-
+puted some discrete function and you want to evaluate this discrete
+function at any point.
+E.1.6 Switching Numerical Method
+There are numerous alternative numerical methods for solving (E.13).
+One of the simplest is Heun’s method:
+u∗= uk + Δtf(uk, tk),
+(E.17)
+uk+1 = uk + 1
+2Δtf(uk, tk) + 1
+2Δtf(u∗, tk+1).
+(E.18)
+This scheme is easily implemented in the ForwardEuler function by
+replacing the Forward Euler formula
+u[k+1] = u[k] + dt*f(u[k], t[k])
+by (E.17) and (E.18):
+u_star = u[k] + dt*f(u[k], t[k])
+u[k+1] = u[k] + 0.5*dt*f(u[k], t[k]) + 0.5*dt*f(u_star, t[k+1])
+We can, especially if f is expensive to calculate, eliminate a call f(u[k],
+t[k]) by introducing an auxiliary variable:
+f_k = f(u[k], t[k])
+u_star = u[k] + dt*f_k
+u[k+1] = u[k] + 0.5*dt*f_k + 0.5*dt*f(u_star, t[k+1])
+
+674
+E Programming of Diﬀerential Equations
+E.1.7 Class Implementation
+As an alternative to the general
+ForwardEuler function in Ap-
+pendix E.1.3, we shall now implement the numerical method in a
+class. This requires, of course, familiarity with the class concept from
+Chapter 7.
+Class Wrapping of a Function. Let us start with simply wrapping
+the ForwardEuler function in a class ForwardEuler_v1 (the postﬁx _v1
+indicates that this is the very ﬁrst class version). That is, we take the
+code in the ForwardEuler function and distribute it among methods in
+a class.
+The constructor can store the input data of the problem and initialize
+data structures, while a solve method can perform the time stepping
+procedure:
+import numpy as np
+class ForwardEuler_v1:
+def __init__(self, f, U0, T, n):
+self.f, self.U0, self.T, self.n = f, dt, U0, T, n
+self.dt = T/float(n)
+self.u = np.zeros(n+1)
+self.t = np.zeros(n+1)
+def solve(self):
+"""Compute solution for 0 <= t <= T."""
+self.u[0] = float(self.U0)
+self.t[0] = float(0)
+for k in range(self.n):
+self.k = k
+self.t[k+1] = self.t[k] + self.dt
+self.u[k+1] = self.advance()
+return self.u, self.t
+def advance(self):
+"""Advance the solution one time step."""
+u, dt, f, k, t = \
+self.u, self.dt, self.f, self.k, self.t
+u_new = u[k] + dt*f(u[k], t[k])
+return u_new
+Note that we have introduced a third class method, advance, which
+isolates the numerical scheme. The motivation is that, by observa-
+tion, the constructor and the solve method are completely general
+as they remain unaltered if we change the numerical method (at least
+this is true for a wide class of numerical methods). The only diﬀer-
+ence between various numerical schemes is the updating formula. It
+is therefore a good programming habit to isolate the updating for-
+mula so that another scheme can be implemented by just replac-
+ing the advance method – without touching any other parts of the
+class.
+
+E.1 Scalar Ordinary Diﬀerential Equations
+675
+Also note that we in the advance method “strip oﬀ” the self preﬁx
+by introducing local symbols with exactly the same names as in the
+mathematical speciﬁcation of the numerical method. This is important
+if we want a one-to-one correspondence between the mathematics and
+the implementation.
+Application of the class goes as follows, here for the model problem
+u′ = u, u(0) = 1:
+def u_exp():
+def f(u, t):
+return u
+solver = ForwardEuler_v1(f, U0=1, T=3, n=15)
+u, t = solver.solve()
+u_exp()
+Switching Numerical Method.
+Implementing, for example, Heun’s
+method (E.17)–(E.18) is a matter of replacing the advance method
+by
+def advance(self):
+"""Advance the solution one time step."""
+u, dt, f, k, t = \
+self.u, self.dt, self.f, self.k, self.t
+u_star = u[k] + dt*f(u[k], t[k])
+u_new = u[k] + \
+0.5*dt*f(u[k], t[k]) + 0.5*dt*f(u_star, t[k+1])
+return u_new
+Checking input data is always a good habit, and in the present class
+the constructor may test that the f argument is indeed an object that
+can be called as a function (cf. page 361):
+if not callable(f):
+raise TypeError(’f is %s, not a function’ % type(f))
+A More Flexible Class. Say we solve u′ = f(u, t) from t = 0 to t = T1.
+We can continue the solution for t > T1 simply by restarting the whole
+procedure with initial conditions at t = T1. Hence, the implementation
+should allow several consequtive solve steps.
+Another fact is that the time step Δt does not need to be constant.
+Allowing small Δt in regions where u changes rapidly and letting Δt
+be larger in areas where u is slowly varying, is an attractive solution
+strategy. The Forward Euler method can be reformulated for a variable
+time step size tk+1 −tk:
+uk+1 = uk + (tk+1 −tk)f(uk, tk).
+(E.19)
+Similarly, Heun’s method and many other methods can be formulated
+with a variable step size simply by replacing Δt with tk+1 −tk. It then
+
+676
+E Programming of Diﬀerential Equations
+makes sense for the user to provide a list or array with time points for
+which a solution is sought: t0, t1, . . . , tn. The solve method can accept
+such a set of points.
+The mentioned extensions lead to a modiﬁed class:
+class ForwardEuler:
+def __init__(self, f):
+if not callable(f):
+raise TypeError(’f is %s, not a function’ % type(f))
+self.f = f
+def set_initial_condition(self, U0):
+self.U0 = float(U0)
+def solve(self, time_points):
+"""Compute u for t values in time_points list."""
+self.t = np.asarray(time_points)
+self.u = np.zeros(len(time_points))
+# Assume self.t[0] corresponds to self.U0
+self.u[0] = self.U0
+for k in range(len(self.t)-1):
+self.k = k
+self.u[k+1] = self.advance()
+return self.u, self.t
+def advance(self):
+"""Advance the solution one time step."""
+u, f, k, t = self.u, self.f, self.k, self.t
+dt = t[k+1] - t[k]
+u_new = u[k] + dt*f(u[k], t[k])
+return u_new
+Here is a veriﬁcation of the implementation, ﬁrst integrating the equa-
+tion corresponding to the f in (E.16) for the time points 0, 0.4, 1, 1.2,
+and then continuing the solution process for t1 = 1.4 and t2 = 1.5 with
+t0 = 1.2 as initial point:
+def _verify_f1_ForwardEuler():
+U0 = 3
+solver = ForwardEuler(_f1)
+solver.set_initial_condition(U0)
+t = [0, 0.4, 1, 1.2]
+u1, t1 = solver.solve(t)
+# Continue with a new time interval
+solver.set_initial_condition(u1[-1])
+t = [1.2, 1.4, 1.5]
+u2, t2 = solver.solve(t)
+u = np.concatenate((u1, u2))
+t = np.concatenate((t1, t2))
+u_exact = _u_solution_f1(t)
+print ’time values:’, t
+print ’Numerical:
+’, u
+print ’Exact:
+’, u_exact
+The output is exactly what we would expect:
+time values: [ 0.
+0.4
+1.
+1.2
+1.2
+1.4
+1.5]
+Numerical:
+[ 3.
+3.08
+3.2
+3.24
+3.24
+3.28
+3.3 ]
+Exact:
+[ 3.
+3.08
+3.2
+3.24
+3.24
+3.28
+3.3 ]
+
+E.2 Systems of Ordinary Diﬀerential Equations
+677
+E.1.8 Example: Logistic Growth
+A more exciting application is to solve the logistic equation (C.23),
+u′(t) = αu(t)
+
+1 −u(t)
+R
+
+.
+The f(u, t) function is simply the right-hand side of this ODE.
+Implementing this problem with the aid of the ForwardEuler function
+from Appendix E.1.3 is left as an exercise for the reader, while we here
+explain how to utilize class ForwardEuler from Appendix E.1.7. Also the
+right-hand-side function f(u, t) will be implemented as a class, because
+it contains the parameters α and R. We may store the initial condition
+as part of this class and have a __str__ method for pretty print of the
+formula for the right-hand-side of the logistic equation.
+This problem class can then be expressed as
+class Logistic:
+"""Problem class for a logistic ODE."""
+def __init__(self, alpha, R, U0):
+self.alpha, self.R, self.U0 = alpha, float(R), U0
+def __call__(self, u, t):
+"""Return f(u,t) for the logistic ODE."""
+return self.alpha*u*(1 - u/self.R)
+def __str__(self):
+"""Return ODE and initial condition."""
+return "u’(t) = %g*u*(1 - u/%g)\nu(0)=%g" % \
+(self.alpha, self.R, self.U0)
+Running a case with α = 0.2, R = 1, u(0) = 0.1, and 400 equally
+spaced time points up to time T = 40, can be performed in the following
+function:
+def logistic():
+problem = Logistic(alpha=0.2, R=1, U0=0.1)
+T = 40
+solver = ForwardEuler(problem)
+solver.set_initial_condition(problem.U0)
+t = np.linspace(0, T, 401)
+# 400 intervals in [0,T]
+u, t = solver.solve(t)
+A plot of u versus t is shown in Figure E.1.
+The ForwardEuler class is further developed in Appendix E.2, where
+the code is extended to other numerical methods and also systems of
+ODEs.
+E.2 Systems of Ordinary Diﬀerential Equations
+The software developed so far in this appendix targets scalar ODEs
+of the form u′ = f(u, t) with initial condition u(0) = U0. Our goal
+
+678
+E Programming of Diﬀerential Equations
+Fig. E.1 Plot of the solution of the ODE problem u′ = 0.2u(1 −u), u(0) = 0.1.
+now is to build a ﬂexible toolbox for solving scalar ODEs as well as
+systems of ODEs. That is, we want the same code to work both for
+systems and scalar equations. Moreover, the user should be able to
+easily switch between diﬀerent numerical methods, with a minimum of
+coding. Also, the developer of the tools should be able to include a new
+numerical method with a minimum of coding. All these requirements
+can be met by utilizing object-oriented programming from Chapter 9.
+Recommended background material consists of Chapters 9.1–9.3.
+E.2.1 Mathematical Problem
+A scalar ODE involves the single equation
+u′(t) = f
+
+u(t), t
+
+with a single function u(t) as unknown, while a system of ODEs involves
+n scalar ODEs and consequently n unknown functions. Let us denote
+the unknown functions in the system by u(i)(t), with i as a counter,
+i = 0, . . . , m −1. The system of n ODEs can then be written in the
+following abstract form:
+du(0)
+dt
+= f(0)
+u(0), u(1), . . . , u(m−1), t
+
+,
+(E.20)
+...
+du(i)
+dt
+= f(i)
+u(0), u(1), . . . , u(m−1), t
+
+,
+(E.21)
+...
+du(m−1)
+dt
+= f(m−1)
+u(0), u(1), . . . , u(m−1), t
+
+.
+(E.22)
+
+E.2 Systems of Ordinary Diﬀerential Equations
+679
+In addition, we need n initial conditions for the n unknown functions:
+u(i)(0) = U (i)
+0 ,
+i = 0, . . . , m −1.
+(E.23)
+Instead of writing out each equation as in (E.20)–(E.22), mathemati-
+cians like to collect the individual functions u(0), u(1), . . . , u(m−1) in a
+vector
+u =
+
+u(0), u(1), . . . , u(m−1)
+.
+The diﬀerent right-hand-side functions f(0), f(1), . . . , f (m−1) in (E.20)–
+(E.22) can also be collected in a vector
+f =
+
+f(0), f(1), . . . , f (m−1)
+.
+Similarly, we put the initial conditions also in a vector
+U0 =
+
+U (0)
+0 , U (1)
+0 , . . . , U (m−1)
+0
+
+.
+With the vectors u, f, and U0, we can write the ODE system (E.20)–
+(E.22) with initial conditions (E.23) as
+u′ = f(u, t),
+u(0) = U0.
+(E.24)
+This is exactly the same notation as we used for a scalar ODE (!). The
+power of mathematics is that abstractions can be generalized so that
+new problems look like the familiar ones, and very often methods carry
+over to the new problems in the new notation without any changes.
+This is true for numerical methods for ODEs too.
+Let us apply the Forward Euler scheme to each of the ODEs in the
+system (E.20)–(E.22):
+u(0)
+k+1 = u(0)
+k
++ Δtf(0)
+u(0)
+k , u(1)
+k , . . . , u(m−1)
+k
+, tk
+
+,
+(E.25)
+...
+u(i)
+k+1 = u(i)
+k + Δtf(i)
+u(0)
+k , u(1)
+k , . . . , u(m−1)
+k
+, tk
+
+,
+(E.26)
+...
+u(m−1)
+k+1
+= u(m−1)
+k
++ Δtf(m−1)
+u(0)
+k , u(1)
+k , . . . , u(m−1)
+k
+, tk
+
+. (E.27)
+Utilizing the vector notation, (E.25)–(E.27) can be compactly written
+as
+uk+1 = uk + Δtf(uk, tk),
+(E.28)
+and this is again nothing but the formula we had for the Forward Euler
+scheme applied to a scalar ODE.
+To summarize, the notation u′ = f(u, t), u(0) = U0, is from now
+on used both for scalar ODEs and for systems of ODEs. In the former
+case, u and f are scalar functions, while in the latter case they are
+
+680
+E Programming of Diﬀerential Equations
+vectors. This great ﬂexibility carries over to programming too: we can
+develop code for u′ = f(u, t) that works for scalar ODEs and systems
+of ODEs, the only diﬀerence being that u and f correspond to float
+objects for scalar ODEs and to arrays for systems of ODEs.
+Unless you are quite familiar with systems of ODEs and array arith-
+metics, it can be a good idea to just think about scalar ODEs and
+that u(t) is a function of one variable when you read on. Later, you
+can come back and reread the text with systems of ODEs and u(t)
+as a vector (array) in mind. The invisible diﬀerence between scalar
+ODEs and systems of ODEs is not only important for addressing both
+newcomers to ODEs and more experienced readers. The principle is
+very important for software development too: We can write code with
+scalar ODEs in mind and test this code. Afterwards, the code should
+also work immediately for systems and u(t) as a vector of functions.
+This remarkable achievement is obtained by an elegant interplay be-
+tween abstractions in mathematics and the functionality and syntax of
+the Python programming language.
+E.2.2 Example of a System of ODEs
+An oscillating spring-mass system can be governed by a second-order
+ODE (see (D.8) in Appendix D for derivation):
+mu′′ + βu′ + ku = F(t),
+u(0) = U0, u′(0) = 0.
+(E.29)
+The parameters m, β, and k are known and F(t) is a prescribed func-
+tion. This second-order equation can be rewritten as two ﬁrst-order
+equations by introducing two functions (see Appendix C.4),
+u(0)(t) = u(t),
+u(1)(t) = u′(t).
+The unknowns are now the position u(0)(t) and the velocity u(1)(t). We
+can then create equations where the derivative of the two new primary
+unknowns u(0) and u(1) appear alone on the left-hand side:
+d
+dtu(0)(t) = u(1)(t),
+(E.30)
+d
+dtu(1)(t) = m−1
+F(t) −βu(1) −ku(0)
+.
+(E.31)
+We write this system as u′(t) = f(u, t) where now u and f are vectors,
+here of length two:
+u(t) =
+
+u(0)(t), u(1)(t)
+
+f(t, u) =
+
+u(1), m−1
+F(t) −βu(1) −ku(0)
+.
+(E.32)
+Note that the vector u(t) is diﬀerent from the quantity u in (E.29)!
+There are, in fact, several interpretation of the symbol u, depending
+
+E.2 Systems of Ordinary Diﬀerential Equations
+681
+on the context: the exact solution u of (E.29), the numerical solution
+u of (E.29), the vector u in a rewrite of (E.29) as a ﬁrst-order ODE
+system, and the array u in the software, holding the numerical values
+of u(t) = (u(0)(t), u(1)(t)).
+E.2.3 From Scalar ODE Code to Systems
+Let us have a look at how the software from Appendices E.1.3–E.1.7
+changes if we try to apply it to systems of ODEs.
+Function Implementation. We start with the ForwardEuler function
+listed on page 671 and the speciﬁc system from Appendix E.2.2. The
+right-hand-side function f(u, t) must now return the vector in (E.32),
+here as a NumPy array:
+def f(u, t):
+return np.array([u[1], 1./m*(F(t) - beta*u[1] - k*u[0])])
+Note that u is an array with two components, holding the values of the
+two unknown functions u(0)(t) and u(1)(t) at time t.
+The initial conditions can also be speciﬁed as an array
+U0 = np.array([0.1, 0])
+What happens if we just send these f and U0 objects to the
+ForwardEuler function?
+To answer the question, we must examine each statement inside the
+function to see if the Python operations are still valid. But of greater
+importance, we must check that right mathematics is carried out. The
+ﬁrst failure occurs with the statement
+u = np.zeros(n+1)
+# u[k] is the solution at time t[k]
+Now, u should be an array of arrays, since the solution at each time level
+is an array. The length of U0 gives information on how many equations
+and unknowns there are in the system. An updated code might be
+if isinstance(U0, (float,int)):
+u = np.zeros(n+1)
+else:
+neq = len(U0)
+u = np.zeros((n+1,neq))
+Fortunately, the rest of the code now works regardless of whether u is
+a one- or two-dimensional array. In the former case, u[k+1] = u[k] +
+... involves computations with float objects only, while in the latter
+case, u[k+1] picks out “row” k + 1 in u, which is the array with the
+two unknown values at time tk+1: u(0)(tk+1) and u(1)(tk+1). The state-
+ment u[k+1] = u[k] + ... then involves array arithmetic with arrays
+of length two in this speciﬁc example.
+
+682
+E Programming of Diﬀerential Equations
+Allowing Lists. The speciﬁcation of f and U0 using arrays is not as
+readable as a plain list speciﬁcation:
+def f(u, t):
+return [u[1], 1./m*(F(t) - beta*u[1] - k*u[0])]
+U0 = [0.1, 0]
+Users would probably prefer the list syntax. With a little adjustment
+inside the modiﬁed ForwardEuler function we can allow lists, tuples, or
+arrays for U0 and as return objects from f. With U0 we just do
+U0 = np.asarray(U0)
+since np.asarray will just return U0 if it already is an array and other-
+wise copy the data to an array.
+With f the situation is a bit more demanding. The array operation
+dt*f(u[k], t[k]) will not work unless f really returns an array (since
+lists or tuples cannot be multiplied by a scalar dt). A trick is to wrap
+a function around the user-provided right-hand-side function:
+def ForwardEuler(f_user, dt, U0, T):
+def f(u, t):
+return np.asarray(f_user(u, t))
+...
+Now, dt*f(u[k], t[k]) will call f, which calls the user’s f_user and
+turns whatever is returned from that function into a NumPy array. A
+more compact syntax arises from using a lambda function (see Chap-
+ter 3.1.11):
+def ForwardEuler(f, dt, U0, T):
+f = lambda u, t: np.asarray(f(u, t))
+...
+Here we have also gotten rid of f_user and simply overwrite the user-
+provided f function by a new function f which ensures that the evalu-
+ation of the right-hand side results in an array.
+Class Implementation. Proceeding with class ForwardEuler from Ap-
+pendix E.1.7, we make observations similar to those above. The trick
+with the lambda function is introduced in the constructor, and distin-
+guishing between scalar and vector ODEs is necessary where self.U0
+and self.u are created. The complete class looks as follows (see the ﬁle
+session.py for real code with applications):
+class ForwardEuler:
+"""
+Class for solving a scalar of vector ODE,
+du/dt = f(u, t)
+by the ForwardEuler solver.
+
+E.2 Systems of Ordinary Diﬀerential Equations
+683
+Class attributes:
+t: array of time values
+u: array of solution values (at time points t)
+k: step number of the most recently computed solution
+f: callable object implementing f(u, t)
+"""
+def __init__(self, f):
+if not callable(f):
+raise TypeError(’f is %s, not a function’ % type(f))
+self.f = lambda u, t: np.asarray(f(u, t))
+def set_initial_condition(self, U0):
+if isinstance(U0, (float,int)):
+# scalar ODE
+self.neq = 1
+else:
+# system of ODEs
+U0 = np.asarray(U0)
+self.neq= U0.size
+self.U0 = U0
+def solve(self, time_points):
+"""Compute u for t values in time_points list."""
+self.t = np.asarray(time_points)
+n = self.t.size
+if self.neq == 1:
+# scalar ODEs
+self.u = np.zeros(n)
+else:
+# systems of ODEs
+self.u = np.zeros((n,self.neq))
+# Assume self.t[0] corresponds to self.U0
+self.u[0] = self.U0
+# Time loop
+for k in range(n-1):
+self.k = k
+self.u[k+1] = self.advance()
+return self.u, self.t
+def advance(self):
+"""Advance the solution one time step."""
+u, f, k, t = self.u, self.f, self.k, self.t
+dt = t[k+1] - t[k]
+u_new = u[k] + dt*f(u[k], t[k])
+return u_new
+The application code for the equation u′′+u = 0, u(0) = 0, u′(0) = 1,
+with solution u(t) = sin(t) and u′(t) = cos(t), reads
+def f(u, t):
+return [u[1], -u[0]]
+U0 = [0, 1]
+solver = ForwardEuler(f)
+solver.set_initial_condition(U0)
+T = 12; n = 100
+t = np.linspace(0, T, n+1)
+u, t = solver.solve(t)
+u0 = u[:,0]
+Note that the computed u array is two-dimensional, where u[k,i] holds
+u(i)(tk). Hence, to grab all the values associated with u(0), we ﬁx i as
+0 and let the k index take on all its legal values: u[:,0]. Then u0 refers
+to the piece of u where the discrete values u(0)(t0), u(0)(t1), . . . , u(0)(tn)
+are stored.
+
+684
+E Programming of Diﬀerential Equations
+E.2.4 Numerical Methods
+Numerical methods for ODEs compute approximations uk to the ex-
+act solution u at discrete time levels tk, k = 1, 2, 3, . . . . Some of the
+simplest, but also most widely used methods for ODEs are listed below.
+1. The Forward Euler method:
+uk+1 = uk + Δt f(uk, tk),
+Δt = tk+1 −tk.
+(E.33)
+2. The Midpoint method:
+uk+1 = uk−1 + 2Δtf(uk, tk),
+2Δt = tk+1 −tk−1
+(E.34)
+for k = 1, 2, . . . . The computation of u1 involves u−1, which is un-
+known, so for the ﬁrst step we must use another method, for instance,
+(E.33).
+3. Heun’s method:
+u∗= uk + Δtf(uk, tk),
+(E.35)
+uk+1 = uk + 1
+2Δtf(uk, tk) + 1
+2Δtf(u∗, tk+1),
+(E.36)
+with Δt = tk+1 −tk.
+4. The 2nd-order Runge-Kutta method:
+uk+1 = uk + K2
+(E.37)
+where
+K1 = Δt f(uk, tk),
+(E.38)
+K2 = Δt f
+
+uk + 1
+2K1, tk + 1
+2Δt
+
+,
+(E.39)
+with Δt = tk+1 −tk.
+5. The 4th-order Runge-Kutta method:
+uk+1 = uk + 1
+6(K1 + 2K2 + 2K3 + K4),
+(E.40)
+where
+K1 = Δt f(uk, tk),
+(E.41)
+K2 = Δt f
+
+uk + 1
+2K1, tk + 1
+2Δt
+
+,
+(E.42)
+K3 = Δt f
+
+uk + 1
+2K2, tk + 1
+2Δt
+
+,
+(E.43)
+K4 = Δt f(uk + K3, tk + Δt),
+(E.44)
+and Δt = tk+1 −tk.
+
+E.2 Systems of Ordinary Diﬀerential Equations
+685
+6. The 3rd-order Adams-Bashforth method:
+uk+1 = uk + Δt
+12
+
+23f(uk, tk) −16f(uk−1, tk−1) + 5f(uk−2, tk−2)
+
+,
+(E.45)
+with Δt constant. To start the scheme, one can apply a 2nd-order
+Runge-Kutta method or Heun’s method to compute u1 and u2 before
+(E.45) is applied for k ≥2.
+7. The Midpoint method with iterations:
+vq = uk + 1
+2Δt
+
+f(vq−1, tk+1) + f(uk, tk)
+
+,
+q = 1, . . . , N, v0 = uk
+(E.46)
+uk+1 = vN.
+(E.47)
+At each time level, one runs the formula (E.46) N times, and the
+value vN becomes uk+1. Setting N = 1 recovers the Forward Euler
+scheme if f is independent of t, while N = 2 corresponds to Heun’s
+method. We can either ﬁx the value of N, or we can repeat (E.46)
+until the change in vq is small, that is, until |vq −vq−1| < ϵ, where
+ϵ is a small value. Fixing N is suﬃcient in this exercise.
+8. The Backward Euler method:
+uk+1 = uk + Δt f(uk+1, tk+1),
+Δt = tk+1 −tk.
+(E.48)
+If f(u, t) is nonlinear in u, (E.48) constitutes a nonlinear equation in
+uk+1, which must be solved by some method for nonlinear equations,
+say Newton’s method (see Appendix E.2.6 for more details).
+The methods above are valid both for scalar ODEs and for systems of
+ODEs. In the system case, the quantities u, uk, uk+1, f, K1, K2, etc.,
+are vectors.
+E.2.5 The ODE Solver Class Hierarchy
+Appendix E.2.3 presents a class ForwardEuler for implementing the
+Forward Euler scheme (E.33) both for scalar ODEs and systems. Only
+the advance method should be necessary to change in order to imple-
+ment other numerical methods. Copying the ForwardEuler class and
+editing just the advance method is considered bad programming prac-
+tice, because we get two copies the general parts of class ForwardEuler.
+As we implement more schemes, we end up with a lot of copies of
+the same code. Correcting an error or improving the code in this
+general part then requires identical edits in several almost identical
+classes.
+A good programming practice is to collect all the common code in
+a superclass. Subclasses can implement the advance method, but share
+
+686
+E Programming of Diﬀerential Equations
+the constructor, the set_initial_condition method, and the solve
+method with the superclass.
+The Superclass. We introduce class ODESolver as the superclass of
+various numerical methods for solving ODEs. Class ODESolver should
+provide all functionality that is common to all numerical methods for
+ODEs:
+1. hold the solution u(t) at discrete time points in an array u
+2. hold the corresponding time values t
+3. hold information about the f(u, t) function, i.e., a callable Python
+object f(u, t)
+4. hold the current time step number k in an attribute k
+5. hold the initial condition U0
+6. implement the loop over all time steps
+As already outlined in Appendix E.1.7, we implement the last point
+as two methods: solve for performing the time loop and advance for
+advancing the solution one time step. The latter method is empty in the
+superclass since the method is to be implemented by various subclasses
+for various numerical schemes.
+A
+ﬁrst
+version
+class
+ODESolver
+follows
+directly
+from
+class
+ForwardEuler in Appendix E.2.3, but letting advance be an empty
+method. However, there is one more extension which will be handy
+in some problems, namely a possibility for the user to terminate the
+time loop if the solution has certain properties. Throwing a ball yields
+an example: the simulation should be stopped when the ball hits
+the ground, instead of simulating an artiﬁcial movement down in the
+ground until the ﬁnal time T is reached. To implement the requested
+feature, the user can provide a function terminate(u, t, step_no),
+which returns True if the time loop is be terminated. The arguments
+are the solution array u, the corresponding time points t, and the
+current time step number step_no. For example, if we want to solve an
+ODE until the solution is (close to) zero, we can supply the function
+def terminate(u, t, step_no):
+eps = 1.0E-6
+# small number
+if abs(u[step_no,0]) < eps:
+# close enough to zero?
+return True
+else:
+return False
+The terminate function is an optional argument to the solve method.
+By default, we provide a function that always returns False.
+The suggested code for the superclass ODESolver then takes the fol-
+lowing form:
+class ODESolver:
+def __init__(self, f):
+self.f = lambda u, t: np.asarray(f(u, t), float)
+
+E.2 Systems of Ordinary Diﬀerential Equations
+687
+def advance(self):
+"""Advance solution one time step."""
+raise NotImplementedError
+def set_initial_condition(self, U0):
+if isinstance(U0, (float,int)):
+# scalar ODE
+self.neq = 1
+U0 = float(U0)
+else:
+# system of ODEs
+U0 = np.asarray(U0)
+self.neq = U0.size
+self.U0 = U0
+def solve(self, time_points, terminate=None):
+if terminate is None:
+terminate = lambda u, t, step_no: False
+self.t = np.asarray(time_points)
+n = self.t.size
+if self.neq == 1:
+# scalar ODEs
+self.u = np.zeros(n)
+else:
+# systems of ODEs
+self.u = np.zeros((n,self.neq))
+# Assume that self.t[0] corresponds to self.U0
+self.u[0] = self.U0
+# Time loop
+for k in range(n-1):
+self.k = k
+self.u[k+1] = self.advance()
+if terminate(self.u, self.t, self.k+1):
+break
+# terminate loop over k
+return self.u[:k+2], self.t[:k+2]
+Note that we return just the parts of self.u and self.t that have
+been ﬁlled with values (the rest are zeroes): all elements up to the one
+with index k+1 are computed before terminate may return True. The
+corresponding slice of the array is then :k+2 since the upper limit is not
+included in the slice. If terminate never returns True we simply have
+that :k+1 is the entire array.
+The Forward Euler Method. Subclasses implement speciﬁc numerical
+formulas for numerical solution of ODEs in the advance method. For
+the Forward Euler the formula is given by (E.33). All data we need for
+this formula are stored as attributes by the superclass. First we load
+these data into variables with shorter names, to avoid the lengthy self
+preﬁx and obtain a notation closer to the mathematics. Then we apply
+the formula (E.33), and ﬁnally we return the new value:
+class ForwardEuler(ODESolver):
+def advance(self):
+u, f, k, t = self.u, self.f, self.k, self.t
+dt = t[k+1] - t[k]
+u_new = u[k] + dt*f(u[k], t[k])
+return u_new
+Remark. When we extract attributes to local variables with short
+names, we should only use these local variables for reading values, not
+
+688
+E Programming of Diﬀerential Equations
+setting values. For example, if we do a k += 1 to update the time step
+counter, that increased value is not reﬂected in self.k (which is the
+“oﬃcial” counter). On the other hand, changing a list in-place, say
+u[k+1] = ..., is reﬂected in self.u. Extracting class attributes in lo-
+cal variables is done for getting the code closer to the mathematics, but
+has a danger of introducing bugs that might be hard to track down.
+The 4th-order Runge-Kutta Method. Below is an implementation of the
+4th-order Runge-Kutta method (E.40):
+class RungeKutta4(ODESolver):
+def advance(self):
+u, f, k, t = self.u, self.f, self.k, self.t
+dt = t[k+1] - t[k]
+dt2 = dt/2.0
+K1 = dt*f(u[k], t[k])
+K2 = dt*f(u[k] + 0.5*K1, t[k] + dt2)
+K3 = dt*f(u[k] + 0.5*K2, t[k] + dt2)
+K4 = dt*f(u[k] + K3, t[k] + dt)
+u_new = u[k] + (1/6.0)*(K1 + 2*K2 + 2*K3 + K4)
+return u_new
+It is left as exercises to implement other numerical methods in the
+ODESolver class hierarchy. However, the Backward Euler method (E.48)
+requires a much more advanced implementation than the other methods
+so that particular method deserves its own section.
+E.2.6 The Backward Euler Method
+The Backward Euler scheme (E.48) leads in general to a nonlinear
+equation at a new time level, while all the other schemes listed in
+Appendix E.2.4 have a simple formula for the new uk+1 value. The
+nonlinear equation reads
+uk+1 = uk + Δt f(uk+1, tk+1).
+For simplicity we assume that the ODE is scalar so the unknown uk+1 is
+a scalar. It might be easier to see that the equation for uk+1 is nonlinear
+if we rearrange the equation to
+F(w) ≡w −Δtf(w, tk+1) −uk = 0,
+(E.49)
+where w = uk+1. If now f(u, t) is a nonlinear function of u, F(w) will
+also be a nonlinear function of w.
+To solve F(w) = 0 we can use the Bisection method from Chap-
+ter 4.6.2, Newton’s method from Appendix A.1.10, or the Secant
+method from Exercise A.14. Here we apply Newton’s method and the
+implementation given in src/diffeq/Newton.py. A disadvantage with
+Newton’s method is that we need the derivative of F with respect
+
+E.2 Systems of Ordinary Diﬀerential Equations
+689
+to w, which requires the derivative ∂f(w, t)/∂w. A quick solution is to
+use a numerical derivative, e.g., class Derivative from Chapter 7.3.2.
+We make a subclass BackwardEuler. As we need to solve F(w) = 0
+at every time step, we also need to implement the F(w) function. This
+is conveniently done in a local function inside the advance method1:
+def advance(self):
+u, f, k, t = self.u, self.f, self.k, self.t
+def F(w):
+return w - dt*f(w, t[k+1]) - u[k]
+dFdw = Derivative(F)
+w_start = u[k] + dt*f(u[k], t[k])
+# Forward Euler step
+u_new, n, F_value = Newton(F, w_start, dFdw, N=30)
+if n >= 30:
+print "Newton’s failed to converge at t=%g "\
+"(%d iterations)" % (t, n)
+return u_new
+The derivative dF/dw is computed numerically by a class Derivative,
+which is a slight modiﬁcation of the similar class in Chapter 7.3.2,
+because we now want to use a more accurate, centered formula:
+class Derivative:
+def __init__(self, f, h=1E-5):
+self.f = f
+self.h = float(h)
+def __call__(self, x):
+f, h = self.f, self.h
+return (f(x+h) - f(x-h))/(2*h)
+This code is included in the ODESolver.py ﬁle after class BackwardEuler.
+The next step is to call Newton’s method. For this purpose we need to
+import the Newton function from the Newton module. The Newton.py ﬁle
+must then reside in the same directory as ODESolver.py, or Newton.py
+must be in one of the directories listed in the sys.path list or the
+PYTHONPATH environment variable (cf. Chapter 4.5.3).
+Having
+the
+Newton(f, x_start, dfdx, N)
+function
+from
+Ap-
+pendix A.1.10 accessible in our ODESolver.py ﬁle, we can make a
+call and supply our F function as the argument f, a start value for the
+iteration, here called w_start, as the argument x, and the derivative
+dFdw for the argument dfdx. We rely on default values for the epsilon
+and store arguments, while the maximum number of iterations is set
+to N=30. The program is terminated if it happens that the number of
+iterations exceeds that value, because then the method is not consid-
+ered to have converged (at least not quickly enough), and we have
+consequently not been able to compute the next uk+1 value.
+1 The local variables in the advance function, e.g., dt and u, act as “global” variables for
+the F function. Hence, when F is sent away to some Newton function, F remembers the values
+of dt, f, t, and u!.
+
+690
+E Programming of Diﬀerential Equations
+The starting value for Newton’s method must be chosen. As we ex-
+pect the solution to not change much from one time level to the next,
+uk could be a good initial guess. However, we can do better by using a
+simple Forward Euler step uk + Δtf(uk, tk), which is exactly what we
+do in the advance function above.
+Since Newton’s method always has the danger of converging slowly,
+it can be interesting to store the number of iterations at each time level
+as an attribute in the BackwardEuler class. We can easily insert extra
+statement for this purpose:
+def advance(self):
+...
+u_new, n, F_value = Newton(F, w_start, dFdw, N=30)
+if k == 0:
+self.Newton_iter = []
+self.Newton_iter.append(n)
+...
+Note the need for creating an empty list (at the ﬁrst call of advance)
+before we can append elements.
+There is now one important question to ask: Will the advance method
+work for systems of ODEs? In that case, F(w) is a vector of functions.
+The implementation of F will work when w is a vector, because all the
+quantities involved in the formula are arrays or scalar variables. The
+dFdw instance will compute a numerical derivative of each component
+of the vector function dFdw.f (which is simply our F function). The call
+to the Newton function is more critical: It turns out that this function,
+as the algorithm behind it, works for scalar equations only. Newton’s
+method can quite easily be extended to a system of nonlinear equa-
+tions, but we do not consider that topic here. Instead we equip class
+BackwardEuler with a constructor that calls the f object and controls
+that the returned value is a float and not an array:
+class BackwardEuler(ODESolver):
+def __init__(self, f):
+ODESolver.__init__(self, f)
+# Make a sample call to check that f is a scalar function:
+try:
+u = np.array([1]); t = 1
+value = f(u, t)
+except IndexError:
+# index out of bounds for u
+raise ValueError(’f(u,t) must return float/int’)
+Observe that we must explicitly call the superclass constructor and
+pass on the argument f to achieve the right storage and treatment of
+this argument.
+Understanding class BackwardEuler implies a good understanding
+of classes in general; a good understanding of numerical methods for
+ODEs, for numerical diﬀerentiation, and for ﬁnding roots of functions;
+and a good understanding on how to combine diﬀerent code segments
+from diﬀerent parts of the book. Therefore, if you have digested class
+
+E.2 Systems of Ordinary Diﬀerential Equations
+691
+BackwardEuler, you have all reasons to believe that you have digested
+the key topics of this book.
+E.2.7 Application 1: u′ = −u
+The perhaps simplest of all ODEs, u′ = −u, with initial condition
+u(0) = 1, is our ﬁrst target problem for the classes in the ODESolver
+hierarchy. The exact solution is u(t) = e−t. The basic part of the ap-
+plication of class ForwardEuler goes as follows:
+import ODESolver
+def f(u, t):
+return -u
+solver = ODESolver.ForwardEuler(f)
+solver.set_initial_condition(1.0)
+t_points = linspace(0, 3, 31)
+u, t = solver.solve(t_points)
+plot(t, u)
+We can run various values of Δt to see the eﬀect on the accuracy:
+# Test various dt values and plot
+figure()
+T = 3
+for dt in 2.0, 1.0, 0.5, 0.1:
+n = int(round(T/dt))
+solver = ODESolver.ForwardEuler(f)
+solver.set_initial_condition(1)
+u, t = solver.solve(linspace(0, T, n+1))
+plot(t, u, legend=’dt=%g’ % dt)
+hold(’on’)
+plot(t, exp(-t), ’bo’, legend=’exact’)
+Figure E.2 shows alarming results. With Δt = 2 we get a completely
+wrong solution that becomes negative and then increasing. The value
+Δt = 1 gives a peculiar solution: uk = 0 for k ≥1! Qualitatively correct
+behavior appears with Δt = 0.5, and the results get quantitatively
+better as we decrease Δt. The solution corresponding to Δ = 0.1 looks
+good from the graph.
+We can easily explain what we observe in Figure E.2. For the equa-
+tion in question, the Forward Euler method computes
+u1 = u0 −Δtu0 = (1 −Δt)u0,
+u2 = u1 −Δtu1 = (1 −Δt)u1 = (1 −Δt)2u0,
+...
+uk = (1 −Δt)ku0.
+With Δt = 1 we simply get uk = 0 for k ≥1. For Δt > 1, 1 −Δt < 0,
+and (1 −Δt)k means raising a negative value to an integer power,
+
+692
+E Programming of Diﬀerential Equations
+Fig. E.2 Solution of u′
+=
+−u for t
+∈
+[0, 3] by the Forward Euler method and
+Δt ∈{2, 1, 0.5, 0.1}.
+which results in uk > 0 for even k and uk < 0 for odd k. Moreover,
+|uk| decreases with k. Such a growing, oscillating solution is of course
+qualitatively wrong when the exact solution is e−t and monotonically
+decaying. The conclusion is that the Forward Euler method gives mean-
+ingless results for Δt ≥1 in the present example.
+A particular strength of the ODESolver hierarchy of classes is that
+we can trivially switch from one method to another. For example, we
+may demonstrate how superior the 4-th order Runge-Kutta method is
+for this equation: just replace ForwardEuler by RungeKutta4 in the pre-
+vious code segment and re-run the program. It turns out that the 4-th
+order Runge-Kutta method gives a monotonically decaying numerical
+solution for all the tested Δt values. In particular, the solutions corre-
+sponding to Δt = 0.5 and Δt = 0.1 are visually very close to the exact
+solution. The conclusion is that the 4-th order Runge-Kutta method is
+a safer and more accurate method.
+Let us compare the two numerical methods in the case where
+Δt = 0.5:
+# Test ForwardEuler vs RungeKutta4
+T = 3
+dt = 0.5
+n = int(round(T/dt))
+t_points = linspace(0, T, n+1)
+figure()
+for solver_class in ODESolver.RungeKutta4, ODESolver.ForwardEuler:
+solver = solver_class(f)
+solver.set_initial_condition(1)
+u, t = solver.solve(t_points)
+plot(t, u, legend=’%s’ % solver_class.__name__)
+hold(’on’)
+plot(t, exp(-t), ’bo’, legend=’exact’)
+Figure E.3 illustrates that diﬀerences in accuracy between the two
+methods. The complete program can be found in the ﬁle app1_decay.py.
+
+E.2 Systems of Ordinary Diﬀerential Equations
+693
+Fig. E.3 Comparison of the Forward Euler and the 4-th order Runge-Kutta method for
+solving u′ = −u for t ∈[0, 3] and a time step Δt = 0.5.
+E.2.8 Application 2: The Logistic Equation
+The logistic ODE (E.5) is copied here for convenience:
+u′(t) = αu(t)
+
+1 −u(t)
+R
+
+,
+u(0) = U0.
+The right-hand side contains the parameters α and R. We know that
+u →R as t →∞, so at some point ˆt in time we have approached
+the asymptotic value u = R within a suﬃciently small tolerance and
+should stop the simulation. This can be done by providing a function
+as the tolerance argument in the solve method.
+Basic Problem and Solver Classes. Let us, as in Appendix E.1.8, im-
+plement the problem-dependent data in a class. This time we store all
+user-given physical data in the class:
+import ODESolver
+from scitools.std import plot, figure
+import numpy as np
+class Problem:
+def __init__(self, alpha, R, U0, T):
+"""
+alpha, R: parameters in the ODE.
+U0: initial condition.
+T: max length of time interval for integration;
+asymptotic value R must be reached within 1%
+accuracy for some t <= T.
+"""
+self.alpha, self.R, self.U0, self.T = alpha, R, U0, T
+def __call__(self, u, t):
+"""Return f(u,t) for logistic ODE."""
+return self.alpha*u*(1 - u/self.R)
+def terminate(self, u, t, step_no):
+
+694
+E Programming of Diﬀerential Equations
+"""Return True when asymptotic value R is reached."""
+tol = self.R*0.01
+return abs(u[step_no] - self.R) < tol
+def __str__(self):
+"""Pretty print of physical parameters."""
+return ’alpha=%g, R=%g, U0=%g’ % \
+(self.alpha, self.R, self.U0)
+Note that the tolerance used in the terminate method is made de-
+pendent on the size of R: if R = 1000 we say the asymptotic value is
+reached when u ≥990. Smaller tolerances will just lead to a solution
+curve where large parts of it show the boring behavior u ≈R.
+The solution is obtained the usual way by short code:
+solver = ODESolver.RungeKutta4(problem)
+solver.set_initial_condition(problem.U0)
+dt = 1.0
+n = int(round(problem.T/dt))
+t_points = np.linspace(0, T, n+1)
+u, t = solver.solve(t_points, problem.terminate)
+Let us pack these statements into a class Solver, which has two meth-
+ods: solve and plot. The code may look like
+class Solver:
+def __init__(self, problem, dt,
+method=ODESolver.ForwardEuler):
+"""
+problem: instance of class Problem.
+dt: time step.
+method: class in ODESolver hierarchy.
+"""
+self.problem, self.dt = problem, dt
+self.solver = method
+def solve(self):
+solver = self.method(self.problem)
+solver.set_initial_condition(self.problem.U0)
+n = int(round(self.problem.T/self.dt))
+t_points = np.linspace(0, self.problem.T, n+1)
+self.u, self.t = solver.solve(t_points,
+self.problem.terminate)
+if solver.k+1 == n: # integration to t=T?
+self.plot()
+raise ValueError(
+’termination criterion not reached, ’\
+’give T > %g’ % self.problem.T)
+def plot(self):
+filename = ’logistic_’ + str(self.problem) + ’.eps’
+plot(self.t, self.u,
+title=str(self.problem) + ’, dt=%g’ % self.dt,
+savefig=filename)
+Problem-dependent data related to the numerical quality of the so-
+lution, such as the time step here, go to the Solver class. That is,
+class Problem contains the physics and class Solver the numerics of the
+problem under investigation.
+
+E.2 Systems of Ordinary Diﬀerential Equations
+695
+If the last computed time step, solver.k+1, equals the last possible
+index, n, problem.terminate never returned True, which means that the
+asymptotic limit was not reached. This is treated as an erroneous con-
+dition. To guide the user, we launch a plot before raising the exception
+with an instructive message. The complete code is found in the ﬁle
+app2_logistic.py.
+Computing an Appropriate Δt. Choosing an appropriate Δt is not al-
+ways so easy. The impact of Δt can sometimes be dramatic, as demon-
+strated for the Forward Euler method in Appendix E.2.7. We could
+automate the process of ﬁnding a suitable Δt: start with a large Δt,
+and keep halving Δt until the diﬀerence between two solutions corre-
+sponding to two consequtive Δt values is small enough.
+Say solver is a class Solver instance computed with time step Δt
+and solver2 is the instance corresponding to a computation with Δt/2.
+Calculating at the diﬀerence between solver.u and solver2.u is not
+trivial as (i) one of the arrays has approximately twice as many elements
+as the other, and (ii) the last element in both arrays does not necessarily
+correspond to the same time value since the time stepping and the
+terminate function may lead to slightly diﬀerent termination times.
+A solution to these two problems is to turn each of the arrays
+solver.u and solver2.u into continuous functions, as explained in Ap-
+pendix E.1.5, and then evaluate the diﬀerence at some selected time
+points up to the smallest value of solver.t[-1] and solver2.t[-1].
+The code becomes
+# Make continuous functions u(t) and u2(t)
+u
+= wrap2callable((solver. t, solver. u))
+u2 = wrap2callable((solver2.t, solver2.u))
+# Sample the difference in n points in [0, t_end]
+n = 13
+t_end = min(solver2.t[-1], solver.t[-1])
+t = np.linspace(0, t_end, n)
+u_diff = np.abs(u(t) - u2(t)).max()
+The next step is to introduce a loop where we halve the time step in
+each iteration and solve the logistic ODE with the new time step and
+compute u_diff as shown above. A complete function takes the form
+def find_dt(problem, method=ODESolver.ForwardEuler,
+tol=0.01, dt_min=1E-6):
+"""
+Return a "solved" class Solver instance where the
+difference in the solution and one with a double
+time step is less than tol.
+problem: class Problem instance.
+method: class in ODESolver hierarchy.
+tol: tolerance (chosen relative to problem.R).
+dt_min: minimum allowed time step.
+"""
+dt = problem.T/10
+# start with 10 intervals
+solver = Solver(problem, dt, method)
+
+696
+E Programming of Diﬀerential Equations
+solver.solve()
+from scitools.std import wrap2callable
+good_approximation = False
+while not good_approximation:
+dt = dt/2.0
+if dt < dt_min:
+raise ValueError(’dt=%g < %g - abort’ % (dt, dt_min))
+solver2 = Solver(problem, dt, method)
+solver2.solve()
+# Make continuous functions u(t) and u2(t)
+u
+= wrap2callable((solver. t, solver. u))
+u2 = wrap2callable((solver2.t, solver2.u))
+# Sample the difference in n points in [0, t_end]
+n = 13
+t_end = min(solver2.t[-1], solver.t[-1])
+t = np.linspace(0, t_end, n)
+u_diff = np.abs(u(t) - u2(t)).max()
+print u_diff, dt, tol
+if u_diff < tol:
+good_approximation = True
+else:
+solver = solver2
+return solver2
+Setting the tolerance tol must be done with a view to the typical
+size of u, i.e., the size of R. With R = 100 and tol=1, the Forward
+Euler method meets the tolerance for Δt = 0.25. Switching to the 4-th
+order Runge-Kutta method makes Δt = 1.625 suﬃcient to meet the
+tolerance. Note that although the latter method can use a signiﬁcantly
+larger time step, it also involves four times as many evaluations of the
+right-hand side function at each time step.
+Finally, we show how to make a class that behaves as class Solver,
+but with automatic computation of the time step. If we do not provide
+a dt parameter to the constructor, the find_dt function is used to com-
+pute dt and the solution, otherwise we use the standard Solver.solve
+code. This new class is conveniently realized as a subclass of Solver
+where we override the constructor and the solve method. The plot
+method can be inherited as is. The code becomes
+class AutoSolver(Solver):
+def __init__(self, problem, dt=None,
+method=ODESolver.ForwardEuler,
+tol=0.01, dt_min=1E-6):
+Solver.__init__(self, problem, dt, method)
+if dt is None:
+solver = find_dt(self.problem, method,
+tol, dt_min)
+self.dt = solver.dt
+self.u, self.t = solver.u, solver.t
+def solve(self, method=ODESolver.ForwardEuler):
+if hasattr(self, ’u’):
+# Solution was computed by find_dt in constructor
+pass
+else:
+Solver.solve(self)
+
+E.2 Systems of Ordinary Diﬀerential Equations
+697
+The call hasattr(self,’u’) returns True if u is an attribute in object
+self. Here this is used as an indicator that the solution was computed
+in the constructor by the find_dt function. A typical use is
+problem = Problem(alpha=0.1, R=500, U0=2, T=130)
+solver = AutoSolver(problem, tol=1)
+solver.solve(method=ODESolver.RungeKutta4)
+solver.plot()
+Dealing with Time-Dependent Coeﬃcients. The carrying capacity of
+the environment, R, may vary with time, e.g., due to seasonal changes.
+Can we extend the previous code so that R can be speciﬁed either as
+a constant or as a function of time?
+This is in fact easy if we in the implementation of the right-hand side
+function assume that R is a function of time. If it is given as a constant
+in the constructor of class Problem, we just wrap it as a function of
+time:
+if isinstance(R, (float,int)):
+# number?
+self.R = lambda t: R
+elif callable(R):
+self.R = R
+else:
+raise TypeError(
+’R is %s, has to be number of function’ % type(R))
+The terminate method is also aﬀected as we need to base the tolerance
+on the R value at the present time level. Also the __str__ method must
+be changed since it is not meaningful to print a function self.R. That
+is, all methods in the generalized problem class, here called Problem2,
+must be altered. We have not chosen to make Problem2 a subclass of
+Problem, even though the interface is the same and the two classes are
+closely related. While Problem is clearly a special case of Problem2, as
+a constant R is a special case of a function (R), the opposite case is
+not true.
+Class Problem2 becomes
+class Problem2(Problem):
+def __init__(self, alpha, R, U0, T):
+"""
+alpha, R: parameters in the ODE.
+U0: initial condition.
+T: max length of time interval for integration;
+asymptotic value R must be reached within 1%
+accuracy for some t <= T.
+"""
+self.alpha, self.U0, self.T = alpha, U0, T
+if isinstance(R, (float,int)):
+# number?
+self.R = lambda t: R
+elif callable(R):
+self.R = R
+else:
+raise TypeError(
+’R is %s, has to be number of function’ % type(R))
+
+698
+E Programming of Diﬀerential Equations
+def __call__(self, u, t):
+"""Return f(u,t) for logistic ODE."""
+return self.alpha*u*(1 - u/self.R(t))
+def terminate(self, u, t, step_no):
+"""Return True when asymptotic value R is reached."""
+tol = self.R(t[step_no])*0.01
+return abs(u[step_no] - self.R(t[step_no])) < tol
+def __str__(self):
+return ’alpha=%g, U0=%g’ % (self.alpha, self.U0)
+We can compute the case where R = 500 for t < 60 and then reduced
+to R = 100 because of an environmental crisis (see Figure E.4):
+problem = Problem2(alpha=0.1, U0=2, T=130,
+R=lambda t: 500 if t < 60 else 100)
+solver = AutoSolver(problem, tol=1)
+solver.solve(method=ODESolver.RungeKutta4)
+solver.plot()
+Note the use of a lambda function (Chapter 3.1.11) to save some typ-
+ing when specifying R. The corresponding graph is made of two parts,
+basically exponential growth until the environment changes and then
+exponential reduction until u approaches the new R value and the
+change in u becomes small.
+Reading Input. Our ﬁnal version of the problem class is equipped with
+functionality for reading data from the command line in addition to
+setting data explicitly in the program. We use the argparse module de-
+scribed in Chapter 4.2.4. The idea now is to have a constructor that just
+sets default values. Then we have a method for deﬁning the command-
+line arguments and a method for transforming the argparse information
+Fig. E.4 Solution of the logistic equation u′ = αu(1 −u/R(t)) when R = 500 for t < 60
+and R = 100 for t ≥60.
+
+E.2 Systems of Ordinary Diﬀerential Equations
+699
+to the attributes alpha, U0, R, and T. The R attribute is supposed to be
+a function, and we use the StringFunction tool to turn strings from
+the command-line into a Python function of time t.
+The code of our new problem class is listed next.
+class Problem3(Problem):
+def __init__(self):
+# Set default parameter values
+self.alpha = 1.
+self.R = StringFunction(’1.0’, independent_variable=’t’)
+self.U0 = 0.01
+self.T = 4.
+def define_command_line_arguments(self, parser):
+"""Add arguments to parser (argparse.ArgumentParser)."""
+def evalcmlarg(text):
+return eval(text)
+def toStringFunction(text):
+return StringFunction(text, independent_variable=’t’)
+parser.add_argument(
+’--alpha’, dest=’alpha’, type=evalcmlarg,
+default=self.alpha,
+help=’initial growth rate in logistic model’)
+parser.add_argument(
+’--R’, dest=’R’, type=toStringFunction, default=self.R,
+help=’carrying capacity of the environment’)
+parser.add_argument(
+’--U0’, dest=’U0’, type=evalcmlarg, default=self.U0,
+help=’initial condition’)
+parser.add_argument(
+’--T’, dest=’T’, type=evalcmlarg, default=self.T,
+help=’integration in time interval [0,T]’)
+return parser
+def set(self, **kwargs):
+"""
+Set parameters as keyword arguments alpha, R, U0, or T,
+or as args (object returned by parser.parse_args()).
+"""
+for prm in (’alpha’, ’U0’, ’R’, ’T’):
+if prm in kwargs:
+setattr(self, prm, kwargs[prm])
+if ’args’ in kwargs:
+args = kwargs[’args’]
+for prm in (’alpha’, ’U0’, ’R’, ’T’):
+if hasattr(args, prm):
+setattr(self, prm, getattr(args, prm))
+else:
+print ’Really strange’, dir(args)
+def __call__(self, u, t):
+"""Return f(u,t) for logistic ODE."""
+return self.alpha*u*(1 - u/self.R(t))
+def terminate(self, u, t, step_no):
+"""Return True when asymptotic value R is reached."""
+tol = self.R(t[step_no])*0.01
+return abs(u[step_no] - self.R(t[step_no])) < tol
+def __str__(self):
+s = ’alpha=%g, U0=%g’ % (self.alpha, self.U0)
+if isinstance(self.R, StringFunction):
+
+700
+E Programming of Diﬀerential Equations
+s += ’, R=%s’ % str(self.R)
+return s
+The calls to parser.add_argument are straightforward, but notice
+that we allow strings for α, U0, and T to be interpreted by eval. The
+string for R is interpreted as a formula by StringFunction. The set
+method is ﬂexible: it accepts any set of keyword arguments, and checks
+ﬁrst if these are the names of the problem parameters, and thereafter if
+args=’ is given, which implies that the parameters are taken from the
+command line. The rest of the class is very similar to earlier versions.
+The typical use of class Problem3 is shown below. First we set pa-
+rameters directly:
+problem = Problem3()
+problem.set(alpha=0.1, U0=2, T=130,
+R=lambda t: 500 if t < 60 else 100)
+solver = AutoSolver(problem, tol=1)
+solver.solve(method=ODESolver.RungeKutta4)
+solver.plot()
+Then we rely on reading parameters from the command line:
+problem = Problem3()
+import argparse
+parser = argparse.ArgumentParser(
+description=’Logistic ODE model’)
+parser = problem.define_command_line_arguments(parser)
+# Try --alpha 0.11 --T 130 --U0 2 --R ’500 if t < 60 else 300’
+args = parser.parse_args()
+problem.set(args=args)
+solver = AutoSolver(problem, tol=1)
+solver.solve(method=ODESolver.RungeKutta4)
+solver.plot()
+The last example using a problem class integrated with the command
+line is the most ﬂexible way of implementing ODE models.
+E.2.9 Application 3: An Oscillating System
+The motion of a box attached to a spring, as described in Appendix D,
+can be modeled by two ﬁrst-order diﬀerential equations as listed in
+(E.32), here repeated with F(t) = mw′′(t) for convenience:
+du(0)
+dt
+= u(1),
+du(1)
+dt
+= w′′(t) + g −m−1βu(1) −m−1ku(0).
+The w(t) function is the forced movement of the end of the spring.
+The code related to this example is found in app3_osc.py. Because
+our right-hand side f contains several parameters, we implement it as
+
+E.2 Systems of Ordinary Diﬀerential Equations
+701
+a class with the parameters as attributes and a __call__ method for
+returning the 2-vector f. We assume that the user of the class supplies
+the w(t) function, so it is natural to compute w′′(t) by a ﬁnite diﬀerence
+formula.
+class OscSystem:
+def __init__(self, m, beta, k, g, w):
+self.m, self.beta, self.k, self.g, self.w = \
+float(m), float(beta), float(k), float(g), w
+def __call__(self, u, t):
+u0, u1 = u
+m, beta, k, g, w = \
+self.m, self.beta, self.k, self.g, self.w
+# Use a finite difference for w’’(t)
+h = 1E-5
+ddw = (w(t+h) - 2*w(t) + w(t-h))/(h**2)
+f = [u1, ddw
++ g - beta/m*u1 - k/m*u0]
+return f
+A simple test case arises if we set m = k = 1 and β = g = w = 0:
+du(0)
+dt
+= u(1),
+du(1)
+dt
+= −u(0).
+Suppose that u(0)(0) = 1 and u(1)(0) = 0. An exact solution is then
+u(0)(t) = cos t,
+u(1)(t) = −sin t.
+We can use this case to check how the Forward Euler method compares
+with the 4-th order Runge-Kutta method:
+import ODESolver
+from scitools.std import *
+f = OscSystem(1.0, 0.0, 1.0, 0.0, lambda t: 0)
+u_init = [1, 0]
+# initial condition
+nperiods = 3.5
+# no of oscillation periods
+T = 2*pi*nperiods
+for solver_class in ODESolver.ForwardEuler, ODESolver.RungeKutta4:
+if solver_class == ODESolver.ForwardEuler:
+npoints_per_period = 200
+elif solver_class == ODESolver.RungeKutta4:
+npoints_per_period = 20
+n = npoints_per_period*nperiods
+t_points = linspace(0, T, n+1)
+solver = solver_class(f)
+solver.set_initial_condition(u_init)
+u, t = solver.solve(t_points)
+# u is an array of [u0,u1] pairs for each time level,
+# get the u0 values from u for plotting
+u0_values = u[:, 0]
+u1_values = u[:, 1]
+u0_exact = cos(t)
+u1_exact = -sin(t)
+figure()
+alg = solver_class.__name__
+# (class) name of algorithm
+plot(t, u0_values, ’r-’,
+
+702
+E Programming of Diﬀerential Equations
+t, u0_exact, ’b-’,
+legend=(’numerical’, ’exact’),
+title=’Oscillating system; position - %s’ % alg,
+savefig=’tmp_oscsystem_pos_%s.eps’ % alg)
+figure()
+plot(t, u1_values, ’r-’,
+t, u1_exact, ’b-’,
+legend=(’numerical’, ’exact’),
+title=’Oscillating system; velocity - %s’ % alg,
+savefig=’tmp_oscsystem_vel_%s.eps’ % alg)
+For this particular application it turns out that the 4-th order Runge-
+Kutta is very accurate, even with few (20) time steps per oscillation.
+Unfortunately, the Forward Euler method leads to a solution with in-
+creasing amplitude in time. Figure E.5 shows a comparison between
+the two methods. Note that the Forward Euler method uses 10 times
+as many time steps as the 4-th order Runge-Kutta method and is still
+much less accurate. A very much smaller time step is needed to limit
+the growth of the Forward Euler scheme for oscillating systems.
+Fig. E.5 Solution of an oscillating system (u′′ + u = 0 formulated as system of two ODEs)
+by (a) the Forward Euler method with Δt = 2π/200; and (b) the 4-th order Runge-Kutta
+method with Δt = 2π/20.
+E.2.10 Application 4: The Trajectory of a Ball
+Exercise 1.13 derives the following two second-order diﬀerential equa-
+tions for the motion of a ball (neglecting air resistance):
+d2x
+dt2 = 0,
+(E.50)
+d2y
+dt2 = −g,
+(E.51)
+where (x, y) is the position of the ball (x is a horizontal measure and
+y is a vertical measure), and g is the acceleration of gravity. To use
+numerical methods for ﬁrst-order equations, we must rewrite the system
+of two second-order equations as a system of four ﬁrst-order equations.
+
+E.2 Systems of Ordinary Diﬀerential Equations
+703
+This is done by introducing to new unknowns, the velocities vx = dx/dt
+and vy = dy/dt. We then have the ﬁrst-order system of ODEs
+dx
+dt = vx,
+(E.52)
+dvx
+dt = 0,
+(E.53)
+dy
+dt = vy,
+(E.54)
+dvy
+dt = −g.
+(E.55)
+The initial conditions are
+x(0) = 0,
+(E.56)
+vx(0) = v0 cos θ,
+(E.57)
+y(0) = y0,
+(E.58)
+vy(0) = v0 sin θ,
+(E.59)
+where v0 is the initial magnitude of the velocity of the ball. The initial
+velocity has a direction that makes the angle θ with the horizontal.
+The code related to this example is found in app4_ball.py. A func-
+tion returning the right-hand side of our ODE system reads
+def f(u, t):
+x, vx, y, vy = u
+g = 9.81
+return [vx, 0, vy, -g]
+It makes sense to solve the ODE system as long as the ball as above the
+ground, i.e., as long as y ≥0. We must therefore supply a terminate
+function as explained on page 686:
+def terminate(u, t, step_no):
+return False if u[step_no,2] >= 0 else True
+Observe that all the y values are given by u[:,2] and we want to test
+the value at the current step, which becomes u[step_no,2].
+The main program for solving the ODEs can be set up as
+v0 = 5
+theta = 80*pi/180
+U0 = [0, v0*cos(theta), 0, v0*sin(theta)]
+T = 1.2; dt = 0.01; n = int(round(T/dt))
+solver = ODESolver.ForwardEuler(f)
+solver.set_initial_condition(U0)
+def terminate(u, t, step_no):
+return False if u[step_no,2] >= 0 else True
+u, t = solver.solve(linspace(0, T, n+1), terminate)
+
+704
+E Programming of Diﬀerential Equations
+Now, u[:,0] represents all the x(t) values, u[:,1] all the vx(t) values,
+u[:,2] all the y(t) values, and u[:,3] all the vy(t) values. To plot the
+trajectory, y versus x, we write
+x = u[:,0]
+y = u[:,2]
+plot(x, y)
+The exact solution is given by (1.5), so we can easily assess the accu-
+racy of the numerical solution. Figure E.6 shows a comparison of the
+numerical and the exact solution in this simple test problem. Note that
+even if we are just interested in y as a function of x, we ﬁrst need to
+solve the complete ODE system for x(t), vx(t), y(t), and vy(t).
+The real strength of the numerical approach is the ease with which we
+can add air resistance and lift to the system of ODEs. Insight in physics
+is necessary to derive what the additional terms are, but implementing
+the terms is trivial in our program above (do Exercise E.32).
+Fig. E.6 The trajectory of a ball solved as a system of four ODEs by the Forward Euler
+method.
+E.2.11 Further Developments of ODESolver
+The ODESolver hierarchy is a simpliﬁed prototype version of a more pro-
+fessional Python package for solving ODEs called Odespy. This package
+features a range of simple and sophisticated methods for solving scalar
+ODEs and systems of ODEs. Some of the solvers are implemented in
+Python, while others call up well-known ODE software in Fortran. Like
+the ODESolver hierarchy, Odespy oﬀers a uniﬁed interface to the diﬀer-
+ent numerical methods, which means that the user can specify the ODE
+problem as a function f(u,t) and send this function to all solvers. This
+
+E.3 Exercises
+705
+feature makes it easy to switch between solvers to test a wide collection
+of numerical methods for a problem.
+Odespy can be downloaded from http://hplgit.github.com/odespy/.
+It is installed by the usual python setup.py install command.
+E.3 Exercises
+Exercise E.1. Solve a simple ODE in two ways.
+The purpose of this exercise is to solve the ODE problem u−10u′ = 0,
+u(0) = 0.2, for t ∈[0, 20]. Use both the ForwardEuler function from
+Appendix E.1.3 and the ForwardEuler class from Appendix E.1.7. Set
+Δt = 1. Check that the results produced by the two equivalent methods
+coincide. Name of program ﬁle: simple_ODE.py.
+⋄
+Exercise E.2. Use the ODESolver hierarchy to solve a simple ODE.
+Solve the ODE problem u′ = u/2 with u(0) = 1, using a class in
+the ODESolver hierarchy. Choose Δt = 0.5 and ﬁnd u(t) for t ∈[0, 6].
+Write out the approximate ﬁnal un value together with the exact
+value e3. Repeat the calculations for Δt = 0.001. Name of program
+ﬁle: ODESolver_demo.py.
+⋄
+Exercise E.3. Solve an ODE for emptying a tank.
+A cylindrical tank of radius R is ﬁlled with water to a height h0. By
+opening a valve of radius r at the bottom of the tank, water ﬂows out,
+and the height of water, h(t), decreases with time. We can derive an
+ODE that governs the height function h(t).
+Mass conservation of water requires that the reduction in height
+balances the outﬂow. In a time interval Δt, the height is reduced by
+Δh, which corresponds to a water volume of πR2Δh. The water leaving
+the tank in the same interval of time equals πr2vΔt, where v is the
+outﬂow velocity. It can be shown (from what is known as Bernoulli’s
+equation) that
+v(t) =
+
+2gh(t) + h′(t)2,
+g being the acceleration of gravity [6, 11]. Note that Δh > 0 implies
+an increase in h, which means that −πR2Δh is the corresponding de-
+crease in volume that must balance the outﬂow loss of volume πr2vΔt.
+Elimination of v and taking the limit Δt →0 lead to the ODE
+dh
+dt = −
+ r
+R
+2
+1 −
+ r
+R
+4−1/2
+2gh.
+For practical applications r ≪R so that 1−(r/R)4 ≈1 is a reasonable
+approximation (friction is neglected in the derivation, and we are also
+going to solve the ODE by approximate methods). The ﬁnal ODE then
+
+706
+E Programming of Diﬀerential Equations
+becomes
+dh
+dt = −
+ r
+R
+2
+2gh.
+(E.60)
+The initial condition follows from the initial height of water, h0, in the
+tank: h(0) = h0.
+Solve (E.60) by a numerical method of your choice in a program. Set
+r = 1 cm, R = 20 cm, g = 9.81 m/s2, and h0 = 1 m. Use a time step
+of 10 seconds. Plot the solution, and experiment to see what a proper
+time interval for the simulation is. Make sure to test for h < 0 so that
+you do not apply the square root function to negative numbers. Can
+you ﬁnd an analytical solution of the problem to compare the numerical
+solution with? Name of program ﬁle: tank_ODE.py.
+⋄
+Exercise E.4. Scale the logistic equation.
+Consider the logistic model (E.5):
+u′(t) = αu(t)
+
+1 −u(t)
+R
+
+,
+u(0) = U0.
+This problem involves three input parameters: U0, R, and α. Learning
+how u varies with U0, R, and α requires much experimentation where
+we vary all three parameters and observe the solution. A much more
+eﬀective approach is to scale the problem. By this technique the solu-
+tion depends only on one parameter U0/R in the present problem. This
+exercise tells how the scaling is done.
+The idea of scaling is to introduce dimensionless versions of the
+independent and dependent variables:
+v = u
+uc
+,
+τ = t
+tc
+,
+where uc and tc are characteristic sizes of u and t, respectively, such
+that the dimensionless variables v and τ are of approximately unit
+size. Since we know that u →R as t →∞, R can be taken as the
+characteristic size of u.
+Insert u = Rv and t = tcτ in the governing ODE and choose tc =
+1/α. Show that the ODE for the new function v(τ) becomes
+dv
+dτ = v(1 −v),
+v(0) = v0.
+(E.61)
+We see that the three parameters U0, R, and α have disappeared from
+the ODE problem, and only one parameter v0 = U0/R is involved.
+Show that if v(τ) is computed, one can recover u(t) by
+u(t) = Rv(αt).
+(E.62)
+Geometrically, the transformation from v to u is just a stretching of
+the two axis in the coordinate system.
+
+E.3 Exercises
+707
+Make a program logistic_scaled.py where you compute v(τ), given
+v0 = 0.05, and then you use (E.62) to plot u(t) for R = 100, 500, 1000
+and α = 1 in one ﬁgure, and u(t) for α = 1, 5, 10 and R = 1000
+in another ﬁgure. Note how eﬀectively you can generate u(t) without
+needing to solve an ODE problem, and also note how varying R and α
+impacts the graph of u(t). Name of program ﬁle: logistic_scaled.py.
+⋄
+Exercise E.5. Compute logistic growth with time-varying carrying ca-
+pacity.
+Use classes Problem2 and AutoSolver from Appendix E.2.8 to study
+logistic growth when the carrying capacity of the environment, R,
+changes periodically with time: R = 500 for its ≤t < (i + 1)ts and
+R = 200 for (i + 1)ts ≤t < (i + 2)ts, with i = 0, 2, 4, 6, . . . . Use
+the same data as in Appendix E.2.8, and ﬁnd some relevant sizes of
+the period of variation, ts, to experiment with. Name of program ﬁle:
+seasonal_logistic_growth.py.
+⋄
+Exercise E.6. Solve an ODE for the arc length.
+Given a curve y = f(x), the length of the curve from x = x0 to some
+point x is given by the function s(x), which solves the problem
+ds
+dx =
+
+1 +
+
+f′(x)
+2,
+s(x0) = 0.
+(E.63)
+Since s does not enter the right-hand side, (E.63) can immediately
+be integrated from x0 to x (see Exercise A.17). However, we shall
+solve (E.63) as an ODE. Use the Forward Euler method and com-
+pute the length of a straight line (for easy veriﬁcation) and a parabola:
+f(x) = 1
+2x + 1, x ∈[0, 2]; f(x) = x2, x ∈[0, 2]. Name of program ﬁle:
+arclength_ODE.py.
+⋄
+Exercise E.7. Compute inverse functions by solving an ODE.
+The inverse function g of some function f(x) takes the value f(x)
+back to x again: g(f(x)) = x. The common technique to compute
+inverse functions is to set y = f(x) and solve with respect to x. The
+formula on the right-hand side is then the desired inverse function g(y).
+Exercise 7.26 makes use of such an approach, where y −f(x) = 0 is
+solved numerically with respect to x for diﬀerent discrete values of y.
+We can formulate a general procedure for computing inverse func-
+tions from an ODE problem. If we diﬀerentiate y = f(x) with respect
+to y, we get 1 = f′(x) dx
+dy by the chain rule. The inverse function we
+seek is x(y), but this function then fulﬁlls the ODE
+x′(y) =
+1
+f′(x).
+(E.64)
+
+708
+E Programming of Diﬀerential Equations
+That y is the independent coordinate and x the function of y can be
+a somewhat confusing notation, so you might introduce u and t for x
+and y:
+u′(t) =
+1
+f′(u).
+The initial condition is x(0) = xr where xr solves the equation
+f(xr) = 0 (x(0) implies y = 0 and then from y = f(x) it follows
+that f(x(0)) = 0).
+Make a program that can use the described method to compute x(y),
+given f(x) and xr. Use any numerical method of your choice for solving
+the ODE problem. Plot f(x) as well as x(y). Verify the implementation
+for f(x) = 2x. Test the method for f(x) = √x. Name of program ﬁle:
+inverse_ODE.py.
+⋄
+Exercise E.8. Generalize the implementation in Exer. E.7.
+The method for computing inverse functions described in Exer-
+cise E.7 is very general. The purpose now is to make a reusable utility,
+here called Inverse, for computing the inverse of some Python function
+f(x) on some interval I=[a,b]. The utility can be used as follows to
+calculate the inverse of sin x on I = [0, π/2]:
+def f(x):
+return sin(x)
+# Compute the inverse of f
+inverse = Inverse(f, x0=0, I=[0, pi/2], resolution=100)
+x, y = Inverse.compute()
+from scitools.std import plot
+plot(y, x, ’r-’,
+x, f(x), ’b-’,
+y, asin(y), ’go’)
+legend([’computed inverse’, ’f(x)’, ’exact inverse’])
+Here, x0 is the value of x at 0, or in general at the left point of the
+interval: I[0]. The parameter resolution tells how many equally sized
+intervals Δy we use in the numerical integration of the ODE. A default
+choice of 1000 can be used if it is not given by the user.
+Make class Inverse and put it in a module. Include a function
+_verify() in the module which tests that class Inverse gives exact solu-
+tion for the test problem f(x) = 2x. Name of program ﬁle: Inverse1.py.
+⋄
+Exercise E.9. Extend the implementation in Exer. E.8.
+Extend the module in Exercise E.8 such that the value of x(0) (x0
+in class Inverse’s constructor) does not need to be provided by the
+user. To this end, class Inverse must solve f(x) = 0 and set x0 equal
+to the root. You may use the Bisection method from Chapter 4.6.2,
+Newton’s method from Appendix A.1.10, or the Secant method from
+Exercise A.14 to solve f(x) = 0. Class Inverse should ﬁgure out a
+
+E.3 Exercises
+709
+suitable initial interval for the Bisection method or start values for the
+Newton or Secant methods. Computing f(x) for x at many points and
+examining these may help in solving f(x) = 0 without any input from
+the user. Name of program ﬁle: Inverse2.py.
+⋄
+Exercise E.10. Compute inverse functions by interpolation.
+Instead of solving an ODE for computing the inverse function g(y) of
+some function f(x), as explained in Exercise E.7, one may use a simpler
+approach based on ideas from Appendix E.1.5. Say we compute discrete
+values of x and f(x), stored in the arrays x and y. Doing a plot(x, y)
+shows y = f(x) as a function of x, and doing plot(y, x) shows x as
+a function of y, i.e., we plot the inverse function g(y). It is therefore
+trivial to plot the inverse function!
+However, if we want the inverse function of f(x) as some Python
+function g(y) that we can call for any y, we can use the tool
+wrap2callable from Appendix E.1.5 to turn the discrete inverse func-
+tion, described by the arrays y (independent coordinate) and x (depen-
+dent coordinate), into a continuous function g(y):
+from scitools.std import wrap2callable
+g = wrap2callable((y, x))
+y = 0.5
+print g(y)
+The g(y) function applies linear interpolation in each interval between
+the points in the y array.
+Implement this method in a program. Verify the implementation for
+f(x) = 2x for x ∈[0, 4] and test it for f(x) = sin x for x ∈[0, π/2].
+Name of program ﬁle: inverse_wrap2callable.py.
+⋄
+Exercise E.11. Simulate a falling or rising body in a ﬂuid.
+A body moving vertically through a ﬂuid (liquid or gas) is subject
+to three diﬀerent types of forces:
+1. the gravity force Fg = −mg, where m is the mass of the body and g
+is the acceleration of gravity;
+2. the drag force2 Fd = −1
+2CDϱA|v|v (see also Exercise 1.11), where CD
+is a dimensionless drag coeﬃcient depending on the body’s shape,
+ϱ is the density of the ﬂuid, A is the cross-sectional area (produced
+by a cutting plane y = const through the thickest part of the body),
+and v is the velocity;
+3. the uplift or buoyancy force (“Archimedes force”) Fb = ϱgV , where
+V is the volume of the body.
+2 Roughly speaking, the Fd formula is suitable for medium to high velocities, while for very
+small velocities, or very small bodies, Fd is proportional to the velocity, not the velocity
+squared, see [11].
+
+710
+E Programming of Diﬀerential Equations
+Newton’s second law applied to the body says that the sum of these
+forces must equal the mass of the body times its acceleration a:
+Fg + Fd + Fb = ma,
+which gives
+−mg −1
+2CDϱA|v|v + ϱgV = ma.
+The unknowns here are v and a, i.e., we have two unknowns but only
+one equation. From kinematics in physics we know that the acceleration
+is the time derivative of the velocity: a = dv/dt. This is our second
+equation. We can easily eliminate a and get a single diﬀerential equation
+for v:
+−mg −1
+2CDϱA|v|v + ϱgV = mdv
+dt .
+A small rewrite of this equation is handy: We express m as ϱbV , where
+ϱb is the density of the body, and we isolate dv/dt on the left-hand side,
+dv
+dt = −g
+
+1 −ϱ
+ϱb
+
+−1
+2CD
+ϱA
+ϱbV |v|v.
+(E.65)
+This diﬀerential equation must be accompanied by an initial condition:
+v(0) = V0.
+Make a program for solving (E.65) numerically, using any numerical
+method of your choice. Implement the right-hand side of (E.65) in the
+__call__ method of a class where the parameters g, ϱ, ϱb, CD, A, and
+V are attributes.
+To verify the program, assume a heavy body in air such that the Fb
+force can be neglected, and assume a small velocity such that the air
+resistance Fd can also be neglected. Setting ϱ = 0 removes both these
+terms from the equation. The motion then leads to the exact velocity
+v(t) = y′(t) = v0 −gt. See how well the program reproduces this simple
+solution.
+After the program is veriﬁed, we are ready to run two real examples
+and plot the evolution of v:
+1. Parachute jumper. The point is to compute the motion of a parachute
+jumper in free fall before the parachute opens. We set the density of
+the human body as ϱb = 1003 kg/m3 and the mass as m = 80 kg,
+implying V = m/ϱb = 0.08 m3. We can base the cross-sectional area
+A on the height 1.8 m and a width of 50 cm, giving A ≈πR2 =
+0.9 m2. The density of air decreases with height, and we here use the
+value 0.79 kg/m3 which is relevant for about 5000 m height. The CD
+coeﬃcient can be set as 0.6. Start with v0 = 0.
+2. Rising ball in water. A ball with the size of a soccer ball is placed in
+deep water, and we seek to model its motion upwards. Contrary to
+
+E.3 Exercises
+711
+the former example, where the buoyancy force Fb is very small, Fb is
+now the driving force, and the gravity force Fg is small. Set A = πa2
+with a = 11 cm, the mass of the ball is 0.43 kg, the density of water
+is 1000 kg/m3, and CD is 0.2. Start with v0 = 0 and see how the ball
+rises.
+Name of program ﬁle: body_in_fluid.py.
+⋄
+Exercise E.12. Check the solution’s limit in Exer. E.11.
+The solution of (E.65) often tends to a constant velocity, called the
+terminal velocity. This happens when the sum of the forces, i.e., the
+right-hand side in (E.65) vanishes. Compute the formula for the ter-
+minal velocity by hand. Solve the ODE using class ODESolver and
+call the solve method with a terminate function that terminates
+the computations when a constant velocity is reached, that is, when
+|v(tn) −v(tn−1)| ≤ϵ, where ϵ is a small number. Run a series of Δt
+values and make a graph of the terminal velocity as a function of Δt
+for the two cases in Exercise E.11. Indicate the exact terminal velocity
+in the plot by a horizontal line. Would you expect the accuracy of the
+computed terminal velocity to increase with decreasing Δt? Discuss!
+Name of program ﬁle: body_in_fluid_termvel.py.
+⋄
+Exercise E.13. Visualize the diﬀerent forces in Exer. E.11.
+The purpose of this exercise is to plot the forces Fg, Fb, and Fd in the
+model from Exercise E.11 as functions of t. Seeing the relative impor-
+tance of the forces as time develops gives an increased understanding
+of how the diﬀerent forces contribute to change the velocity. Name of
+program ﬁle: body_in_fluid_forces.py.
+⋄
+Exercise E.14. Solve an ODE until constant solution.
+Newton’s law of cooling,
+dT
+dt = −h(T −Ts)
+(E.66)
+can be used to see how the temperature T of an object changes be-
+cause of heat exchange with the surroundings, which have a tempera-
+ture Ts. The parameter h, with unit s−1 is an experimental constant
+(heat transfer coeﬃcient) telling how eﬃcient the heat exchange with
+the surroundings is. For example, (E.66) may model the cooling of a
+hot pizza taken out of the oven. The problem with applying (E.66),
+nevertheless, is that h must be measured. Suppose we have measured
+T at t = 0 and t1. We can use a rough Forward Euler approximation
+of (E.66) with one time step of length t1,
+T(t1) −T(0)
+t1
+= −h
+
+T(0) −Ts
+
+,
+to make the estimate
+
+712
+E Programming of Diﬀerential Equations
+h = T(t1) −T(0)
+t1(Ts −T(0)).
+(E.67)
+Suppose now you take a hot pizza out of the oven. The temperature
+of the pizza is 200 C at t = 0 and 180 C after 50 seconds, in a room
+with temperature 20 C. Find an estimate of h from the formula above.
+Solve (E.66) to ﬁnd the evolution of the temperature of the pizza. Use
+class ForwardEuler or RungeKutta4, and supply a terminate function to
+the solve method so that the simulation stops when T is suﬃciently
+close to the ﬁnal room temperature Ts. Plot the solution. Name of
+program ﬁle: pizza_cooling1.py.
+⋄
+Exercise E.15. Use classes in Exer. E.14.
+Solve Exercise E.14 with a class Problem containing the parameters
+h, Ts, T(0), and Δt as attributes. A method estimate_h should take
+t1 and T(t1) as arguments, compute h, and assign it to self.h. Also a
+method __call__ for computing the right-hand side must be included.
+The terminate function can be a method in the class, a stand-alone
+function, or a lambda function. By using class Problem, we avoid having
+the physical parameters as global variables in the program and all the
+problem-speciﬁc data are packed into one object.
+Write a function solve(problem) that takes a Problem object with
+name problem as argument, solves the ODE, and plots the solution. We
+now want to run experiments with diﬀerent values of some parameters:
+Ts = 15, 22, 30 C and T(0) = 250, 200 C. Make a list of Problem objects
+and plot the solution for each problem in the same ﬁgure:
+# Given h and dt
+problems = [Problem(h, T_s, T_0, dt) \
+for T_s in 15, 22, 30 for T_0 in 250, 200]
+for problem in problems:
+solve(problem)
+hold(’on’)
+Name of program ﬁle: pizza_cooling2.py.
+⋄
+Exercise E.16. Scale away parameters in Exer. E.14.
+Use the scaling approach from Appendix E.2.8 to “scale away” the
+parameters in the ODE in Exercise E.14. That is, introduce a new
+unknown u = (T −Ts)/(T(0) −Ts) and a new time scale τ = th. Find
+the ODE and the initial condition that governs the u(τ) function. Make
+a program that computes u(τ) until |u| < 0.001. Store the discrete
+u and τ values in a ﬁle u_tau.dat if that ﬁle is not already present
+(you can use os.path.isfile(f) to test if a ﬁle with name f exists).
+Create a function T(u, tau, h, T0, Ts) that loads the u and τ data
+from the u_tau.dat ﬁle and returns two arrays with T and t values,
+corresponding to the computed arrays for u and τ. Plot T versus t.
+Give the parameters h, Ts, and T(0) on the command line. Note that
+this program is supposed to solve the ODE once and then recover any
+
+E.3 Exercises
+713
+T(t) solution by a simple scaling of the single u(τ) solution. Name of
+program ﬁle: pizza_cooling3.py.
+⋄
+Exercise E.17. Use the 4th-order Runge-Kutta on (C.34).
+Investigate if the 4th-order Runge-Kutta method is better than the
+Forward Euler scheme for solving the challenging ODE problem (C.34)
+from Exercise C.3 on page 639. Name of program ﬁle: yx_ODE2.py.
+⋄
+Exercise E.18. Compare ODE methods.
+The equation u′ = −au is a relevant model for radioactive decay,
+where u(t) is the fraction of particles that remains in the radioactive
+substance at time t. The parameter a is the inverse of the so-called
+mean lifetime of the substance. The initial condition is u(0) = 1.
+Introduce a class Decay to hold information about the physical prob-
+lem: the parameter a and a __call__ method for computing the right-
+hand side −au of the ODE. Initialize an instance of class Decay with
+a = ln(2)/5600 1/y (y means the unit years, and this value of a cor-
+responds to the Carbon-14 radioactive isotope whose decay is used ex-
+tensively in dating organic material that is tens of thousands of years
+old).
+Solve (E.7) by both the Forward Euler and the 4-th order Runge-
+Kutta method, using the ForwardEuler and the RungeKutta4 classes
+in the ODESolver hierarchy. Use a time step of 500 years, and simulate
+decay for T = 20,000 y (let the time unit be 1 y). Plot the two solutions.
+Write out the ﬁnal u(T) value and compare it with the exact value e−aT .
+Name of program ﬁle: radioactive_decay.py.
+⋄
+Exercise E.19. Compare ODE methods.
+Consider the problem described in Exercise E.3 on page 705. Make
+a class Problem that holds problem-speciﬁc parameters: h0, r, R, Δt,
+and T ([0, T] being the time interval for simulation). Our aim is to
+solve this ODE problem using the ForwardEuler, BackwardEuler, and
+RungeKutta4 classes in the ODESolver hierarchy. Read one or more Δt
+values from the command line, solve the problems for these Δt values,
+and plot the graphs in the same ﬁgure:
+# Given h_0, r, R
+problems = [Problem(h_0, r, R, float(dt)) for dt in sys.argv[1:]]
+for problem in problems:
+for method in ForwardEuler, BackwardEuler, RungeKutta4:
+solve(problem, method)
+hold(’on’)
+The solve function must use the method class and information in the
+Problem object to solve the ODE and make a curve plot of h(t) (anno-
+tating the legend with the value of dt and method).
+Try out diﬀerent Δt values between 5 and 50 s. Comment upon the
+quality of the various methods to compute a correct limiting value of h
+as Δt is varied. (Hint: negative h values may appear when the problem
+
+714
+E Programming of Diﬀerential Equations
+is solved numerically, so set h = 0 if h < 0 before computing
+√
+h.)
+Name of program ﬁle: tank_ODE_3methods.py.
+⋄
+Exercise E.20. Solve two coupled ODEs for radioactive decay.
+Consider two radioactive substances A and B. The nuclei in sub-
+stance A decay to form nuclei of type B with a mean lifetime τA, while
+substance B decay to form type A nuclei with a mean lifetime τB. Let-
+ting uA and uB be the fractions of the initial amount of material in
+substance A and B, respectively, the following system of ODEs governs
+the evolution of uA(t) and uB(t):
+u′
+A = uB/τB −uA/τA,
+(E.68)
+u′
+B = uA/τA −uB/τB,
+(E.69)
+with uA(0) = uB(0) = 1. As in Exercise E.18, introduce a problem
+class, which holds the parameters τA and τB and oﬀers a __call__
+method to compute the right-hand side vector of the ODE system,
+i.e., (uB/τB −uA/τA, uA/τA −uB/τB). Solve for uA and uB using a
+subclass in the ODESolver hierarchy and the parameter choice τA = 8
+minutes, τB = 40 minutes, and Δt = 10 seconds. Plot uA and uB
+against time measured in minutes. From the ODE system it follows
+that the ratio uA/uB →τA/τB as t →∞(assuming u′
+A = u′
+B = 0
+in the limit t →∞). Check that the solutions fulﬁlls this requirement
+(this is a partial veriﬁcation of the program). Name of program ﬁle:
+radioactive_decay2.py.
+⋄
+Exercise E.21. Code a 2nd-order Runge-Kutta method; function.
+Implement the 2nd-order Runge-Kutta method speciﬁed in formula
+(E.37). Use a plain function RungeKutta2 of the type shown in Ap-
+pendix E.1.2 for the Forward Euler method. Construct a test problem
+where you know the analytical solution, and plot the diﬀerence be-
+tween the numerical and analytical solution. Name of program ﬁle:
+RungeKutta2_func.py.
+⋄
+Exercise E.22. Code a 2nd-order Runge-Kutta method; class.
+Make a new subclass RungeKutta2 in the ODESolver hierarchy from
+Appendix E.2.5 for solving ordinary diﬀerential equations with the 2nd-
+order Runge-Kutta method speciﬁed in formula (E.37). Construct a
+test problem where you know the analytical solution, and plot the dif-
+ference between the numerical and analytical solution as a function of
+time. Place the RungeKutta2 class and the test problem in a separate
+module (where the superclass ODESolver is imported from the ODESolver
+module). Call the test problem from the test block in the module ﬁle.
+Name of program ﬁle: RungeKutta2.py.
+⋄
+Exercise E.23. Make a subclass for Heun’s method.
+Implement the numerical method (E.35)–(E.36) in a subclass of
+ODESolver. Place the code in a separate ﬁle where the ODESolver class
+
+E.3 Exercises
+715
+is imported. How can you verify that the implementation is correct?
+Name of program ﬁle: Heun.py.
+⋄
+Exercise E.24. Make a subclass for the Midpoint method.
+Implement the Midpoint method speciﬁed in formula (E.34) from
+page 684 in a subclass of ODESolver.
+Compare in a plot the Midpoint method with the Forward Euler and
+4th-order Runge-Kutta methods and the exact solution for the problem
+u′ = u, u(0) = 1, with 10 steps between 0 and the end time T = 5.
+Name of program ﬁle: Midpoint.py.
+⋄
+Exercise E.25. Make a subclass for an Adams-Bashforth method.
+Implement the Adams-Bashforth method (E.45) on page 685 in a
+subclass of ODESolver. Use Heun’s method (E.36) to compute u1.
+Compare in a plot the Adams-Bashforth method with the Forward
+Euler and 4th-order Runge-Kutta methods and the exact solution for
+the problem u′ = u, u(0) = 1, with 10 steps between 0 and the end
+time T = 5. Name of program ﬁle: AdamsBashforth3.py.
+⋄
+Exercise E.26. Implement the iterated Midpoint method; function.
+Implement the numerical method (E.46)–(E.47) as a function
+iterated_Midpoint_method(f, U0, T, n, N)
+where f is a Python implementation of f(u, t), U0 is the initial condi-
+tion u(0) = U0, T is the ﬁnal time of the simulation, n is the number
+of time steps, and N is the parameter N in the method (E.46). The
+iterated_Midpoint_method should return two arrays: u0, . . . , un and
+t0, . . . , tn. To verify the implementation, calculate by hand u1 and u2
+when N = 2 for the ODE u′ = −2u, u(0) = 1, with Δt = 1/4. Compare
+your hand calculations with the results of the program. Thereafter, run
+the program for the same ODE problem but with Δt = 0.1 and T = 2.
+Name of program ﬁle: MidpointIter_func.py.
+⋄
+Exercise E.27. Implement the iterated Midpoint method; class.
+The purpose of this exercise is to implement the numerical
+method (E.46)–(E.47) in a class like the ForwardEuler class from
+Appendix E.1.7. Create a module containing the class and a test
+function demonstrating the use:
+def _application():
+def f(u, t):
+return -2*u
+solver = MidpointIter(f, N=4)
+solver.set_initial_condition(1)
+t_points = numpy.linspace(0, 1.5, 16)
+u, t = solver.solve(t_points)
+from scitools.std import plot
+plot(t, u)
+Call the _application function from the test block in the module ﬁle.
+Also include a _verify function which compares the hand calculations
+
+716
+E Programming of Diﬀerential Equations
+of two time steps (see Exercise E.26) with the results produced by the
+class. Name of program ﬁle: MidpointIter_class.py.
+⋄
+Exercise E.28. Make a subclass for the iterated Midpoint method.
+Implement the numerical method (E.46)–(E.47) in a subclass of
+ODESolver. The code should reside in a separate ﬁle where the ODESolver
+class is imported. One can either ﬁx N or introduce an ϵ and iterate
+until the change in |vq −vq−1| is less than ϵ. Allow the constructor to
+take both N and ϵ as arguments. Compute a new vq as long as q ≤N
+or |vq −vq−1| > ϵ. Let N = 20 and ϵ = 10−6 by default. Name of
+program ﬁle: MidpointIter.py.
+⋄
+Exercise E.29. Study convergence of numerical methods for ODEs.
+The approximation error when solving an ODE numerically is usu-
+ally of the form CΔtr, where C and r are constants that can be es-
+timated from numerical experiments. The constant r, called the con-
+vergence rate, is of particular interest. Halving Δt halves the error if
+r = 1, but if r = 3, halving Δt reduces the error by a factor of 8.
+Exercise 9.16 describes a method for estimating r from two consec-
+utive experiments. Make a function
+ODE_convergence(f, U0, u_e, method, dt=[])
+that returns a series of estimated r values corresponding to a series
+of Δt values given as the dt list. The argument f is a Python imple-
+mentation of f(u, t) in the ODE u′ = f(u, t). The initial condition is
+u(0) = U0, where U0 is given as the U0 argument, u_e is the exact
+solution ue(t) of the ODE, and method is the name of a class in the
+ODESolver hierarchy. The error between the exact solution ue and the
+computed solution u0, u1, . . . , un can be deﬁned as
+e =
+	
+Δt
+n
+
+i=0
+
+ue(ti) −ui
+2
+
+1/2
+.
+Call the ODE_convergence function for some methods you have in the
+ODESolver hierarchy and answers to exercises, and print the estimated
+r values for each method. Use an ODE problem of your own choice.
+Name of program ﬁle: ODE_convergence.py.
+⋄
+Exercise E.30. Solve an ODE speciﬁed on the command line.
+To solve an ODE, we want to make a program cmlodesolver.py
+which accepts an ODE problem to be speciﬁed on the command line.
+The command-line arguments are f u0 dt T, where f is the right-
+hand side f(u, t) speciﬁed as a string formula (to be converted to a
+StringFunction object), u0 is the initial condition, dt is the time step,
+and T is the ﬁnal time of the simulation. A ﬁfth optional argument can
+be given to specify the class name of the numerical solution method
+(set any method of choice as default value). A curve plot of the solution
+
+E.3 Exercises
+717
+versus time should be produced and stored in a ﬁle plot.png. Name of
+program ﬁle: cmlodesolver.py.
+⋄
+Exercise E.31. Find the body’s position in Exer. E.11.
+In Exercise E.11 we compute the velocity v(t). The position of the
+body, y(t), is related to the velocity by y′(t) = v(t). Extend the program
+from Exercise E.11 to solve the system
+dy
+dt = v,
+dv
+dt = −g
+
+1 −ϱ
+ϱb
+
+−1
+2CD
+ϱA
+ϱbV |v|v.
+Name of program ﬁle: body_in_fluid2.py.
+⋄
+Exercise E.32. Add the eﬀect of air resistance on a ball.
+The diﬀerential equations governing the horizontal and vertical mo-
+tion of a ball subject to gravity and air resistance read3
+d2x
+dt2 = −3
+8CD ¯ϱa−1
+dx
+dt
+2
++
+dy
+dt
+2 dx
+dt ,
+(E.70)
+d2y
+dt2 = −g −3
+8CD ¯ϱa−1
+dx
+dt
+2
++
+dy
+dt
+2 dy
+dt ,
+(E.71)
+where (x, y) is the position of the ball (x is a horizontal measure and
+y is a vertical measure), g is the acceleration of gravity, CD = 0.2 is
+a drag coeﬃcient, ¯ϱ is the ratio of the density of air and the ball, and
+a is the radius of the ball. The latter two quantities can be taken as
+0.017 and 11 cm for a football.
+Let the initial condition be x = y = 0 (start position in the origin)
+and
+dx/dt = v0 cos θ,
+dy/dt = v0 sin θ,
+where v0 is the magnitude of the initial velocity and θ is the angle the
+velocity makes with the horizontal. For a hard football kick we can set
+v0 = 120 km/h and take θ as 30 degrees.
+Express the two second-order equations above as a system of four
+ﬁrst-order equations with four initial conditions. Implement the right-
+hand side in a problem class where the physical parameters CD, ¯ϱ, a,
+v0, and θ are stored along with the initial conditions.
+Solve the ODE system for CD = 0 (no air resistance) and CD = 0.2,
+and plot y as a function of x in both cases to illustrate the eﬀect
+of air resistance. Use the 4-th order Runge-Kutta method. Make sure
+you express all units in kg, m, s, and radians. Name of program ﬁle:
+kick2D.py.
+⋄
+3 The equations arise by combining the models in Exercises 1.11 and 1.13.
+
+718
+E Programming of Diﬀerential Equations
+Exercise E.33. Solve an ODE system for an electric circuit.
+An electric circuit with a resistor, a capacitor, an inductor, and a
+voltage source can be described by the ODE
+LdI
+dt + RI + Q
+C = E(t),
+(E.72)
+where LdI/dt is the voltage drop across the inductor, I is the current
+(measured in amperes, A), L is the inductance (measured in henrys,
+H), R is the resistance (measured in ohms, Ω), Q is the charge on the
+capacitor (measured in coulombs, C), C is the capacitance (measured
+in farads, F), E(t) is the time-variable voltage source (measured in
+volts, V), and t is time (measured in seconds, s). There is a relation
+between I and Q:
+dQ
+dt = I.
+(E.73)
+Equations (E.72)–(E.73) is a system two ODEs. Solve these for L = 1
+H, E(t) = 2 sin ωt V, ω2 = 3.5 s−2, C = 0.25 C, R = 0.2 Ω, I(0) = 1 A,
+and Q(0) = 1C. Use the Forward Euler scheme with Δt = 2π/(60ω).
+The solution will, after some time, oscillate with the same period as
+E(t), a period of 2π/ω. Simulate 10 periods. (Actually, it turns out
+that the Forward Euler scheme overestimates the amplitudes of the
+oscillations. Exercise E.34 compares the Forward Euler scheme with
+the more accurate 4th-order Runge-Kutta method.) Name of program
+ﬁle: electric_circuit.py.
+⋄
+Exercise E.34. Compare methods for solving (E.72)–(E.73).
+Consider the system of ODEs in Exercise E.33 for simulating an elec-
+tric circuit. The purpose now is to compare the Forward Euler scheme
+with the 4-th order Runge-Kutta method. Make a class Circuit for
+storing the physical parameters of the problem (L, R, C, E(t)) as well
+as the initial conditions (I(0), Q(0)). Class Circuit should also deﬁne
+the right-hand side of the ODE through a __call__ method. Create
+two solver instances, one from the ForwardEuler class and one from the
+RungeKutta4 class. Solve the ODE system using both methods. Plot the
+two I(t) solutions for comparison. As you will see, the Forward Euler
+scheme overestimates the amplitudes signiﬁcantly, compared with the
+more accurate 4th-order Runge-Kutta method. Name of program ﬁle:
+electric_circuit2.py.
+⋄
+Exercise E.35. Simulate the spreading of a disease.
+We shall in this exercise model epidemiological diseases such as
+measles or swine ﬂu. Suppose we have three categories of people: sus-
+ceptibles (S) who can get the disease, infected (I) who has developed
+the disease and who can infect susceptibles, and recovered (R) who
+have recovered from the disease and become immune. Let S(t), I(t),
+and R(t) be the number of people in category S, I, and R, respectively.
+
+E.3 Exercises
+719
+We have that S + I + R = N, where N is the size of the population,
+assumed constant here for simplicity.
+When people mix in the population there are SI possible pairs of
+susceptibles and infected, and a certain fraction βSI per time interval
+does meet with the result that the infected “successfully” infects the
+susceptible. During a time interval Δt, βSIΔt get infected and move
+from the S to the I category:
+S(t + Δt) = S(t) −βSIΔt.
+We divide by Δt and let Δ →0 to get the diﬀerential equation
+S′(t) = −βSI.
+(E.74)
+A fraction νI of the infected will per time unit recover from the disease.
+In a time Δt, νIΔt recover and move from the I to the R category. The
+quantity 1/ν typically reﬂects the duration of the disease. In the same
+time interval, βSIΔt come from the S to the I category. The accounting
+for the I category therefore becomes
+I(t + Δt) = I(t) + βSIΔt −νIΔt,
+which in the limit Δt →∞becomes the diﬀerential equation
+I′(t) = βSI −νI.
+(E.75)
+Finally, the R category gets contributions from the I category:
+R(t + Δt) = R(t) + νIΔt.
+The corresponding ODE for R reads
+R′(t) = νI.
+(E.76)
+In case the recovered do not become immune, we do not need the recov-
+ered category, since the recovered go directly out of the I category to
+the S category again. This gives a contribution νI to the equation for S
+and we end up with the S–I system (C.32)–(C.33) from Appendix C.5.
+The system (E.74)–(E.76) is known as a SIR model in epidemiology
+(which is the name of the scientiﬁc ﬁeld studying the spreading of
+epidemic diseases).
+Solve the equations in the SIR model by any numerical method of
+your choice. Show from the equations that S′ + I′ + R′ = 0, which
+means that S + I + R must be constant. This can be used to test the
+program. Let S(0) = 1500, I(0) = I0, and R(0) = 0. Set ν = 0.1,
+I0 = 1, Δt = 0.5, and t ∈[0, 60]. Time t here counts days. Make a plot
+corresponding to β = 0.0005. Certain precautions, like staying inside,
+
+720
+E Programming of Diﬀerential Equations
+will reduce β. Try β = 0.0001 and watch the eﬀect on S(t). Name of
+program ﬁle: SIR.py.
+⋄
+Exercise E.36. Make a more ﬂexible code in Exer. E.35.
+The parameters ν and β in the SIR model in Exercise E.35 can be
+constants or functions of time. Now we shall make an implementation
+of the f(u, t) function specifying the ODE system such that ν and β
+can be given as either a constant or a Python function. Introduce a
+class for f(u, t), with the following code sketch:
+class Problem:
+def __init__(self, nu, beta, S0, I0, R0, T):
+"""
+nu, beta: parameters in the ODE system
+S0, I0, R0: initial values
+T: simulation for t in [0,T]
+"""
+if isinstance(nu, (float,int)):
+# number?
+self.nu = lambda t: nu
+# wrap as function
+elif callable(nu):
+self.nu = nu
+# same for beta and self.beta
+...
+# store the other parameters
+def __call__(self, u, t):
+"""Right-hand side function of the ODE system."""
+S, I, R = u
+return [-self.beta(t)*S*I,
+# S equation
+...,
+# I equation
+-self.nu(t)*I]
+# R equation
+# Example:
+problem = Problem(beta=lambda t: 0.0005 if t <= 12 else 0.0001,
+nu=0.1, S0=1500, I0=1)
+solver = ODESolver.ForwardEuler(problem.f)
+Write the complete code for class Problem based on the sketch of ideas
+above. The ν parameter is usually not varying with time as 1/ν is a
+characteristic size of the period a person is sick, but introduction of
+new medicine during the disease might change the picture such that
+time dependence becomes relevant.
+We can also make a class Solver for solving the problem (see Ap-
+pendix E.2.8 for similar examples):
+class Solver:
+def __init__(self, problem, dt):
+self.problem, self.dt = problem, dt
+def solve(self, method=ODESolver.RungeKutta4):
+self.solver = method(problem)
+ic = [self.problem.S0, self.problem.I0, self.problem.R0]
+self.solver.set_initial_condition(ic)
+n = int(round(self.problem.T/float(self.dt)))
+t = np.linspace(0, self.problem.T, n+1)
+u, self.t = self.solver.solve(t)
+self.S, self.I, self.R = u[:,0], u[:,1], u[:,2]
+
+E.3 Exercises
+721
+def plot(self):
+# plot S(t), I(t), and R(t)
+After the breakout of a disease, authorities often start campaigns for
+decreasing the spreading of the disease. Suppose a massive campaign
+telling people to wash their hands more frequently is launched, with the
+eﬀect that β is signiﬁcantly reduced after a some days. For the speciﬁc
+case simulated in Exercise E.35, let
+β(t) =
+0.0005, 0 ≤t ≤12,
+0.0001, t > 12
+Simulate this scenario with the Problem and Solver classes. Report the
+maximum number of infected people and compare it to the case where
+β(t) = 0.0005. Name of program ﬁle: SIR_class.py.
+⋄
+Exercise E.37. Introduce vaccination in Exer. E.35.
+We shall now extend the SIR model in Exercise E.35 with a vaccina-
+tion program. If a fraction p of the susceptibles per time unit is being
+vaccinated, and we say that the vaccination is 100% eﬀective, pSΔt
+individuals will be removed from the S category in a time interval Δt.
+We place the vaccinated people in a new category V. The equations for
+S and V becomes
+S′ = −βSI −pS,
+(E.77)
+V ′ = pS.
+(E.78)
+The equations for I and R are not aﬀected. The initial condition for V
+can be taken as V (0) = 0. The resulting model is named SIRV.
+Make a program for computing S(t), I(t), R(t), and V (t). Try the
+same parameters as in Exercise E.35 in combination with p = 0.1.
+Watch the eﬀect of vaccination on the maximum number of infected.
+Name of program ﬁle: SIRV.py.
+⋄
+Exercise E.38. Introduce a vaccination campaign in Exer. E.37.
+Let the vaccination campaign in Exercise E.37 start 6 days after the
+outbreak of the disease and let it last for 10 days,
+p(t) =
+0.1, 6 ≤t ≤15,
+0,
+otherwise
+Plot the corresponding solutions S(t), I(t), R(t), and V (t). (It is clearly
+advantageous to have the SIRV model implemented as an extension to
+the classes in Exercise E.36.) Name of program ﬁle: SIRV_varying_p.py.
+⋄
+Exercise E.39. Find optimal vaccination period in Exer. E.38.
+Let the vaccination campaign in Exercise E.38 last for VT days:
+
+722
+E Programming of Diﬀerential Equations
+p(t) =
+0.1, 6 ≤t ≤6 + VT ,
+0,
+otherwise
+Compute the maximum number of infected people, maxt I(t), as a func-
+tion of VT ∈[0, 31]. Plot this function. Determine the optimal VT , i.e.,
+the smallest vaccination period VT such that increasing VT has negligi-
+ble eﬀect on the maximum number of infected people. Name of program
+ﬁle: SIRV_optimal_duration.py.
+⋄
+Exercise E.40. Simulate human–zombie interaction.
+Suppose the human population is attacked by zombies. This is quite a
+common happening in movies, and the “zombiﬁcation” of humans acts
+much like the spreading of a disease. Let us make a diﬀerential equation
+model, inspired by the SIR model from Exercise E.35, to simulate how
+humans and zombies interact.
+We introduce four categories of individuals:
+1. S: susceptible humans who can become zombies.
+2. I: infected humans, being bitten by zombies.
+3. Z: zombies.
+4. R: removed individuals, either conquered zombies or dead humans.
+The corresponding functions counting how many individuals we have
+in each category are named S(t), I(t), Z(t), and R(t), respectively.
+The type of zombies considered here is inspired by the standard for
+modern zombies set by the classic movie The Night of the Living Dead,
+by George A. Romero from 1968. Only a small extension of the SIR
+model is necessary to model the eﬀect of human–zombie interaction
+mathematically. A fraction of the human susceptibles is getting bitten
+by zombies and moves to the infected category. A fraction of the in-
+fected is then turned into zombies. On the other hand, humans can
+conquer zombies.
+Now we shall precisely set up all the dynamic features of the human-
+zombie populations we aim to model. Changes in the S category are
+due to three eﬀects:
+1. Susceptibles are infected by zombies, modeled by a term −ΔtβSZ,
+similar to the S-I interaction in the SIR model.
+2. Susceptibles die naturally or get killed and therefore enter the re-
+moved category. If the probability that one susceptible dies during
+a unit time interval is δS, the total expected number of deaths in a
+time interval Δt becomes ΔtδSS.
+3. We also allow new humans to enter the area with zombies, as this
+eﬀect may be necessary to successfully run a war on zombies. The
+number of new individuals in the S category arriving per time
+unit is denoted by Σ, giving an increase in S(t) by ΔtΣ during a
+time Δt.
+
+E.3 Exercises
+723
+We could also add newborns to the S category, but we simply skip this
+eﬀect since it will not be signiﬁcant over time scales of a few days.
+The balance of the S category is then
+S′ = Σ −βSZ −δSS,
+in the limit Δt →0.
+The infected category gets a contribution ΔtβSZ from the S cat-
+egory, but loses individuals to the Z and R category. That is, some
+infected are turned into zombies, while others die. Movies reveal that in-
+fected may commit suicide or that others (susceptibles) may kill them.
+Let δI be the probability of being killed in a unit time interval. Dur-
+ing time Δt, a total of δIΔtI will die and hence be transferred to the
+removed category. The probability that a single infected is turned into
+a zombie during a unit time interval is denoted by ρ, so that a total of
+ΔtρI individuals are lost from the I to the Z category in time Δt. The
+accounting in the I category becomes
+I′ = βSZ −ρI −δII.
+The zombie category gains −ΔtρI individuals from the I category.
+We disregard the eﬀect that any removed individual can turn into a
+zombie again, as we consider that eﬀect as pure magic beyond reason-
+able behavior, at least according to what is observed in the Romero
+movie tradition. A fundamental feature in zombie movies is that hu-
+mans can conquer zombies. Here we consider zombie killing in a “man-
+to-man” human–zombie ﬁght. This interaction resembles the nature of
+zombiﬁcation (or the susceptible-infective interaction in the SIR model)
+and can be modeled by a loss −αSZ for some parameter α with an in-
+terpretation similar to that of β. The equation for Z then becomes
+Z′ = ρI −αSZ.
+The accounting in the R category consists of a gain δS of natural
+deaths from the S category, a gain δI from the I category, and a gain
+αSZ from defeated zombies:
+R′ = δSS + δII + αSZ.
+The complete SIZR model for human–zombie interaction can be sum-
+marized as
+S′ = Σ −βSZ −δSS,
+(E.79)
+I′ = βSZ −ρI −δII,
+(E.80)
+Z′ = ρI −αSZ,
+(E.81)
+R′ = δSS + δII + αSZ.
+(E.82)
+
+724
+E Programming of Diﬀerential Equations
+The interpretations of the parameters are as follows:
+• Σ: the number of new humans brought into the zombiﬁed area per
+unit time.
+• β: the probability that a theoretically possible human-zombie pair
+actually meets physically, during a unit time interval, with the result
+that the human is infected.
+• δS: the probability that a susceptible human is killed or dies, in a
+unit time interval.
+• δI: the probability that an infected human is killed or dies, in a unit
+time interval.
+• ρ: the probability that an infected human is turned into a zombie,
+during a unit time interval.
+• α: the probability that, during a unit time interval, a theoretically
+possible human-zombie pair ﬁghts and the human kills the zombie.
+Note that probabilities per unit time do not necessarily lie in the in-
+terval [0, 1]. The real probability, lying between 0 and 1, arises after
+multiplication by the time interval of interest.
+Implement the SIZR model with a Problem and Solver class as ex-
+plained in Exercise E.36, allowing parameters to vary in time. The
+time variation is essential to make a realistic model that can mimic
+what happens in movies. It becomes necessary (cf. Exercise E.41)
+to work with piecewise constant functions in time, for instance from
+scitools.std (or Exercise 3.27):
+from scitools.std import PiecewiseConstant
+# Define f(t) as 1.5 in [0,3], 0.1 in [3,4] and 1 in [4,7]
+f = PiecewiseConstant(domain=[0, 7],
+data=[(0, 1.5), (3, 0.1), (4, 1)])
+Test the implementation with the following data: β = 0.0012, α =
+0.0016, δI = 0.014, Σ = 2, ρ = 1, S(0) = 10, Z(0) = 100, I(0),
+R(0) = 0, and simulation time T = 24 hours. All other parameters can
+be set to zero. These values are estimated from the hysterical phase of
+the movie The Night of the Living Dead. The time unit is hours. Plot
+the S, I, Z, and R quantities. Name of program ﬁle: SIZR.py.
+⋄
+Exercise E.41. Simulate an entire zombie movie.
+The movie The Night of the Living Dead has three phases:
+1. The initial phase, lasting for (say) 4 hours, where two humans meet
+one zombie and of the humans get infected. A rough (and uncertain)
+estimation of parameters in this phase, taking into account dynamics
+not shown in the movie, yet necessary to establish a more realistic
+evolution of the S and Z categories later in the movie, is Σ = 20,
+β = 0.03, ρ = 1, S(0) = 60, and Z(0) = 1. All other parameters are
+taken as zero when not speciﬁed.
+
+E.3 Exercises
+725
+2. The hysterical phase, when the zombie treat is evident. This phase
+lasts for 24 hours, and relevant parameters can be taken as β =
+0.0012, α = 0.0016, δI = 0.014, Σ = 2, ρ = 1.
+3. The counter attack by humans, estimated to last for 5 hours, with
+parameters α = 0.006, β = 0 (humans no longer get infected), δS =
+0.0067, ρ = 1.
+Use the program from Exercise E.40 to simulate all three phases of the
+movie. Name of program ﬁle: Night_of_the_Living_Dead.py.
+⋄
+Exercise E.42. Simulate a war on zombies.
+A war on zombies can be implemented through large-scale eﬀective
+attacks. A possible model is to increase α in the SIZR model from
+Exercise E.40 by some amount ω(t), where ω(t) varies in time to model
+strong attacks at some distinct points of time T1 < T2 < · · · < Tm.
+Around these t values we want ω to have a large value, while in between
+the attacks ω is small. One possible mathematical function with this
+behavior is a sum of Gaussian functions:
+ω(t) = a
+m
+
+i=0
+exp
+1
+2
+t −Ti
+σ
+2
+,
+(E.83)
+where a measures the strength of the attacks (the maximum value of
+ω(t)) and σ measures the length of the attacks, which should be much
+less than the time between the points of attack: typically, 4σ measures
+the length of an attack, and we must have 4σ ≪Ti −Ti−1. We should
+choose a signiﬁcantly larger than α to make the attacks in the war on
+zombies much stronger than the “man-to-man” killing of zombies.
+Modify the model and the implementation from Exercise E.40 to
+include a war on zombies. As a demonstration, we start out with 50
+humans and 3 zombies, and β = 0.0625 as estimated from The Night of
+The Living Dead movie. These values lead to a rapid zombiﬁcation. We
+assume there are some small resistances against zombies from the hu-
+mans: α = 0.2β. However, the humans implement three strong attacks,
+a = 50α, at 5, 10, and 18 hours after zombiﬁcation starts. The attacks
+last for about 2 hours (σ = 0.5). Add this eﬀect to the simulation in Ex-
+ercise E.41 and see if such attacks are suﬃcient to save mankind in this
+particular case. Use ρ = 1 as before and set non-speciﬁed parameters
+to zero. Name of program ﬁle: war_on_zombies.py.
+⋄
+Exercise E.43. Explore predator-prey population interactions.
+Suppose we have two species in an environment: a predator and a
+prey. How will the two populations interact and change with time?
+A system of ordinary diﬀerential equations can give insight into this
+question. Let x(t) and y(t) be the size of the prey and the predator
+populations, respectively. In the absence of a predator, the population
+of the prey will follow the ODE derived in Appendix C.2:
+
+726
+E Programming of Diﬀerential Equations
+dx
+dt = rx,
+with r > 0, assuming there are enough resources for exponential
+growth. Similarly, in the absence of prey, the predator population will
+just experience a death rate m > 0:
+dy
+dt = −my.
+In the presence of the predator, the prey population will experience a
+reduction in the growth proportional to xy. The number of interactions
+(meetings) between x and y numbers of animals is xy, and in a certain
+fraction of these interactions the predator eats the prey. The predator
+population will correspondingly experience a growth in the population
+because of the xy interactions with the prey population. The adjusted
+growth of both populations can now be expressed as
+dx
+dt = rx −axy,
+(E.84)
+dy
+dt = −my + bxy,
+(E.85)
+for positive constants r, m, a, and b. Solve this system and plot x(t)
+and y(t) for r = m = 1, a = 0.3, b = 0.2, x(0) = 1, and y(0) = 1,
+t ∈[0, 20]. Try to explain the dynamics of the population growth you
+observe. Experiment with other values of a and b. Name of program
+ﬁle: predator_prey.py.
+⋄
+Exercise E.44. Formulate a 2nd-order ODE as a system.
+In this and subsequent exercises we shall deal with the following
+second-order ordinary diﬀerential equation with two initial conditions:
+m¨u + f( ˙u) + s(u) = F(t),
+t > 0,
+u(0) = U0, ˙u(0) = V0.
+(E.86)
+The notation ˙u and ¨u means u′(t) and u′′(t), respectively. Write (E.86)
+as a system of two ﬁrst-order diﬀerential equations. Also set up the
+initial condition for this system.
+Physical Applications. Equation (E.86) has a wide range of applications
+throughout science and engineering. A primary application is damped
+spring systems in, e.g., cars and bicycles: u is the vertical displacement
+of the spring system attached to a wheel; ˙u is then the corresponding
+velocity; F(t) resembles a bumpy road; s(u) represents the force from
+the spring; and f( ˙u) models the damping force (friction) in the spring
+system. For this particular application f and s will normally be linear
+functions of their arguments: f( ˙u) = β ˙u and s(u) = ku, where k is a
+spring constant and β some parameter describing viscous damping.
+
+E.3 Exercises
+727
+Equation (E.86) can also be used to describe the motions of a
+moored ship or oil platform in waves: the moorings act as a nonlin-
+ear spring s(u); F(t) represents environmental excitation from waves,
+wind, and current; f( ˙u) models damping of the motion; and u is the
+one-dimensional displacement of the ship or platform.
+Oscillations of a pendulum can be described by (E.86): u is the angle
+the pendulum makes with the vertical; s(u) = (mg/L) sin(u), where L
+is the length of the pendulum, m is the mass, and g is the acceleration of
+gravity; f( ˙u) = β| ˙u| ˙u models air resistance (with β being some suitable
+constant, see Exercises 1.11 and E.48); and F(t) might be some motion
+of the top point of the pendulum.
+Another application is electric circuits with u(t) as the charge, m = L
+as the inductance, f( ˙u) = R ˙u as the voltage drop across a resistor R,
+s(u) = u/C as the voltage drop across a capacitor C, and F(t) as an
+electromotive force (supplied by a battery or generator).
+Furthermore, Equation (E.86) can act as a simpliﬁed model of many
+other oscillating systems: aircraft wings, lasers, loudspeakers, micro-
+phones, tuning forks, guitar strings, ultrasound imaging, voice, tides,
+the El Ni˜no phenomenon, climate changes – to mention some.
+We remark that (E.86) is a possibly nonlinear generalization of Equa-
+tion (D.8) explained in Appendix D.1.3. The case in Appendix D cor-
+responds to the special choice of f( ˙u) proportional to the velocity ˙u,
+s(u) proportional to the displacement u, and F(t) as the acceleration
+¨w of the plate and the action of the gravity force.
+⋄
+Exercise E.45. Solve the system in Exer. E.44 in a special case.
+Make a function
+def rhs(u, t):
+...
+for returning a list with two elements with the two right-hand side
+expressions in the ﬁrst-order diﬀerential equation system from Exer-
+cise E.44. As usual, the u argument is an array or list with the two
+solution components u[0] and u[1] at some time t. Inside rhs, assume
+that you have access to three global Python functions friction(dudt),
+spring(u), and external(t) for evaluating f( ˙u), s(u), and F(t), respec-
+tively.
+Test the rhs function in combination with the functions f( ˙u) = 0,
+F(t) = 0, s(u) = u, and the choice m = 1. The diﬀerential equation
+then reads ¨u+u = 0. With initial conditions u(0) = 1 and ˙u(0) = 0, one
+can show that the solution is given by u(t) = cos(t). Apply three numer-
+ical methods: the 4th-order Runge-Kutta method and the Forward Eu-
+ler method from the ODESolver module developed in Appendix E.2.5, as
+well as the 2nd-order Runge-Kutta method developed in Exercise E.22.
+Use a time step Δt = π/20.
+
+728
+E Programming of Diﬀerential Equations
+Plot u(t) and ˙u(t) versus t together with the exact solutions. Also
+make a plot of ˙u versus u (plot(u[:,0], u[:,1]) if u is the array re-
+turned from the solver’s solve method). In the latter case, the exact
+plot should be a circle4, but the ForwardEuler method results in a
+spiral. Investigate how the spiral develops as Δt is reduced.
+The kinetic energy K of the motion is given by 1
+2m ˙u2, and the po-
+tential energy P (stored in the spring) is given by the work done by
+the spring force: P =
+ u
+0 s(v)dv = 1
+2u2. Make a plot with K and P as
+functions of time for both the 4th-order Runge-Kutta method and the
+Forward Euler method, for the same physical problem described above.
+In this test case, the sum of the kinetic and potential energy should be
+constant. Compute this constant analytically and plot it together with
+the sum K + P as calculated by the 4th-order Runge-Kutta method
+and the Forward Euler method.
+Name of program ﬁle: oscillator_v1.py.
+⋄
+Exercise E.46. Make a tool for analyzing oscillatory solutions.
+The solution u(t) of the equation (E.86) often exhibits an oscillatory
+behavior (for the test problem in Exercise E.45 we have that u(t) =
+cos t). It is then of interest to ﬁnd the wavelength of the oscillations. The
+purpose of this exercise is to ﬁnd and visualize the distance between
+peaks in a numerical representation of a continuous function.
+Given an array (y0, . . . , yn−1) representing a function y(t) sampled
+at various points t0, . . . , tn−1. A local maximum of y(t) occurs at t = tk
+if yk−1 < yk > yk+1. Similarly, a local minimum of y(t) occurs at
+t = tk if yk−1 > yk < yk+1. By iterating over the y1, . . . , yn−2 values
+and making the two tests, one can collect local maxima and minima
+as (tk, yk) pairs. Make a function minmax(t, y) which returns two lists,
+minima and maxima, where each list holds pairs (2-tuples) of t and y
+values of local minima or maxima. Ensure that the t value increases
+from one pair to the next. The arguments t and y in minmax hold the
+coordinates t0, . . . , tn−1 and y0, . . . , yn−1, respectively.
+Make another function wavelength(peaks) which takes a list peaks
+of 2-tuples with t and y values for local minima or maxima as argument
+and returns an array of distances between consecutive t values, i.e., the
+distances between the peaks. These distances reﬂect the local wave-
+length of the computed y function. More precisely, the ﬁrst element
+in the returned array is peaks[1][0]-peaks[0][0], the next element is
+peaks[2][0]-peaks[1][0], and so forth.
+Test the minmax and wavelength functions on y values generated by
+y = et/4 cos(2t) and y = e−t/4 cos(t2/5) for t ∈[0, 4π]. Plot the y(t)
+curve in each case, and mark the local minima and maxima computed
+by minmax with circles and boxes, respectively. Make a separate plot
+with the array returned from the wavelength function (just plot the
+4 The points on the curve are (cos t, sin t), which all lie on a circle as t is varied.
+
+E.3 Exercises
+729
+array against its indices - the point is to see if the wavelength varies or
+not). Plot only the wavelengths corresponding to maxima.
+Make a module with the minmax and wavelength function, and let
+the test block perform the tests speciﬁed above. Name of program ﬁle:
+wavelength.py.
+⋄
+Exercise E.47. Enhance the code from Exer. E.45.
+The user-chosen functions f, s, and F in Exercise E.45 must be coded
+with particular names. It is then diﬃcult to have several functions for
+s(u) and experiment with these. A much more ﬂexible code arises if
+we adopt the ideas of a problem and a solver class as explained in
+Appendix E.2.8. Speciﬁcally, we shall here make use of class Problem3
+in Appendix E.2.8 to store information about f( ˙u), s(u), F(t), u(0),
+˙u(0), m, T, and the exact solution (if available). The solver class can
+store parameters related to the numerical quality of the solution, i.e.,
+Δt and the name of the solver class in the ODESolver hierarchy. In
+addition we will make a visualizer class for producing plots of various
+kinds.
+We want all parameters to be set on the command line, but also have
+sensible default values. As in Appendix E.2.8, the argparse module
+is used to read data from the command line. Class Problem can be
+sketched as follows:
+class Problem:
+def define_command_line_arguments(self, parser):
+"""Add arguments to parser (argparse.ArgumentParser)."""
+parser.add_argument(
+’--friction’, type=func_dudt, default=’0’,
+help=’friction function f(dudt)’,
+metavar=’<function expression>’)
+parser.add_argument(
+’--spring’, type=func_u, default=’u’,
+help=’spring function s(u)’,
+metavar=’<function expression>’)
+parser.add_argument(
+’--external’, type=func_t, default=’0’,
+help=’external force function F(t)’,
+metavar=’<function expression>’)
+parser.add_argument(
+’--u_exact’, type=func_t_vec, default=’0’,
+help=’exact solution u(t) (0 or None: now known)’,
+metavar=’<function expression>’)
+parser.add_argument(
+’--m’, type=evalcmlarg, default=1.0, help=’mass’,
+type=float, metavar=’mass’)
+...
+return parser
+def set(self, args):
+"""Initialize parameters from the command line."""
+self.friction = args.friction
+self.spring = args.spring
+self.m = args.m
+...
+def __call__(self, u, t):
+
+730
+E Programming of Diﬀerential Equations
+"""Define the right-hand side in the ODE system."""
+m, f, s, F = \
+self.m, self.friction, self.spring, self.external
+...
+Several
+functions
+are
+speciﬁed
+as
+the
+type
+argument
+to
+parser.add_argument for turning strings into proper objects, in partic-
+ular StringFunction objects with diﬀerent independent variables:
+def evalcmlarg(text):
+return eval(text)
+def func_dudt(text):
+return StringFunction(text, independent_variable=’dudt’)
+def func_u(text):
+return StringFunction(text, independent_variable=’u’)
+def func_t(text):
+return StringFunction(text, independent_variable=’t’)
+def func_t_vec(text):
+if text == ’None’ or text == ’0’:
+return None
+else:
+f = StringFunction(text, independent_variable=’t’)
+f.vectorize(globals())
+return f
+The use of evalcmlarg is essential: this function runs the strings from
+the command line through eval, which means that we can use mathe-
+matical formulas like -T’4*pi’.
+Class Solver is relatively much shorter than class Problem:
+class Solver:
+def __init__(self, problem):
+self.problem = problem
+def define_command_line_arguments(self, parser):
+"""Add arguments to parser (argparse.ArgumentParser)."""
+# add --dt and --method
+...
+return parser
+def set(self, args):
+self.dt = args.dt
+self.n = int(round(self.problem.T/self.dt))
+self.solver = eval(args.method)
+def solve(self):
+self.solver = self.method(self.problem)
+ic = [self.problem.initial_u, self.problem.initial_dudt]
+self.solver.set_initial_condition(ic)
+time_points = linspace(0, self.problem.T, self.n+1)
+self.u, self.t = self.solver.solve(time_points)
+The Visualizer class holds references to a Problem and Solver in-
+stance and creates plots. The user can specify plots in an interactive
+dialog in the terminal window. Inside a loop, the user is repeatedly
+asked to specify a plot until the user responds with quit. The spec-
+iﬁcation of a plot can be one of the words u, dudt, dudt-u, K, and
+
+E.3 Exercises
+731
+wavelength which means a plot of u(t) versus t, ˙u(t) versus t, ˙u versus
+u, K (= 1
+2m ˙u2, kinetic energy) versus t, and u’s wavelength versus its
+indices, respectively. The wavelength can be computed from the local
+maxima of u as explained in Exercise E.46.
+A sketch of class Visualizer is given next:
+class Visualizer:
+def __init__(self, problem, solver):
+self.problem = problem
+self.solver = solver
+def define_command_line_arguments(self, parser):
+parser.add_argument(
+’--plot’, type=str, default=’u dudt’,
+help=’specification of types of plots’,
+metavar=’<space separated list of plot types>’)
+return parser
+def set(self, args):
+plot_spec = args.plot
+self.plots = plot_spec.split()
+def visualize(self):
+t = self.solver.t
+# short form
+u, dudt = self.solver.u[:,0], self.solver.u[:,1]
+# Tag all plots with numerical and physical input values
+title = ’solver=%s, dt=%g, m=%g’ % \
+(self.solver.method, self.solver.dt, self.problem.m)
+# Can easily get the formula for friction, spring and force
+# if these are string formulas.
+if isinstance(self.problem.friction, StringFunction):
+title += ’ f=%s’ % str(self.problem.friction)
+if isinstance(self.problem.spring, StringFunction):
+title += ’ s=%s’ % str(self.problem.spring)
+if isinstance(self.problem.external, StringFunction):
+title += ’ F=%s’ % str(self.problem.external)
+plot_type = ’’
+while plot_type != ’quit’:
+plot_type = raw_input(’Specify a plot: ’)
+figure()
+if plot_type == ’u’:
+# Plot u vs t
+if self.problem.u_exact is not None:
+hold(’on’)
+# Plot self.problem.u_exact vs t
+show()
+savefig(’tmp_u.eps’)
+elif plot_type == ’dudt’:
+...
+Make a complete implementation of the three proposed classes. Also
+make a main function that (i) creates a problem, solver, and visualizer,
+(ii) calls the functions to deﬁne command-line arguments in each of
+them, (iii) reads the command line, (iv) passes on the args from the
+reading of the command line to the problem, solver, and visualizer
+classes, (v) calls the solver, and (vi) calls the visualizer’s visualize
+method to create plots. Collect the classes and functions in a module
+oscillator, which has a call to main in the test block.
+
+732
+E Programming of Diﬀerential Equations
+The ﬁrst task from Exercises E.45 can now be run as
+Terminal
+oscillator.py --method ForwardEuler --u_exact "cos(t)" \
+--dt "pi/20" --T "5*pi"
+The other tasks from Exercises E.45 can be tested similarly.
+Explore some of the possibilities of specifying several functions on
+the command line:
+Terminal
+oscillator.py --method RungeKutta4 --friction "0.1*dudt" \
+--external "sin(0.5*t)" --dt "pi/80" \
+--T "40*pi" --m 10
+oscillator.py --method RungeKutta4 --friction "0.8*dudt" \
+--external "sin(0.5*t)" --dt "pi/80" \
+--T "120*pi" --m 50
+Name of program ﬁle: oscillator.py.
+⋄
+Exercise E.48. Allow ﬂexible choice of functions in Exer. E.47.
+Some typical choices of f( ˙u), s(u), and F(t) in (E.86) are listed
+below:
+1. Linear friction force (low velocities): f( ˙u) = 6πμR ˙u (Stokes drag),
+where R is the radius of a spherical approximation to the body’s
+geometry, and μ is the viscosity of the surrounding ﬂuid.
+2. Quadratic friction force (high velocities): f( ˙u) = 1
+2CDϱA| ˙u| ˙u, see
+Exercise 1.11 for explanation of symbols.
+3. Linear spring force: s(u) = ku, where k is a spring constant.
+4. Sinusoidal spring force: s(u) = k sin u, where k is a constant.
+5. Cubic spring force: s(u) = k(u −1
+6u3), where k is a spring constant.
+6. Sinusoidal external force: F(t) = F0+A sin ωt, where F0 is the mean
+value of the force, A is the amplitude, and ω is the frequency.
+7. “Bump” force: F(t) = H(t −t1)(1 −H(t −t2))F0, where H(t) is the
+Heaviside function from Exercise 3.24, t1 and t2 are two given time
+points, and F0 is the size of the force. This F(t) is zero for t < t1
+and t > t2, and F0 for t ∈[t1, t2].
+8. Random force 1: F(t) = F0 + A · U(t; B), where F0 and A are con-
+stants, and U(t; B) denotes a function whose value at time t is ran-
+dom and uniformly distributed in the interval [−B, B].
+9. Random force 2: F(t) = F0 + A · N(t; μ, σ), where F0 and A are
+constants, and N(t; μ, σ) denotes a function whose value at time t
+is random, Gaussian distributed number with mean μ and standard
+deviation σ.
+Make a module functions where each of the choices above are imple-
+mented as a class with a __call__ special method. Also add a class Zero
+for a function whose value is always zero. It is natural that the parame-
+ters in a function are set as arguments to the constructor. The diﬀerent
+
+E.3 Exercises
+733
+classes for spring functions can all have a common base class holding
+the k parameter as attribute. Name of program ﬁle: functions.py.
+⋄
+Exercise E.49. Use the modules from Exer. E.47 and E.48.
+The purpose of this exercise is to demonstrate the use of the classes
+from Exercise E.48 to solve problems described by (E.86).
+With a lot of models for f( ˙u), s(u), and F(t) available as classes in
+functions.py, the initialization of self.friction, self.spring, etc.,
+from the command line does not work, because we assume simple
+string formulas on the command line. Now we want to write things
+like -spring ’LinearSpring(1.0)’. There is a quite simple remedy: re-
+place all the special conversion functions to StringFunction objects by
+evalcmlarg in the type speciﬁcations in the parser.add_argument calls.
+If a from functions import * is also performed in the oscillator.py
+ﬁle, a simple eval will turn strings like ’LinearSpring(1.0)’ into living
+objects.
+However, we shall here follow a simpler approach, namely dropping
+initializing parameters on the command line and instead set them di-
+rectly in the code. Here is an example:
+problem = Problem()
+problem.m = 1.0
+k = 1.2
+problem.spring = CubicSpring(k)
+problem.friction = Zero()
+problem.T = 8*pi/sqrt(k)
+...
+This is the simplest way of making use of the objects in the functions
+module.
+Note that the set method in classes Solver and Visualizer is unaf-
+fected by the new objects from the functions module, so ﬂexible initial-
+ization via command-line arguments works as before for -dt, -method,
+and plot. One may also dare to call the set method in the problem
+object to set parameters like m, initial_u, etc., or one can choose the
+safer approach of not calling set but initialize all attributes explicitly
+in the user’s code.
+Make a new ﬁle say oscillator_test.py where you import class
+Problem, Sover, and Visualizer, plus all classes from the functions
+module. Provide a main1 function for solving the following problem:
+m = 1, u(0) = 1, ˙u(0) = 0, no friction (use class Zero), no external
+forcing (class Zero), a linear spring s(u) = u, Δt = π/20, T = 8π, and
+exact u(t) = cos(t). Use the Forward Euler method.
+Then make another function main2 for the case with m = 5, u(0) = 1,
+˙u(0) = 0, linear friction f( ˙u) = 0.1 ˙u, s(u) = u, F(t) = sin( 1
+2t), Δt =
+π/80, T = 60π, and no knowledge of an exact solution. Use the 4-th
+order Runge-Kutta method.
+Let a test block use the ﬁrst command-line argument to indicate a
+call to main1 or main2. Name of program ﬁle: oscillator_test.py.
+⋄
+
+734
+E Programming of Diﬀerential Equations
+Exercise E.50. Model the economy of ﬁshing.
+A population of ﬁsh is governed by the diﬀerential equation
+dx
+dt = 1
+10x
+
+1 −x
+100
+
+−h,
+x(0) = 500,
+(E.87)
+where x(t) is the size of the population at time t and h is the harvest.
+(a) Assume h = 0. Find an exact solution for x(t). For which value of t
+is dx
+dt largest? For which value of t is 1
+x
+dx
+dt largest?
+(b) Solve the diﬀerential equation (E.87) by the Forward Euler method.
+Plot the numerical and exact solution in the same plot.
+(c) Suppose the harvest h depends on the ﬁshers’ eﬀorts, E, in the
+following way: h = qxE, with q as a constant. Set q = 0.1 and
+assume E is constant. Show the eﬀect of E on x(t) by plotting several
+curves, corresponding to diﬀerent E values, in the same ﬁgure.
+(d) The ﬁshers’ total revenue is given by π = ph −c
+2E2, where p is a
+constant. In the literature about the economy of ﬁsheries, one is often
+interested in how a ﬁshery will develop in the case the harvest is not
+regulated. Then new ﬁshers will appear as long as there is money
+to earn (π > 0). It can (for simplicity) be reasonable to model the
+dependence of E on π as
+dE
+dt = γπ,
+(E.88)
+where γ is a constant. Solve the system of diﬀerential equations for
+x(t) and E(t) by the 4th-order Runge-Kutta method, and plot the
+curve with points (x(t), E(t)) in the two cases γ = 1/2 and γ →∞.
+Choose c = 0.3, p = 10, E(0) = 0.5, and T = 1.
+Name of program ﬁle: fishery.py.
+⋄

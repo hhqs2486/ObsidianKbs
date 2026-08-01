@@ -1,0 +1,946 @@
+C H A P T E R   15 
+ 
+■ ■ ■ 
+243
+IMAP 
+At first glance, the Internet Message Access Protocol (IMAP) resembles the POP protocol described in 
+Chapter 14. And if you have read the first sections of Chapter 13, which give the whole picture of how e-
+mail travels across the Internet, you will already know that the two protocols fill a quite similar role: POP 
+and IMAP are two ways that a laptop or desktop computer can connect to a larger Internet server to view 
+and manipulate a user’s e-mail. 
+But there the resemblance ends. Whereas the capabilities of POP are rather anemic—the user can 
+download new messages to his or her personal computer—the IMAP protocol offers such a full array of 
+capabilities that many users store their e-mail permanently on the server, keeping it safe from a laptop 
+or desktop hard drive crash. Among the advantages that IMAP has over POP are the following: 
+• 
+Mail can be sorted into several folders, rather than having to arrive in a single in-
+box. 
+• 
+Flags are supported for each message, like “read,” “replied,” “seen,” and 
+“deleted.” 
+• 
+Messages can be searched for text strings right on the server, without having to 
+download each one. 
+• 
+A locally stored message can be uploaded directly to one of the remove folders. 
+• 
+Persistent unique message numbers are maintained, making robust 
+synchronization possible between a local message store and the messages kept on 
+the server. 
+• 
+Folders can be shared with other users, or marked read-only. 
+• 
+Some IMAP servers can present non-mail sources, like Usenet newsgroups, as 
+though they were mail folders. 
+• 
+An IMAP client can selectively download one part of a message—for example, 
+grabbing a particular attachment, or only the message headers, without having to 
+wait to download the rest of the message. 
+These features, taken together, mean that IMAP can be used for many more operations than the 
+simple download-and-delete spasm that POP supports. Many mail readers, like Thunderbird and 
+Outlook, can present IMAP folders so they operate with the same capabilities of locally stored folders. 
+When a user clicks a message, the mail reader downloads it from the IMAP server and displays it, instead 
+of having to download all of the messages in advance; the reader can also set the message’s “read” flag at 
+the same time. 
+
+CHAPTER 15 ■ IMAP 
+244 
+THE IMAP PROTOCOL 
+Purpose: Read, arrange, and delete mail from mail folders 
+Standard: RFC 3501 (2003) 
+Runs atop: TCP/IP 
+Default port: 143 (cleartext), 993 (SSL) 
+Library: imaplib, IMAPClient 
+Exceptions: socket.error, socket.gaierror, IMAP4.error, 
+      IMAP4.abort, IMAP4.readonly 
+IMAP clients can also synchronize themselves with an IMAP server. Someone about to leave on a 
+business trip might download an IMAP folder to a laptop. Then, on the road, mail might be read, 
+deleted, or replied to; the user’s mail program would record these actions. When the laptop finally 
+reconnects to the network, their e-mail client can mark the messages on the server with the same “read” 
+or “replied” flags already set locally, and can even go ahead and delete the messages from the server that 
+were already deleted locally so that the user does not see them twice. 
+The result is one of IMAP’s biggest advantages over POP: users can see the same mail, in the same 
+state, from all of their laptop and desktop machines. Either the poor POP users must, instead, see the 
+same mail multiple times (if they tell their e-mail clients to leave mail on the server), or each message 
+will be downloaded only once to the machine on which they happen to read it (if the e-mail clients 
+delete the mail), which means that their mail winds up scattered across all of the machines from which 
+they check it. IMAP users avoid this dilemma. 
+Of course, IMAP can also be used in exactly the same manner as POP—to download mail, store it 
+locally, and delete the messages immediately from the server—for those who do not want or need its 
+advanced features. 
+There are several versions of the IMAP protocol available. The most recent, and by far the most 
+popular, is known as IMAP4rev1; in fact, the term “IMAP” is today generally synonymous with 
+IMAP4rev1. This chapter assumes that IMAP servers are IMAP4rev1 servers. Very old IMAP servers, 
+which are quite uncommon, may not support all features discussed in this chapter. 
+There is also a good how-to about writing an IMAP client at the following links: 
+http://www.dovecot.org/imap-client-coding-howto.html 
+http://www.imapwiki.org/ClientImplementation 
+If you are doing anything beyond simply writing a small single-purpose client to summarize the 
+messages in your in-box or automatically download attachments, then you should read the foregoing 
+resources thoroughly—or a book on IMAP, if you want a more thorough reference—so that you can 
+handle correctly all of the situations you might run into with different servers and their implementations 
+of IMAP. This chapter will teach just the basics, with a focus on how to best connect from Python. 
+Understanding IMAP in Python 
+The Python Standard Library contains an IMAP client interface named imaplib, which does offer 
+rudimentary access to the protocol. Unfortunately, it limits itself to knowing how to send requests and 
+deliver their responses back to your code. It makes no attempt to actually implement the detailed rules 
+in the IMAP specification for parsing the returned data. 
+
+CHAPTER 15 ■ IMAP 
+245
+As an example of how values returned from imaplib are usually too raw to be usefully used in a 
+program, take a look at Listing 15–1. It is a simple script that uses imaplib to connect to an IMAP 
+account, list the “capabilities” that the server advertises, and then display the status code and data 
+returned by the LIST command. 
+Listing 15–1. Connecting to IMAP and Listing Folders 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 15 - open_imaplib.py 
+# Opening an IMAP connection with the pitiful Python Standard Library 
+ 
+import getpass, imaplib, sys 
+ 
+try: 
+»   hostname, username = sys.argv[1:] 
+except ValueError: 
+»   print 'usage: %s hostname username' % sys.argv[0] 
+»   sys.exit(2) 
+ 
+m = imaplib.IMAP4_SSL(hostname) 
+m.login(username, getpass.getpass()) 
+print 'Capabilities:', m.capabilities 
+print 'Listing mailboxes ' 
+status, data = m.list() 
+print 'Status:', repr(status) 
+print 'Data:' 
+for datum in data: 
+»   print repr(datum) 
+m.logout() 
+If you run this script with appropriate arguments, it will start by asking for your password—IMAP 
+authentication is almost always accomplished through a username and password: 
+$ python open_imaplib.py imap.example.com brandon@example.com 
+Password: 
+If your password is correct, it will then print out a response that looks something like the result 
+shown in Listing 15–2. As promised, we see first the “capabilities,” which list the IMAP features that this 
+server supports. And, we must admit, the type of this list is very Pythonic: whatever form the list had on 
+the wire has been turned into a pleasant tuple of strings. 
+Listing 15–2. Example Output of the Previous Listing 
+Capabilities: ('IMAP4REV1', 'UNSELECT', 'IDLE', 'NAMESPACE', 'QUOTA', 
+ 'XLIST', 'CHILDREN', 'XYZZY', 'SASL-IR', 'AUTH=XOAUTH') 
+Listing mailboxes 
+Status: 'OK' 
+Data: 
+'(\\HasNoChildren) "/" "INBOX"' 
+'(\\HasNoChildren) "/" "Personal"' 
+'(\\HasNoChildren) "/" "Receipts"' 
+'(\\HasNoChildren) "/" "Travel"' 
+'(\\HasNoChildren) "/" "Work"' 
+'(\\Noselect \\HasChildren) "/" "[Gmail]"' 
+'(\\HasChildren \\HasNoChildren) "/" "[Gmail]/All Mail"' 
+
+CHAPTER 15 ■ IMAP 
+246 
+'(\\HasNoChildren) "/" "[Gmail]/Drafts"' 
+'(\\HasChildren \\HasNoChildren) "/" "[Gmail]/Sent Mail"' 
+'(\\HasNoChildren) "/" "[Gmail]/Spam"' 
+'(\\HasNoChildren) "/" "[Gmail]/Starred"' 
+'(\\HasChildren \\HasNoChildren) "/" "[Gmail]/Trash"' 
+But things fall apart when we turn to the result of the list() method. First, we have been returned 
+its status code manually, and code that uses imaplib has to incessantly check for whether the code is 
+'OK' or whether it indicates an error. This is not terribly Pythonic, since usually Python programs can 
+run along without doing error checking and be secure in the knowledge that an exception will be thrown 
+if anything goes wrong. 
+Second, imaplib gives us no help in interpreting the results! The list of e-mail folders in this IMAP 
+account uses all sorts of protocol-specific quoting: each item in the list names the flags set on each 
+folder, then designates the character used to separate folders and sub-folders (the slash character, in this 
+case), and then finally supplies the quoted name of the folder. But all of this is returned to us raw, leaving 
+it to us to interpret strings like the following: 
+(\HasChildren \HasNoChildren) "/" "[Gmail]/Sent Mail" 
+So unless you want to implement several details of the protocol yourself, you will want a more 
+capable IMAP client library. 
+IMAPClient 
+Fortunately, a popular and battle-tested IMAP library for Python does exist, and is available for easy installation 
+from the Python Package Index. The IMAPClient package is written by a friendly Python programmer named 
+Menno Smits, and in fact uses the Standard Library imaplib behind the scenes to do its work. 
+If you want to try out IMAPClient, try installing it in a “virtualenv,” as described in Chapter 1. Once installed, 
+you can use the python interpreter in the virtual environment to run the program shown in Listing 15–3. 
+Listing 15–3. Listing IMAP Folders with IMAPClient 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 15 - open_imap.py 
+# Opening an IMAP connection with the powerful IMAPClient 
+ 
+import getpass, sys 
+from imapclient import IMAPClient 
+ 
+try: 
+»   hostname, username = sys.argv[1:] 
+except ValueError: 
+»   print 'usage: %s hostname username' % sys.argv[0] 
+»   sys.exit(2) 
+ 
+c = IMAPClient(hostname, ssl=True) 
+try: 
+»   c.login(username, getpass.getpass()) 
+except c.Error, e: 
+»   print 'Could not log in:', e 
+»   sys.exit(1) 
+ 
+print 'Capabilities:', c.capabilities() 
+
+CHAPTER 15 ■ IMAP 
+247
+print 'Listing mailboxes:' 
+data = c.list_folders() 
+for flags, delimiter, folder_name in data: 
+»   print '  %-30s%s %s' % (' '.join(flags), delimiter, folder_name) 
+c.logout() 
+You can see immediately from the code that more details of the protocol exchange are now being 
+handled on our behalf. For example, we no longer get a status code back that we have to check every 
+time we run a command; instead, the library is doing that check for us and will raise an exception to stop 
+us in our tracks if anything goes wrong. 
+Second, you can see that each result from the LIST command—which in this library is offered as the 
+list_folders() method instead of the list() method offered by imaplib—has already been parsed into 
+Python data types for us. Each line of data comes back as a tuple giving us the folder flags, folder name 
+delimiter, and folder name, and the flags themselves are a sequence of strings. 
+Take a look at Listing 15–4 for what the output of this second script looks like. 
+Listing 15–4. Properly Parsed Flags and Folder Names 
+Capabilities: ('IMAP4REV1', 'UNSELECT', 'IDLE', 'NAMESPACE', 'QUOTA', 'XLIST', 'CHILDREN', 
+'XYZZY', 'SASL-IR', 'AUTH=XOAUTH') 
+Listing mailboxes: 
+  \HasNoChildren                / INBOX 
+  \HasNoChildren                / Personal 
+  \HasNoChildren                / Receipts 
+  \HasNoChildren                / Travel 
+  \HasNoChildren                / Work 
+  \Noselect \HasChildren        / [Gmail] 
+  \HasChildren \HasNoChildren   / [Gmail]/All Mail 
+  \HasNoChildren                / [Gmail]/Drafts 
+  \HasChildren \HasNoChildren   / [Gmail]/Sent Mail 
+  \HasNoChildren                / [Gmail]/Spam 
+  \HasNoChildren                / [Gmail]/Starred 
+  \HasChildren \HasNoChildren   / [Gmail]/Trash 
+The standard flags listed for each folder may be zero or more of the following: 
+• 
+\Noinferiors: This means that the folder does not contain any sub-folders and 
+that it is not possible for it to contain sub-folders in the future. Your IMAP client 
+will receive an error if it tries to create a sub-folder under this folder. 
+• 
+\Noselect: This means that it is not possible to run select_folder() on this 
+folder—that is, this folder does not and cannot contain any messages. (Perhaps it 
+exists just to allow sub-folders beneath it, as one possibility.) 
+• 
+\Marked: This means that the server considers this box to be interesting in some 
+way; generally, this indicates that new messages have been delivered since the last 
+time the folder was selected. However, the absence of \Marked does not guarantee 
+that the folder does not contain new messages; some servers simply do not 
+implement \Marked at all. 
+• 
+\Unmarked: This guarantees that the folder doesn’t contain new messages. 
+Some servers return additional flags not covered in the standard. Your code must be able to accept 
+and ignore those additional flags. 
+
+CHAPTER 15 ■ IMAP 
+248 
+Examining Folders 
+Before you can actually download, search, or modify any messages, you must “select” a particular folder 
+to look at. This means that the IMAP protocol is stateful: it remembers which folder you are currently 
+looking at, and its commands operate on the current folder without making you repeat its name over 
+and over again. This can make interaction more pleasant, but it also means that your program has to be 
+careful that it always knows what folder is selected or it might wind up doing something to the wrong 
+folder. 
+So when you “select” a folder, you tell the IMAP server that all the following commands—until you 
+change folders, or exit the current one—will apply to the selected folder. 
+When selecting, you have the option to select the folder “read only” by supplying a readonly=True 
+argument. This causes any operations that would delete or modify messages to return an error message 
+should you attempt them. Besides preventing you from making any mistakes when you meant to leave 
+all of the messages intact, the fact that you are just reading can be used by the server to optimize access 
+to the folder (for example, it might read-lock but not write-lock the actual folder storage on disk while 
+you have it selected). 
+Message Numbers vs. UIDs 
+IMAP provides two different ways to refer to a specific message within a folder: by a temporary message 
+number (which typically goes 1, 2, 3, and so forth) or by a UID (unique identifier). The difference 
+between the two lies with persistence. Message numbers are assigned right when you select the folder. 
+This means they can be pretty and sequential, but it also means that if you revisit the same folder later, 
+then a given message may have a different number. For programs such as live mail readers or simple 
+download scripts, this behavior (which is the same as POP) is fine; you do not need the numbers to stay 
+the same. 
+But a UID, by contrast, is designed to remain the same even if you close your connection to the 
+server and do not reconnect again for another week. If a message had UID 1053 today, then the same 
+message will have UID 1053 tomorrow, and no other message in that folder will ever have UID 1053. If 
+you are writing a synchronization tool, this behavior is quite useful! It will allow you to verify with 100% 
+percent certainty that actions are being taken against the correct message. This is one of the things that 
+make IMAP so much more fun than POP. 
+Note that if you return to an IMAP account and the user has—without telling you—deleted a folder 
+and then created a new one with the same name, then it might look to your program as though the same 
+folder is present but that the UID numbers are conflicting and no longer agree. Even a folder re-name, if 
+you fail to notice it, might make you lose track of which messages in the IMAP account correspond to 
+which messages you have already downloaded. But it turns out that IMAP is prepared to protect you 
+against this, and (as we will see soon) provides a UIDVALIDITY folder attribute that you can compare from 
+one session to the next to see whether UIDs in the folder will really correspond to the UIDs that the same 
+messages had when you last connected. 
+Most IMAP commands that work with specific messages can take either message numbers or UIDs. 
+Normally, IMAPClient always uses UIDs and ignores the temporary message numbers assigned by IMAP. 
+But if you want to see the temporary numbers instead, simply instantiate IMAPClient with a 
+use_uid=False argument—or, you can even set the value of the class’s use_uid attribute to False and 
+True on the fly during your IMAP session. 
+
+CHAPTER 15 ■ IMAP 
+249
+Message Ranges 
+Most IMAP commands that work with messages can work with one or more messages. This can make 
+processing far faster if you need a whole group of messages. Instead of issuing separate commands and 
+receiving separate responses for each individual message, you can operate on a group of messages as a 
+whole. The operation works faster since you no longer have to deal with a network round-trip for every 
+single command. 
+When you supply a message number, you can instead supply a comma-separated list of message 
+numbers. And, if you want all messages whose numbers are in a range but you do not want to have to list 
+all of their numbers (or if you do not even know their numbers—maybe you want “everything starting 
+with message one” without having to fetch their numbers first), you can use a colon to separate the start 
+and end message numbers. An asterisk means “and all of the rest of the messages.” Here is an example 
+specification: 
+2,4:6,20:* 
+It means “message 2,” “messages 4 through 6,” and “message 20 through the end of the mail folder.” 
+Summary Information 
+When you first select a folder, the IMAP server provides some summary information about it—about the 
+folder itself and also about its messages. 
+The summary is returned by IMAPClient as a dictionary. Here are the keys that most IMAP servers 
+will return when you run select_folder(): 
+• 
+EXISTS: An integer giving the number of messages in the folder 
+• 
+FLAGS: A list of the flags that can be set on messages in this folder 
+• 
+RECENT: Specifies the server’s approximation of the number of messages that have 
+appeared in the folder since the last time an IMAP client ran select_folder() on 
+it. 
+• 
+PERMANENTFLAGS: Specifies the list of custom flags that can be set on messages; this 
+is usually empty. 
+• 
+UIDNEXT: The server’s guess about the UID that will be assigned to the next 
+incoming (or uploaded) message 
+• 
+UIDVALIDITY: A string that can be used by clients to verify that the UID numbering 
+has not changed; if you come back to a folder and this is a different value than the 
+last time you connected, then the UID number has started over and your stored 
+UID values are no longer valid. 
+• 
+UNSEEN: Specifies the message number of the first unseen message (one without 
+the \Seen flag) in the folder 
+Of these flags, servers are only required to return FLAGS, EXISTS, and RECENT, though most will 
+include at least UIDVALIDITY as well. Listing 15–5 shows an example program that reads and displays the 
+summary information of my INBOX mail folder. 
+
+CHAPTER 15 ■ IMAP 
+250 
+Listing 15–5. Displaying Folder Summary Information 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 15 - folder_info.py 
+# Opening an IMAP connection with IMAPClient and listing folder information. 
+import getpass, sys 
+from imapclient import IMAPClient 
+try: 
+»   hostname, username = sys.argv[1:] 
+except ValueError: 
+»   print 'usage: %s hostname username' % sys.argv[0]
+»   sys.exit(2) 
+c = IMAPClient(hostname, ssl=True) 
+try: 
+»   c.login(username, getpass.getpass()) 
+except c.Error, e: 
+»   print 'Could not log in:', e 
+»   sys.exit(1) 
+else: 
+»   select_dict = c.select_folder('INBOX', readonly=True)
+»   for k, v in select_dict.items(): 
+»   »   print '%s: %r' % (k, v) 
+»   c.logout() 
+When run, this program displays results such as this: 
+$ ./folder_info.py imap.example.com brandon@example.com 
+Password: 
+EXISTS: 3 
+PERMANENTFLAGS: ('\\Answered', '\\Flagged', '\\Draft', '\\Deleted',
+»   »   »   »    '\\Seen', '\\*') 
+READ-WRITE: True 
+UIDNEXT: 2626 
+FLAGS: ('\\Answered', '\\Flagged', '\\Draft', '\\Deleted', '\\Seen')
+UIDVALIDITY: 1 
+RECENT: 0 
+That shows that my INBOX folder contains three messages, none of which have arrived since I last
+checked. If your program is interested in using UIDs that it stored during previous sessions, remember
+to compare the UIDVALIDITY to a stored value from a previous session. 
+Downloading an Entire Mailbox 
+With IMAP, the FETCH command is used to download mail, which IMAPClient exposes as its fetch()
+method. 
+The simplest way to fetch involves downloading all messages at once, in a single big gulp. While this
+is simplest and requires the least network traffic (since you do not have to issue repeated commands and
+receive multiple responses), it does mean that all of the returned messages will need to sit in memory 
+Download from www.eBookTM.Com
+
+CHAPTER 15 ■ IMAP 
+251
+together as your program examines them. For very large mailboxes whose messages have lots of 
+attachments, this is obviously not practical! 
+Listing 15–6 downloads all of the messages from my INBOX folder into your computer’s memory in a 
+Python data structure, and then displays a bit of summary information about each one.  
+Listing 15–6. Downloading All Messages in a Folder 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 15 - mailbox_summary.py 
+# Opening an IMAP connection with IMAPClient and retrieving mailbox messages. 
+ 
+import email, getpass, sys 
+from imapclient import IMAPClient 
+ 
+try: 
+»   hostname, username, foldername = sys.argv[1:] 
+except ValueError: 
+»   print 'usage: %s hostname username folder' % sys.argv[0] 
+»   sys.exit(2) 
+ 
+c = IMAPClient(hostname, ssl=True) 
+try: 
+»   c.login(username, getpass.getpass()) 
+except c.Error, e: 
+»   print 'Could not log in:', e 
+»   sys.exit(1) 
+ 
+c.select_folder(foldername, readonly=True) 
+msgdict = c.fetch('1:*', ['BODY.PEEK[]']) 
+for message_id, message in msgdict.items(): 
+»   e = email.message_from_string(message['BODY[]']) 
+»   print message_id, e['From'] 
+»   payload = e.get_payload() 
+»   if isinstance(payload, list): 
+»   »   part_content_types = [ part.get_content_type() for part in payload ] 
+»   »   print '  Parts:', ' '.join(part_content_types) 
+»   else: 
+»   »   print '  ', ' '.join(payload[:60].split()), '...' 
+c.logout() 
+Remember that IMAP is stateful: first we use select_folder() to put us “inside” the given folder, 
+and then we can run fetch() to ask for message content. (You can later run close_folder() if you want 
+to leave and not be inside a given folder any more.) The range '1:*' means “the first message through 
+the end of the mail folder,” because message IDs—whether temporary or UIDs—are always positive 
+integers. 
+The perhaps odd-looking string 'BODY.PEEK[]' is the way to ask IMAP for the “whole body” of the 
+message. The string 'BODY[]' means “the whole message”; inside the square brackets, as we will see, you 
+can instead ask for just specific parts of a message. 
+And PEEK indicates that you are just looking inside the message to build a summary, and that you do 
+not want the server to automatically set the \Seen flag on all of these messages for you and thus ruin its 
+memory of which messages the user has read. (This seemed a nice feature for me to add to a little script 
+like this that you might run against a real mailbox—I would not want to mark all your messages as read!) 
+The dictionary that is returned maps message UIDs to dictionaries giving information about each 
+message. As we iterate across its keys and values, we look in each message-dictionary for the 'BODY[]' 
+
+CHAPTER 15 ■ IMAP 
+252 
+key that IMAP has filled in with the information about the message that we asked for: its full text, 
+returned as a large string. 
+Using the email module that we learned about in Chapter 12, the script asks Python to grab the 
+From: line and a bit of the message’s content, and print them to the screen as a summary. Of course, if 
+you wanted to extend this script so that you save the messages in a file or database instead, you can just 
+omit the email parsing step and instead treat the message body as a single string to be deposited in 
+storage and parsed later. 
+Here is what it looks like to run this script: 
+$ ./mailbox_summary.py imap.example.com brandon INBOX 
+Password: 
+2590 "Amazon.com" <order-update@amazon.com> 
+  Dear Brandon, Portable Power Systems, Inc. shipped the follo ... 
+2469 Meetup Reminder <info@meetup.com> 
+  Parts: text/plain text/html 
+2470 billing@linode.com 
+  Thank you. Please note that charges will appear as "Linode.c ... 
+Of course, if the messages contained large attachments, it could be ruinous to download them in 
+their entirety just to print a summary; but since this is the simplest message-fetching operation, I 
+thought that it would be reasonable to start with it! 
+Downloading Messages Individually 
+E-mail messages can be quite large, and so can mail folders—many mail systems permit users to have 
+hundreds or thousands of messages, that can each be 10MB or more. That kind of mailbox can easily 
+exceed the RAM on the client machine if its contents are all downloaded at once, as in the previous 
+example. 
+To help network-based mail clients that do not want to keep local copies of every message, IMAP 
+supports several operations besides the big “fetch the whole message” command that we saw in the 
+previous section. 
+• 
+An e-mail’s headers can be downloaded as a block of text, separately from the 
+message. 
+• 
+Particular headers from a message can be requested and returned. 
+• 
+The server can be asked to recursively explore and return an outline of the MIME 
+structure of a message. 
+• 
+The text of particular sections of the message can be returned. 
+This allows IMAP clients to perform very efficient queries that download only the information they 
+need to display for the user, decreasing the load on the IMAP server and the network, and allowing 
+results to be displayed more quickly to the user. 
+For an example of how a simple IMAP client works, examine Listing 15–7, which puts together a 
+number of ideas about browsing an IMAP account. Hopefully this provides more context than would be 
+possible if these features were spread out over a half-dozen shorter program listings at this point in the 
+chapter! You can see that the client consists of three concentric loops that each take input from the user 
+as he or she views the list of mail folders, then the list of messages within a particular mail folder, and 
+finally the sections of a specific message. 
+
+CHAPTER 15 ■ IMAP 
+253
+Listing 15–7. A Simple IMAP Client 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 15 - simple_client.py 
+# Letting a user browse folders, messages, and message parts. 
+ 
+import getpass, sys 
+from imapclient import IMAPClient 
+try: 
+»   hostname, username = sys.argv[1:] 
+except ValueError: 
+»   print 'usage: %s hostname username' % sys.argv[0] 
+»   sys.exit(2) 
+ 
+banner = '-' * 72 
+ 
+c = IMAPClient(hostname, ssl=True) 
+try: 
+»   c.login(username, getpass.getpass()) 
+except c.Error, e: 
+»   print 'Could not log in:', e 
+»   sys.exit(1) 
+ 
+def display_structure(structure, parentparts=[]): 
+»   """Attractively display a given message structure.""" 
+»   # The whole body of the message is named 'TEXT'. 
+»   if parentparts: 
+»   »   name = '.'.join(parentparts) 
+»   else: 
+»   »   print 'HEADER' 
+»   »   name = 'TEXT' 
+ 
+»   # Print this part's designation and its MIME type. 
+»   is_multipart = isinstance(structure[0], list) 
+»   if is_multipart: 
+»   »   parttype = 'multipart/%s' % structure[1].lower() 
+»   else: 
+»   »   parttype = ('%s/%s' % structure[:2]).lower() 
+»   print '%-9s' % name, parttype, 
+»   # For a multipart part, print all of its subordinate parts; for 
+»   # other parts, print their disposition (if available). 
+»   if is_multipart: 
+»   »   print 
+»   »   subparts = structure[0] 
+»   »   for i in range(len(subparts)): 
+»   »   »   display_structure(subparts[i], parentparts + [ str(i + 1) ]) 
+»   else: 
+»   »   if structure[6]: 
+»   »   »   print 'size=%s' % structure[6], 
+»   »   if structure[8]: 
+»   »   »   disposition, namevalues = structure[8] 
+»   »   »   print disposition, 
+»   »   »   for i in range(0, len(namevalues), 2): 
+»   »   »   »   print '%s=%r' % namevalues[i:i+2] 
+
+CHAPTER 15 ■ IMAP 
+254 
+»   »   print 
+ 
+def explore_message(c, uid): 
+»   """Let the user view various parts of a given message.""" 
+»   msgdict = c.fetch(uid, ['BODYSTRUCTURE', 'FLAGS']) 
+ 
+»   while True: 
+»   »   print 
+»   »   print 'Flags:', 
+»   »   flaglist = msgdict[uid]['FLAGS'] 
+»   »   if flaglist: 
+»   »   »   print ' '.join(flaglist) 
+»   »   else: 
+»   »   »   print 'none' 
+»   »   display_structure(msgdict[uid]['BODYSTRUCTURE']) 
+»   »   print 
+»   »   reply = raw_input('Message %s - type a part name, or "q" to quit: ' 
+»   »   »   »   »   »     % uid).strip() 
+»   »   print 
+»   »   if reply.lower().startswith('q'): 
+»   »   »   break 
+»   »   key = 'BODY[%s]' % reply 
+»   »   try: 
+»   »   »   msgdict2 = c.fetch(uid, [key]) 
+»   »   except c._imap.error: 
+»   »   »   print 'Error - cannot fetch section %r' % reply 
+»   »   else: 
+»   »   »   content = msgdict2[uid][key] 
+»   »   »   if content: 
+»   »   »   »   print banner 
+»   »   »   »   print content.strip() 
+»   »   »   »   print banner 
+»   »   »   else: 
+»   »   »   »   print '(No such section)' 
+ 
+def explore_folder(c, name): 
+»   """List the messages in folder `name` and let the user choose one.""" 
+ 
+»   while True: 
+»   »   c.select_folder(name, readonly=True) 
+»   »   msgdict = c.fetch('1:*', ['BODY.PEEK[HEADER.FIELDS (FROM SUBJECT)]', 
+»   »   »   »   »   »   »   »     'FLAGS', 'INTERNALDATE', 'RFC822.SIZE']) 
+»   »   print 
+»   »   for uid in sorted(msgdict): 
+»   »   »   items = msgdict[uid] 
+»   »   »   print '%6d  %20s  %6d bytes  %s' % ( 
+»   »   »   »   uid, items['INTERNALDATE'], items['RFC822.SIZE'], 
+»   »   »   »   ' '.join(items['FLAGS'])) 
+»   »   »   for i in items['BODY[HEADER.FIELDS (FROM SUBJECT)]'].splitlines(): 
+»   »   »   »   print ' ' * 6, i.strip() 
+ 
+»   »   reply = raw_input('Folder %s - type a message UID, or "q" to quit: ' 
+»   »   »   »   »   »     % name).strip() 
+»   »   if reply.lower().startswith('q'): 
+
+CHAPTER 15 ■ IMAP 
+255
+»   »   »   break 
+»   »   try: 
+»   »   »   reply = int(reply) 
+»   »   except ValueError: 
+»   »   »   print 'Please type an integer or "q" to quit' 
+»   »   else: 
+»   »   »   if reply in msgdict: 
+»   »   »   »   explore_message(c, reply) 
+ 
+»   c.close_folder() 
+ 
+def explore_account(c): 
+»   """Display the folders in this IMAP account and let the user choose one.""" 
+ 
+»   while True: 
+ 
+»   »   print 
+»   »   folderflags = {} 
+»   »   data = c.list_folders() 
+»   »   for flags, delimiter, name in data: 
+»   »   »   folderflags[name] = flags 
+»   »   for name in sorted(folderflags.keys()): 
+»   »   »   print '%-30s %s' % (name, ' '.join(folderflags[name])) 
+»   »   print 
+ 
+»   »   reply = raw_input('Type a folder name, or "q" to quit: ').strip() 
+»   »   if reply.lower().startswith('q'): 
+»   »   »   break 
+»   »   if reply in folderflags: 
+»   »   »   explore_folder(c, reply) 
+»   »   else: 
+»   »   »   print 'Error: no folder named', repr(reply) 
+ 
+if __name__ == '__main__': 
+»   explore_account(c) 
+You can see that the outer function uses a simple list_folders() call to present the user with a list 
+of his or her mail folders, like some of the program listings we have seen already. Each folder’s IMAP 
+flags are also displayed. This lets the program give the user a choice between folders: 
+INBOX                          \HasNoChildren 
+Receipts                       \HasNoChildren 
+Travel                         \HasNoChildren 
+Work                           \HasNoChildren 
+Type a folder name, or "q" to quit: 
+Once a user has selected a folder, things become more interesting: a summary has to be printed for 
+each message. Different e-mail clients make different choices about what information to present about 
+each message in a folder; Listing 15–7 chooses to select a few header fields together with the message’s 
+date and size. Note that it is careful to use BODY.PEEK instead of BODY to fetch these items, since the IMAP 
+server would otherwise mark the messages as \Seen merely because they had been displayed in a 
+summary! 
+The results of this fetch() call are printed to the screen once an e-mail folder has been selected: 
+2703   2010-09-28 21:32:13   19129 bytes  \Seen 
+
+CHAPTER 15 ■ IMAP 
+256 
+»    From: Brandon Craig Rhodes 
+»    Subject: Digested Articles 
+ 
+2704   2010-09-28 23:03:45   15354 bytes 
+»    Subject: Re: [venv] Building a virtual environment for offline testing 
+»    From: "W. Craig Trader" 
+ 
+2705   2010-09-29 08:11:38   10694 bytes 
+»    Subject: Re: [venv] Building a virtual environment for offline testing 
+»    From: Hugo Lopes Tavares 
+ 
+Folder INBOX - type a message UID, or "q" to quit: 
+As you can see, the fact that several items of interest can be supplied to the IMAP fetch() command 
+lets us build fairly sophisticated message summaries with only a single round-trip to the server! 
+Once the user has selected a particular message, we use a technique that we have not discussed so 
+far: we ask fetch() to return the BODYSTRUCTURE of the message, which is the key to seeing a MIME 
+message’s parts without having to download its entire text. Instead of making us pull several megabytes 
+over the network just to list a large message’s attachments, BODYSTRUCTURE simply lists its MIME sections 
+as a recursive data structure. 
+Simple MIME parts are returned as a tuple: 
+('TEXT', 'PLAIN', ('CHARSET', 'US-ASCII'), None, None, '7BIT', 2279, 48) 
+The elements of this tuple, which are detailed in section 7.4.2 of RFC 3501, are as follows (starting 
+from item index zero, of course): 
+1. 
+MIME type 
+2. 
+MIME subtype 
+3. 
+Body parameters, presented as a tuple (name value name value ...) where 
+each parameter name is followed by its value 
+4. 
+Content ID 
+5. 
+Content description 
+6. 
+Content encoding 
+7. 
+Content size, in bytesva 
+8. 
+For textual MIME types, this gives the content length in lines. 
+When the IMAP server sees that a message is multipart, or when it examines one of the parts of the 
+message that it discovers is itself multipart (see Chapter 12 for more information about how MIME 
+messages can nest other MIME messages inside them), then the tuple it returns will begin with a list of 
+sub-structures, which are each a tuple laid out just like the outer structure. Then it will finish with some 
+information about the multipart container that bound those sections together: 
+([(...), (...)], "MIXED", ('BOUNDARY', '=-=-='), None, None) 
+The value "MIXED" indicates exactly what kind of multipart container is being represented—in this 
+case, the full type is multipart/mixed. Other common “multipart” subtypes besides “mixed” are 
+alternative, digest, and parallel. The remaining items beyond the multipart type are optional, but if 
+present, provide a set of name-value parameters (here indicating what the MIME multipart boundary 
+string was), the multipart’s disposition, its language, and its location (typically given by a URL). 
+
+CHAPTER 15 ■ IMAP 
+257
+Given these rules, you can see how a recursive routine like display_structure() in Listing 15–7 is 
+perfect for unwinding and displaying the hierarchy of parts in a message. When the IMAP server returns 
+a BODYSTRUCTURE, the routine goes to work and prints out something like this for examination by the user: 
+Folder INBOX - type a message UID, or "q" to quit: 2701 
+Flags: \Seen 
+HEADER 
+TEXT      multipart/mixed 
+1         multipart/alternative 
+1.1       text/plain size=253 
+1.2       text/html size=508 
+2         application/octet-stream size=5448 ATTACHMENT FILENAME='test.py' 
+Message 2701 - type a part name, or "q" to quit: 
+You can see that the message whose structure is shown here is a quite typical modern e-mail, with a 
+fancy rich-text HTML portion for users who view it in a browser or modern e-mail client, and a plain-text 
+version of the same message for people using more traditional devices or applications. It also contains a 
+file attachment, complete with a suggested file name in case the user wants to download it to the local 
+filesystem. Our sample program does not attempt to save anything to the hard drive, both for simplicity 
+and safety; instead, the user can select any portion of the message—such as the special sections HEADER 
+and TEXT, or one of the specific parts like 1.1—and its content will be printed to the screen. 
+If you examine the program listing, you will see that all of this is supported simply by calls to the 
+IMAP fetch() method. Part names like HEADER and 1.1 are simply more options for what you can specify 
+when you call fetch(), and can be used right alongside other values like BODY.PEEK and FLAGS. The only 
+difference is that the latter values work for all messages, whereas a part name like 2.1.3 would exist only 
+for multipart messages whose structure included a part with that designation. 
+One oddity you will note is that the IMAP protocol does not actually provide you with any of the 
+multipart names that a particular message supports! Instead, you have to count the number of parts 
+listed in the BODYSTRUCTURE starting with the index 1 in order to determine which part number you should 
+ask for. You can see that our display_structure() routine here uses a simple loop to accomplish this 
+counting. 
+One final note about the fetch() command: it lets you not only pull just the parts of a message that 
+you need at any given moment, but also truncate them in case they are quite long and you just want to 
+provide an excerpt from the beginning to tantalize the user! To use this feature, follow any part name 
+with a slice in angle brackets that indicates what range of characters you want—it works very much like 
+Python’s slice operation: 
+BODY[]<0.100> 
+That would return the first 100 bytes of the message body. This can let you inspect both text and the 
+beginning of an attachment to learn more about its content before letting the user decide whether to 
+select or download it. 
+Flagging and Deleting Messages 
+You might have noticed, while trying out Listing 15–7 or reading its example output just shown, that 
+IMAP marks messages with attributes called “flags,” which typically take the form of a backslash-
+prefixed word, like \Seen for one of the messages just cited. Several of these are standard, and are 
+defined in RFC 3501 for use on all IMAP servers. Here is what the most important ones mean: 
+• 
+\Answered: The user has replied to the message. 
+• 
+\Draft: The user has not finished composing the message. 
+
+CHAPTER 15 ■ IMAP 
+258 
+• 
+\Flagged: The message has somehow been singled out specially; the purpose and 
+meaning of this flag vary between mail readers. 
+• 
+\Recent: No IMAP client has seen this message before. This flag is unique, in that 
+the flag cannot be added or removed by normal commands; it is automatically 
+removed after the mailbox is selected. 
+• 
+\Seen: The message has been read. 
+As you can see, these flags correspond roughly to the information that many mail readers visually 
+present about each message. While the terminology may differ (many clients talk about “new” rather 
+than “not seen” messages), the meaning is broadly understood. Particular servers may also support 
+other flags, and those flags do not necessarily begin with the backslash. Also, the \Recent flag is not 
+reliably supported by all servers, so general-purpose IMAP clients can treat it only as, at best, a hint. 
+The IMAPClient library supports several methods for working with flags. The simplest retrieves the 
+flags as though you had done a fetch() asking for 'FLAGS', but goes ahead and removes the dictionary 
+around each answer: 
+>>> c.get_flags(2703) 
+{2703: ('\\Seen',)} 
+There are also calls to add and remove flags from a message: 
+c.remove_flags(2703, ['\\Seen']) 
+c.add_flags(2703, ['\\Answered']) 
+In case you want to completely change the set of flags for a particular message without figuring out 
+the correct series of adds and removes, you can use set_flags() to unilaterally replace the whole list of 
+message flags with a new one: 
+c.set_flags(2703, ['\\Seen', '\\Answered']) 
+Any of these operations can take a list of message UIDs instead of the single UID shown in these 
+examples. 
+Deleting Messages 
+One last interesting use of flags is that it is how IMAP supports message deletion. The process, for safety, 
+takes two steps: first the client marks one or more messages with the \Delete flag; then it calls expunge() 
+to perform the deletions as a single operation. 
+The IMAPClient library does not make you do this by hand, however (though that would work); 
+instead it hides the fact that flags are involved behind a simple delete_messages() routine that marks the 
+messages for you. It still has to be followed by expunge() if you actually want the operation to take effect, 
+though: 
+c.delete_messages([2703, 2704]) 
+c.expunge() 
+Note that expunge() will reorder the normal IDs of the messages in the mailbox, which is yet another 
+reason for using UIDs instead! 
+
+CHAPTER 15 ■ IMAP 
+259
+Searching 
+Searching is another issue that is very important for a protocol designed to let you keep all your mail on 
+the mail server itself: without search, an e-mail client would have to download all of a user’s mail anyway 
+the first time he or she wanted to perform a full-text search to find an e-mail message. 
+The essence of search is simple: you call the search() method on an IMAP client instance, and are 
+returned the UIDs (assuming, of course, that you accept the IMAPClient default of use_uid=True for your 
+client) of the messages that match your criteria: 
+>>> c.select_folder('INBOX') 
+>>> c.search('SINCE 20-Aug-2010 TEXT Apress') 
+[2590L, 2652L, 2653L, 2654L, 2655L, 2699L] 
+These UIDs can then be the subject of a fetch() command that retrieves the information about 
+each message that you need in order to present a summary of the search results to the user. 
+The query shown in the foregoing example combines two criteria, one requesting recent messages 
+(those that have arrived since August 20, 2010, the year that I am typing this) and the other asking that 
+the message text have the word “Apress” somewhere inside, and the result will include only messages 
+that satisfy the first criteria and that satisfy the second criteria—that is the result of concatenating two 
+criteria with a space so that they form a single string. If instead you wanted messages that matched just 
+one of the criteria, but not both, you can join them with an OR operator: 
+OR (SINCE 20-Aug-2010) (TEXT Apress) 
+There are many criteria that you can combine in order to form a query. Like the rest of IMAP, they 
+are specified in RFC 3501. Some criteria are quite simple, and refer to binary attributes like flags: 
+ALL: Every message in the mailbox 
+UID (id, ...): Messages with the given UIDs 
+LARGER n: Messages more than n octets in length 
+SMALLER m: Messages less than m octets in length 
+ANSWERED: Have the flag \Answered 
+DELETED: Have the flag \Deleted 
+DRAFT: Have the flag \Draft 
+FLAGGED: Have the flag \Flagged 
+KEYWORD flag: Have the given keyword flag set 
+NEW: Have the flag \Recent 
+OLD: Lack the flag \Recent 
+UNANSWERED: Lack the flag \Answered 
+UNDELETED: Lack the flag \Deleted 
+UNDRAFT: Lack the flag \Draft 
+UNFLAGGED: Lack the flag \Flagged 
+UNKEYWORD flag: Lack the given keyword flag 
+UNSEEN: Lack the flag \Seen 
+There are a number of flags that match items in each message’s headers. Each of them searches for a 
+given string in the header of the same name, except for the “send” tests, which look at the Date header: 
+BCC string 
+CC string 
+FROM string 
+HEADER name string 
+SUBJECT string 
+TO string 
+
+CHAPTER 15 ■ IMAP 
+260 
+An IMAP message has two dates: the internal Date header specified by the sender, which is called its
+“send date,” and the date at which it actually arrived at the IMAP server. (The former could obviously be
+a forgery; the latter is as reliable as the IMAP server and its clock.) So there are two sets of criteria for
+dates, depending on which date you want to query by: 
+BEFORE 01-Jan-1970 
+ON 01-Jan-1970 
+SINCE 01-Jan-1970
+SENTBEFORE 01-Jan-1970
+SENTON 01-Jan-1970
+SENTSINCE 01-Jan-1970 
+Finally, there are two search operations that refer to the text of the message itself—these are the big
+workhorses that support full-text search of the kind your users are probably expecting when they type
+into a search field in an e-mail client: 
+BODY string: The message body must contain the string. 
+TEXT string: The entire message, either body or header, must contain the string somewhere. 
+See the documentation for the particular IMAP server you are using to learn whether it returns any
+“near miss” matches, like those supported by modern search engines, or only exact matches for the
+words you provide. 
+If your strings contain any characters that IMAP might consider special, try surrounding them with
+double-quotes, and then backslash-quote any double-quotes within the strings themselves: 
+>>> c.search(r'TEXT "Quoth the raven, \"Nevermore.\""')
+[2652L] 
+Note that by using an r'...' string here, I avoided having to double up the backslashes to get single
+backslashes through to IMAP. 
+Manipulating Folders and Messages 
+Creating or deleting folders is done quite simply in IMAP, by providing the name of the folder: 
+c.create_folder('Personal') 
+c.delete_folder('Work') 
+Some IMAP servers or configurations may not permit these operations, or may have restrictions on
+naming; be sure to have error checking in place when calling them. 
+There are two operations that can create new e-mail messages in your IMAP account besides the
+“normal” means of waiting for people to send them to you. 
+First, you can copy an existing message from its home folder over into another folder. Start by using
+select_folder() to visit the folder where the messages live, and then run the copy method like this: 
+c.select_folder('INBOX') 
+c.copy([2653L, 2654L], 'TODO') 
+Finally, it is possible to add a message to a mailbox with IMAP. You do not need to send the message
+first with SMTP; IMAP is all that is needed. Adding a message is a simple process, though there are a
+couple of things to be aware of. 
+The primary concern is line endings. Many Unix machines use a single ASCII line feed character
+(0x0a, or '\n' in Python) to designate the end of a line of text. Windows machines use two characters:
+CR-LF, a carriage return (0x0D, or '\r' in Python) followed by a line feed. Older Macs use just the
+carriage return. 
+Download from www.eBookTM.Com
+
+CHAPTER 15 ■ IMAP 
+261
+Like many Internet protocols (HTTP comes immediately to mind), IMAP internally uses CR-LF 
+('\r\n' in Python) to designate the end of a line. Some IMAP servers will have problems if you upload a 
+message that uses any other character for the end of a line. Therefore, you must always be careful to 
+have the correct line endings when you translate uploaded messages. This problem is more common 
+than you might expect, since most local mailbox formats use only '\n' for the end of each line. 
+However, you must also be cautious in how carefully you change the line endings, because some 
+messages may use '\r\n' somewhere inside despite using only '\n' for the first few dozen lines, and 
+IMAP clients have been known to fail if a message uses both different line endings! The solution is a 
+simple one, thanks to Python’s powerful splitlines() string method that recognizes all three possible 
+line endings; simply call the function on your message and then re-join the lines with the standard line 
+ending: 
+>>> 'one\rtwo\nthree\r\nfour'.splitlines() 
+['one', 'two', 'three', 'four'] 
+>>> '\r\n'.join('one\rtwo\nthree\r\nfour'.splitlines()) 
+'one\r\ntwo\r\nthree\r\nfour' 
+The actual act of appending a message, once you have the line endings correct, is to call the 
+append() method on your IMAP client: 
+c.append('INBOX', my_message) 
+You can also supply a list of flags as a keyword argument, as well as a msg_time to be used as its 
+arrival time by passing a normal Python datetime object. 
+Asynchrony 
+Finally, a major admission needs be made about this chapter’s approach toward IMAP: even though we 
+have described IMAP as though the protocol were synchronous, it in fact supports clients that want to 
+send dozens of requests down the socket to the server and then receive the answers back in whatever 
+order the server can most efficiently fetch the mail from disk and respond. 
+The IMAPClient library hides this protocol flexibility by always sending one request, waiting for the 
+response, and then returning that value. But other libraries—and in particular the IMAP capabilities 
+provided inside Twisted Python—let you take advantage of its asynchronicity. 
+But for most Python programmers needing to script mailbox interactions, the synchronous 
+approach taken in this chapter should work just fine. 
+Summary 
+IMAP is a robust protocol for accessing e-mail messages stored on a remote server. Many IMAP libraries 
+exist for Python; imaplib is built into the Standard Library, but requires you to do all sorts of low-level 
+response parsing by yourself. A far better choice is IMAPClient by Menno Smits, which you can install 
+from the Python Package Index. 
+On an IMAP server, your e-mail messages are grouped into folders, some of which will come pre-
+defined by your particular IMAP provider and some of which you can create yourself. An IMAP client can 
+create folders, delete folders, insert new messages into a folder, and move existing messages between 
+folders. 
+Once a folder has been selected, which is the IMAP rough equivalent of a “change directory” 
+command on a filesystem, messages can be listed and fetched very flexibly. Instead of having to 
+download every message in its entirety—though, of course, that is an option—the client can ask for 
+particular information from a message, like a few headers and its message structure, in order to build a 
+
+CHAPTER 15 ■ IMAP 
+262 
+display or summary for the user to click into, pulling message parts and attachments down from the 
+server on demand. 
+The client can also set flags on each message—some of which are also meaningful to the server—
+and can delete messages by setting the \Delete flag and then performing an expunge operation. 
+Finally, IMAP offers sophisticated search functionality, again so that common user operations can 
+be supported without requiring the e-mail data to be downloaded to the local machine. 
+ 

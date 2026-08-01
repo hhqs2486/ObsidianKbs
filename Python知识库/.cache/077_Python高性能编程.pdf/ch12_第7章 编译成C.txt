@@ -1,0 +1,1742 @@
+ 
+第7 章 
+编译成C 
+读完本章之后你将能够回答下列问题 
+• 
+我怎样让我的Python 代码作为低级代码来运行？ 
+• 
+JIT 编译器和AOT 编译器的区别是什么？ 
+• 
+编译后的Python 代码运行什么任务能够比本地Python 快？ 
+• 
+为什么类型注解提升了编译后Python 代码的运行速度？ 
+• 
+我该怎样使用C 或Fortran 为Python 编写模块？ 
+• 
+我该怎样在Python 中使用C 或者Fortran 的库？ 
+让你的代码运行更快的最简单的办法就是让它做更少的工作。设想你已经选择了优
+秀的算法并且已经减少了要处理的数据量，要执行更少指令的最简单的方法就是把
+你的代码编译成机器码。 
+Python 为此提供了许多选项，包括纯粹的基于C的编译方式，比如Cython、Shed Skin
+和Pythran，凭借Numba 的基于LLVM 的编译方式，还有替代虚拟机的PyPy，包
+含了一个内置的即时编译器（JIT）。当决定采用哪条路线时，你需要在代码的可适
+用性和团队效率的要求方面做出权衡。 
+这些工具中的每一种都给你的工具链增加了新的依赖性，并且Cython 会额外要求
+你用一种新的语言类型来编写（一种Python 和C 的混合），这就意味着你需要新的
+技能。Cython 的新语言可能会伤害你的团队效率，因为没有C 语言知识的团队成
+员在支持这种代码方面可能会有麻烦，尽管在实践中，这很可能只是一个小小的顾
+虑，因为你只会在代码中精心选择的小部分区域使用Cython。 
+126 
+ 
+
+ 
+图编译成C 
+127 
+值得注意的是对你的代码执行CPU 和内存剖析有可能会促发你去思考可以采用的
+高层算法优化。这些算法的变动（例如，用额外的逻辑来避免计算或者用缓存来避
+免重新计算）会帮助你避免在代码中做无用功，并且Python 的表达力会帮助你获
+得发现这些算法的机会。Radim Řehůřek 在12.2 节中讨论了Python 的实现怎样能
+够胜出纯C 的实现。 
+在本章中，我们会检视： 
+• 
+Cython —这是编译成C 最通用的工具，覆盖了numpy 和普通的Python 代码
+（需要一些C 语言的知识）。 
+• 
+Shed Skin — 一个用于非numpy 代码的，自动把Python 转换成C 的转换器。 
+• 
+Numba — 一个专用于numpy 代码的新编译器。 
+• 
+Pythran — 一个用于numpy 和非numpy 代码的新编译器。 
+• 
+PyPy — 一个用于非numpy 代码的，取代常规Python 可执行程序的稳定的
+即时编译器。 
+接下来在本章中，我们会查看外来接口，这些接口允许C 代码被编译进Python 的
+扩展模块。Python 的本地API 和ctypes、cffi（来自PyPy 的作者），以及f2py
+这种能把Fortran 转为Python 的转换器一起使用。 
+7.1  可能获得哪种类型的速度提升 
+如果你的问题求助于编译方式，那么很有可能得到至少一个数量级大小的速度提
+升。这里，我们会看到在单核上，以及在使用OpenMP 的多核上，有各种各样的方
+法来达成一到两个数量级大小的提速。在编译后趋于更快运行的Python 代码有可
+能是数学方面的，并且可能有许多循环在重复着多次相同的运算。在这些循环中，
+有可能会生成许多临时对象。 
+调用外部库（例如，正则表达式、字符串操作、调用数据库）的代码在编译后不可
+能表现出任何速度提升。I/O 密集型的程序同样不可能表现出明显的速度提升。 
+类似地，如果你的Python 代码集中于调用向量化的numpy 例程，那么在编译后就
+不大可能运行得更快—只有当被编译的代码主要是Python（并且可能主要是循
+环）时才会运行得更快。我们在第6 章会看到numpy 运算，编译不会真正有助于
+提速，因为没有许多中间对象。 
+
+128 
+第7 章 
+总体而言，编译后的代码不可能比手工精心编写的C 例程运行得更快，但也不可
+能比它慢很多。从你的Python 代码生成的C 代码很有可能和手写的C 例程跑得一
+样快，除非C 程序员掌握了特定的知识和方法在目标机器架构上去调制C 代码。 
+对于集中于数学方面的代码来说，一个手写的Fortran 例程有可能会超越等价的C
+例程，但是这也有可能需要具备专家级别的知识水准。总体而言，一个编译后的结
+果（可能使用了Cython、Pythran 或Shed Skin）将会如大多数程序员所需要的那样
+接近于手写C 的结果。 
+当你剖析和工作于你的算法时，请把图7-1 记在脑中。通过少量剖析去理解你的代
+码的工作应该能够让你在算法层面做出更明智的选择。在这之后，致力于编译器使
+用上的一些工作应该让你获得额外的速度提升。你还可能会一直微调你的算法，但
+是不要惊讶于见到你那部分不断增加的工作量只是换来了越来越小的改进。要知道
+多余的努力可能是无效的。 
+ 
+图7-1  一些花在剖析和编译上的工作会带来丰厚回报，但是继续努力，收益就趋向于不断减少 
+如果你正在处理Python 代码和内置的库，不涉及numpy，那么Cython、Shed Skin
+和PyPy 是你的主要选择。如果你正在用numpy 工作，那么Cython、Numba 和
+Pythran 是正确的选择。这些工具都支持Python2.7，一些支持Python3.2+。 
+
+ 
+图编译成C 
+129 
+下面一些例子仅需要懂一点C 编译器和C 代码。如果你缺乏这方面知识，你应该
+在深入探索之前学习一点C 语言和编译一个可以工作的C 程序。 
+7.2  JIT 和AOT 编译器的对比 
+我们将要查看的工具大体分为两类：提前编译工具（Cython、Shed Skin、Pythran）
+和“即时”编译工具（Numba、PyPy）。 
+通过提前编译（AOT），你会创建一个为你的机器定制的静态库。如果你下载了
+numpy、scipy 或scikit-learn，它就会在你的机器上用Cython 编译部分的
+库（或者如果你正在使用像Continuum’s Anaconda 之类的分发包，你就会使用一个
+事先构建的预编译库）。通过在使用之前编译的方式，你就会获得一个能够在工作
+中立即拿来使用来解决你的问题的库。 
+通过即时编译，你不必提前做很多（如果有的话），你让编译器在使用时只逐步编
+译恰到好处的那部分代码。这就意味着你会有“冷启动”问题——如果你的大部分
+代码能够被编译并且当前都还没有被编译过，当你开始运行代码而且正在被编译
+时，就会跑得很慢。如果这事在你每次运行脚本时都发生，并且你运行这脚本很多
+次，开销就会变得很显著。PyPy 会遭受这个问题，所以你可能不想要用它来处理
+短小且频繁运行的脚本。 
+当前情形向我们展示了提前编译可以给我们带来最快的速度提升，但这经常会需要
+大量的人力。即时编译提供了印象深刻的速度提升而且几乎不需要人工干预，但是
+它也会遇到刚才描述到的问题。当为你的问题选择正确的技术时，你不得不思考这
+些权衡问题。 
+7.3  为什么类型检查有助代码更快运行 
+Python 是动态类型的——一个变量能够引用任何类型的对象，并且任意代码行都能
+够改变被引用对象的类型。这使得虚拟机难以在机器码层面优化代码的运行方式，
+因为它不知道哪种基础数据类型会用于将来的运算。让代码保持泛型就会让代码运
+行更慢。 
+在下面的例子中，v 或是一个浮点数，或是一对代表复数的浮点数。两个条件会先
+后在相同循环的不同位置发生，或者在相关代码的串行区域发生： 
+v = -1.0 
+print type(v), abs(v) 
+
+130 
+第7 章 
+<type 'float'> 1.0 
+ 
+v = 1-1j 
+print type(v), abs(v) 
+ 
+<type 'complex'> 1.41421356237 
+ 
+abs 函数会根据底层数据类型来以不同方式工作。对一个整数或浮点数来说，abs
+只是简单地把负值转换为正值来作为结果。对复数来说，abs 涉及对分量的平方和
+开平方根： 
+2
+2
+( )
+.
+.
+abs c
+c real
+c imag
+=
++
+ 
+还是复数的例子，它的机器码涉及更多的指令并且会运行得更久。在对一个变量调
+用abs 之前，Python 首先不得不查看变量的类型，接着决定调用哪个函数版本—
+—当你做出很多重复调用的时候，这个开销会累积。 
+在Python 的每种基础对象内部，就像integer 那样，会被更高层的Python 对象包装
+起来（例如，一个int 包装了integer）。更高层的对象有额外的函数，就像为
+辅助存储的__hash__函数，还有为打印的__str__函数。 
+在CPU 密集型的代码区域内部，不改变变量类型的情况很常见。这就给了我们一
+个机会来做静态编译和加快代码运行。 
+如果我们想要的一切全都是大量的中间级的数学运算，我们就不需要更高层次的函
+数，我们也不大可能需要引用计数的机制。我们会向下进入到机器代码的层面，并
+且使用机器码和字节来快速运算，而不是去操控更高层次的Python 对象，那会涉
+及更大的开销。要做到这个，我们就要提前决定对象的类型，这样我们就能产生正
+确的C 代码。 
+7.4  使用C 编译器 
+在接下来的示例中，我们会从GNU C 编译器的工具链中使用gcc 和g++。如果你
+能正确配置环境，你可能会选择替代gcc 的编译器（例如，Intel 的icc 或者微软
+的cl）。Cython 使用了gcc，Shed Skin 使用了g++。 
+gcc 对大多数平台来说是很好的选择，它得到了很好的支持还很先进。虽然经常有
+可能利用调制的编译器（例如Intel 的icc 可能会在Intel 设备上生成比gcc 更快
+的代码）来压榨出更高的性能，但是代价就是你不得不去获取一些更多的领域知识
+并且学习在替代gcc 的编译器上怎样去调制开关项。 
+
+ 
+图编译成C 
+131 
+C 和C++经常被用作静态编译器，而不用其他语言，比如Fortran，这要归因于C
+和C++的普适性和大范围的支持库。编译器和转换器（Cython 等，在这种情况下
+是转换器）有机会来学习注解代码从而决定静态优化步骤（就像内联函数和循环展
+开）是否要采用。对中间级的抽象语法树的贪婪分析（由Pythran、Numba 和PyPy
+执行）提供了机会来结合Python 表达法的知识，从而去通知底层编译器尽可能利
+用已经看见的模式。 
+7.5  复习Julia 集的例子 
+回到第2 章我们剖析了Julia 集产生器。这个代码使用整数和复数来生成输出图片。
+图片的计算是CPU 密集型的。在代码中主要的开销就是有个计算输出列表的内循
+环，这是CPU 密集型的本质。这个列表能被当作方形的像素阵列来画出，其中每
+个值代表了产生那个像素的开销。 
+内循环的代码显示在例7-1 中。 
+例7-1  复习Julia 函数的CPU 密集型代码 
+def calculate_z_serial_purepython(maxiter, zs, cs): 
+    """Calculate output list using Julia update rule""" 
+    output = [0] * len(zs) 
+    for i in range(len(zs)): 
+        n = 0 
+        z = zs[i] 
+        c = cs[i] 
+        while n < maxiter and abs(z) < 2: 
+            z = z * z + c 
+            n += 1 
+        output[i] = n 
+    return output 
+ 
+在Ian 的笔记本电脑上，原始的Julia 集在1000*1000 的格子中计算并且maxiter= 
+300，使用运行在CPython2.7 中的纯粹Python 实现，计算大概接近于11 秒。 
+7.6  Cython 
+Cython 是一个能把类型注解的Python 转换为一个扩展编译模块的编译器。类型注
+解如同C 一样。能够像一个常规Python 模块那样使用import 来导入扩展模块。一
+开始简单，但是它有一个学习曲线，必须去攀登每一级更高的复杂度和优化度。对
+Ian 来说，Cython 是一个可以选择的工具，用来把计算密集型的函数转为更快的代
+码，这是由于它的广泛使用性、成熟性和对OpenMP 的支持。 
+
+132 
+第7 章 
+随着OpenMP 标准，它可能把并行问题转换为在一台多核CPU 机器上运行的多
+处理器感知模块。线程从你的Python 代码隐藏起来了，它们通过生成的C 代码
+来运算。 
+Cython（2007 年发布）是Pyrex（2002 年发布）的一个分支，在原始Pyrex 基础上
+扩展了能力。使用Cython 的库包括scipy、scikit-learn、lxml 和zmp。 
+Cython 能够被用来通过一个setup.py 脚本编译一个模块。它也能够在IPython 中通
+过一个“magic”命令来交互使用。通常情况下类型由开发者注解，尽管一些自动
+注解也是有可能的。 
+7.6.1  使用Cython 编译纯Python 版本 
+开始写一个扩展编译模块的简单方法涉及3 个文件。使用我们的Julia 作为例子，
+它们是： 
+• 
+调用它的Python 代码（来自前面的Julia 代码块）。 
+• 
+在一个新.pyx 文件中要被编译的函数。 
+• 
+一个setup.py，包含了调用Cython 来制作扩展模块的指令。 
+使用这个方法，setup.py 脚本调用Cython 把.pyx 文件编译成一个编译模块。在类
+UNIX 系统上，编译模块可能会是一个.so 文件；在Windows 上应该是一个.pyd（类
+DLL 的Python 库）。 
+对于Julia 的例子，我们会用： 
+• 
+julia1.py，构建输入列表并调用计算函数。 
+• 
+cythonfn.pyx，包含了我们能注解的CPU 密集型函数。 
+• 
+setup.py，包含了构建指令。 
+运行setup.py 的结果就是获得一个能够被导入的模块。在例7-2 的julia1.py 脚本中，
+我们只需要做一些很小的改动来导入新的模块并调用我们的函数。 
+例7-2  导入新编译模块到我们的主代码中 
+... 
+import calculate # as defined in setup.py 
+... 
+def calc_pure_python(desired_width, max_iterations): 
+    # ... 
+
+ 
+图编译成C 
+133 
+    start_time = time.time() 
+    output = calculate.calculate_z(max_iterations, zs, cs) 
+    end_time = time.time() 
+    secs = end_time - start_time 
+    print "Took", secs, "seconds" 
+...  
+在例7-3 中，我们将从一个没有类型注解的纯Python 脚本开始。 
+例7-3  在cythonfn.pyx（从.py 重命名）中为Cython 的setup.py 准备的未改动
+过的纯Python 代码 
+# cythonfn.pyx 
+def calculate_z(maxiter, zs, cs): 
+    """Calculate output list using Julia update rule""" 
+    output = [0] * len(zs) 
+    for i in range(len(zs)): 
+        n = 0 
+        z = zs[i] 
+        c = cs[i] 
+        while n < maxiter and abs(z) < 2: 
+            z = z * z + c 
+            n += 1 
+        output[i] = n 
+    return output 
+ 
+在例7-4 中显示的setup.py 脚本是简短的，它定义了把cythonfn.pyx 转换为
+calculate.so 的方法。 
+例7-4  setup.py，把cythonfn.pyx 转换为由Cython 去编译的C 代码 
+from distutils.core import setup 
+from distutils.extension import Extension 
+from Cython.Distutils import build_ext 
+ 
+setup( 
+        cmdclass = {'build_ext': build_ext}, 
+        ext_modules = [Extension("calculate", ["cythonfn.pyx"])] 
+        ) 
+ 
+当我们在例7-5 中用参数build_ext 运行setup.py 脚本时，Cython 会查找cythonfn.pyx
+并构建calculate.so。 
+ 
+备忘 
+记住这是一个手动步骤—如果你更新了你的.pyx 或者setup.py，但
+是忘记重新去运行构建命令，你不会获得一个要导入的更新的.so 模
+块。如果你不确定是否编译了代码，检查.so 文件的时间戳。如果怀疑
+的话，删除生成的C 文件和.so 文件，再重新构建。 
+
+134 
+第7 章 
+例7-5  运行setup.py 构建一个新的编译模块 
+$ python setup.py build_ext --inplace 
+running build_ext 
+cythoning cythonfn.pyx to cythonfn.c 
+building 'calculate' extension 
+gcc -pthread -fno-strict-aliasing -DNDEBUG -g -fwrapv -O2 -Wall 
+    -Wstrict-prototypes -fPIC -I/usr/include/python2.7 -c cythonfn.c 
+    -o build/temp.linux-x86_64-2.7/cythonfn.o 
+gcc -pthread -shared -Wl,-O1 -Wl,-Bsymbolic-functions -Wl, 
+    -Bsymbolic-functions -Wl,-z, 
+    relro build/temp.linux-x86_64-2.7/cythonfn.o -o calculate.so 
+ 
+--inplace 参数让Cython 在当前目录中构建编译模块，而不是在一个独立的构建
+目录中。在构建完成后，我们会有两个难以卒读的中间文件cythonfn.c 和
+calculate.so。 
+现在当运行julia1.py 时，会导入编译模块，在Ian 的笔记本电脑上计算Julia 集在
+8.9 秒内做完，而不是通常的多于11 秒。这是一个花费很少工作量的小小改进。 
+7.6.2  Cython 注解来分析代码块 
+前面的示例给我们演示了我们能够快速构建一个编译模块。对紧凑的循环和数学运
+算来说，这往往能带来速度提升。很明显，我们不应该盲目优化—我们需要知道
+哪里慢了，这样就能够决定集中于哪个方向去努力。 
+Cython 有一个注解选项能输出一个可以让我们在浏览器上查看的HTML 文件。要
+产生注解，我们要使用命令cython –a cythonfh.pyx 来产生输出文件
+cythonfn.html。在浏览器中它看起来就像图7-2 中的那样。一张类似的图片在Cython
+文档中有提供。 
+ 
+图7-2  彩色版Cython 的非注解函数输出 
+
+ 
+图编译成C 
+135 
+每一行能够被双击扩展来显示生成的C 代码。更多的黄色意味着“更多的Python
+虚拟机调用”，而更多的白色意味着“更多的非Python 的C 代码”。目标就是移除
+尽可能多的黄色并以更尽可能多的白色来结束。 
+尽管“更多的黄色线条”意味着更多的虚拟机调用，但这并不一定让你的代码跑得
+更慢。每一个虚拟机调用都有一个开销，但是这些调用的开销仅当发生于大循环的
+内部时才会变得显著。在大循环外部的调用（例如，在函数开始处创建输出的一行）
+相对于内部的计算循环的开销来说并不高。不用把你的时间浪费在不会拖慢运行速
+度的代码行间。 
+在我们的例子中，那些回调Python 虚拟机最多次的代码行（“最深的黄色”）是第4
+行和第8 行。从我们之前的剖析工作中，我们知道第8 行可能被调用了超过3 千万
+次，所以这是一个需要集中很多精力的候选对象。 
+第9、10 和11 行几乎是一样深度的黄色，我们也知道它们是在紧凑的内循环内。
+总体上，它们占了这个函数执行时间的大部分，所以我们需要首先集中于它们上面。
+如果你需要回忆起多少时间花费在这部分上了，请向前参考2.8 节。 
+第6 和第7 行的黄色深度减弱了，既然它们只是被调用了一百万次，它们对最终的
+速度影响就小得多了，所以我们可以在稍后再集中于它们身上。事实上，因为它们
+是列表对象，我们几乎没有办法来提升他们的存取速度，除非如我们将会在7.8 节
+中读到的那样，用numpy 数组来取代list 对象，这会带来小小的速度优势。 
+为了更好地理解黄色区域，我们可以双击展开每一行。在图7-3 中，我们可以看
+到为了创建输出列表，我们遍历了zs 的长度，创建了新的由Python 虚拟机来引
+用计数的Python 对象。尽管这些调用是耗时的，它们不会真正影响这个函数的执
+行时间。 
+为了改进函数的执行时间，我们需要开始声明对象的类型，这些对象被包含在了耗
+时的内循环中。这样这些循环才能够减少相对耗时的回调Python 虚拟机的次数，
+从而节省时间。 
+一般情况下，可能最消耗CPU 时间的代码行是下面这些： 
+• 
+在紧凑的内循环内。 
+• 
+解引用list、array 或者np.array 这些项。 
+• 
+执行数学运算。 
+
+136 
+第7 章 
+ 
+图7-3  在一行Python 代码后面的C 代码 
+ 
+备忘 
+如果你并不知道哪些代码行执行得最频繁，使用一个剖析工具是最合适
+的—line_profile，在2.8 节中讨论过。你将会得到哪些行在Python
+虚拟机中消耗最多，这样你就会有一个清晰的依据再次集中于那些代码
+行以获得最佳的速度。 
+7.6.3  增加一些类型注解 
+图7-2 展示了函数几乎每一行都回调了Python 虚拟机。我们所有的数值运算也都
+回调了Python 虚拟机，因为我们使用的是高层的Python 对象。我们需要把这些都
+转换为本地C 对象，接着在进行数值方面的编码时，我们需要把结果再转换回
+Python 对象。 
+在例7-6 中，我们会看到怎样使用cdef 语法来增加一些原始类型。 
+ 
+备忘 
+值得重视的是那些类型只能被Cython 理解，而不是Python。Cython
+使用这些类型把Python 代码转换为C 对象，而不需要回调Python 栈，
+这意味着运算能执行得更快，但是损失了灵活性和开发速度。 
+
+ 
+图编译成C 
+137 
+我们增加的类型是： 
+• 
+有符号整数int。 
+• 
+只能为正的无符号整数unsigned int。 
+• 
+双精度复数double complex。 
+Cdef 关键字让我们在函数体内声明变量。作为C 语言规范的需求，这些声明必须
+出现在函数顶部。 
+例7-6  增加原始C 类型开始让我们的编译函数运行更快，通过用C 做更多工
+作从而减少Python 虚拟机的工作 
+def calculate_z(int maxiter, zs, cs): 
+    """Calculate output list using Julia update rule""" 
+    cdef unsigned int i, n 
+    cdef double complex z, c 
+    output = [0] * len(zs) 
+    for i in range(len(zs)): 
+        n = 0 
+        z = zs[i] 
+        c = cs[i] 
+        while n < maxiter and abs(z) < 2: 
+            z = z * z + c 
+            n += 1 
+        output[i] = n 
+    return output 
+ 
+ 
+备忘 
+当增加Cython 注解后，你正在给.pyx 增加非Python 的代码。这意味着
+你丧失了在解释器中开发Python 的天然的交互性。对熟悉C 语言编程
+的人来说，我们又回到了编码—编译—运行—调试的循环中去了。 
+ 
+你可能会奇怪我们是否可以给作为参数传入的list 增加类型注解。我们能够使用
+list 关键字，但是实践中对于这个例子无效。list 对象还是不得不在Python 层
+面去查询来找出其中的内容，速度是很慢的。 
+给其中一些原始对象增加类型的做法在图7-4 中的注解输出中反映了出来。第11
+和12 行是很关键的地方——这2 行我们调用最频繁的代码——现在已由黄色转为
+了白色，显示出它们不再去回调Python 虚拟机了。我们可以期待与前面的版本比
+较之下的一个很大的速度提升。第10 行被调用了超过3 000 万次，所以我们还是
+要集中在它上面。 
+
+138 
+第7 章 
+ 
+图7-4  我们的第一个类型注解 
+在编译后，这个版本花了4.3 秒来完成任务。只对函数做了很少的改动，我们却跑
+出了是原来Python 版本两倍的速度。 
+值得重视的是我们获得提速的原因是更多的频繁调用的运算被放到了C 的层面—
+在这个案例中，更新了z 和n。这意味着C 编译器能够去优化更底层的函数来对代
+表这些变量的字节做运算，而不是去调用相对慢速的Python 虚拟机。 
+我们在图7-4 中可以看到while 循环还是相当耗时的（黄色部分）。耗时的调用在
+于Python 对复数z 的abs 函数中。Cython 没有对复数提供原生的abs 函数。作
+为替代，我们可以提供自己的本地扩展。 
+就如本章前面提醒的那样，对一个复数做abs 涉及对实部和虚部的平方和开平方
+根。在我们的测试中，我们想要看看结果的平方根是否小于2。与其开平方根，我
+们不如对比较表达式的另一端求平方，因此我们把<2 转换为<4。这就避免了必须
+要计算平方根来作为abs 函数的最终结果。 
+实质上，我们从下式开始： 
+2
+2
+.
+.
+4
+c real
+c imag
++
+<
+ 
+我们还有简化版的运算： 
+2
+2
+.
+.
+4
+c real
+c imag
++
+<
+ 
+如果我们在下列代码中保留了sqrt 运算，我们还是能看到执行速度的提升。优化
+代码的秘诀之一就是让它尽可能的少干活。通过考虑一个函数的最终目标来移除相
+
+ 
+图编译成C 
+139 
+对耗时的运算意味着C 编译器能集中于它所擅长的方面，而不是尝试去感知程序
+员的最终需求。 
+编写等价的但是更特殊的代码来解决相同的问题就是所谓的强度减弱。你用更糟糕
+的灵活性（和可能更糟糕的可读性）去换来更快的执行速度。 
+数学分解在下一个例子中，见例7-7，其中我们已经用一行简化的扩展数学表达式
+来代替相对耗时的abs 函数。 
+例7-7  用Cython 来扩展abs 函数 
+def calculate_z(int maxiter, zs, cs): 
+    """Calculate output list using Julia update rule""" 
+    cdef unsigned int i, n 
+    cdef double complex z, c 
+    output = [0] * len(zs) 
+    for i in range(len(zs)): 
+        n = 0 
+        z = zs[i] 
+        c = cs[i] 
+        while n < maxiter and (z.real * z.real + z.imag * z.imag) < 4: 
+            z = z * z + c 
+            n += 1 
+        output[i] = n 
+    return output 
+ 
+通过代码注解，我们看到在第10 行（图7-5）以while 语句为代价换来的小小改
+进。现在它包含了更少的Python 虚拟机调用。尽管对于能够获得多少速度提升来
+说并不是立即显而易见的，但是我们知道这行被调用了超过3000 万次，因此我们
+期待一个优越的性能提升。 
+ 
+图7-5  展开数学表达式取得了最终的胜利 
+
+140 
+第7 章 
+这个改变有巨大的效果——通过减少在最内循环中Python 调用的次数，我们大大
+降低了函数的运算时间。这个新版本只用0.25 秒就执行完毕了，具有超过原版本
+40 倍的速度提升，令人惊叹。 
+ 
+备忘 
+Cython 支持几种编译成C 的方式，有一些比这里描述的全类型注解
+方式要来得简单。如果你想要一个更简单的起点来使用Cython，并
+且查看pyximport 来方便向同事介绍Cython，你应该熟悉纯Python
+模式。 
+ 
+为了对代码片段做最终可能的改进，我们会禁止list 中的每个解引用的边界检
+查。边界检查的目的是确保程序不会去访问超出分配数组的空间—在C 中，
+很容易无意中访问了超出数组边界的内存，产生不可预料的结果（可能是一个
+段错误！）。 
+Cython 默认会保护程序员免于意外地去寻址超出list 边界的空间。这种保护消耗了
+一点CPU 时间，但是它发生于我们函数的外循环处，所以总体上不会占用很多时
+间。通常禁止边界检查是安全的，除非你要执行自己的计算来做数组寻址，这种情
+况下你会不得不小心翼翼地呆在list 的边界内。 
+Cython 有一系列标志开关可以用各种各样的方式去表述。最简单的就是在.pyx 文
+件的起始处把它们作为单行注释加入。也可以利用装饰器或编译时标志来改变这些
+设定。为了禁止边界检查，我们在.pyx 文件开头的注释内给Cython 增加了一行指
+令（directive）。 
+#cython: boundscheck=False 
+def calculate_z(int maxiter, zs, cs): 
+ 
+要注意的是，禁止边界检查只会节省一点时间，因为它发生于外循环中，而不是在
+更耗时的内循环中。对于这个例子来说，它不会节省更多的时间。 
+ 
+备忘 
+如果你的CPU 密集型代码在频繁解引用的循环中，尝试禁止边界检
+查和外围检查。 
+7.7  Shed Skin 
+Shed Skin 是一个和Python2.4～2.7 一起使用的实验性的把Python 转为C++的编译
+
+ 
+图编译成C 
+141 
+器。它使用类型引用来自动检查Python 程序来注解每一个变量。被注解的代码接
+着就会被翻译成C 代码，可以被g++之类的标准编译器编译。自动反射是Shed Skin
+的一个很有趣的特征，用户只要求提供一个关于怎样用正确类型的数据来调用函数
+的例子，Shed Skin 会把剩下的都给做了。 
+类型引用的好处是程序员不需要显式地手动声明类型。付出的开销就是分析器需要
+能够推导出程序中的每个变量的类型。在当前版本中，上千行Python 代码能被自
+动转换成C。它使用了Boehm 的标记-清除垃圾收集器来自动管理内存。Boehm 的
+垃圾收集器也用于Mono 和Java 的GNU 编译器。Shed Skin 的缺点就是它使用了
+外部实现的标准库。任何没有被实现的库（包含numpy）将不受支持。 
+整个项目有超过75 个例子，包括了许多集中于数学方面的纯Python 模块，甚至有
+一个能够完整工作的Commodore 64 模拟器。每一个模块在用Shed Skin 编译后，
+相比本地运行的CPython，速度得到明显的提升。 
+Shed Skin 能构建独立的可执行程序，不依赖于已安装的Python 安装包或者在常规
+Python 代码中用import 导入的扩展模块。 
+编译模块管理它们自己的内存。这意味着来自Python 进程的内存被拷贝进来并且
+结果被拷贝出去——没有显式的共享内存。对于大块内存（例如，一个大矩阵）执
+行拷贝的开销很显著，我们在本节末尾会简略看一下。 
+Shed Skin 提供了和PyPy 一样的很多好处（请看7.11 节）。因此，PyPy 可能更容易
+使用，因为它不需要任何编译步骤。Shed Skin 自动增加类型注解的方式可能让一
+些用户很感兴趣，并且生成的C 代码比Cython 生成的可读性高，如果你希望修改
+生成的C 代码的话。我们肯定地猜测自动类型反射代码会让社区中的其他编译器
+编写者很感兴趣。 
+7.7.1  构建扩展模块 
+在这个例子中，我们会构建一个扩展模块。我们会导入生成的模块，就如在Cython
+的示例中做的那样。我们也能够把这个模块编译成一个独立的可执行文件。 
+在例7-8 中，我们有一个在独立模块中的代码示例，它包含了无法注解的普通Python
+代码。也要注意我们已经增加了一个__main__测试——这使得这个模块可以被独
+立运行来做类型分析。Shed Skin 能够使用这个__main__块来提供示例中的参数，
+从而去推导出传入calculate_z 的参数类型，进而推导出在CPU 密集型函数内
+部所使用的数据类型。 
+
+142 
+第7 章 
+例7-8  把我们的CPU 密集型函数挪到一个分离的模块去（就如我们用Cython
+做的那样）来让Shed Skin 的自动类型推导系统运行 
+# shedskinfn.py 
+def calculate_z(maxiter, zs, cs): 
+    """Calculate output list using Julia update rule""" 
+    output = [0] * len(zs) 
+    for i in range(len(zs)): 
+        n = 0 
+        z = zs[i] 
+        c = cs[i] 
+        while n < maxiter and abs(z) < 2: 
+            z = z * z + c 
+            n += 1 
+        output[i] = n 
+    return output 
+ 
+ 
+if __name__ == "__main__": 
+    # make a trivial example using the correct types to enable type inference 
+    # call the function so Shed Skin can analyze the types 
+    output = calculate_z(1, [0j], [0j]) 
+ 
+我们能够像例7-9 中那样，既可以在这个模块被编译之前导入它，也可以在这个模
+块被编译之后再导入它，就像通常所做的那样。既然代码没有被改动过（不像使用
+Cython 那样），我们就能在编译前调用Python 的原生模块。如果你还未编译过你的
+代码，你不会得到速度提升，但是你能够使用常规的Python 工具以一种轻量级的
+方式来调试。 
+例7-9  导入外部模块以便让Shed Skin 编译它 
+... 
+import shedskinfn 
+... 
+def calc_pure_python(desired_width, max_iterations): 
+    #... 
+    start_time = time.time() 
+    output = shedskinfn.calculate_z(max_iterations, zs, cs) 
+    end_time = time.time() 
+    secs = end_time - start_time 
+    print "Took", secs, "seconds" 
+... 
+ 
+就如在例7-10 中所见，我们能使用Shedskin  -ann  shedskin.py 让Shed 
+Skin 提供一个它所分析的注解输出，这会生成shedskinfn.ss.py。如果我们要
+编译一个扩展模块，我们只需要用空的__main__函数来做分析“种子”。 
+
+ 
+图编译成C 
+143 
+例7-10  检查Shed Skin 的注解输出看下它推导出了哪些类型 
+# shedskinfn.ss.py 
+def calculate_z(maxiter, zs, cs):         # maxiter: [int], 
+                                          # zs: [list(complex)], 
+                                          # cs: [list(complex)] 
+    """Calculate output list using Julia update rule""" 
+    output = [0] * len(zs)                # [list(int)] 
+    for i in range(len(zs)):              # [__iter(int)] 
+        n = 0                             # [int] 
+        z = zs[i]                         # [complex] 
+        c = cs[i]                         # [complex] 
+        while n < maxiter and abs(z) < 2: # [complex] 
+            z = z * z + c                 # [complex] 
+            n += 1                        # [int] 
+        output[i] = n                     # [int] 
+    return output                         # [list(int)] 
+ 
+ 
+if __name__ == "__main__":                # [] 
+    # make a trivial example using the correct types to enable type inference 
+    # call the function so Shed Skin can analyze the types 
+    output = calculate_z(1, [0j], [0j])   # [list(int)] 
+ 
+__main__的类型被分析之后，接着在calculate_z 的内部，变量z 和c 的类型
+能够从与它们有互动的对象中推导出来。 
+我们使用shedskin --extmod shedskinfn.py 来编译这个模块，会生成下列
+文件： 
+• 
+shedskinfn.hpp（C++头文件）。 
+• 
+shedskinfn.cpp（C++源文件）。 
+• 
+Makefile。 
+通过运行make，我们就生成了shedskinfn.so。我们能够通过import  
+shedskinfn 在Python 中使用。用shedskinfn.so 来执行julia1.py 的时间
+只有0.4 秒——相比未编译的版本，只做了很小的工作就取得了巨大的胜利。 
+我们也能展开abs 函数，就如我们用Cython 在例7-7 中做的那样。在运行这个版
+本（只改了abs 那一行）并使用一些额外的标志位--nobounds --nowrap 之后，
+我们得到了一个0.3 秒的最终执行时间。这比Cython 版本稍慢一点（慢0.05 秒），
+但是我们不需要声明所有的类型信息。这使得用Shed Skin 来做实验很容易。PyPy
+以相近的速度运行了这个代码的相同版本。 
+
+144 
+第7 章 
+ 
+备忘 
+仅仅是因为Cython、PyPy 和Shed Skin 在这个例子中跑出了相近的速
+度，但这并不意味着这是普遍性的结果。为了让你的项目得到最佳提
+速，你必须调查这些不同的工具并运行你自己的实验。 
+Shed Skin 允许你声明额外的编译期选项，比如-ffast-math 或-o3，并且你能够
+在两遍扫描（第一遍收集执行统计信息，第二遍在这些统计信息基础上优化生成的
+代码）中增加剖析导向优化（PGO）来设法做出进一步的速度提升。然而剖析导向
+优化没有让Julia 的例子跑得更快，在实践中它通常很少或没有真实效果。 
+你应该注意到默认整数是32 比特的，如果你想要更大的64 比特整数范围，那么就
+声明--long 标志。你也应该避免在紧凑的内循环中分配小对象（例如，new tuples），
+因为垃圾收集器并不能高效地处理它们。 
+7.7.2  内存拷贝的开销 
+在我们的示例中，Shed Skin 通过把数据扁平化成基本C 类型的方式把Python 的list
+对象拷贝进Shed Skin 的环境中来，接着在执行函数的末尾把结果从C 函数转换为
+Python 的list。这些转换和拷贝花费时间。这大概就占了我们在前面的结果中看
+到的多出来的0.05 秒（相比Cython 的结果多了0.05 秒）吧？ 
+我们能够修改Shedskinfn.py文件来移除实际的工作量，这样我们就能计算经由Shed 
+Skin 把数据拷进拷出的开销。下面的calculate_z 的变体是我们所需要的： 
+def calculate_z(maxiter, zs, cs): 
+    """Calculate output list using Julia update rule""" 
+    output = [0] * len(zs) 
+    return output 
+ 
+当我们用这个框架函数执行julia1.py 时，执行时间接近于0.05 秒（显然它不
+计算正确结果！）。这个时间是把2000000 个复数拷贝进calculate_z 并把
+1000000 个整数再次拷贝出来的开销。实质上，Shed Skin 和Cython 生成了相同的
+机器码，执行速度的差异归结于Shed Skin 在一个独立的内存空间运行，还有就是
+所需的拷进拷出数据的开销。硬币的另一面就是，使用Shed Skin，你不必预先做
+注解工作，节省了相当多的时间。 
+7.8  Cython 和numpy 
+list 对象（作为背景，请看第3 章）的每一个解引用都有开销，因为它们所引用的
+对象可以存在于内存中任意处。而相反，array 对象在RAM 的连续块中存储原生类
+
+ 
+图编译成C 
+145 
+型，能够被快速寻址。 
+Python 具有array 模块，为基础原生类型（包括整数、浮点数、字符串和Unicode
+字串）提供了一维存储。Numpy 的numpy.array 模块允许多维存储和更多样的
+原生类型，包括复数。 
+当以可预测的方式去迭代访问一个array 对象时，如果要移动到序列中的下一个
+原生项，编译器会被指导去直接访问该项的内存地址，而不是让Python 来计算出
+一个合适的地址。既然数据布局到了连续块中，在C 中用偏移量来计算下一项的
+地址就是轻而易举的，而不要让CPython 去计算来得到相同的结果，因为这会涉及
+慢速的虚拟机回调。 
+你应该注意到了如果运行接下来的numpy 版本而不用任何Cython 注解（例如，只
+是作为一个普通Python 脚本运行），大概要71 秒跑完——远超出普通的Python list
+脚本，它大概花费11 秒。拖慢运行速度的原因是在numpy lists 中解引用每一
+个元素的开销——它从来不是为这种用法而设计的，即使对初学者来说，这种用法
+看上去直观。通过编译代码，我们移除了这个开销。 
+Cython 为此有两种特殊的语法形式。更老的Cython 版本有一种特殊的访问numpy 
+array 的类型，但最近更一般化的缓存接口协议通过memoryview 引入了进来
+—允许对实现了缓存接口的任意对象进行相同的低级访问，包括numpy arrays
+和Python arrays。 
+缓存接口的一个附加优势是内存块能够很容易地在其他C 库中共享，而不需要把
+它们从Python 对象转换成其他形式。 
+例7-11 中的代码块看上去有一点像原来的实现，除了我们增加的memoryview 注
+解外。函数的第2 个参数是double complex[:] zs，意味着我们有一个使用
+缓存协议（用[]声明）的双精度复数对象，包含了一个一维的数据块（由一个冒
+号：声明）。 
+例7-11  Julia 计算函数的注解numpy 版本 
+# cython_np.pyx 
+import numpy as np 
+cimport numpy as np 
+ 
+def calculate_z(int maxiter, double complex[:] zs, double complex[:] cs): 
+    """Calculate output list using Julia update rule""" 
+    cdef unsigned int i, n 
+    cdef double complex z, c 
+    cdef int[:] output = np.empty(len(zs), dtype=np.int32) 
+
+146 
+第7 章 
+    for i in range(len(zs)): 
+        n = 0 
+        z = zs[i] 
+        c = cs[i] 
+        while n < maxiter and (z.real * z.real + z.imag * z.imag) < 4: 
+            z = z * z + c 
+            n += 1 
+        output[i] = n 
+    return output 
+ 
+除了使用缓存注解语法声明输入参数外，我们也注解了输出变量，由empty 给它
+分配了一个一维的numpy array。调用empty 会分配一块内存，但是不会用完
+整的数值初始化内存，所以它不包含任何东西。我们在内循环中会覆写这个array
+的内容，所以我们不需要重复给它赋默认值。这要比分配并给array 的内容赋默
+认值要稍快一点。 
+我们也使用更快、更显式的数学版本来展开abs 的调用。这个版本用了0.23 秒跑
+完——结果比原来在例7-7 中的纯Python 的Julia 例子的Cython 化版本要稍微快一
+点。纯Python 版本有每次解引用一个Python 复数对象的开销，但是这些解引用发
+生于外循环中，所以不占用多少执行时间。在外循环之后，我们做了这些变量的本
+地版本，它们以“C 的速度”运行。这个numpy 的例子和之前的纯Python 例子中
+的内循环都对相同的数据做了相同的处理，所以执行时间的差异归因于外循环中的
+解引用和输出队列的创建。 
+在一台机器上使用OpenMP 来做并行解决方案 
+作为这版代码演进的最后步骤，让我们看一下使用OpenMP C++扩展来并行化处理
+让我们为难的并行问题。如果你的问题适合这个模式，那么你就能很快发挥你的计
+算机多核的优势。 
+OpenMP（Open Multi-Processing）是一个定义良好的跨平台API，支持并行执行，
+以及与C、C++和Fortran 的内存共享。它被构建入了大多数的现代C 编译器，如
+果C 代码编写合适的话，并行化就会在编译器级别上发生，所以它就给开发者使
+用Cython 带来了相对小的工作量。 
+与Cython 一起，OpenMP 能够通过使用prange（并行range）操作符和给setup.py
+增加-fopenmp 编译指令的方式加入进来。在一个prange 循环中的工作就能够
+做到并行运行，因为我们禁止了全局解释器锁（GIL）。 
+一个修改过的支持prange 的代码版本显示在例7-12 中。用nogil:来声明禁止
+GIL 的代码块，在这个代码块内部，我们使用prange 为循环开启OpenMP 并行模
+式来独立计算每一个i。 
+
+ 
+图编译成C 
+147 
+ 
+警告 
+当禁止GIL 时，我们一定不能在常规Python 对象（例如，lists）
+上操作，必须要在原生对象和支持memoryview 接口的对象上去操
+作。如果并行操作了常规的Python 对象，我们不得不去解决随之
+而来的内存管理问题，而这是GIL 意图避免的。Cython 不阻止我
+们去操控Python 对象，但是如果你这样做，只会招来痛苦和困扰。 
+ 
+例7-12  增加prange 来启用OpenMP 并行化 
+# cython_np.pyx 
+from cython.parallel import prange 
+import numpy as np 
+cimport numpy as np 
+ 
+def calculate_z(int maxiter, double complex[:] zs, double complex[:] cs): 
+    """Calculate output list using Julia update rule""" 
+    cdef unsigned int i, length 
+    cdef double complex z, c 
+    cdef int[:] output = np.empty(len(zs), dtype=np.int32) 
+    length = len(zs) 
+    with nogil: 
+        for i in prange(length, schedule="guided"): 
+            z = zs[i] 
+            c = cs[i] 
+            output[i] = 0 
+            while output[i] < maxiter and (z.real * z.real + z.imag * z.imag) < 4: 
+                z = z * z + c 
+                output[i] += 1 
+    return output 
+ 
+为了编译cython_np.pyx，我们不得不修改setup.py 脚本，就如在例7-13 中显示的
+那样。我们让它通知C 编译器在编译期间使用-fopenmp 作为参数来启用OpenMP
+以及和OpenMP 库去链接。 
+例7-13  为Cython 在setup.py 中增加OpenMP 编译器和和链接器标志 
+#setup.py 
+from distutils.core import setup 
+from distutils.extension import Extension 
+from Cython.Distutils import build_ext 
+ 
+setup( 
+        cmdclass = {'build_ext': build_ext}, 
+        ext_modules = [Extension("calculate", 
+                                 ["cython_np.pyx"], 
+
+148 
+第7 章 
+                                  extra_compile_args=['-fopenmp'], 
+                                  extra_link_args=['-fopenmp'])] 
+        ) 
+ 
+使用Cython 的prange，我们能够选择不同的调度方式。使用static，工作负
+载可以均匀地在可用的CPU 之间分布。我们的一些计算区域在时间上是开销很大
+的，另一些则开销很小。如果我们用static 让Cython 在CPU 之间平等地调度工
+作块，那么一些区域要比另外一些完成得快，那些线程就会处于空闲状态。 
+Dynamic 和guided 调度选项都企图缓解这个问题，可以通过在运行时动态地把
+工作分配给更小的块，这样当工作负载的运算时间可变时，CPU 会更均匀地得到
+分布。对你的代码来说，正确的选择将会是根据你的工作负载的本质而做改变。 
+通过引入OpenMP 和使用schedule=”guided’，我们把执行时间降低到了接近
+0.07 秒——guided 调度会动态地分配工作，所以更少的线程在等待新的工作。 
+我们也可能为这个例子使用#cython:boundscheck=False 来禁止边界检查，
+但是这不会改进我们的运行时间。 
+7.9  Numba 
+来自Continuum Analytics 的Numba 是一个专用于numpy 代码的即时编译器，在运
+行时由LLVM 编译器（不是由我们在之前例子中所用的g++或gcc）来编译。它
+不需要预编译扫描，所以当你用它来运行新代码时，它会根据你的硬件编译每一个
+注解的函数。漂亮之处就是你提供了一个装饰器告诉它需要集中于哪些函数，接着
+你就让Numba 接手。它的目标是在所有标准numpy 代码上运行。 
+这是一个更年轻的项目（我们使用v0.13），它的API 可能会随着每一次发布发生
+小小的改变，所以认为当前它在研究环境中更有用。如果你使用numpy array，
+并且有迭代许多次的非向量代码，Numba 会给你一个快速而不需付出什么代价的
+胜利。 
+使用Numba 的一个缺点就是工具链——它使用了LLVM，具有很多的依赖性。我
+们推荐你使用Continuum 的Anaconda 发布包，因为它提供了所有一切，否则在一
+个全新的环境中安装Numba 是一个很耗时的任务。 
+例7-14 展示了给我们的核心Julia 函数增加@jit 装饰器。这就是所需的全部
+了，numba 被导入的事实意味着LLVM 机制会在运行时发挥作用，在幕后编译
+这个函数。 
+
+ 
+图编译成C 
+149 
+例7-14  让函数应用@jit 装修器 
+from numba import jit 
+... 
+@jit() 
+def calculate_z_serial_purepython(maxiter, zs, cs, output): 
+ 
+如果移除了@jit 装饰器，那么这只是用Python2.7 运行的Julia 演示版的numpy
+版本，它花费了71 秒。增加@jit 装饰器后执行时间降低到0.3 秒。这已经很接近
+我们用Cython 达成的结果了，然而又没有多出注解的工作量。 
+如果我们在同一个Python 会话中第2 次去运行相同的函数，它甚至跑得更快——
+如果参数类型一样的话就不需要去编译目标函数了，所以整体执行速度就更快。第
+2 次Numba 的运行结果等价于我们之前一起使用Cython 和numpy 获得的结果（所
+以它几乎不需要做什么就可以达到与Cython 一样快的结果！）。PyPy 有同样的热身
+需要。 
+当用Numba 去调试时，值得注意的是你可以让Numba 去显示在一个编译函数内部
+的正在处理的变量类型。在例7-15 中，我们可以看到zs 被JIT 编译器识别为一个
+复杂的数组。 
+例7-15  调试推导出的类型 
+print("zs has type:", numba.typeof(zs)) 
+    array(complex128, 1d, C)) 
+ 
+Numba 也支持其他形式的自省，比如inspect_types，从而让你可以检查编译
+代码去看看类型信息在哪里被推导出来。如果类型丢失了，那你就能细化函数的表
+达方式去帮助Numba 得到发现更多的类型推导的机会。 
+Numba 的高级版本，NumbaPro，可以实验性的用OpenMP 支持prange 并行操
+作符。实验性的GPU 之处也有。这个项目的目标是很轻松地把使用numpy 的更
+慢的Python 循环代码转换为运行快速的代码，能在CPU 或GPU 上运行，这个可
+以关注一下。 
+7.10  Pythran 
+Pythran 是一个把Python 转换成C++的编译器，作用于包含对部分numpy 支持的
+Python 子集。它表现得有点像Numba 和Cython——你注解一个函数的参数，接着
+它接管进一步的类型注解和代码特化。它利用了矢量化可能性和基于OpenMP 的并
+行化可能性。它只用Python2.7 运行。 
+
+150 
+第7 章 
+Pythran 的一个很有趣的特点是它会意图自动发现并行化的机会（例如，如果你正
+使用一个map），并把它转换成并行代码，而不需要你额外的工作量。你也能用
+pragma omp 来声明并行区域，在这方面，感觉它很类似于Cython 对OpenMP
+的支持。 
+在幕后，Pythran 会企图把通常的Python 代码和numpy 代码很激进地编译成速度
+很快的C++代码—甚至比Cython 的结果更快。你应该注意到这个项目是年轻
+的，你可能会遇到错误；你也应该注意到开发团队很友好并倾向于在几小时内修
+正错误。 
+再看一下例6-9 中的扩散方程。我们已经把例程中的计算部分抽取出来放到一个独
+立模块中，这样它就能被编译成一个二进制库。Pythran 的一个良好特点就是我们
+不产生与Python 不兼容的代码。回想起Cython，我们不得不用注解的Python 来创
+建 .pyx 文件，这样就不能被Python 直接运行了。使用Pythran 时，我们只需添加
+一行注释来让Pythran 编译器识别。这意味着如果我们删除了生成的.so 编译模块，
+我们就能单独用Python 来运行我们的代码—这对调试很有利。 
+在例7-16 中，你可以看见我们更早期的传热方程的例子。evolve 函数有一行注
+释来为函数注解类型信息（因为它是注释，所以如果你不用Pythran 运行，Python
+只会忽略注释）。当Pythran 运行时，它看到那行注释并且通过每一个相关的函数来
+传播类型信息（很像我们见到的Shed Skin）。 
+例7-16  添加一行注释去注解evolve()的入口点 
+import numpy as np 
+def laplacian(grid): 
+    return np.roll(grid, +1, 0) + 
+                   np.roll(grid, -1, 0) + 
+                   np.roll(grid, +1, 1) + 
+                   np.roll(grid, -1, 1) - 4 * grid 
+ 
+#pythran export evolve(float64[][], float) 
+def evolve(grid, dt, D=1): 
+    return grid + dt * D * laplacian(grid) 
+ 
+我们可以用pythran diffusion_numpy.py 来编译这个模块，会输出
+diffusion_numpy.so。从一个测试函数中，我们可以导入这个新模块并且调用evolve。
+在Ian 的笔记本上，不用Pythran 的话，这个函数在一个8192×2192 的网格上运行
+了3.8 秒。用了Pythran 后降低到1.5 秒。显然，如果Pythran 支持你需要的函数的
+话，它就能够得到令人印象深刻的性能提升，而几乎无须做什么工作。 
+速度提升的原因是Pythran 有它自己的roll 函数版本，功能更少—因此它能编
+
+ 
+图编译成C 
+151 
+译成复杂度更低的运行可能更快的代码。这也意味着它比numpy 版本（Pythran 的
+作者说明Pythran 只实现了部分numpy）的灵活度要低，但是当它工作时，能够胜
+出我们所见到的其他工具的运行结果。 
+现在让我们把相同的技术应用于Julia 的展开数学表达式的例子中。只是给
+calculate_z 添加一行注解，我们就能把运行时间降低到0.29 秒——比Cython
+的结果慢一点点。在外循环的前面添加一行OpenMP 声明后把执行时间降低到0.1
+秒，距离Cython 的最佳OpenMP 结果已经不远。注解的代码在例7-17 中可见。 
+例7-17  得到OpenMP 支持的注解Pythran 的calculate_z 
+#pythran export calculate_z(int, complex[], complex[], int[]) 
+def calculate_z(maxiter, zs, cs, output): 
+    #omp parallel for schedule(guided) 
+    for i in range(len(zs)): 
+ 
+迄今为止我们所见的技术都涉及使用常规CPyhon 解释器之外的编译器。现在让我
+们看一下PyPy，它提供了一个全新的解释器。 
+7.11  PyPy 
+PyPy 是一个Python 语言的替代实现，包含了一个可跟踪的即时编译器，它兼容
+Python2.7，也有实验性的Python3.2 版本。 
+PyPy 是一个普适性的CPython 替代品，提供了几乎所有的内置模块。该项目包含
+了RPython 翻译工具链，被用来构建PyPy（也可用来构建其他解释器）。PyPy 中
+的JIT 编译器很高效，能够看到良好的速度提升而几乎或完全不需要你这边的任何
+工作。看看12.5 节，这是一个大规模PyPy 部署成功的故事。 
+PyPy 运行我们的纯Python 版的Julia 演示而不做任何改动。使用CPython，它用了
+11 秒，而使用PyPy，它用了0.3 秒。这意味着PyPy 取得了很接近于例7-7 中的
+Cython 的成果，而完全没有任何工作量—令人印象很深刻！就如我们在讨论
+Numba 时观察到的那样，如果在同一会话中再次运行计算，那么第2 次（以及接
+下来每次）会比第1 次刚编译完那会儿要跑得快。 
+PyPy 支持所有内置模块的事实是很有趣的——这意味着可以像在CPython 中一样
+用多进程方式工作。如果你在运行内置模块时遇到问题，你能用多进程方式并行地
+去运行，除此之外，还会得到你所希望的速度提升。 
+PyPy 的速度随着时间而演进。图7-6 中的图表来自speed.pypy.ord，会告诉你它的
+成熟度。这些速度测试反映了多种多样的用户案例，不只是数学运算。很清楚PyPy
+
+152 
+第7 章 
+提供了比CPython 更快的体验。 
+ 
+图7-6  每一个新版本PyPy 提供了速度提升 
+7.11.1  垃圾收集的差异 
+PyPy 使用了不同于CPython 的垃圾收集器，这能导致你的代码行为产生不明显的
+改变。尽管CPython 使用引用计数，PyPy 却使用了修改后的标记和清理方法来推
+迟清除不用的对象。这两者都是对Python 规范的具体实现，你只需注意当交换时，
+需要做一些代码改动。 
+一些在CPython 中见到的编码方式依赖于引用计数的行为——尤其是冲刷文件（如
+果这些文件打开后被写入了，而不去显式地关闭文件）。使用PyPy，相同的代码可
+以运行，但是对文件的更新可能会推迟冲刷到磁盘上，直到垃圾收集器下次运行时
+才会被冲刷。一种既能使用PyPy，又能使用Python 工作的替代方式就是用with 来
+使用上下文管理器去打开和自动关闭文件。在PyPy 的网站上的“PyPy 与CPython
+的差异”那页列出了细节，垃圾收集器的实现细节在网站上也有。 
+7.11.2  运行PyPy 并安装模块 
+如果你从没有运行过一种替代的Python 解释器，你可能会受益于一个短小的例子。
+假设你已经下载并解压出PyPy，你现在会得到一个包含bin 目录的文件夹结构。
+按例7-18 所示运行它来启动PyPy。 
+
+ 
+图编译成C 
+153 
+例7-18  运行PyPy 来看看它实现了Python 2.7.3 
+$ ./bin/pypy 
+Python 2.7.3 (84efb3ba05f1, Feb 18 2014, 23:00:21) 
+[PyPy 2.3.0-alpha0 with GCC 4.6.3] on linux2 
+Type "help", "copyright", "credits" or "license" for more information. 
+And now for something completely different: ``<arigato> (not thread-safe, but 
+well, nothing is)'' 
+ 
+注意到PyPy 作为Python 2.7.3 运行。现在我们需要设置pip，并想要安装ipython
+（注意IPython 以我们曾见过的相同的Python 2.7.3 的编译包启动）。如果你不求助
+于现成的发布包或包管理器来安装pip，这些显示在例7-19 中的步骤和你可能已经
+用CPython 做过的步骤一模一样。 
+例7-19  为PyPy 安装pip 用以安装第三方模块，比如IPython 
+$ mkdir sources # make a local download directory 
+$ cd sources 
+# fetch distribute and pip 
+$ curl -O http://python-distribute.org/distribute_setup.py 
+$ curl -O https://raw.github.com/pypa/pip/master/contrib/get-pip.py 
+# now run the setup files for these using pypy 
+$ ../bin/pypy ./distribute_setup.py 
+... 
+$ ../bin/pypy get-pip.py 
+... 
+$ ../bin/pip install ipython 
+... 
+$ ../bin/ipython 
+Python 2.7.3 (84efb3ba05f1, Feb 18 2014, 23:00:21) 
+Type "copyright", "credits" or "license" for more information. 
+ 
+IPython 2.0.0—An enhanced Interactive Python. 
+?         -> Introduction and overview of IPython's features. 
+%quickref -> Quick reference. 
+Help      -> Python's own help system. 
+object?   -> Details about 'object', use 'object??' for extra details. 
+ 
+注意PyPy 对像numpy 之类的项目的支持非同寻常（有一个经由cpyext 的桥接
+层，但是它太慢了，以致于对numpy 没什么用），所以不要期待PyPy 对numpy 做
+强力支持。PyPy 的确有一个实验性的numpy 移植版本，称为“numpypy”（安装指
+导在Ian 的博客上），但是当前它没有提供任何有用的速度优势
+①。 
+如果你需要其他包，只要是纯Python 的，就可能安装上，而任何依赖于C 扩展库
+的就可能无法有效工作。PyPy 没有引用计数的垃圾收集器，任何为CPython 编译
+                        
+① 本书写作期间它没有提供任何有用的速度优势。 
+
+154 
+第7 章 
+的包会使用支持CPython 垃圾收集器的库调用。PyPy 有一个变通方法，但是会增
+加很多开销。在实践中，去尝试强迫让更老的扩展库直接和PyPy 一起工作是无效
+的。PyPy 的建议就是如果有可能就尝试移除任何C 扩展代码（它或许只是用来让
+Python 代码运行更快，现在那是PyPy 的工作了）。PyPy 的维基维护了一串可兼容
+的模块列表。 
+PyPy 的另一个缺点是它使用了很多内存。每个发布版在这方面都有改良，但在实
+践中，它可能还是使用了比CPython 更多的内存。然而内存相对便宜，所以用来为
+性能提升做交换还是有意义的。一些用户也已报道了在使用PyPy 时有更少的内存
+占用。如果这仍然对你很重要，那就用具有代表性的数据去做实验。 
+PyPy 受限于全局解释器锁，但是开发团队正在搞一个叫作软件事务内存（STM）的
+项目来企图移除GIL 的必要性。STM 有一点像数据库事务。它是一个并发控制机制，
+应用于内存访问。如果在相同的内存空间上发生冲突，它能够回滚改动。集成STM
+的目标是能够让高并发系统有一种并发控制的方式，在运算上丧失了一些效率，但
+是通过不强迫用户处理并发存取控制的所有方方面面来提高程序员的生产率。 
+推荐的剖析器工具是jitviewer 和logparser。 
+7.12  什么时候使用每种工具 
+如果你正工作于数值处理的项目，那么这些技术中的每一种可能都对你有用。表
+7-1 总结了主要选项。 
+如果你的问题适用于可支持函数的严格范围内，Pythran 大概在numpy 问题上提供
+了最佳的性能提升，却花费最少的工作量。它也提供了一些简单的OpenMP 并行项，
+这也是一个相对年轻的项目。 
+表7-1 
+可选的编译器总结 
+ 
+Cython 
+Shed Skin
+Numba 
+Pythran 
+PyPy 
+成熟度 
+Y 
+Y 
+_ 
+_ 
+Y 
+广泛使用性 
+Y 
+_ 
+_ 
+_ 
+_ 
+支持Numpy  
+Y 
+_ 
+Y 
+Y 
+_ 
+没有间断的代码改动 
+_ 
+Y 
+Y 
+Y 
+Y 
+需要有C 的知识 
+Y 
+_ 
+_ 
+_ 
+_ 
+支持OpenMP 
+Y 
+_ 
+Y 
+Y 
+Y 
+ 
+
+ 
+图编译成C 
+155 
+Numba 可能提供了快速的性能提升，而几乎不需要什么工作量，但是它也会有在
+你的代码上可能不会工作得很好的限制。这也是一个相对年轻的项目。 
+Cython 可能为最广泛的问题集提供了最好的结果，但是它的确需要更多的工作量
+和交额外的“支持税”，这要归因于它混合使用了Python 和C 注解。 
+如果你不使用numpy 或其他难以移植的C 扩展，PyPy 是一个强力的选择。 
+如果你想要编译成C 并且不使用numpy 或其他外部库，Shed Skin 可能是有用的。 
+如果你正在部署一个生产工具，那么你可能想要坚持使用理解良好的工具—
+Cython 应该是你的主要选择，你可能想要查阅在12.2 节。PyPy 也被用于产品设
+置（看看12.5 节）。 
+如果你工作于少量的数值处理需求，注意Cython 的缓存接口接受arrary.array
+矩阵——这是一个把一块数据传给Cython 的简单方法，可用来做快速的数值处理
+而不用添加numpy 作为项目依赖。 
+整体而言，Pythran 和Numba 是年轻但是很有前景的项目，而Cython 十分成熟。
+PyPy 到现在被视为相对成熟，并且应该一定要有长期的过程来评估。 
+在2014 年的一堂Ian 的课上，一个有能力的学生实现了Julia 算法的C 版本，并且
+失望地看到它执行得比他的Cython 版本要慢。他透露在64 位机器上使用了32 位
+浮点数——这要比在64 位机器上使用64 位双精度数运行得慢。尽管该学生是一个
+好的C 程序员，但他不知道这会牵涉到执行速度上的代价。他改变了代码，他的C
+版本代码尽管明显比自动生成的Cython 版本要短小得多，却跑出了大概一样的速
+度。编写原始的C 版本，对比速度，并且想出修正方案，这一系列行为要比一上
+来就用Cython 花费更长的时间。 
+这只是个趣闻轶事，我们没有建议说Cython 会生成最好的代码，并且胜任的C 程
+序员也能够想出怎样让他们的代码比Cython 生成的版本运行得更快。然而，值得
+注意的是，假想手写C 代码会比由Python 转换成的代码更快也不靠谱。你一定要
+始终做基准测试并且使用证据来做决定。C 编译器很擅长把代码转换为相对高效的
+机器码，而Python 很擅长让你用更易于理解的语言来表达你的问题——明智地结
+合这两种力量。 
+7.12.1  其他即将出现的项目 
+PyData 编译器页列出了一系列高性能编译工具。Theano 是一个更高级的语言，允
+许使用高维数组上的数学操作符表达式。它与numpy 紧密结合，并且能为CPU
+
+156 
+第7 章 
+和GPU 导出编译过的代码。有趣的是，它已经受到了深度学习AI 社区的青睐。
+Parakeet 集中于涉及密集numpy 数组的编译运算，使用Python 的子集。它也支
+持GPU。 
+PyViennaCL 是一个Python 绑定到ViennaCL 的数值计算和线性代数库。它使用
+numpy，支持GPU 和CPU。ViennaCL 用C++编写，为CUDA、OpenCL 和OpenMP
+生成代码。它支持密集和稀疏的线性代数运算、BLAS 和求解器。 
+Nuitka 是一个以替代通常的CPython 解释器为目标的Python 编译器，具有创建编
+译过的可执行程序的选项。它支持Python2.7 的全部，尽管在我们的测试中，它没
+有为我们普通的Python 数值测试产生任何明显的性能提升。 
+Pyston 是该领域最新的加入者。它使用了LLVM 编译器，被Dropbox 支持。由于
+缺少对扩展模块的支持，它可能遭受与PyPy 所面临的同样的问题，但是有项目计
+划去解决这个问题。如果这个问题得不到解决，对numpy 的支持就不现实。 
+在我们的社区里，我们很幸运拥有各种各样可选的编译器。虽然它们都各有取
+舍，但它们也提供了许多能力，这样复杂的项目就能充分利用CPU 和多核架构
+的力量。 
+7.12.2  一个图像处理单元（GPU）的注意点 
+GPU 在当前是个性感的技术，我们选择了把涉及它们的话题拖后直到至少下一版。
+这是因为该领域在飞速变化，很可能我们现在所说的所有东西到我们读到它时已经
+改变了。关键的是，它不只是让你改变所写的代码行，而是随着架构的演进，你可
+能要彻底改变解决问题的方式。 
+Ian 工作于一个物理学问题，使用Python 和PyCUDA，用了一年的NVIDIA GTX 
+480 GPU。到年底为止驾驭了GPU 的全部能力，并且系统比在双核机器上运行相
+同的函数快了整整25 倍。双核的变体用C 写成，使用了一个并行库，为了数据
+处理，GPU 的变体大部分由PyCUDA 所包装的CUDA 的C 所表达。很快在那之
+后，GTX 5xx 系列的GPU 问世了，许多应用于4xx 系列的优化就发生了改变。
+大概耗费一年的工作最终被放弃了，还是倾向于运行在CPU 上的更易于维护的C
+的解决方案。 
+这是一个孤立的例子，但是它强调了写底层CUDA（或OpenCL）代码的危险。在
+GPU 之上的提供了更高级功能的库可能已得到了广泛使用（例如，提供了图像分
+析或视频转码接口的库），我们规劝你去考虑这些库，而不是去直接为GPU 编码。 
+以为你管理GPU 为目标的项目包括Numba、Parakeet 和Theano。 
+
+ 
+图编译成C 
+157 
+7.12.3  一个对未来编译器项目的展望 
+在当前的可选的编译器之中，我们已经有一些强大的技术组件。就个人而言，我们
+想要看到Shed Skin 的注解引擎变得广泛适用，这样它就能和其他工具一起工作—
+例如，当学用Cython（尤其当使用numpy 时）时，产生一个兼容Cython 的输出来
+让学习曲线变平滑。Cython 是成熟的并且紧密集成入Python 和numpy，如果学习曲
+线和对支持的需求不那么可畏，那么更多人会使用它。 
+更长期的愿望就是看到一些类似Numba 和PyPy 的解决方案在常规Python 代码和
+numpy 代码上都提供JIT 的解决方案。当前没有一个解决方案可用，一个解决了这
+个问题的工具将会是替代我们当前都在使用的常规CPython 解释器的强有力的竞
+争者，而不需要开发者修改他们的代码。 
+友善的竞争和对新思路的巨大市场真的会让我们的生态系统变成一个富足的地方。 
+7.13  外部函数接口 
+有时候自动化解决方案不起作用，你需要自己写一些定制的C 或Fortran 代码。这
+是有可能的，因为编译手段没有找到一些潜在的优化，或者因为你想要利用在
+Python 中没有的库或语言特色。在所有这些情况中，你会需要使用外部函数接口，
+让你去访问用其他语言编写和编译的代码。 
+在本章其余部分，我们试图用一个外部库来解决2 阶扩散方程，就以我们在第6 章
+①
+中所做的相同的方式。显示在例7-20 中的这个库代码，能够代表你已经安装的库，
+或者一些你已经编写的代码。我们要看的方法发挥了巨大的作用，来提取出你的部
+分代码并把它们挪到另一种语言中去，以便做很目标化的基于语言的优化。 
+例7-20  解决2 阶扩散问题的C 代码示例 
+void evolve(double in[][512], double out[][512], double D, double dt) { 
+    int i, j; 
+   double laplacian; 
+   for (i=1; i<511; i++) { 
+      for (j=1; j<511; j++) { 
+         laplacian = in[i+1][j] + in[i-1][j] + in[i][j+1] + in[i][j-1]\ 
+            - 4 * in[i][j]; 
+         out[i][j] = in[i][j] + D * dt * laplacian; 
+      } 
+   } 
+} 
+ 
+                        
+① 为了简化，我们不会实现边界条件。 
+
+158 
+第7 章 
+为了使用这个代码，我们必须把它编译成一个创建了.so 文件的共享模块。我们能
+使用gcc（或任何其他C 编译器）通过以下步骤来做： 
+$ gcc -O3 -std=gnu99 -c diffusion.c 
+$ gcc -shared -o diffusion.so diffusion.o 
+ 
+我们能把这个最终的共享库文件放置于可以被我们的Python 代码所访问的任何地
+方，但是标准*nix 组织把共享库存放于/usr/lib 和/usr/local/lib。 
+7.13.1  ctypes 
+cPython
+①中最基本的外部函数接口是通过ctypes 模块。这个模块的特性就是具
+有很多限制性—你要负责做一切，并且需要用一段时间来确认你是按顺序做了
+这一切。这个额外级别的复杂性在我们的ctypes 扩散版本中得到了证明，显示
+于例7-21 中。 
+例7-21  ctypes 2 阶扩散代码 
+import ctypes 
+ 
+grid_shape = (512, 512) 
+_diffusion = ctypes.CDLL("../diffusion.so") # X 
+ 
+# Create references to the C types that we will need to simplify future code 
+TYPE_INT = ctypes.c_int 
+TYPE_DOUBLE = ctypes.c_double 
+TYPE_DOUBLE_SS = ctypes.POINTER(ctypes.POINTER(ctypes.c_double)) 
+ 
+# Initialize the signature of the evolve function to: 
+# void evolve(int, int, double**, double**, double, double) 
+_diffusion.evolve.argtypes = [ 
+    TYPE_INT, 
+    TYPE_INT, 
+    TYPE_DOUBLE_SS, 
+    TYPE_DOUBLE_SS, 
+    TYPE_DOUBLE, 
+    TYPE_DOUBLE, 
+] 
+_diffusion.evolve.restype = None 
+ 
+def evolve(grid, out, dt, D=1.0): 
+    # First we convert the Python types into the relevant C types 
+                        
+① 这很依赖于cPython。其他版本的Python 可能有它们自己版本的ctypes，可能以很不同的方式工作。 
+
+ 
+图编译成C 
+159 
+    cX = TYPE_INT(grid_shape[0]) 
+    cY = TYPE_INT(grid_shape[1]) 
+    cdt = TYPE_DOUBLE(dt) 
+    cD = TYPE_DOUBLE(D) 
+    pointer_grid = grid.ctypes.data_as(TYPE_DOUBLE_SS) # Y 
+    pointer_out = out.ctypes.data_as(TYPE_DOUBLE_SS) 
+ 
+    # Now we can call the function 
+    _diffusion.evolve(cX, cY, pointer_grid, pointer_out, cD, cdt) # Z 
+ 
+X 这类似于导入diffusion.so 库。 
+Y grid 和out 都是numpy 数组。 
+Z 我们最终做完所有必要的步骤并能直接调用C 函数。 
+我们做的第一件事就是“导入”我们的共享库。通过ctypes.CDLL 调用来做。在这
+行中，我们可以声明Python 能够访问的任何共享库（例如，ctypes-opencv 模块
+装载libcv.so 库）。由此，我们得到了一个_diffusion 对象，包含了共享库所
+含有的所有成员。在这个例子中，diffusion.so 只包含了一个函数—evolve，
+这不是一个对象的属性。如果diffusion.so 中含有许多函数和属性，我们能通过
+_diffusion 对象来访问它们全部。 
+无论怎样，即使_diffusion 对象里有可调用的evolve 函数，却不知道怎样来
+使用它。C 是静态类型的，并且函数有很具体的签名。为了恰当地用evolve 函数
+来工作，我们必须显式地设置输入参数类型和返回类型。当用Python 接口串行地
+开发库，或者当处理一个快速变化的库时，这就会变得很枯燥。而且，既然ctypes
+不能检查你所给的是否是正确的类型，一旦你犯错，你的代码就可能默默地失败或
+发生段错误。 
+而且除了要设置参数和函数对象的返回类型，我们也需要小心地转换使用的数据
+（这叫“类型转换”）。我们传送给函数的每一个参数必须很小心地转换为本地的C
+类型。有时这事会变得相当诡异，因为Python 的变量类型很灵活。例如，如果我
+们有num1 = 1e5，我们就知道这是一个Python 的浮点数，因此我们应该使用
+ctypes.c_float。另一方面，对于num2 = 1e300 来说，我们就不得不使用
+ctype.c_double，因为它对标准C 浮点数会有溢出。 
+那就是说，numpy 给它的数组提供了一个.ctypes 属性来使它易与ctypes 兼容。
+如果numpy 没有提供这个功能，我们将不得不把一个ctypes 数组初始化成正确
+类型，接着找到我们原始数据的位置并让我们的新ctypes 对象指向那儿。 
+
+160 
+第7 章 
+ 
+警告 
+当你正在把一个对象转换为一个ctype 对象时，除非那个对象实现
+了一个缓存（就如array 模块、numpy arrays、cStringIO 等
+那样），不然你的数据将会被拷贝进新对象中。在把一个整数转换为
+浮点数的情况下，这并不会对你的代码性能有什么影响。无论如何，
+如果你正在转换一个很长的Python list，这会导致很大的性能惩罚！
+在这些情况下，使用array 模块，或numpy array，或者干脆用
+struct 模块构建你自己的缓存对象，这些都会有帮助。但是这样做会
+伤害你的代码可读性，因为这些对象一般没有它们的原生Python 对
+应物那样灵活。 
+ 
+如果你必须要给库传送一个复杂的数据结构，情况就会变得愈加复杂。例如，如果
+你的库期待一个代表空间中的点的C 结构，有x 和y 属性，你不得不定义： 
+from ctypes import Structure 
+class cPoint(Structure): 
+    _fields_ = ("x", c_int), ("y", c_int) 
+ 
+在这个点上，你能通过初始化一个cPoint 对象（例如，point = cPoint(10, 
+5)）来开始创建一个兼容C 的对象。这不是一项有可怕工作量的工作，但是却会
+变得乏味，并且产生一些代码碎片。如果一个新版本库发布了，稍微改了下结构体，
+会发生什么事呢？这会让你的代码很难维护，一般会导致僵硬的代码，开发者会决
+定从不去更新正在被使用的低层库。 
+基于这些理由，如果你已经很好地理解C 并且想要能够微调接口的每一方面，使
+用ctypes 模块是很正确的。它有很好的可移植性，因为它是标准库的一部分，如
+果你的任务简单，它就提供简单的解决方案。要仔细一点，因为ctypes 解决方案
+的复杂性（类似低层解决方案）会很快变得难以管理。 
+7.13.2  cffi 
+意识到ctypes 有时会相当难用，cffi 意图简化程序员所使用的许多标准运算。
+它用一个内部的C 解析器来做，能够理解函数和结构体定义。 
+作为结果，我们能仅仅写出C 代码来定义我们希望使用的库的结构体，接着
+cffi 将会为我们做所有重量级的工作：导入模块并确认我们给结果函数声明了
+正确的类型。事实上，如果有库的源码，这个工作几乎微不足道，因为头文件
+（用.h 结尾的文件）会包含我们所需的所有相关定义。例7-22 演示了cffi 版本
+的2 阶扩散代码。 
+
+ 
+图编译成C 
+161 
+例7-22  cffi 的2 阶扩散代码 
+from cffi import FFI 
+ 
+ffi = FFI() 
+ffi.cdef(r''' 
+   void evolve( 
+    int Nx, int Ny, 
+    double **in, double **out, 
+    double D, double dt 
+   ); # X 
+''') 
+lib = ffi.dlopen("../diffusion.so") 
+ 
+def evolve(grid, dt, out, D=1.0): 
+    X, Y = grid_shape 
+    pointer_grid = ffi.cast('double**', grid.ctypes.data) # Y 
+    pointer_out = ffi.cast('double**', out.ctypes.data) 
+    lib.evolve(X, Y, pointer_grid, pointer_out, D, dt) 
+ 
+X 这个定义的内容能被正常地从你正在使用的库手册中，或者通过查看库的头文
+件获取。 
+Y 尽管我们还是需要把非本地Python 对象做类型转换来使用我们的C 模块，语法
+对那些有C 经验的人来说是很熟悉的。 
+在前面的代码中，我们可以把cffi 的初始化过程看作两个步骤。首先，我们创建
+了一个FFI 对象并且给出我们所需的全局C 声明。除了函数签名以外，还可以包
+括数据类型。接着，我们使用dlopen 把一个共享库导入它自己的名字空间，这是
+一个FFI 的子空间。这意味着我们能够装载两个具有相同evolve 函数的库，分
+别赋给变量lib1 和lib2，然后独立地使用它们（这对于调试和剖析很给力）。 
+除了简单地导入C 共享库以外，cffi 允许你只写C 代码，然后使用verify 函数
+来即时编译。这有很多即时收益——你能够简单地把你的一小部分代码用C 来重
+写，而不去调用独立的C 库的庞大的机制。可做替换的是，如果有一个你希望使
+用的库，但是要求用一些C 的胶水代码来让接口完美工作，你可以按例7-23 显示
+的那样只是把它和你的cffi 代码内联起来从而让一切都处于一个中心化的位置
+上。除此之外，既然代码是即时编译的，你可以给你需要编译的每块代码声明编译
+指令。需要注意的是，无论如何，当每次verify 函数运行去做实际的编译时， 这
+种编译方式会有首次惩罚。 
+例7-23  内联2 阶扩散代码的cffi 
+ffi = FFI() 
+ffi.cdef(r''' 
+
+162 
+第7 章 
+    void evolve( 
+       int Nx, int Ny, 
+       double **in, double **out, 
+       double D, double dt 
+    ); 
+''') 
+lib = ffi.verify(r''' 
+void evolve(int Nx, int Ny, 
+        double in[][Ny], double out[][Ny], 
+        double D, double dt) { 
+    int i, j; 
+    double laplacian; 
+    for (i=1; i<Nx-1; i++) { 
+        for (j=1; j<Ny-1; j++) { 
+            laplacian = in[i+1][j] + in[i-1][j] + in[i][j+1] + in[i][j-1]\ 
+                - 4 * in[i][j]; 
+            out[i][j] = in[i][j] + D * dt * laplacian; 
+        } 
+    } 
+} 
+''', extra_compile_args=["-O3",]) # X 
+ 
+X 既使我们正在即时编译这段代码，我们也可以提供相关的编译标志。 
+Verify 功能的另一个好处是它与复杂的cdef 声明交互得很好。例如，如果我们
+正要使用一个具有很复杂结构体的库，但是只是想使用它的一部分，我们能够使用
+部分结构定义。为此，我们在ffi.cdef 中的结构体定义中添加一个…，并且在后
+面的verify 中#include 相关的头文件。 
+例如，假设我们正使用一个有complicated.h 头文件的库，其中包含了一个类
+似于下面的结构体： 
+struct Point { 
+    double x; 
+    double y; 
+    bool isActive; 
+    char *id; 
+    int num_times_visited; 
+} 
+ 
+如果我们只需要关心x 和y 的属性，我们能写一些简单的cffi 代码，只关心下面
+这些值： 
+from cffi import FFI 
+ 
+ffi = FFI() 
+ffi.cdef(r""" 
+    struct Point { 
+
+ 
+图编译成C 
+163 
+        double x; 
+        double y; 
+        ...; 
+    }; 
+    struct Point do_calculation(); 
+""") 
+lib = ffi.verify(r""" 
+    #include <complicated.h> 
+""")  
+我们能运行comlicated.h 库的do_calculation 函数，并且返回给我们一个
+Point 对象，它的x 和y 属性是可以访问的。这种移植性很惊人，因为代码在具有
+不同的Point 实现的系统上都能很好地工作，或者当complicated.h 的新版本出
+来后也能很好地工作，只要它们都有x 和y 属性就可以。 
+所有这些优点让cffi 成为在Python 中用C 代码来工作时的一个很优秀的工具。
+它比ctypes 简单很多，然而当直接和外来函数接口一起用时，还是给予了你想要
+的等量的细粒度控制。 
+7.13.3  f2py 
+对于许多科学应用来说，Fortran 还是一个黄金标准。尽管它作为一种通用语言的
+日子已经结束了，但它还是有很多优点来让编写矢量运算变得容易，并且运行相当
+快。另外，有很多性能数学库用Fortran 编写（LAPACK、BLAS 等），并且能够使
+用在你的Python 代码中的性能关键部分。 
+对于这种情况，f2py 提供了一个非常简单的把Fortran 代码导入Python 的方法。
+归因于Fortran 的显式类型，这个模块能做得很简单。既然解析和理解类型是简单
+的，f2py 就能容易地创建一个CPython 模块，该模块依靠C 中的本地外部函数支
+持来使用Fortran 代码。这意味着当你要使用f2py 时，你其实在自动生成一个知
+道怎样使用Fortran 代码的C 模块！这样的结果就是，许多在ctypes 和cffi 的
+方案中与生俱来的混淆就不存在了。 
+在例7-24 中，我们能看到一些用于解决扩散方程的与f2py 兼容的代码。事实上，
+所有本地Fortran 代码都与f2py 兼容。无论如何，函数参数注解（由!f2py 为前
+缀的语句）简化了最终的Python 模块并且会生成易于使用的接口。注解隐式地告
+诉f2py 我们是否意图让一个参数只用于输出还是只用于输入，是让我们就地修改
+还是完全隐式地修改。隐式类型对于vectors 的大小尤其有用：当Fortran 可能
+需要让那些数字变显式时，我们的Python 代码已经有这个信息在手上了。当我们
+把类型设为“隐式”时，f2py 能够自动为我们填充那些值，基本上在最终的Python
+接口中是让它们保持隐式的。 
+
+164 
+第7 章 
+例7-24  使用f2py 注解的Fortran 2 阶扩散代码 
+SUBROUTINE evolve(grid, next_grid, D, dt, N, M) 
+    !f2py threadsafe 
+    !f2py intent(in) grid 
+    !f2py intent(inplace) next_grid 
+    !f2py intent(in) D 
+    !f2py intent(in) dt 
+    !f2py intent(hide) N 
+    !f2py intent(hide) M 
+    INTEGER :: N, M 
+    DOUBLE PRECISION, DIMENSION(N,M) :: grid, next_grid 
+    DOUBLE PRECISION, DIMENSION(N-2, M-2) :: laplacian 
+    DOUBLE PRECISION :: D, dt 
+ 
+    laplacian = grid(3:N, 2:M-1) + grid(1:N-2, 2:M-1) + & 
+                grid(2:N-1, 3:M) + grid(2:N-1, 1:M-2) - 4 * grid(2:N-1, 2:M-1) 
+     next_grid(2:N-1, 2:M-1) = grid(2:N-1, 2:M-1) + D * dt * laplacian 
+END SUBROUTINE evolve 
+ 
+我们运行下面的命令来把代码构建成一个Python 模块： 
+$ f2py -c -m diffusion --fcompiler=gfortran --opt='-O3' diffusion.f90 
+ 
+这会创建一个能被直接导入Python 的diffusion.so 文件。 
+如果我们交互性地运行结果模块，我们能看到f2py 带给我们的好处，多亏了我们
+的注解和f2py 解析Fortran 代码的能力： 
+In [1]: import diffusion 
+ 
+In [2]: diffusion? 
+Type:        module 
+String form: <module 'diffusion' from 'diffusion.so'> 
+File:        .../examples/compilation/f2py/diffusion.so 
+Docstring: 
+This module 'diffusion' is auto-generated with f2py (version:2). 
+Functions: 
+  evolve(grid,next_grid,d,dt) 
+. 
+ 
+In [3]: diffusion.evolve? 
+Type:        fortran 
+String form: <fortran object> 
+Docstring: 
+evolve(grid,next_grid,d,dt) 
+ 
+Wrapper for ``evolve``. 
+
+ 
+图编译成C 
+165 
+ 
+Parameters 
+grid : input rank-2 array('d') with bounds (n,m) 
+next_grid : rank-2 array('d') with bounds (n,m) 
+d : input float 
+dt : input float 
+ 
+这个代码显示出f2py 生成的结果是自动文档化的，而且接口相当简化。例如，与
+其我们来抽取出vectors 的大小，f2py 已经能发现自动寻找这些信息的方法并且在
+最终的接口中只是把它隐藏了起来。事实上，最终的evolve 函数签名看起来和我
+们在例6-14 中所写的纯Python 版本一模一样。 
+我们必须要仔细的唯一事情就是在内存中numpy array 的顺序。既然绝大多数我
+们所用的numpy 和Python 集中于从C 演变过来的代码，我们对于内存中的数据顺
+序一直使用C 的惯例（称为行优先顺序）。Fortran 使用了一种不同的惯例（列优先
+顺序），这样我们必须要确保让我们的vectors 遵守惯例。这些顺序仅仅表明了对于
+一个2 维数组，它的列或行在内存中是否是紧挨的
+①。幸运的是，这仅仅意味着当
+我们声明vectors 时，给numpy 指明order=’F’参数就行。 
+ 
+备忘 
+行优先顺序和列优先顺序的差异意味着矩阵[ [1, 2], [3, 4] ]
+在内存中按行优先顺序排列成[1, 2, 3, 4]，按列优先顺序排列成
+[1, 3, 2, 4]。这个差异只是习惯上的，当使用恰当时对性能没有
+任何真正影响。 
+ 
+这就产生了下面我们使用Fortran 子例程的代码。除了导入f2py 衍生库和让我们
+的数据遵照显式的Fortran 顺序之外，这个代码看上去和我们在例6-14 中所使用的
+简直一模一样。 
+from diffusion import evolve 
+ 
+def run_experiment(num_iterations): 
+    next_grid = np.zeros(grid_shape, dtype=np.double, order='F') # X 
+    grid = np.zeros(grid_shape, dtype=np.double, order='F') 
+ 
+    # ... standard initialization ... 
+ 
+    for i in range(num_iterations): 
+        evolve(grid, next_grid, 1.0, 0.1) 
+        grid, next_grid = next_grid, grid 
+ 
+                        
+① 更多信息，请参看维基。 
+
+166 
+第7 章 
+X Fortran 在内存中以不同的顺序排列数字，所以我们必须记得把我们的numpy 
+array 设置成使用这个标准。 
+7.13.4  CPython 模块 
+最后，我们总是能一路走到CPython API 的层面，并且写一个CPython 模块。这要
+求我们以和开发CPython 一样的方式去写代码，并且需要小心对待我们的代码和
+CPython 实现之间的所有交互。 
+这样会具有很优秀的移植性优势，取决于Python 版本。我们不需要任何外部模
+块或库，只需一个C 编译器和Python！无论怎样，这样并不一定能很好地扩展
+到Python 的新版本中去。例如，让用Python 2.7 写的CPython 模块和Python 3
+一起工作。 
+然而为移植性付出了巨大的代价，你要负责你的Python 代码和模块之间接口的所
+有方方面面。甚至只是为最简单的任务也要去写上几十行的代码。例如，为了和来
+自例7-20 中的扩散库对接，我们必须写28 行代码只是去读一个函数的参数并解析
+它（例7-25）。当然，这确实意味着你有惊人的细粒度去控制正在发生的事情。如
+此可以一直走下去直到能够手动为Python 的垃圾收集去更改引用计数（当创建处
+理本地Python 类型的CPython 模块时，这是许多痛楚的根源）。就因为这样，最终
+的代码趋向于比其他的接口方式快几分钟。 
+ 
+警告 
+总而言之，这个方法应该留作最后的解决手段。虽然它为编写
+CPython 模块提供了很多信息，但最终的代码不如其他潜在的方法
+那么可重用和可维护。在模块中做很细微的改动常常需要完全重写。
+事实上，我们包含了模块代码，并且需要setup.py 来编译它（例7-26）
+作为警示。 
+ 
+例7-25  与2 阶扩散库对接的CPython 模块 
+// python_interface.c 
+// - cpython module interface for diffusion.c 
+#define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION 
+ 
+#include <Python.h> 
+#include <numpy/arrayobject.h> 
+#include "diffusion.h" 
+ 
+/* Docstrings */ 
+
+ 
+图编译成C 
+167 
+static char module_docstring[] = 
+    "Provides optimized method to solve the diffusion equation"; 
+static char cdiffusion_evolve_docstring[] = 
+    "Evolve a 2D grid using the diffusion equation"; 
+ 
+PyArrayObject* py_evolve(PyObject* self, PyObject* args) { 
+    PyArrayObject* data; 
+    PyArrayObject* next_grid; 
+    double dt, D=1.0; 
+ 
+    /* The "evolve" function will have the signature: 
+    *       evolve(data, next_grid, dt, D=1) 
+    */ 
+    if (!PyArg_ParseTuple(args, "OOd|d", &data, &next_grid, &dt, &D)) { 
+        PyErr_SetString(PyExc_RuntimeError, "Invalid arguments"); 
+        return NULL; 
+    } 
+ 
+    /* Make sure that the numpy arrays are contiguous in memory */ 
+    if (!PyArray_Check(data) || !PyArray_ISCONTIGUOUS(data)) { 
+        PyErr_SetString(PyExc_RuntimeError,"data is not a contiguous array."); 
+        return NULL; 
+    } 
+    if (!PyArray_Check(next_grid) || !PyArray_ISCONTIGUOUS(next_grid)) { 
+        PyErr_SetString(PyExc_RuntimeError,"next_grid is not a contiguous array."); 
+        return NULL; 
+    } 
+ 
+    /* Make sure that grid and next_grid are of the same type and have the same 
+    * dimensions 
+    */ 
+    if (PyArray_TYPE(data) != PyArray_TYPE(next_grid)) { 
+        PyErr_SetString(PyExc_RuntimeError, 
+                        "next_grid and data should have same type."); 
+        return NULL; 
+    } 
+    if (PyArray_NDIM(data) != 2) { 
+        PyErr_SetString(PyExc_RuntimeError,"data should be two dimensional"); 
+        return NULL; 
+    } 
+    if (PyArray_NDIM(next_grid) != 2) { 
+        PyErr_SetString(PyExc_RuntimeError,"next_grid should be two dimensional"); 
+        return NULL; 
+    } 
+
+168 
+第7 章 
+    if ((PyArray_DIM(data,0) != PyArrayDim(next_grid,0)) || 
+        (PyArray_DIM(data,1) != PyArrayDim(next_grid,1))) { 
+        PyErr_SetString(PyExc_RuntimeError, 
+                        "data and next_grid must have the same dimensions"); 
+        return NULL; 
+    } 
+ 
+    /* Fetch the size of the grid we are working with */ 
+    const int N = (int) PyArray_DIM(data, 0); 
+    const int M = (int) PyArray_DIM(data, 1); 
+ 
+    evolve( 
+        N, 
+        M, 
+        PyArray_DATA(data), 
+        PyArray_DATA(next_grid), 
+        D, 
+        dt 
+    ); 
+ 
+    Py_XINCREF(next_grid); 
+    return next_grid; 
+} 
+ 
+/* Module specification */ 
+static PyMethodDef module_methods[] = { 
+/* { method name , C function , argument types , docstring } */ 
+   { "evolve"     , py_evolve  , METH_VARARGS    , cdiffusion_evolve_docstring } , 
+   { NULL         , NULL       , 0               , NULL } 
+}; 
+ 
+/* Initialize the module */ 
+PyMODINIT_FUNC initcdiffusion(void) 
+{ 
+    PyObject *m = Py_InitModule3("cdiffusion", module_methods, module_docstring); 
+    if (m == NULL) 
+        return; 
+    /* Load `numpy` functionality. */ 
+    import_array(); 
+} 
+ 
+为了构建这个代码，我们需要创建一个setup.py 脚本，使用distutils 模块来确定
+构建代码的方式，这样才是兼容Python（例7-26）。除了标准distutils 模块，numpy
+还提供了它自己的模块用以帮助在你的CPython 模块中加入与numpy 的整合。 
+
+ 
+图编译成C 
+169 
+例7-26  用于CPython 模块扩散接口的setup 文件 
+""" 
+setup.py for cpython diffusion module. The extension can be built by running 
+ 
+    $ python setup.py build_ext --inplace 
+ 
+which will create the __cdiffusion.so__ file, which can be directly imported into 
+Python. 
+""" 
+ 
+from distutils.core import setup, Extension 
+import numpy.distutils.misc_util 
+ 
+__version__ = "0.1" 
+ 
+cdiffusion = Extension( 
+    'cdiffusion', 
+    sources = ['cdiffusion/cdiffusion.c', 'cdiffusion/python_interface.c'], 
+    extra_compile_args = ["-O3", "-std=c99", "-Wall", "-p", "-pg", ], 
+    extra_link_args = ["-lc"], 
+) 
+ 
+setup ( 
+    name = 'diffusion', 
+    version = __version__, 
+    ext_modules = [cdiffusion,], 
+    packages = ["diffusion", ], 
+    include_dirs = numpy.distutils.misc_util.get_numpy_include_dirs(), 
+) 
+ 
+生成的结果是一个cdiffusion.so 文件，能被Python 直接导入，而且使用起来
+相当简单。既然我们已经完全控制了最终函数的签名以及我们的C 代码与库的精
+确交互方式，我们能够（以一些艰难的工作）创建出一个容易使用的模块。 
+from cdiffusion import evolve 
+ 
+def run_experiment(num_iterations): 
+    next_grid = np.zeros(grid_shape, dtype=np.double) 
+    grid = np.zeros(grid_shape, dtype=np.double) 
+ 
+    # ... standard initialization ... 
+ 
+    for i in range(num_iterations): 
+        evolve(grid, next_grid, 1.0, 0.1) 
+        grid, next_grid = next_grid, grid 
+
+170 
+第7 章 
+7.14  小结 
+本章所介绍的各种不同的策略允许你在不同程度上定制你的代码，以便降低CPU
+必须执行的指令数量和提高你的程序效率。有时这能用算法来做到，尽管常常必须
+手动去做（请看7.2 节）。而且，有时只是必须借用这些方法来使用其他语言已经
+写好的库。无论动机如何，Python 允许我们从其他语言在某些问题上能够带来的速
+度提升中获得收益，然而当有需要时还是保留了它的表达性和灵活性。 
+然而需要注意的是，做这些优化只是为了优化CPU 指令的效率。如果你把I/O 密
+集型进程和CPU 密集型问题耦合了起来，仅仅是编译你的代码可能不会带来任何
+合理的速度提升。对于这些问题，我们必须重新思考我们的解决方案，并且可能要
+利用并行化来在同一时间运行不同的任务。 
+ 

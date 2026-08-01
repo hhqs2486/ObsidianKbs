@@ -1,0 +1,1058 @@
+I l@ve RuBoard
+Chapter 7. Network Protocols
+ 
+"Increasingly, people seem to misinterpret complexity as sophistication, which is baffling—the
+incomprehensible should cause suspicion rather than admiration. Possibly this trend results from a mistaken
+belief that using a somewhat mysterious device confers an aura of power on the user."
+—Niklaus Wirth
+ 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+7.1 Overview
+ 
+This chapter describes Python's socket protocol support and the networking modules built on top of the socket
+module. These include client handlers for most popular Internet protocols, as well as several frameworks that can be
+used to implement Internet servers.
+ 
+For the low-level examples in this chapter, I'll use two protocols for illustration: the Internet Time Protocol and the
+Hypertext Transfer Protocol.
+ 
+7.1.1 Internet Time Protocol
+ 
+The Internet Time Protocol (RFC 868, Postel and Harrenstien, 1983) is a simple protocol that allows a network
+client to get the current time from a server. 
+Since this protocol is relatively lightweight, many (but far from all) Unix systems provide this service. It's also about as
+easy to implement as a network protocol can possibly be. The server simply waits for a connection request and
+immediately returns the current time as a 4-byte integer containing the number of seconds since January 1, 1900.
+ 
+In fact, the protocol is so simple that I can include the entire specification:
+ 
+File: rfc868.txt
+Network Working Group                                    J. Postel - ISI
+Request for Comments: 868                           K. Harrenstien - SRI
+                                                                May 1983
+                             Time Protocol
+This RFC specifies a standard for the ARPA Internet community.  Hosts on
+the ARPA Internet that choose to implement a Time Protocol are expected
+to adopt and implement this standard.
+This protocol provides a site-independent, machine readable date and
+time.  The Time service sends back to the originating source the time in
+seconds since midnight on January first 1900.
+One motivation arises from the fact that not all systems have a
+date/time clock, and all are subject to occasional human or machine
+error.  The use of time-servers makes it possible to quickly confirm or
+correct a system's idea of the time, by making a brief poll of several
+independent sites on the network.
+This protocol may be used either above the Transmission Control Protocol
+(TCP) or above the User Datagram Protocol (UDP).
+When used via TCP the time service works as follows:
+   S: Listen on port 37 (45 octal).
+   U: Connect to port 37.
+   S: Send the time as a 32 bit binary number.
+   U: Receive the time.
+   U: Close the connection.
+   S: Close the connection.
+   The server listens for a connection on port 37.  When the connection
+   is established, the server returns a 32-bit time value and closes the
+   connection.  If the server is unable to determine the time at its
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+7.2 The socket Module
+ 
+The socket module implements an interface to the socket communication layer. You can create both client and server
+sockets using this module.
+ 
+Let's start with a client example. The client in Example 7-1 connects to a time protocol server, reads the 4-byte
+response, and converts it to a time value.
+ 
+Example 7-1. Using the socket Module to Implement a Time Client
+ 
+File: socket-example-1.py
+import socket
+import struct, time
+# server
+HOST = "www.python.org"
+PORT = 37
+# reference time (in seconds since 1900-01-01 00:00:00)
+TIME1970 = 2208988800L # 1970-01-01 00:00:00
+# connect to server
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.connect((HOST, PORT))
+# read 4 bytes, and convert to time value
+t = s.recv(4)
+t = struct.unpack("!I", t)[0]
+t = int(t - TIME1970)
+s.close()
+# print results
+print "server time is", time.ctime(t)
+print "local clock is", int(time.time()) - t, "seconds off"
+server time is Sat Oct 09 16:42:36 1999
+local clock is 8 seconds off 
+The socket factory function creates a new socket of the given type (in this case, an Internet stream socket, also
+known as a TCP socket). The connect method attempts to connect this socket to the given server. Once that has
+succeeded, the recv method is used to read data.
+ 
+Creating a server socket is done in a similar fashion. But instead of connecting to a server, you bind the socket to a
+port on the local machine, tell it to listen for incoming connection requests, and process each request as fast as
+possible.
+ 
+Example 7-2 creates a time server, bound to port 8037 on the local machine (port numbers up to 1024 are reserved
+for system services, and you have to have root privileges to use them to implement services on a Unix system).
+ 
+Example 7-2. Using the socket Module to Implement a Time Server
+ 
+File: socket-example-2.py
+import socket
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+7.3 The select Module
+ 
+This select module, shown in Example 7-6, allows you to check for incoming data on one or more sockets, pipes, or
+other compatible stream objects.
+ 
+You can pass one or more sockets to the select function to wait for them to become readable, writable, or signal an
+error:
+ 
+•
+A socket becomes ready for reading when someone connects after a call to listen (which means that accept
+won't block) when data arrives from the remote end, or when the socket is closed or reset (in this case, recv
+will return an empty string).
+ 
+•
+A socket becomes ready for writing when the connection is established after a non-blocking call to connect
+or when data can be written to the socket.
+ 
+•
+A socket signals an error condition when the connection fails after a non-blocking call to connect.
+ 
+Example 7-6. Using the select Module to Wait for Data Arriving Over Sockets
+ 
+File: select-example-1.py
+import select
+import socket
+import time
+PORT = 8037
+TIME1970 = 2208988800L
+service = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+service.bind(("", PORT))
+service.listen(1)
+print "listening on port", PORT
+while 1:
+    is_readable = [service]
+    is_writable = []
+    is_error = []
+    r, w, e = select.select(is_readable, is_writable, is_error, 1.0)
+    if r:
+        channel, info = service.accept()
+        print "connection from", info
+        t = int(time.time()) + TIME1970
+        t = chr(t>>24&255) + chr(t>>16&255) + chr(t>>8&255) + chr(t&255)
+        channel.send(t) # send timestamp
+        channel.close() # disconnect
+    else:
+        print "still waiting"
+listening on port 8037
+still
+aiting
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+7.4 The asyncore Module
+ 
+The asyncore module provides a "reactive" socket implementation. Instead of creating socket objects and calling
+methods on them to do things, this module allows you to write code that is called when something can be done. To
+implement an asynchronous socket handler, subclass the dispatcher class, and override one or more of the following
+methods: 
+•
+handle_connect is called when a connection is successfully established.
+ 
+•
+handle_expt is called when a connection fails.
+ 
+•
+handle_accept is called when a connection request is made to a listening socket. The callback should call the
+accept method to get the client socket.
+ 
+•
+handle_read is called when there is data waiting to be read from the socket. The callback should call the recv
+method to get the data.
+ 
+•
+handle_write is called when data can be written to the socket. Use the send method to write data.
+ 
+•
+handle_close is called when the socket is closed or reset.
+ 
+•
+handle_error(type, value, traceback) is called if a Python error occurs in any of the other callbacks. The
+default implementation prints an abbreviated traceback to sys.stdout.
+ 
+Example 7-7 shows a time client, similar to the one for the socket module.
+ 
+Example 7-7. Using the asyncore Module to Get the Time from a Time Server
+ 
+File: asyncore-example-1.py
+import asyncore
+import socket, time
+# reference time (in seconds since 1900-01-01 00:00:00)
+TIME1970 = 2208988800L # 1970-01-01 00:00:00
+class TimeRequest(asyncore.dispatcher):
+    # time requestor (as defined in RFC 868)
+    def _ _init_ _(self, host, port=37):
+        asyncore.dispatcher._ _init_ _(self)
+        self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
+self connect((host
+port))
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+7.5 The asynchat Module
+ 
+The asynchat module is an extension to asyncore. It provides additional support for line-oriented protocols. It also
+provides improved buffering support, via the push methods and the "producer" mechanism.
+ 
+Example 7-12 implements a very minimal HTTP responder. It simply returns an HTML document containing
+information from an HTTP request (the output appears in the browser window).
+ 
+Example 7-12. Using the asynchat Module to Implement a Minimal HTTP Server
+ 
+File: asynchat-example-1.py
+import asyncore, asynchat
+import os, socket, string
+PORT = 8000
+class HTTPChannel(asynchat.async_chat):
+    def _ _init_ _(self, server, sock, addr):
+        asynchat.async_chat._ _init_ _(self, sock)
+        self.set_terminator("\r\n")
+        self.request = None
+        self.data = ""
+        self.shutdown = 0
+    def collect_incoming_data(self, data):
+        self.data = self.data + data
+    def found_terminator(self):
+        if not self.request:
+            # got the request line
+            self.request = string.split(self.data, None, 2)
+            if len(self.request) != 3:
+                self.shutdown = 1
+            else:
+                self.push("HTTP/1.0 200 OK\r\n")
+                self.push("Content-type: text/html\r\n")
+                self.push("\r\n")
+            self.data = self.data + "\r\n"
+            self.set_terminator("\r\n\r\n") # look for end of headers
+        else:
+            # return payload.
+            self.push("<html><body><pre>\r\n")
+            self.push(self.data)
+            self.push("</pre></body></html>\r\n")
+            self.close_when_done()
+class HTTPServer(asyncore.dispatcher):
+    def _ _init_ _(self, port):
+        self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.bind(("", port))
+        self.listen(5)
+    def handle_accept(self):
+        conn, addr = self.accept()
+        HTTPChannel(self, conn, addr)
+#
+# try it out
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+7.6 The urllib Module
+ 
+The urlib module provides a unified client interface for HTTP, FTP, and gopher. It automatically picks the right
+protocol handler based on the uniform resource locator (URL) passed to the library.
+ 
+Fetching data from a URL is extremely easy. Just call the urlopen method, and read from the returned stream object,
+as shown in Example 7-14.
+ 
+Example 7-14. Using the urllib Module to Fetch a Remote Resource
+ 
+File: urllib-example-1.py
+import urllib
+fp = urllib.urlopen("http://www.python.org")
+op = open("out.html", "wb")
+n = 0
+while 1:
+    s = fp.read(8192)
+    if not s:
+        break
+    op.write(s)
+    n = n + len(s)
+fp.close()
+op.close()
+for k, v in fp.headers.items():
+    print k, "=", v
+print "copied", n, "bytes from", fp.url
+server = Apache/1.3.6 (Unix)
+content-type = text/html
+accept-ranges = bytes
+date = Mon, 11 Oct 1999 20:11:40 GMT
+connection = close
+etag = "741e9-7870-37f356bf"
+content-length = 30832
+last-modified = Thu, 30 Sep 1999 12:25:35 GMT
+copied 30832 bytes from http://www.python.org 
+Note that stream object provides some non-standard attributes. headers is a Message object (as defined by the
+mimetools module), and url contains the actual URL. The latter is updated if the server redirects the client to a new
+URL.
+ 
+The urlopen function is actually a helper function, which creates an instance of the FancyURLopener class and calls
+its open method. To get special behavior, you can subclass that class. For instance, the class in Example 7-15
+automatically logs in to the server when necessary.
+ 
+Example 7-15. Using the urllib Module with Automatic Authentication
+ 
+File: urllib-example-3.py
+import urllib
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+7.7 The urlparse Module
+ 
+The urlparse module contains functions to process URLs, and to convert between URLs and platform-specific
+filenames. Example 7-16 demonstrates.
+ 
+Example 7-16. Using the urlparse Module
+ 
+File: urlparse-example-1.py
+import urlparse
+print urlparse.urlparse("http://host/path;params?query#fragment")
+('http', 'host', '/path', 'params', 'query', 'fragment') 
+A common use is to split an HTTP URL into host and path components (an HTTP request involves asking the host
+to return data identified by the path), as shown in Example 7-17.
+ 
+Example 7-17. Using the urlparse Module to Parse HTTP Locators
+ 
+File: urlparse-example-2.py
+import urlparse
+scheme, host, path, params, query, fragment =\
+        urlparse.urlparse("http://host/path;params?query#fragment")
+if scheme == "http":
+    print "host", "=>", host
+    if params:
+        path = path + ";" + params
+    if query:
+        path = path + "?" + query
+    print "path", "=>", path
+host => host
+path => /path;params?query 
+Alternatively, Example 7-18 shows how you can use the urlunparse function to put the URL back together again.
+ 
+Example 7-18. Using the urlparse Module to Parse HTTP Locators
+ 
+File: urlparse-example-3.py
+import urlparse
+scheme, host, path, params, query, fragment =\
+        urlparse.urlparse("http://host/path;params?query#fragment")
+if scheme == "http":
+    print "host", "=>", host
+    print "path", "=>", urlparse.urlunparse(
+    (None, None, path, params, query, None)
+    )
+host => host
+path => /path;params?query 
+Example 7-19 uses the urljoin function to combine an absolute URL with a second, possibly relative URL.
+ 
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+7.8 The cookie Module
+ 
+(New in 2.0) This module provides basic cookie support for HTTP clients and servers. Example 7-20 shows its use.
+ 
+Example 7-20. Using the cookie Module
+ 
+File: cookie-example-1.py
+import Cookie
+import os, time
+cookie = Cookie.SimpleCookie()
+cookie["user"] = "Mimi"
+cookie["timestamp"] = time.time()
+print cookie
+# simulate CGI roundtrip
+os.environ["HTTP_COOKIE"] = str(cookie)
+print
+cookie = Cookie.SmartCookie()
+cookie.load(os.environ["HTTP_COOKIE"])
+for key, item in cookie.items():
+    # dictionary items are "Morsel" instances
+    # use value attribute to get actual value
+    print key, repr(item.value)
+Set-Cookie: timestamp=736513200;
+Set-Cookie: user=Mimi;
+user 'Mimi'
+timestamp '736513200'
+ 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+7.9 The robotparser Module
+ 
+(New in 2.0) The robotparser module reads robots.txt files, which are used to implement the Robot Exclusion
+Protocol (http://info.webcrawler.com/mak/projects/robots/robots.html).
+ 
+If you're implementing an HTTP robot that will visit arbitrary sites on the Net (not just your own sites), it's a good
+idea to use this module to check that you really are welcome. Example 7-21 demonstrates the robotparser module.
+ 
+Example 7-21. Using the robotparser Module
+ 
+File: robotparser-example-1.py
+import robotparser
+r = robotparser.RobotFileParser()
+r.set_url("http://www.python.org/robots.txt")
+r.read()
+if r.can_fetch("*", "/index.html"):
+    print "may fetch the home page"
+if r.can_fetch("*", "/tim_one/index.html"):
+    print "may fetch the tim peters archive"
+may fetch the home page 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+7.10 The ftplib Module
+ 
+The ftplib module contains a File Transfer Protocol (FTP) client implementation.
+ 
+Example 7-22 demonstrates how to log in and get a directory listing of the login directory. Note that the format of the
+directory listing is server dependent (it's usually the same as the format used by the directory listing utility on the
+server host platform).
+ 
+Example 7-22. Using the ftplib Module to Get a Directory Listing
+ 
+File: ftplib-example-1.py
+import ftplib
+ftp = ftplib.FTP("www.python.org")
+ftp.login("anonymous", "ftplib-example-1")
+print ftp.dir()
+ftp.quit()
+total 34
+drwxrwxr-x  11 root     4127         512 Sep 14 14:18 .
+drwxrwxr-x  11 root     4127         512 Sep 14 14:18 ..
+drwxrwxr-x   2 root     4127         512 Sep 13 15:18 RCS
+lrwxrwxrwx   1 root     bin           11 Jun 29 14:34 README -> welcome.msg
+drwxr-xr-x   3 root     wheel        512 May 19  1998 bin
+drwxr-sr-x   3 root     1400         512 Jun  9  1997 dev
+drwxrwxr--   2 root     4127         512 Feb  8  1998 dup
+drwxr-xr-x   3 root     wheel        512 May 19  1998 etc
+... 
+Downloading files is easy; just use the appropriate retr function. Note that when you download a text file, you have to
+add line endings yourself. The function in Example 7-23 uses a lambda expression to do that on the fly.
+ 
+Example 7-23. Using the ftplib Module to Retrieve Files
+ 
+File: ftplib-example-2.py
+import ftplib
+import sys
+def gettext(ftp, filename, outfile=None):
+    # fetch a text file
+    if outfile is None:
+        outfile = sys.stdout
+    # use a lambda to add newlines to the lines read from the server
+    ftp.retrlines("RETR " + filename, lambda s, w=outfile.write: w(s+"\n"))
+def getbinary(ftp, filename, outfile=None):
+    # fetch a binary file
+    if outfile is None:
+        outfile = sys.stdout
+    ftp.retrbinary("RETR " + filename, outfile.write)
+ftp = ftplib.FTP("www.python.org")
+ftp.login("anonymous", "ftplib-example-2")
+gettext(ftp, "README")
+getbinary(ftp, "welcome.msg")
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+7.11 The gopherlib Module
+ 
+The gopherlib module contains a gopher client implementation, shown in Example 7-25.
+ 
+Example 7-25. Using the gopherlib Module
+ 
+File: gopherlib-example-1.py
+import gopherlib
+host = "gopher.spam.egg"
+f = gopherlib.send_selector("1/", host)
+for item in gopherlib.get_directory(f):
+    print item
+['0', "About Spam.Egg's Gopher Server", "0/About's Spam.Egg's
+Gopher Server", 'gopher.spam.egg', '70', '+']
+['1', 'About Spam.Egg', '1/Spam.Egg', 'gopher.spam.egg', '70', '+']
+['1', 'Misc', '1/Misc', 'gopher.spam.egg', '70', '+']
+... 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+7.12 The httplib Module
+ 
+The httplib module, shown in Example 7-26, provides an HTTP client interface.
+ 
+Example 7-26. Using the httplib Module
+ 
+File: httplib-example-1.py
+import httplib
+USER_AGENT = "httplib-example-1.py"
+class Error:
+    # indicates an HTTP error
+    def _ _init_ _(self, url, errcode, errmsg, headers):
+        self.url = url
+        self.errcode = errcode
+        self.errmsg = errmsg
+        self.headers = headers
+    def _ _repr_ _(self):
+        return (
+            "<Error for %s: %s %s>" %
+            (self.url, self.errcode, self.errmsg)
+            )
+class Server:
+    def _ _init_ _(self, host):
+        self.host = host
+    def fetch(self, path):
+        http = httplib.HTTP(self.host)
+        # write header
+        http.putrequest("GET", path)
+        http.putheader("User-Agent", USER_AGENT)
+        http.putheader("Host", self.host)
+        http.putheader("Accept", "*/*")
+        http.endheaders()
+        # get response
+        errcode, errmsg, headers = http.getreply()
+        if errcode != 200:
+            raise Error(errcode, errmsg, headers)
+        file = http.getfile()
+        return file.read()
+if _ _name_ _ == "_ _main_ _":
+    server = Server("www.pythonware.com")
+    print server.fetch("/index.htm") 
+Note that the HTTP client provided httplib blocks while waiting for the server to respond. For an asynchronous
+solution, which among other things allows you to issue multiple requests in parallel, see the examples for the asyncore
+module.
+ 
+7.12.1 Posting Data to an HTTP Server
+ 
+Th h
+lib
+d l
+l
+ll
+d
+h
+HTTP
+d
+h
+POST
+h
+i E
+l 7 27
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+7.13 The poplib Module
+ 
+The poplib module (shown in Example 7-28) provides a Post Office Protocol (POP3) client implementation. This
+protocol is used to "pop" (copy) messages from a central mail server to your local computer.
+ 
+Example 7-28. Using the poplib Module
+ 
+File: poplib-example-1.py
+import poplib
+import string, random
+import StringIO, rfc822
+SERVER = "pop.spam.egg"
+USER  = "mulder"
+PASSWORD = "trustno1"
+# connect to server
+server = poplib.POP3(SERVER)
+# login
+server.user(USER)
+server.pass_(PASSWORD)
+# list items on server
+resp, items, octets = server.list()
+# download a random message
+id, size = string.split(random.choice(items))
+resp, text, octets = server.retr(id)
+text = string.join(text, "\n")
+file = StringIO.StringIO(text)
+message = rfc822.Message(file)
+for k, v in message.items():
+    print k, "=", v
+print message.fp.read()
+subject = ANN: (the eff-bot guide to) The Standard Python Library
+message-id = <199910120808.KAA09206@spam.egg>
+received = (from fredrik@spam.egg)
+ by spam.egg (8.8.7/8.8.5) id KAA09206
+ for mulder; Tue, 12 Oct 1999 10:08:47 +0200
+from = Fredrik Lundh <fredrik@spam.egg>
+date = Tue, 12 Oct 1999 10:08:47 +0200
+to = mulder@spam.egg
+... 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+7.14 The imaplib Module
+ 
+The imaplib module, shown in Example 7-29, provides an Internet Message Access Protocol (IMAP) client
+implementation. This protocol lets you access mail folders stored on a central mail server as if they were local.
+ 
+Example 7-29. Using the imaplib Module
+ 
+File: imaplib-example-1.py
+import imaplib
+import string, random
+import StringIO, rfc822
+SERVER = "imap.spam.egg"
+USER  = "mulder"
+PASSWORD = "trustno1"
+# connect to server
+server = imaplib.IMAP4(SERVER)
+# login
+server.login(USER, PASSWORD)
+server.select()
+# list items on server
+resp, items = server.search(None, "ALL")
+items = string.split(items[0])
+# fetch a random item
+id = random.choice(items)
+resp, data = server.fetch(id, "(RFC822)")
+text = data[0][1]
+file = StringIO.StringIO(text)
+message = rfc822.Message(file)
+for k, v in message.items():
+    print k, "=", v
+print message.fp.read()
+server.logout()
+subject = ANN: (the eff-bot guide to) The Standard Python Library
+message-id = <199910120816.KAA12177@larch.spam.egg>
+to = mulder@spam.egg
+date = Tue, 12 Oct 1999 10:16:19 +0200 (MET DST)
+from = <effbot@spam.egg>
+received = (effbot@spam.egg) by imap.algonet.se (8.8.8+Sun/8.6.12)
+id KAA12177 for effbot@spam.egg; Tue, 12 Oct 1999 10:16:19 +0200
+(MET DST)
+body text for test 5 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+7.15 The smtplib Module
+ 
+The smtplib module (shown in Example 7-30) provides a Simple Mail Transfer Protocol (SMTP) client
+implementation. This protocol is used to send mail through Unix mail servers.
+ 
+To read mail, use the poplib or imaplib modules.
+ 
+Example 7-30. Using the smtplib Module
+ 
+File: smtplib-example-1.py
+import smtplib
+import string, sys
+HOST = "localhost"
+FROM = "effbot@spam.egg"
+TO = "fredrik@spam.egg"
+SUBJECT = "for your information!"
+BODY = "next week: how to fling an otter"
+body = string.join((
+    "From: %s" % FROM,
+    "To: %s" % TO,
+    "Subject: %s" % SUBJECT,
+    "",
+    BODY), "\r\n")
+print body
+server = smtplib.SMTP(HOST)
+server.sendmail(FROM, [TO], body)
+server.quit()
+From: effbot@spam.egg
+To: fredrik@spam.egg
+Subject: for your information!
+next week: how to fling an otter 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+7.16 The telnetlib Module
+ 
+The telnetlib module provides a telnet client implementation.
+ 
+Example 7-31 connects to a Unix computer, logs in, and then retrieves a directory listing.
+ 
+Example 7-31. Using the telnetlib Module to Log In to a Remote Server
+ 
+File: telnetlib-example-1.py
+import telnetlib
+import sys
+HOST = "spam.egg"
+USER = "mulder"
+PASSWORD = "trustno1"
+telnet = telnetlib.Telnet(HOST)
+telnet.read_until("login: ")
+telnet.write(USER + "\n")
+telnet.read_until("Password: ")
+telnet.write(PASSWORD + "\n")
+telnet.write("ls librarybook\n")
+telnet.write("exit\n")
+print telnet.read_all()
+[spam.egg mulder]$ ls
+README                                 os-path-isabs-example-1.py
+SimpleAsyncHTTP.py                     os-path-isdir-example-1.py
+aifc-example-1.py                      os-path-isfile-example-1.py
+anydbm-example-1.py                    os-path-islink-example-1.py
+array-example-1.py                     os-path-ismount-example-1.py
+... 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+7.17 The nntplib Module
+ 
+The nntplib module provides a Network News Transfer Protocol (NNTP) client implementation.
+ 
+7.17.1 Listing messages
+ 
+Prior to reading messages from a news server, you have to connect to the server and then select a newsgroup. The
+script in Example 7-32 also downloads a complete list of all messages on the server and extracts some more or less
+interesting statistics from that list.
+ 
+Example 7-32. Using the nntplib Module to List Messages
+ 
+File: nntplib-example-1.py
+import nntplib
+import string
+SERVER = "news.spam.egg"
+GROUP  = "comp.lang.python" 
+AUTHOR = "fredrik@pythonware.com" # eff-bots human alias
+# connect to server
+server = nntplib.NNTP(SERVER)
+# choose a newsgroup
+resp, count, first, last, name = server.group(GROUP)
+print "count", "=>", count
+print "range", "=>", first, last
+# list all items on the server
+resp, items = server.xover(first, last)
+# extract some statistics
+authors = {}
+subjects = {}
+for id, subject, author, date, message_id, references, size, lines in items:
+    authors[author] = None
+    if subject[:4] == "Re: ":
+        subject = subject[4:]
+    subjects[subject] = None
+    if string.find(author, AUTHOR) >= 0:
+        print id, subject
+    
+print "authors", "=>", len(authors)
+print "subjects", "=>", len(subjects)
+count => 607
+range => 57179 57971
+57474 Three decades of Python!
+...
+57477 More Python books coming...
+authors => 257
+subjects => 200 
+7.17.2 Downloading Messages
+ 
+Downloading a message is easy. Just call the article method, as shown in Example 7-33.
+ 
+Example 7-33. Using the nntplib Module to Download Messages
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+7.18 The SocketServer Module
+ 
+The SocketServer module provides a framework for various kinds of socket-based servers. The module provides a
+number of classes that can be mixed and matched to create servers for different purposes.
+ 
+Example 7-35 implements an Internet Time Protocol server using this module. Use the timeclient script to try it out.
+ 
+Example 7-35. Using the SocketServer Module
+ 
+File: socketserver-example-1.py
+import SocketServer
+import time
+# user-accessible port
+PORT = 8037
+# reference time
+TIME1970 = 2208988800L
+class TimeRequestHandler(SocketServer.StreamRequestHandler):
+    def handle(self):
+        print "connection from", self.client_address
+        t = int(time.time()) + TIME1970
+        b = chr(t>>24&255) + chr(t>>16&255) + chr(t>>8&255) + chr(t&255)
+        self.wfile.write(b)
+server = SocketServer.TCPServer(("", PORT), TimeRequestHandler)
+print "listening on port", PORT
+server.serve_forever()
+connection from ('127.0.0.1', 1488)
+connection from ('127.0.0.1', 1489)
+... 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+7.19 The BaseHTTPServer Module
+ 
+This is a basic framework for HTTP servers, built on top of the SocketServer framework.
+ 
+Example 7-36 generates a random message each time you reload the page. The path variable contains the current
+URL, which you can use to generate different contents for different URLs (as it stands, the script returns an error
+page for anything but the root path).
+ 
+Example 7-36. Using the BaseHTTPServer Module
+ 
+File: basehttpserver-example-1.py
+import BaseHTTPServer
+import cgi, random, sys
+MESSAGES = [
+    "That's as maybe, it's still a frog.",
+    "Albatross! Albatross! Albatross!",
+    "It's Wolfgang Amadeus Mozart.",
+    "A pink form from Reading.",
+    "Hello people, and welcome to 'It's a Tree.'"
+    "I simply stare at the brick and it goes to sleep.",
+]
+class Handler(BaseHTTPServer.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path != "/":
+            self.send_error(404, "File not found")
+            return
+        self.send_response(200)
+        self.send_header("Content-type", "text/html")
+        self.end_headers()
+        try:
+            # redirect stdout to client
+            stdout = sys.stdout
+            sys.stdout = self.wfile
+            self.makepage()
+        finally:
+            sys.stdout = stdout # restore
+        
+    def makepage(self):
+        # generate a random message
+        tagline = random.choice(MESSAGES)
+        print "<html>"
+        print "<body>"
+        print "<p>Today's quote: "
+        print "<i>%s</i>" % cgi.escape(tagline)
+        print "</body>"
+        print "</html>"
+PORT = 8000
+httpd = BaseHTTPServer.HTTPServer(("", PORT), Handler)
+print "serving at port", PORT
+httpd.serve_forever() 
+See the SimpleHTTPServer and CGIHTTPServer modules for more extensive HTTP frameworks.
+ 
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+7.20 The SimpleHTTPServer Module
+ 
+The SimpleHTTPServer module is a simple HTTP server that provides standard GET and HEAD request handlers.
+The pathname given by the client is interpreted as a relative filename (relative to the current directory when the server
+was started, that is). The module's use is demonstrated in Example 7-37.
+ 
+Example 7-37. Using the SimpleHTTPServer Module
+ 
+File: simplehttpserver-example-1.py
+import SimpleHTTPServer
+import SocketServer
+# minimal web server.  serves files relative to the
+# current directory.
+PORT = 8000
+Handler = SimpleHTTPServer.SimpleHTTPRequestHandler
+httpd = SocketServer.TCPServer(("", PORT), Handler)
+print "serving at port", PORT
+httpd.serve_forever()
+serving at port 8000
+localhost - - [11/Oct/1999 15:07:44] code 403, message Directory listing not sup
+ported
+localhost - - [11/Oct/1999 15:07:44] "GET / HTTP/1.1" 403 -
+localhost - - [11/Oct/1999 15:07:56] "GET /samples/sample.htm HTTP/1.1" 200 - 
+The server ignores drive letters and relative pathnames (such as `..'). However, it does not implement any other
+access control mechanisms, so be careful.
+ 
+Example 7-38 implements a truly minimal web proxy. When sent to a proxy, the HTTP requests should include the
+full URI for the target server. This server uses urllib to fetch data from the target.
+ 
+Example 7-38. Using the SimpleHTTPServer Module as a Proxy
+ 
+File: simplehttpserver-example-2.py
+# a truly minimal HTTP proxy
+import SocketServer
+import SimpleHTTPServer
+import urllib
+PORT = 1234
+class Proxy(SimpleHTTPServer.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        self.copyfile(urllib.urlopen(self.path), self.wfile)
+httpd = SocketServer.ForkingTCPServer(('', PORT), Proxy)
+print "serving at port", PORT
+httpd.serve_forever() 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+7.21 The CGIHTTPServer Module
+ 
+The CGIHTTPServer module shown in Example 7-39 is a simple HTTP server that can call external scripts through
+the common gateway interface (CGI).
+ 
+Example 7-39. Using the CGIHTTPServer Module
+ 
+File: cgihttpserver-example-1.py
+import CGIHTTPServer
+import BaseHTTPServer
+class Handler(CGIHTTPServer.CGIHTTPRequestHandler):
+    cgi_directories = ["/cgi"]
+PORT = 8000
+httpd = BaseHTTPServer.HTTPServer(("", PORT), Handler)
+print "serving at port", PORT
+httpd.serve_forever() 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+7.22 The cgi Module
+ 
+The cgi module provides a number of support functions and classes for CGI scripts. Among other things, it can parse
+CGI form data.
+ 
+Example 7-40 shows a simple CGI script that returns a list of a files in a given directory (relative to the root directory
+specified in the script).
+ 
+Example 7-40. Using the cgi Module
+ 
+File: cgi-example-1.py
+import cgi
+import os, urllib
+ROOT = "samples"
+# header
+print "text/html"
+print
+query = os.environ.get("QUERY_STRING")
+if not query:
+    query = "."
+script = os.environ.get("SCRIPT_NAME", "")
+if not script:
+    script = "cgi-example-1.py"
+print "<html>"
+print "<head>"
+print "<title>file listing</title>"
+print "</head>"
+print "</html>"
+print "<body>"
+try:
+    files = os.listdir(os.path.join(ROOT, query))
+except os.error:
+    files = []
+for file in files:
+    link = cgi.escape(file)
+    if os.path.isdir(os.path.join(ROOT, query, file)):
+        href = script + "?" + os.path.join(query, file)
+        print "<p><a href= '%s'>%s</a>" % (href, cgi.escape(link))
+    else:
+        print "<p>%s" % link
+print "</body>"
+print "</html>"
+text/html
+<html>
+<head>
+<title>file listing</title>
+</head>
+</html>
+<body>
+<p>sample gif
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot
+
+I l@ve RuBoard
+7.23 The webbrowser Module
+ 
+(New in 2.0) The webbrowser module provides a basic interface to the system's standard web browser. It provides
+an open function, which takes a filename or a URL, and displays it in the browser. If you call open again, it attempts
+to display the new page in the same browser window. Example 7-41 demonstrates the webbrowser module.
+ 
+Example 7-41. Using the webbrowser Module
+ 
+File: webbrowser-example-1.py
+import webbrowser
+import time
+webbrowser.open("http://www.pythonware.com")
+# wait a while, and then go to another page
+time.sleep(5)
+webbrowser.open(
+    "http://www.pythonware.com/people/fredrik/librarybook.htm"
+    ) 
+On Unix, this module supports lynx, Netscape, Mosaic, Konquerer, and Grail. On Windows and Macintosh, it uses
+the standard browser (as defined in the registry or the Internet configuration panel).
+ 
+I l@ve RuBoard
+This document is created with the unregistered version of CHM2PDF Pilot

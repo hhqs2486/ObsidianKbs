@@ -1,0 +1,1611 @@
+ 
+ 
+国国 
+273 
+第11 章 
+使用更少的RAM 
+读完本章之后你将能够回答下列问题 
+• 
+为什么我应该使用更少的RAM？ 
+• 
+为什么numpy 和array 对存储大量数字而言更有利？ 
+• 
+怎样把许多文本高效地存储进RAM？ 
+• 
+我该如何能仅仅使用一个字节来（近似地）计数到1e77？ 
+• 
+什么是布隆过滤？为什么我可能会需要它们？ 
+我们很少会思考我们正在使用多少RAM，一直到把它用完为止。如果你在扩展代
+码时用完了内存，它就会成为一个突如其来的阻碍者。把更多的东西纳入一台机器
+的RAM 意味着更少的机器要管理，并且给你一条途径来为更大的项目规划容量。
+了解为什么RAM 被吃光了而且考虑更有效的方式来使用这个稀缺资源将有助于你
+处理扩展性的问题。 
+另一种节约RAM 的途径就是使用容器来利用你的数据特性进行压缩。在本章中，
+我们将看看tries 树（有序的树数据结构）和DAWG，后者能够把一个1.1GB 的字
+符串集压缩到只有 254MB，而几乎不改变性能。第三种途径就是用空间来和准确
+性做交换。对于这种途径，我们将看看近似计数和近似集合成员，相比它们所对应
+的精确算法大大减少了RAM 的使用。 
+对内存使用要考虑的一点就是“数据有质量”的观念。数据越多，移动起来就越
+慢。如果你能够吝啬于使用内存，你的数据将可能消耗得更快，因为它在总线上
+移动得更快，而且更多的数据将被纳入有限的缓存中。如果你需要把它存入离线
+
+274 
+第11 章 
+存储中（例如，一个硬盘驱动或者一个远程的数据集群），那么它会以慢得多的
+速度来传输进你的机器中。设法选择合适的数据结构，这样你的所有数据都能够
+纳入一台机器中。 
+对Python 对象所使用的RAM 量做统计棘手得令人吃惊。我们不必知道对象在幕后
+是如何被表示的，如果我们请求操作系统所使用的字节数，它将告诉我们分配给进
+程的总量。在这两种情况下，我们都不能精确地查看每个单独的Python 对象占用
+的内存是怎样加入总量中的。 
+因为一些对象和库无法报告它们内部所分配的所有字节（或者它们包装了完全没有
+报告自己的内存分配的外部库），这应当是一种最佳猜测的情况。在本章中所探索
+的方法能够帮助我们决定最好的方式来表示我们的数据，从而整体上使用了更少的
+RAM。 
+11.1  基础类型的对象开销高 
+使用存储着几百上千项的类似于list 的容器来工作是普遍的。一旦你存储大数
+据，RAM 的使用就变成了一个问题。 
+一个具有100000000 项的list 大概要消耗760MB，这是在假设所有条目都是相同对
+象的前提下。如果我们存储了100000000 个不同项（例如，唯一的整数），那么我
+们得期望使用GB 数量级的RAM！每一个唯一的对象都有一个内存开销。 
+在例11-1 中，我们在一个list 中存储了许多0 整数。如果你存储了100000000 个
+任意对象的引用（无论对象的实例有多大），你还是期望要看见大约760MB 的内存
+开销，因为list 存储着对象的引用（不是对象的拷贝）。回头参考下2.9 节来回忆
+怎样使用memory_profile；在这里，我们使用%load_ext memory_profile
+来把它作为一个新的魔法函数载入进IPython。 
+例11-1  测量在一个list 中的100000000 个相同整数的内存使用 
+In [1]: %load_ext memory_profiler # load the %memit magic function 
+In [2]: %memit [0]*int(1e8) 
+peak memory: 790.64 MiB, increment: 762.91 MiB 
+ 
+对于下个例子，我们将从一个全新的shell 开始。就如在例11-2 中对memit 的首
+次调用所揭示的那样，一个全新的IPython shell 大约消耗了20MB 的RAM。接下
+来，我们可以创建一个具有100000000 个唯一数字的临时list。这总共大约消耗
+3.1GB。 
+
+ 
+图使用更少的RAM 
+275 
+ 
+警告 
+在运行的进程中，内存能够被缓存起来，所以当使用memit 来剖析
+时，先退出再重启Python shell 总是更安全的方式。 
+ 
+在memit 命令结束后，临时list 被释放了。最终对memit 的调用显示内存使用停
+留在大约2.3GB。 
+ 
+问题 
+在读取答案之前，为什么Python进程还是可能要保持2.3GB 的RAM？
+在后台留下什么东西了吗，即使list 已经到垃圾收集器中去了？ 
+ 
+例11-2  测量一个list 中100000000 个不同整数的内存使用 
+# we use a new IPython shell so we have a clean memory 
+In [1]: %load_ext memory_profiler 
+In [2]: %memit # show how much RAM this process is consuming right now 
+peak memory: 20.05 MiB, increment: 0.03 MiB 
+In [3]: %memit [n for n in xrange(int(1e8))] 
+peak memory: 3127.53 MiB, increment: 3106.96 MiB 
+In [4]: %memit 
+peak memory: 2364.81 MiB, increment: 0.00 MiB 
+ 
+100000000 个整数对象占据了2.3GB 的绝大部分，即使它们不再被使用了。Python
+缓存了类似整数的基础对象为以后所用。在一个RAM 有限的系统中，这会造成问
+题，所以你应该注意到这些基础类型可能会构建在缓存中。 
+在例11-3 中一个后续的memit 创建了另一个含有100000000 项的list，消耗了大
+约760MB，在这个回调期间总体占用了大约达到3.1GB 的内存分配。760MB 单单
+为容器所用，因为底层的Python 整数对象已经存在——它们在缓存中，这样就可
+以被复用。 
+例11-3  再次测量在一个list 中的100000000 个不同整数的内存使用 
+In [5]: %memit [n for n in xrange(int(1e8))] 
+peak memory: 3127.52 MiB, increment: 762.71 MiB 
+ 
+接下来我们将看到我们能够使用array 模块来以更为廉价的方式存储100000000
+个整数。 
+Array 模块以廉价的方式存储了许多基础对象 
+Array 模块高效地存储了类似于整数、浮点数和字符的基础类型，但没有复数或
+者类。它创建了一个连续的RAM 块来保存底层数据。 
+
+276 
+第11 章 
+在例11-4 中，我们把100000000 个整数（每个8 字节）分配到一个连续的内存块。
+总体上，进程大约消耗了 760MB。这种方式和之前唯一整数列表的方式之间的差
+别是2300MB – 760MB == 1.5GB。这是一个对RAM 的巨大节约。 
+例11-4  构建一个使用760MB 的RAM 的具有100000000 个整数的数组 
+In [1]: %load_ext memory_profiler 
+In [2]: import array 
+In [3]: %memit array.array('l', xrange(int(1e8))) 
+peak memory: 781.03 MiB, increment: 760.98 MiB 
+In [4]: arr = array.array('l') 
+In [5]: arr.itemsize 
+Out[5]: 8 
+ 
+注意在array 中的唯一数字不是Python 对象，它们在array 中是字节。如果我
+们要解引用它们中任何一个，那么一个新的Python int 对象将会被构建。如果你想
+要在它们之上来做计算，不会发生整体上的节省，但是如果你想要把数组传递给一
+个外部进程或者只使用一些数据，你应该看到相比使用一个整数的list 来说，大
+大节约了RAM。 
+ 
+备忘 
+如果你正使用Cython 在一个大数字数组或大数字矩阵上工作，并且
+你不想要对numpy 的外部依赖，提醒你可以把你的数据存储在一个
+array 中，并把它传进Cython 来做处理，这样没有额外的内存开销。 
+ 
+array 模块使用一个有限的具有各种不同精度的datatype 集（请看例11-5）来工
+作。选择你需要的最小精度，这样你就会仅仅按需分配RAM，而不是分配超出需
+求更多的RAM。要注意字节的大小是平台相关的—这里的大小参考32 位的平台
+（它声明了最小尺寸），而我们却是在一台64 位的笔记本电脑上运行例子的。 
+例11-5  由array 模块所提供的基本类型 
+In [5]: array? # IPython magic, similar to help(array) 
+Type:       module 
+String Form:<module 'array' (built-in)> 
+Docstring: 
+This module defines an object type which can efficiently represent 
+an array of basic values: characters, integers, floating point 
+numbers. Arrays are sequence types and behave very much like lists, 
+except that the type of objects stored in them is constrained. The 
+type is specified at object creation time by using a type code, which 
+is a single character. The following type codes are defined: 
+ 
+    Type code   C Type             Minimum size in bytes 
+
+ 
+图使用更少的RAM 
+277 
+    'c'         character          1 
+    'b'         signed integer     1 
+    'B'         unsigned integer   1 
+    'u'         Unicode character  2 
+    'h'         signed integer     2 
+    'H'         unsigned integer   2 
+    'i'         signed integer     2 
+    'I'         unsigned integer   2 
+    'l'         signed integer     4 
+    'L'         unsigned integer   4 
+    'f'         floating point     4 
+    'd'         floating point     8 
+ 
+The constructor is: 
+ 
+array(typecode [, initializer]) -- create a new array 
+ 
+numpy 具有能够持有更广泛的datatypes 的数组——你对每一项的字节的数量
+有更多的控制，并且你还可以使用复数和datetime 对象。一个complex128 对
+象采用每项16 个字节：每项是一个8 字节的浮点数对。你不能在一个Python 数组
+中存储复杂的对象，但是它们在numpy 中是自由使用的。如果你是一个numpy 的
+新手，请回去看看第6 章。 
+在例11-6 中，你能看见numpy 数组的另一个特性—你可以查询项的数量、每个
+基础类型的大小以及底层RAM 块的组合存储总量。注意这不包括Python 对象的开
+销（一般情况下，相比你存储在数组中的数据而言，这是微不足道的）。 
+例11-6  在numpy 数组中存储更多的复杂类型 
+In [1]: %load_ext memory_profiler 
+In [2]: import numpy as np 
+In [3]: %memit arr=np.zeros(1e8, np.complex128) 
+peak memory: 1552.48 MiB, increment: 1525.75 MiB 
+In [4]: arr.size # same as len(arr) 
+Out[4]: 100000000 
+In [5]: arr.nbytes 
+Out[5]: 1600000000 
+In [6]: arr.nbytes/arr.size # bytes per item 
+Out[6]: 16 
+In [7]: arr.itemsize # another way of checking 
+Out[7]: 16 
+ 
+使用一个常规的list 在RAM 中来存储许多数字比使用一个array 对象要低效
+得多。应当发生更多的内存分配，每一次都花费时间。在更大的对象上也发生了运
+算，对缓存更不友好，整体上使用了更多的RAM，这样一来可用于其他程序的RAM
+就更少了。 
+
+278 
+第11 章 
+无论如何，如果你在Python 的array 内容上做任何工作，基础类型可能被转换成
+临时对象，抵消了它们的收益。当和其他进程通信时把它们当成数据存储来使用是
+array 的一个很棒的使用场景。 
+如果你正在做重量级的数字运算，那么numpy 数组几乎肯定是一个更好的选择，
+因为你得到了更多的datatype 选项和许多专业而快速的函数。如果你想要让你的项
+目有更少的依赖性，你可能选择避开numpy，尽管Cython 和Pythran 用array 和
+numpy 数组同样都工作得好。Numba 只用numpy 数组来工作。 
+Python 提供了一些其他工具来理解内存使用，就如我们将要在下一节中看到的
+那样。 
+11.2  理解集合中的RAM 使用 
+你可能想知道你是否能够请求Python 关于每个对象所使用的RAM 大小。Python
+的sys.getsizeof(obj)调用会告诉我们一些关于对象所使用的内存情况（绝大
+多数而不是全部对象提供了这个调用）。如果你以前没有见过，那么提醒一下它不
+会给你所期待的关于容器的答案！ 
+让我们通过查看一些基础类型来开始。在Python 中的int 是一个可变尺寸的对象，
+它起始于一个常规的整数，如果你计数超过sys.maxint（在Ian 的64 位笔记本
+电脑上，这个值是9223372036854775807），它就会转变为一个长整数。 
+作为一个常规的整数，它占用24 字节（对象有许多开销）；而作为长整数，它消耗
+36 字节： 
+In [1]: sys.getsizeof(int()) 
+Out[1]: 24 
+In [2]: sys.getsizeof(1) 
+Out[2]: 24 
+In [3]: n=sys.maxint+1 
+In [4]: sys.getsizeof(n) 
+Out[4]: 36 
+ 
+我们可以对byte string 做同样的检查。一个空字符串消耗37 字节，每一个多加的
+字符增加了1 字节的开销： 
+In [21]: sys.getsizeof(b"") 
+Out[21]: 37 
+In [22]: sys.getsizeof(b"a") 
+Out[22]: 38 
+In [23]: sys.getsizeof(b"ab") 
+
+ 
+图使用更少的RAM 
+279 
+Out[23]: 39 
+In [26]: sys.getsizeof(b"cde") 
+Out[26]: 40 
+ 
+当我们使用一个列表时，我们看见了不同的表现。getsizeof 没有对列表的内容
+计数，仅仅是列表自身的开销。一个空列表消耗72 字节，在一台64 位笔记本电脑
+上，列表中的每一项占用了8 个额外字节： 
+# goes up in 8-byte steps rather than the 24 we might expect! 
+In [36]: sys.getsizeof([]) 
+Out[36]: 72 
+In [37]: sys.getsizeof([1]) 
+Out[37]: 80 
+In [38]: sys.getsizeof([1,2]) 
+Out[38]: 88 
+ 
+如果我们使用byte string，这就更明显了——我们期望你看到比getsizeof 所报
+告的要大得多的开销。 
+In [40]: sys.getsizeof([b""]) 
+Out[40]: 80 
+In [41]: sys.getsizeof([b"abcdefghijklm"]) 
+Out[41]: 80 
+In [42]: sys.getsizeof([b"a", b"b"]) 
+Out[42]: 88 
+ 
+getsizeof 只报告了一部分开销，常常仅仅是父对象的开销。就如之前所提示的
+那样，它也不总是被实现了的，所以可以作有限的用途。 
+一个轻量级的更好的工具是asizeof，它会遍历容器的层级结构并对它所发现的
+每个对象做出最好的猜测，给整体大小增加了尺寸。注意它的速度相当慢。 
+除了依赖于猜测和假设之外，它也不能计算幕后的内存分配（例如，一个包装了C
+库的模块可能没有报告在C 库中所分配的字节数）。最好把它用来作为一个指导。
+我们倾向于使用memit，因为它给了我们在问题机器上的准确的内存使用计数。 
+你如下所示使用asizeof： 
+In [1]: %run asizeof.py 
+In [2]: asizeof([b"abcdefghijklm"]) 
+Out[2]: 136 
+ 
+我们可以检查它对一个大列表所做的估算——这里我们将使用100000000 个整数： 
+# this takes 30 seconds to run! 
+In [1]: asizeof([x for x in xrange(10000000)]) # 1e7 integers 
+Out[1]: 321528064 
+ 
+
+280 
+第11 章 
+我们可以通过使用memit 来查看进程如何增长来验证这个估算。在这种情况下，
+数字是非常接近的： 
+In [2]: %memit([x for x in xrange(10000000)]) 
+peak memory: 330.64 MiB, increment: 310.62 MiB 
+ 
+asizeof 一般要比使用memit 来得更慢，但是当你分析小对象时，asizeof 是
+可以用上的。memit 可能对真实世界的应用来说更加有用，因为进程的实际内存
+使用是测量出来的，而不是推导出来的。 
+11.3  字节和Unicode 的对比 
+转换到Python 3.3+的一个令人信服的理由就是它对Unicode 对象的存储明显要比
+在Python 2.7 中少。如果你主要处理许多字符串，并且它们吃掉了很多RAM，一
+定要考虑转移到Python 3.3 中去。这样你就绝对免费地得到了对RAM 的节省。 
+在例11-7 中，我们可以看到100000000 个字符的序列被构建成字符集合（这与在
+Python 2.7 中的常规的str 相同）以及被构建成Unicode 的对象。Unicode 变体占
+用了多达4 倍的RAM，每一个Unicode 字符耗费了相同的更高的代价，而不管表
+示底层数据所需的字节的数量是多少。 
+例11-7  Unicode 对象在Python 2.7 中是代价高昂的 
+In [1]: %load_ext memory_profiler 
+In [2]: %memit b"a" * int(1e8) 
+peak memory: 100.98 MiB, increment: 80.97 MiB 
+In [3]: %memit u"a" * int(1e8) 
+peak memory: 380.98 MiB, increment: 360.92 MiB 
+ 
+Unicode 对象的UTF-8 编码为每个ASCII 字符使用一个字节，而为更少见到的
+字符使用了更多的字节。Python 2.7 为每一个Unicode 字符使用了相同数量的字
+节数，而不管字符的出现率。如果你对Unicode 编码和Unicode 对象的对比没有
+把握，那么请去看看Net Batchelder 的“实践Unicode，或者是，我该如何结束
+痛苦？” 
+从Python 3.3 开始，多亏了PEP 393，我们具有了灵活的Unicode 表示。它通过观
+察字符串中的字符范围，并且尽可能使用更少的字节数来表示更低阶的字符的方式
+来工作。 
+在例11-8 中，你可以见到字节的开销和ASCII 字符的Unicode 版本的开销是一样的，
+并且使用了非ASCII 的字符（sigma）仅仅翻倍地使用了内存—这还是比Python 2.7
+中的境遇要更好。 
+
+ 
+图使用更少的RAM 
+281 
+例11-8  Unicode 对象在Python 3.3+中要远远更低廉 
+Python 3.3.2+ (default, Oct 9 2013, 14:50:09) 
+IPython 1.2.0 -- An enhanced Interactive Python. 
+... 
+In [1]: %load_ext memory_profiler 
+In [2]: %memit b"a" * int(1e8) 
+peak memory: 91.77 MiB, increment: 71.41 MiB 
+In [3]: %memit u"a" * int(1e8) 
+peak memory: 91.54 MiB, increment: 70.98 MiB 
+In [4]: %memit u"Σ" * int(1e8) 
+peak memory: 174.72 MiB, increment: 153.76 MiB 
+ 
+在Python 3.3 默认Unicode 对象的前提下，如果你在许多字符串数据上工作，你几
+乎肯定会受益于这个升级。缺少低廉的字符串存储对一些人来说是在早期Python 
+3.1 期间遇到的一个障碍，但是现在随着PEP 393，这完全不是一个问题。 
+11.4  高效地在RAM 中存储许多文本 
+使用文本的一个普遍的问题就是它占用了许多RAM——但是如果我们想要测试一
+下我们是否在之前见到过字符串或对它们的频率进行计数，那么让它们在RAM 中
+是方便的，而不是让它们从磁盘中来回换页。以自然的方式存储字符串是代价昂贵
+的，但是trie 树和有向无环的单词图（DAWGs）能够被用来压缩表示它们，然而
+又允许进行快速的操作。 
+这些更高级的算法能够让你显著节约RAM 的使用量，这意味着你可能不需要扩展到
+更多的服务器上，对于生产系统有巨大的节省。在本节中，我们将看看使用trie 树来
+压缩一个字符串集，从耗费1.1GB 下降到254MB，而仅让性能发生微小的变化。 
+对于这个例子，我们将从维基百科的部分转储上构建而来。这个集合包含了8545076
+个唯一的符号，来自于英语维基百科的一部分，在磁盘上占用了111707546（111MB）
+之多。 
+符号从它们原来的文章上以空格符来分割。它们是具有可变长度的，并且包含了
+Uncode 字符和数字。它们看起来就像： 
+faddishness 
+'melanesians' 
+Kharálampos 
+PizzaInACup™ 
+url="http://en.wikipedia.org/wiki?curid=363886" 
+VIIIa), 
+Superbagnères. 
+ 
+
+282 
+第11 章 
+我们将使用这个文本例子来测试我们如何能快速地构建持有每个唯一单词实例的
+数据结构，然后我们将看看如何能快速地查询已知的单词（我们将使用不常见的
+“Zwiebel”，来自于画家Alfred Zwiebel）。这让我们发问，“我们以前曾讲过Zwiebel
+吗？”符号寻找是一个普遍的问题，要能够快速地做出来是重要的。 
+ 
+备忘 
+当你在你自己的问题上尝试这些容器时，要注意你可能会看到不同的
+表现。每种容器以不同的方式构建了自己内部的结构，传递不同类型
+的符号可能会影响结构的构建时间，而且不同长度的符号会影响查询
+时间。总是要以系统的方法来做测试。 
+在800 万个符号上尝试这些方法 
+图11-1 显示了使用一些容器存储了800 万个符号的文本文件（111MB 原始数据），这
+些容器就是我们在本节中将要讨论的。X 轴显示了每个容器的RAM 使用情况，Y 轴跟
+踪了查询时间，每个点的大小与构建结构所花的时间有关（更大的点意味着花费更久）。 
+就如我们在这张图表中所能见到的那样，set 和DAWG 的例子使用了许多RAM。List
+的例子内存开销大而且又慢。Marisa trie 树和HAT trie 树的例子对于这个数据集是最
+有效的，它们使用了其他方法四分之一的RAM，而几乎没有改变查找速度。 
+ 
+图11-1  DAWG 和tries 树与内置容器的对比 
+
+ 
+图使用更少的RAM 
+283 
+图表没有显示对没有排序方法的简单list 的查找时间，我们将马上介绍，因
+为它花费得太久了。datrie 的例子没有在绘图中包含，因为它会产生一个段错
+误（我们已经在过去的另一项任务中有这个问题）。当它工作时，它是快速而紧
+凑的，但是它能够展现出无法控制的难以做出解释的构建时间。因为它能比其
+他方法更快，所以值得把它包括进来，但是显而易见，你将要在你的数据上彻
+底测试它。 
+请注意你必须要使用多种不同的容器来测试你的问题—每一个容器有不同的权
+衡之处，例如构建时间和API 的灵活性。 
+接下来，我们将构建一个进程来测试每个容器的行为。 
+1．list 
+让我们从最简单的方法开始。我们会把我们的符号加载进一个list 中，接着使用
+一个O(n)的线性搜索来查询它。我们不能在已经提到过的大型例子中这样做—
+搜索花费了太久的时间—所以我们将用一个小得多的例子（499048 个符号）来
+演示技巧。 
+在接下来的每一个例子中，我们都使用一个产生器text_example.readers，
+用来同时从输入文件中抽取出Unicode 符号。这意味着读取进程只使用了很少量的
+RAM： 
+t1 = time.time() 
+words = [w for w in text_example.readers] 
+print "Loading {} words".format(len(words)) 
+t2 = time.time() 
+print "RAM after creating list {:0.1f}MiB, took {:0.1f}s". 
+    format(memory_profiler.memory_usage()[0], t2 - t1) 
+ 
+我们对能够以多快的速度查询到这个列表感兴趣。理想情况下，我们想要找到一个
+容器来存储我们的文本并且允许我们没有任何代价地来查询和修改它。为了查询
+它，我们使用timeit 来对已知的单词进行数次查找： 
+assert u'Zwiebel' in words 
+time_cost = sum(timeit.repeat(stmt="u'Zwiebel' in words", 
+                              setup="from __main__ import words", 
+                              number=1, 
+                              repeat=10000)) 
+print "Summed time to lookup word {:0.4f}s".format(time_cost) 
+ 
+我们的测试脚本报告大约59MB，被用来把原来5MB 的文件作为一个列表来存储，
+查找时间是86 秒： 
+
+284 
+第11 章 
+RAM at start 10.3MiB 
+Loading 499048 words 
+RAM after creating list 59.4MiB, took 1.7s 
+Summed time to lookup word 86.1757s 
+ 
+把文本存储进一个没有排序的list 明显是一个糟糕的主意。O(n)的查找时间是
+代价高昂的，内存使用也同样如此。这是所有情况中最糟糕的！ 
+我们能够通过对list 做排序以及通过bisect 模块使用二分查找法来改进查找时
+间。对于将来的查询来说，这给了我们一个合理的下限。在例11-9 中我们对排序
+列表所花费的时间进行计时。在这里我们切换到更大的有854506 个符号的集合。 
+例11-9  对为了使用bisect 而做准备的排序操作进行计时 
+    t1 = time.time() 
+    words = [w for w in text_example.readers] 
+    print "Loading {} words".format(len(words)) 
+    t2 = time.time() 
+    print "RAM after creating list {:0.1f}MiB, took {:0.1f}s". 
+    format(memory_profiler.memory_usage()[0], t2 - t1) 
+    print "The list contains {} words".format(len(words)) 
+    words.sort() 
+    t3 = time.time() 
+    print "Sorting list took {:0.1f}s".format(t3 - t2) 
+ 
+接下来我们像以前一样做相同的查找，但是使用额外的index 方法，它使用了
+bisect: 
+import bisect 
+... 
+def index(a, x): 
+    'Locate the leftmost value exactly equal to x' 
+    i = bisect.bisect_left(a, x) 
+    if i != len(a) and a[i] == x: 
+        return i 
+    raise ValueError 
+... 
+    time_cost = sum(timeit.repeat(stmt="index(words, u'Zwiebel')", 
+                                  setup="from __main__ import words, index", 
+                                  number=1, 
+                                  repeat=10000)) 
+ 
+在例11-10 中，我们看到RAM 的使用比以前要大得多，因为我们明显装载进了更
+多的数据。排序进一步用去了16 秒，而累计的查找时间却是0.02 秒。 
+例11-10  对在一个排序列表上使用bisect 进行计时 
+$ python text_example_list_bisect.py 
+RAM at start 10.3MiB 
+Loading 8545076 words 
+
+ 
+图使用更少的RAM 
+285 
+RAM after creating list 932.1MiB, took 31.0s 
+The list contains 8545076 words 
+Sorting list took 16.9s 
+Summed time to lookup word 0.0201s 
+ 
+现在我们有了一个对字符串查找计时的合理的基线：RAM 使用必须要好于932MB，
+并且总共查找时间应该比0.02 秒更少。 
+2．set 
+使用内置的set 看起来或许是处理我们任务的最明显的方法了。在例11-11 中，
+set 在一个散列结构中存储了每一个字符串（如果你需要清醒一下，请看第4 章）。
+检查成员是快速的，但是每一个字符串必须分开存储，在RAM 上代价昂贵。 
+例11-11  使用一个set 来存储数据 
+    words_set = set(text_example.readers) 
+ 
+就如我们在例11-12 中所见的那样，set 比list 使用了更多的RAM；无论如何，
+它给了我们一个非常快速的查询时间，而不需要一个额外的index 函数或者一个中
+间的排序操作。 
+例11-12  运行set 的例子 
+$ python text_example_set.py 
+RAM at start 10.3MiB 
+RAM after creating set 1122.9MiB, took 31.6s 
+The set contains 8545076 words 
+Summed time to lookup word 0.0033s 
+ 
+如果RAM 不昂贵，那么这可能是最合理的首选方法。 
+然而，我们现在已经丧失了原来数据的顺序。如果顺序对你是重要的，提示你可以
+把字符串作为键存储在字典里，每个值就是和原来的读取顺序相关的索引。这样，
+你就能向字典查询键是否存在，并请求它的索引。 
+3．更有效的树结构 
+让我们介绍一组更高效地使用RAM 来表示字符串的算法。 
+来自维基共享资源的图11-2 展示了4 个单词在trie 树和DAWG
+①中的不同表示：
+“tap”、“taps”、“top”和“tops”。DAFSA 是DAWG 的另一个名称。使用一个list
+或者set，这些单词中的每一个都作为一个独立的字符串存储。DAWG 和trie 树共
+享了字符串的公共部分，所以用到的RAM 更少。 
+                        
+① 这个例子取自关于确定性无环有限状态机（DAFSA）的维基文章。DAFSA 是DAWG 的另一个名称。附
+随的图片来自于维基共享资源。 
+
+286 
+第11 章 
+DAWG 和trie 树的主要区别是trie 树只共享公共前缀，然而DAWG 共享公共前缀
+和后缀。在有很多公共单词前缀和后缀的语言中（就像英语），这样能减少很多
+重复。 
+精确的内存表现取决于你的数据结构。典型说来，一个DAWG 不能分配一个值给
+键，这归因于从字符串的开始到结束之间的多条路径，但是展示在这里的版本能够
+接受一个值映射。Trie 树也能接收一个值映射。有些结构不得不在开始扫描时构建，
+其他的则能在任何时候更新。 
+这些结构的一个巨大优势就是它们提供了一个公共前缀搜索，那就是你可以请求与
+你提供的前缀相同的所有单词。使用我们的4 个单词列表，当搜索“ta”时，结果
+将是“tap”和“taps”。而且，既然这些结果是通过图结构所发现的，获取到它们
+是很快速的。例如，如果你正工作于DNA 方面，使用trie 树编辑数百万的短单词
+是减少RAM 使用的一种有效方式。 
+ 
+图11-2  Trie 树和DAWG 结构（图片由Chkno 提供【CC BY-SA 3.0】） 
+在下面的小节中，我们凑近看一看DAWGs、trie 树和它们的用途。 
+4．有向无环单词图（DAWG） 
+有向无环图（MIT 授权）企图高效地表示共享公共前缀和后缀的字符串。 
+在例11-13 中，你会看到对DAWG 的很简单的设置。对于这个实现，DAWG 在创
+建后不能被修改，它读取了一个迭代器来立即创建自己。缺少创建之后的更新可能
+对你的使用场景来说是一个败笔。如果是这样，你可能需要研究用trie 树来取代它。
+DAWG 的确支持丰富的查询，包括前缀查找。它也允许持久化，并且支持把整数
+索引作为值与字节及记录值一起存储起来。 
+
+ 
+图使用更少的RAM 
+287 
+例11-13  使用DAWGl 来存储数据 
+import dawg 
+... 
+    words_dawg = dawg.DAWG(text_example.readers) 
+ 
+就如你能够在例11-14 中所看见的那样，对于相同组的字符串集，它比之前的set
+例子仅仅稍微少用了一些RAM。更类似的输入文本将会产生更强大的压缩。 
+例11-14  使用DAWG 的例子 
+$ python text_example_dawg.py 
+RAM at start 10.3MiB 
+RAM after creating dawg 968.8MiB, took 63.1s 
+Summed time to lookup word 0.0049s 
+ 
+5．Marisa trie 树 
+Marisa trie 树（LGPL 和BSD 双授权）是一个使用Cython 绑定外部库的静态trie
+树。因为它是静态的，它在创建之后就不能改动。它像DAWG 一样支持把整数索
+引作为值与字符值及记录值一起存储。 
+一个键能被用来查询一个值，反之亦然。所有共享了相同前缀的键能被高效地找到。
+tries 树的内容可以被持久化。例11-15 图示了使用一个Marisa trie 树来存储我们的
+样本数据。 
+例11-15  使用Marisa trie 树来存储数据 
+import marisa_trie 
+... 
+    words_trie = marisa_trie.Trie(text_example.readers) 
+ 
+在例11-16 中，我们可以看到相比DAWG 的例子，在RAM 存储方面有显著的提高，
+但是整体搜索时间更慢一点。 
+例11-16  运行Marisa trie 树例子 
+$ python text_example_trie.py 
+RAM at start 11.0MiB 
+RAM after creating trie 304.7MiB, took 55.3s 
+The trie contains 8545076 words 
+Summed time to lookup word 0.0101s 
+ 
+6．Datrie 树 
+双数组trie 树，或者datrie（LGPL 授权），使用了预先构建的字母表来高效地存储
+键。这种trie 树能够在创建之后修改，但是只使用相同的字母表。它也能够寻找与
+所提供的键共享前缀的所有键，并且支持持久化。 
+
+288 
+第11 章 
+它与HAT trie 树一起提供了最快的查找时间之一。 
+ 
+备忘 
+当使用datrie 树来做维基上的例子以及做以往的DNA 表示的工作时，
+它有一个变态的构建时间。与其他用几秒完成构建的数据结构相比，
+它可能要花费几分钟或数小时来表示DNA 字符串。 
+ 
+datre 树需要一个字母表来呈现给构造函数，并且只有键才允许使用这个字母表。
+在我们的维基的例子中，这意味着我们需要对原始数据做两遍扫描。你可以在例
+11-17 中看到这种情况。第一遍扫描把一个字母表的字符集构建成一个set，第二遍
+扫描构建trie 树。这个更慢的构建过程允许更快的查找时间。 
+例11-17  使用一个双数组trie 树来存储数据 
+import datrie 
+... 
+    chars = set() 
+    for word in text_example.readers: 
+        chars.update(word) 
+    trie = datrie.BaseTrie(chars) 
+... 
+    # having consumed our generator in the first chars pass, 
+        we need to make a new one 
+    readers = text_example.read_words(text_example.SUMMARIZED_FILE) # new generator 
+    for word in readers: 
+        trie[word] = 0 
+ 
+好悲伤，在这个例子数据集上，datrie 树抛出了一个段错误，所以我们不能显示你
+的计时信息。我们选择把它包含进来，因为在其他的测试中，它要比下面的HAT Trie
+树倾向于更快一点（但是RAM 使用要低效一点）。我们已经使用它成功地进行了
+DNA 搜索，所以如果你有一个静态的问题并且它可以工作，你可以对它能很好地
+工作具有信心。如果你的问题具有可变化的输入，无论如何，这可能不是一个合适
+的选择。 
+7．HAT trie 树 
+HAT trie 树（MIT 授权）使用了缓存友好的表达方式从而在现代CPU 上达成非常
+快速的查找。它能够在创建后被修改，但是另一方面只有非常有限的API。 
+对于简单的使用场景，它具有很棒的性能，但是API 的局限性（例如，缺少前缀查
+找）可能让它对你的应用来说用途更少。例11-18 演示了在我们的例子数据集上使
+用HAT trie 树。 
+
+ 
+图使用更少的RAM 
+289 
+例11-18  使用HAT trie 树来存储数据 
+import hat_trie 
+... 
+    words_trie = hat_trie.Trie() 
+    for word in text_example.readers: 
+        words_trie[word] = 0 
+ 
+就如你能在例11-19 中所见的那样，HAT trie 树提供了我们的新数据结构中最快的
+查找时间，以及卓越的RAM 使用。它在API 上的局限意味着它的使用受到了限制，
+但是如果你只是需要在许多字符串中快速查找，那么这可能是你的解决方案。 
+例11-19  运行HAT trie 例子 
+$ python text_example_hattrie.py 
+RAM at start 9.7MiB 
+RAM after creating trie 254.2MiB, took 44.7s 
+The trie contains 8545076 words 
+Summed time to lookup word 0.0051s 
+ 
+8．在生产系统中使用tries 树 （和DAWGs） 
+trie 树和DAWG 数据结构提供了良好的收益，但是你还是必须在你的问题上对它们
+做基准测试，而不是盲目地采用它们。如果你的字符串上有重叠的序列，那么有可
+能你会看到对RAM 使用的改进。 
+Tries 树和DAWGs 不是那么知名，但它们在生产系统上却提供了强大的收益。我
+们在12.4 节中有一个令人印象深刻的成功故事。在DapApps（坐落在UK 的一个
+Python 软件工作室）的Jamie Matthews 也有一个关于在客户系统中使用trie 树来为
+客户做出更高效和更廉价的部署的故事： 
+在DabApps，我们经常设法处理复杂的技术架构问题，通过把复杂问题划
+分为小的、自包含的组件，一般使用HTTP 在组件间进行网络通信来做到。
+这种方式（被称为“面向服务的”或者“微服务”架构）有各种益处，包
+括有可能在多个项目间复用或者共享单个组件的功能。 
+一个这样的任务就是做邮编的地理编码，这常常是我们面向客户的项目中
+的需求。这个任务把全部的UK 邮编（例如：“BN11AG”）转变成一个经
+纬度的坐标对，从而使得应用可以执行诸如距离测量之类的地理空间计算。 
+在它的最底层，一个地理编码数据库是一个简单的字符串之间的映射，能
+够从概念上被表示成一个字典。字典的键是邮编，以一个规范的形式存储
+（“BN11AG”），值就是坐标的某种表示（我们使用了地理散列编码，但是
+
+290 
+第11 章 
+简洁明了地来说，想象一下由逗号分隔的一对，例如：“50.822921，
+-0.142871”）。 
+在UK 大约有170 万个邮编。就如上面所描述的那样，简单地把全部数据
+集装载进一个Python 字典要使用好几百兆字节的内存。使用Python 的简
+单序列化（pickle）格式把这个数据结构在磁盘上做持久化需要一个不可
+接受的大量的存储空间。我们知道我们可以做得更好。 
+我们实验了几种不同的内存和磁盘存储以及序列化格式，包括把数据存储
+在诸如Redis 和LevelDB 之类的外部数据库中，而且还对键/值对做压缩。
+最终我们偶然想起使用trie 树的主意。Trie 树在表示内存中的大量字符串
+方面极其高效，而且可利用的开源库（我们选择了“marisa-trie 树”）让它
+们变得非常易于使用。 
+最终的应用程序，包括了一个小型的由Flask 框架所构建的web API 使用了
+仅仅30MB 的内存来表示完整的UK 邮编数据库，并且能够令人愉快地处
+理大量的邮编查找请求。代码是简单的，服务很轻量化，而且无痛部署和
+运行在诸如Heroku 一样的免费主机平台上，而且不需要或者不依赖于外部
+数据库。我们的实现是开源的，在https://github.com/j4mie/postcodeserver/
+上有提供。 
+——Jamie Matthews 
+DabApps.com 技术总监（UK） 
+11.5  使用更少RAM 的窍门 
+一般来说，如果你能够避免把它放进RAM，就去做。你所加载的每样东西都耗
+费你的RAM。你可能会加载你的部分数据，例如使用一个内存映射；或者，你
+可能会使用生成器来加载你所需的部分数据，为了局部计算，而不是把它一次性
+全部加载进来。 
+如果你正用数字型的数据来工作，那么你几乎肯定会想要转而使用numpy 数组
+—该包提供了许多直接工作在底层基本类型对象上的快速算法。与使用数字的列
+表相比，RAM 上的节省是巨大的，而且时间上的节省也一样令人惊奇。 
+在本书中你已经注意到我们一般使用xrange，而不是range，只是因为（在
+Python 2.x 中）xrange 是一个产生器，然而range 却构建了一个完整的列表。
+
+ 
+图使用更少的RAM 
+291 
+构建一个100000000 个整数的列表仅仅用来遍历正确的次数是过分的——RAM
+耗费巨大而且完全不必要。Python 3.x 把range 变成了一个产生器，这样你不再
+需要做这种改变。 
+如果你正使用字符串工作，并且你用的是Python 2.x，如果你想要节约RAM，设法
+坚持使用str 而不是unicode。如果你贯穿整个程序需要许多Uncode 对象，你
+可能通过简单地升级到Python 3.3+，就能受到更好的服务。如果你正要在一个静
+态结构中存储大量的Uncode 对象，那么你可能想要调查下我们刚才讨论过的
+DAWG 和trie 树结构。 
+如果你正用许多比特字串来工作，调查下numpy 和bitarray 包，它们都有把比
+特打包进字节的高效表示。你可能也会受益于查看Redis，它提供了高效的比特模
+式存储。 
+PyPy 项目正在试验更高效的同质数据结构的表示，这样相同的基本类型（例如，
+整数）的长列表在PyPy 中要比在CPython 中的等价结构体可能耗费要少得多。
+Micro Python 项目会让任何工作于嵌入式系统的人产生兴趣。它是一个缩微内存
+印记的，试图兼容于Python 3 的Python 实现。 
+这（几乎！）不用我说，你要知道当你设法优化RAM 使用时，你必须要做基准测
+试，并且在你改变算法前，有一个适当的单元测试集会产生一个优厚的报酬。 
+已经回顾了几种高效地压缩字符串和存储数字的方法后，我们现在将看看以精度换
+取存储空间。 
+11.6  概率数据结构 
+概率数据结构允许你以精度来换取大幅度的内存使用下降。除此之外，你能在它们
+之上所做的操作数量比set 或者trie 树要有限得多。例如，使用一个单独的耗费
+2.56KB 的HyperLogLog++结构，你能够计数唯一项的数量一直到大约7900000000
+项，而具有1.625%的误差。 
+这意味着如果我们尝试计数唯一的汽车牌照数字，如果我们的HyperLogLog++计数
+器得出有654192028，我们就会置信实际的数目在643561407 到664822648 之间。
+而且，如果这个精度不够，你可以仅仅给结构增加更多的内存，它就会做得更好。
+给它40.96KB 的资源就会让误差从1.625%降低到0.4%。无论如何，即使假设没有
+开销，把这数据存储到一个set 中也会耗费3.925GB！ 
+
+292 
+第11 章 
+另一方面，HyperLogLog++结构将只能够对一个集合的牌照进行计数，并合并另一
+个集合的牌照。如此这般，我们就能够让每一个州有一个这样的结构，查找在那些
+州中有多少独立的牌照，然后再把它们合并起来得到整个国家的计数。如果给我们
+一个牌照，我们无法以非常优秀的准确度来告诉你我们以前是否见过它，而且我们
+无法给你一个我们曾经见过的牌照样本。 
+当你已经花费了时间去理解问题并且需要投入生产来能够回答关于一个非常巨大
+的数据集上的一个很小的问题集时，概率数据结构是奇妙的。每种不同的数据结构
+有它能够以不同的精度来回答的不同问题，所以找到合适的数据结构只和理解你的
+需求相关。 
+几乎在所有情况下，概率数据结构通过找到对数据的另一种表示形式来工作，这
+种表示更紧凑并且包含与回答某个问题集相关的信息。可以把这看成一种有损压
+缩的类型，我们可能丢失了数据的某些方面，但是却保留了必要的成分。既然我
+们允许数据丢失掉与我们所关心的特定问题集不一定相关的部分，这种有损压缩
+能够比我们之前使用trie 树所看到的无损压缩高效得多。正因为如此，你选择使
+用哪种概率数据结构是相当重要的—你想要挑选为你的使用场景保留了合适
+信息的那一个！ 
+在我们深入探索之前，应该澄清这里的“误差率”由标准差来定义。这个术语源自
+于描述高斯分布，说明函数围绕一个中心值的发散程度。当标准差增长时，值的数
+量就更偏离中心点。概率数据结构的误差率因此成名就是因为围绕着它们的所有分
+析都是基于概率的。如此这般，当我们说HyperLogLog++算法有一个err
+1.04
+m
+=
+的
+误差时，我们意思是指有66%的机会误差会小于err，有95%的机会小于2*err，有
+99.7%的机会小于3*err。
+① 
+11.6.1  使用1 字节的Morris 计数器来做近似计数 
+我们将介绍使用其中最早期的一种概率计数器—Morris 计数器（以NSA 和贝尔
+实验室的Robert Morris 来命名）来做概率计数的主题。应用包括在RAM 受限的环
+境中（例如，在一台嵌入式计算机上）对数百万个对象进行计数，理解大数据流，
+以及类似图像和语音识别之类的问题。 
+Morris 计数器跟踪一个指数并以2exponent 来对计数状态建模（不是一个正确的计数）
+——它提供了一个数量级的估计。这个估计使用概率规则来更新。 
+                        
+① 这些数字来自于高斯分布的66-95-99 规则。更多的信息能够在维基百科条目中找到。 
+
+ 
+图使用更少的RAM 
+293 
+我们开始把指数设为0。如果我们请求计数器的值，我们会给出pow(2,exponent) 
+=1（敏锐的读者会注意到这偏差一个—我们的确说过这是近似计数器！）。如果
+我们让计数器自增，它将会产生一个随机数（使用均匀分布），并且它会测试是否
+random(0,1) <= 1 / pow(2, exponent)，对（pow(2, 0) == 1）始终
+为真。计数器自增，并把指数设为1。 
+我们让计数器第二次自增，它就会测试是否random(0, 1) <= 1 / pow(2, 1)。
+这将会有50%的机会为真。如果测试通过，那么指数就递增了。如果不通过，那么
+对于这次递增请求，指数不递增。 
+表格11-1 显示了对于每一个首指数，递增发生的几率。 
+表11-1 
+Morris 计数器细节 
+exponent 
+pow(2, exponent) 
+P(increment) 
+0 
+1 
+1 
+1 
+2 
+0.5 
+2 
+4 
+0.25 
+3 
+8 
+0.125 
+4 
+16 
+0.0625 
+… 
+… 
+… 
+254 
+2.894802e+76 
+3.454467e-77 
+ 
+为指数使用一个单独的无符号字节，我们能够近似计数的最大值是math.pow(2, 
+255) == 5e76。当总数增大时，相对实际数量的误差就会变大，但是节省下来
+的RAM 多得惊人，因为我们只使用了1 字节，否则我们只好用32 位的无符号多
+字节。例11-20 展示了Morris 计数器的一个简单实现。 
+例11-20  简单的Morris 计数器实现 
+from random import random 
+ 
+class MorrisCounter(object): 
+    counter = 0 
+    def add(self, *args): 
+        if random() < 1.0 / (2 ** self.counter): 
+            self.counter += 1 
+ 
+    def __len__(self): 
+        return 2**self.counter 
+ 
+使用这个例中的实现，我们能够看到在例11-20 中，第一个递增计数器的请求成功
+了，而第二个失败了。
+① 
+                        
+① 一个更加完全崭新的使用了一个字节数组来创建多计数器的实现在https://github.com/ianozsvald/morris_counter
+中可用。 
+
+294 
+第11 章 
+例11-21  Morris 计数器库的例子 
+In [2]: mc = MorrisCounter() 
+In [3]: print len(mc) 
+1.0 
+In [4]: mc.add() # P(1) of doing an add 
+In [5]: print len(mc) 
+2.0 
+In [6]: mc.add() # P(0.5) of doing an add 
+In [7]: print len(mc) # the add does not occur on this attempt 
+2.0  
+在图11-3 中，粗黑线显示了一个通常的在每一次迭代中递增的整数。在一个64
+位的计算机上，这是一个8 字节的整数。三个1 字节的Morris 计数器的演进以点
+线来显示；Y 轴显示它们的值，近似表示了每次迭代中的真实的数量。展示了三
+个计数器来给你一个关于它们的不同轨迹以及总体趋势的概念。三个计数器完全
+相互独立。 
+ 
+图11-3  三个1 字节的Morris 计数器对比一个8 字节的整数 
+这张图表给你一些使用Morris 计数器时所要期望的误差概念。关于误差表现的进
+一步细节在线上有提供。 
+
+ 
+图使用更少的RAM 
+295 
+11.6.2  K 最小值 
+在Morris 计数器中，我们丢失了所插入的项目的任何类型的信息。那就是说，计
+数器的内部状态是相同，而不管我们是.add(“micha”)还是.add(“ian”)。额
+外的信息是有用的，如果使用得当，能够帮助我们的计数器只对唯一项进行计数。
+这样做的话，调用.add(“micha”)几千次将只会增加计数器一次。 
+为了实现这种行为，我们将探索散列函数的属性（请看4.1.4 节来得到对散列函数
+的更深入的讨论）。 
+我们想要利用的主要属性就是基于这样一个事实：散列函数获取输入并且均匀地分
+配它。例如，让我们假设有一个散列函数获取一个字符串并输出一个0 到1 之间的
+数字。那个函数均匀分布意味着当我们给它输入一个字符串时，我们以与得到一个
+0.2 的值相等的几率来得到一个0.5 的值，或者任何一个其他的值。这也意味着如
+果我们给它输入很多字符串值，我们将期望这些值被相对均匀排布。记住，这是一
+个概率化的论点：值不是总会被均匀排布，但是如果我们有许多字符串，并且尝试
+了这个实验很多次，它们会趋向于均匀地排布。 
+假设我们获取了100 项并存储了那些值的散列（散列从0 到1 数数）。知道均匀排
+布意味着与其说“我们有100 项”，不如说“我们每一项之间的间隔是0.01”。这是
+K 最小值算法
+①最终的出处——如果我们保存了我们所见到的k 个最小的唯一散列
+值，我们就能近似估算散列值的总体空间，并且推导出这些项的全部数量。在图
+11-4 中，当越来越多的项加进来时，我们能看见一个K 最小值结构（也叫作一个
+KMV）的状态。首先，既然我们没有很多散列值，我们保存的最大散列就是相当
+大的。当我们把越来越多项加进来时，我们所保存的最大的k 个散列值就会变得越
+来越小。使用这个方法，我们能够得到O
+(
+)
+2
+2
+k
+π
+−
+⎛
+⎞
+⎜
+⎟
+⎝
+⎠的误差率。 
+k 越大，我们就越能说明我们所使用的散列化函数对于我们的特定输入不是完全均
+匀的，而且还是造成不幸散列值的原因。一个不幸散列值的例子就是对[‘A’, ‘B’, 
+‘C’]做散列化，得到了值[0.01, 0.02, 0.03]。如果我们开始散列化越来越
+多的值，它们会聚合起来的可能性就越来越少。 
+而且，既然我们只保留最小的唯一散列值，数据结构只考虑唯一的输入。我们早就
+能看到这个，因为如果我们处在一个只存储了最小的三个散列并且当前[0.1, 0.2, 
+                        
+① Beyer,K.,Haas, P.J., Reinwald, B., Sismanis, Y.,和Gemulla, R.“在多集和操作下，有关对独立值估算的概要”。
+2007 年ACM SIGMOD 数据管理国际会议进展——SIGMOD ’07, (2007): 199　210. doi:10.1145/1247480.1247504。 
+
+296 
+第11 章 
+0.3]是最小的散列的状态中，如果我们增加了任何散列值是0.4 的项，我们的状
+态将保持不变。同样，如果我们添加了散列值是0.3 的更多项进来，我们的状态
+也不会改变。这是一个叫作幂等性的属性，它意味着如果我们对这个结构多次用相
+同的输入做相同的操作，状态将保持不变。这与某些结构相反，例如，在一个list
+的尾部添加总是会改变它的值。幂等性的概念贯穿于本小节中的所有数据结构，但
+是除了Morris 计数器之外。 
+例11-22 展示了一个非常基本的K 最小值实现。值得注意的是我们使用了一个
+sortedset，它就像一个set，但是只包含唯一项。这种唯一性免费地把幂等性给
+了我们的KMinValues 结构。为了看到它，请跟随代码：当相同的项被加入了超
+过一次，数据属性不发生改变。 
+ 
+图11-4  当更多的元素加进来时，值存储在一个KMV 结构中 
+例11-22  简单的KMin 值实现 
+import mmh3 
+from blist import sortedset 
+ 
+class KMinValues(object): 
+    def __init__(self, num_hashes): 
+        self.num_hashes = num_hashes 
+
+ 
+图使用更少的RAM 
+297 
+        self.data = sortedset() 
+ 
+    def add(self, item): 
+        item_hash = mmh3.hash(item) 
+        self.data.add(item_hash) 
+        if len(self.data) > self.num_hashes: 
+            self.data.pop() 
+ 
+    def __len__(self): 
+        if len(self.data) <= 2: 
+        return 0 
+    return (self.num_hashes - 1) * (2**32-1) / float(self.data[-2] + 2**31 - 1) 
+ 
+使用在Python 的包countmemaybe（例11-23）中的KMinValues 的实现，我们
+可以开始看看这个数据结构的用途。这个实现与例11-22 中的非常类似，但是它完
+全实现了其他的集合操作，例如并集与交集。也要注意“大小”和“势”被交替使
+用（单词“势”来自于集合理论，更多的在分析概率数据结构中被用到）。在这里，
+我们能看见即使让k 使用一个小得合理的值，我们也能够存储50000 项，而且能够
+以相对低的误差计算许多集合操作的势。 
+例11-23  countmemaybe 的KMinValue 实现 
+>>> from countmemaybe import KMinValues 
+ 
+>>> kmv1 = KMinValues(k=1024) 
+ 
+>>> kmv2 = KMinValues(k=1024) 
+ 
+>>> for i in xrange(0,50000): #X 
+    kmv1.add(str(i)) 
+   ...: 
+ 
+>>> for i in xrange(25000, 75000): #Y 
+    kmv2.add(str(i)) 
+   ...: 
+ 
+>>> print len(kmv1) 
+50416 
+ 
+>>> print len(kmv2) 
+52439 
+ 
+>>> print kmv1.cardinality_intersection(kmv2) 
+25900.2862992 
+ 
+>>> print kmv1.cardinality_union(kmv2) 
+75346.2874158 
+ 
+X 我们在kmv1 中放入了50000 个元素。 
+Y 在kmv2 中也放入50000 个元素，其中25000 个与在kmv1 中的相同。 
+
+298 
+第11 章 
+ 
+备忘 
+使用这些类型的算法，散列函数的选择对于估算的质量具有巨大的影
+响。这些实现都使用了mmh3，Python 实现的mumurhash3 对于散列
+化字符串具有良好的属性。无论如何，可以使用不同的散列函数，如
+果它们对你特定的数据集更方便的话。 
+ 
+11.6.3  布隆过滤器 
+有时我们需要能够做其他类型的集合操作，为此，我们需要引入新的概率数据结构
+类型。布隆过滤
+①被创造出来用以回答我们是否在之前看到过一个条目的问题。 
+布隆过滤器通过多散列值的方式来工作，用于把一个值表示成多个整数。如果我们
+之后看到了相同的整数集，我们就能相当确信这就是相同的值。 
+为了以高效利用可用的资源的方式做到这一点，我们暗暗地把整数编码成一个列表
+的索引。这可能被看作一个初始化成False 的布尔型的列表。如果我们被要求增
+加一个散列值为[10, 4, 7]的对象，那么我们设置列表的第十、第四和第七个索
+引为True。将来，如果我们被问到以前是否看见到一个特定的条目，我们仅仅查
+找它的散列值并检查布尔型列表中对应的点是否设置成了True。 
+这种方法不会给我们带来假阴性，而会给我们带来一个可控的假阳性率。这意味着
+如果布隆过滤器说我们以前没有看见过一个条目，那么我们100%确认我们的确以
+前没有见过该条目。另一方面，如果布隆过滤器说我们以前曾看见过一个条目，那
+么有一定的概率我们其实并没有看见过，并且我们只是看见了一个错误的结果。这
+个错误的结果来自于我们会有散列冲撞的事实，有时两个对象的散列值会是相同
+的，即使它们不是同一个对象。无论如何，在实践中，布隆过滤器被设置成具有不
+到0.5%的误差率，所以这种错误是可以被接受的。 
+ 
+备忘 
+我们可以仅凭两个相互独立的散列函数来模拟具有我们想要的数量
+的散列函数。这个方法被称作“双散列”。如果我们有一个给出两个
+相互独立的散列值的散列函数，我们可以这样做： 
+def multi_hash(key, num_hashes): 
+    hash1, hash2 = hashfunction(key) 
+    for i in xrange(num_hashes): 
+        yield (hash1 + i * hash2) % (2^32 - 1) 
+ 
+                        
+① Bloom,B.H. “以允许的误差使用hash 编码做空间/时间的权衡。”ACM 通信。13:7（1970）：422-426 
+doi:10.1145/362686.362692 
+
+ 
+图使用更少的RAM 
+299 
+模数确保了作为结果的散列值是32 比特的（我们可以通过2^64 – 1
+来为64 比特的散列函数求摸）。 
+我们所需的布尔型列表的准确长度以及每一个条目的散列值的数量将基于我们
+所要求的容量和误差率而定。使用一些相当简单的统计参数
+①，我们看到理想的
+值就是： 
+2
+log(
+)
+_
+log(2)
+log(2)
+_
+_
+error
+num
+bits
+capacity
+num
+hashes
+num
+bits capacity
+= −
+⋅
+=
+⋅
+ 
+那就是说，如果我们希望以0.05%的假阳性（那就是说，当我们说曾经看到过一个
+对象时，有0.05%的几率其实我们并没有见过它）来存储50000 个对象（不管对象
+自己有多大），那就需要791015 比特的存储空间和11 个散列函数。 
+为了进一步提高我们使用内存的效率，我们能够使用单个比特来表示布尔值（一个
+本地的布尔型实际上占用4 比特位）。我们能够通过使用bitarray 模块来轻易地
+做到。例11-24 展示了一个简单的布隆过滤器的实现。 
+例11-24  简单的布隆过滤器实现 
+import bitarray 
+import math 
+import mmh3 
+ 
+class BloomFilter(object): 
+    def __init__(self, capacity, error=0.005): 
+        """ 
+        Initialize a Bloom filter with given capacity and false positive rate 
+        """ 
+        self.capacity = capacity 
+        self.error = error 
+        self.num_bits = int(-capacity * math.log(error) / math.log(2)**2) + 1 
+        self.num_hashes = int(self.num_bits * math.log(2) / float(capacity)) + 1 
+        self.data = bitarray.bitarray(self.num_bits) 
+ 
+    def _indexes(self, key): 
+        h1, h2 = mmh3.hash64(key) 
+        for i in xrange(self.num_hashes): 
+            yield (h1 + i * h2) % self.num_bits 
+                        
+① 维基关于布隆过滤器的页面上有一个非常简单的对布隆过滤器属性的证明。 
+
+300 
+第11 章 
+ 
+    def add(self, key): 
+        for index in self._indexes(key): 
+            self.data[index] = True 
+ 
+    def __contains__(self, key): 
+        return all(self.data[index] for index in self._indexes(key)) 
+ 
+    def __len__(self): 
+        num_bits_on = self.data.count(True) 
+        return -1.0 * self.num_bits * 
+                    math.log(1.0 - num_bits_on / float(self.num_bits)) / 
+                        float(self.num_hashes) 
+ 
+    @staticmethod 
+    def union(bloom_a, bloom_b): 
+        assert bloom_a.capacity == bloom_b.capacity, "Capacities must be equal" 
+        assert bloom_a.error == bloom_b.error, "Error rates must be equal" 
+ 
+        bloom_union = BloomFilter(bloom_a.capacity, bloom_a.error) 
+        bloom_union.data = bloom_a.data | bloom_b.data 
+        return bloom_union 
+ 
+如果我们插入的条目超过了我们对布隆过滤器所声明的容量，那么会发生什么呢？
+最终，布尔型列表中的所有条目都被设置成了True，在这种情况下，我们说我们
+已看见了每一个条目。这意味着布隆过滤器对所设置的初始容量很敏感，如果我们
+正在处理一个不知道大小的数据集（例如，数据流），情况就会相当恶劣。 
+处理这种情况的一种方法就是使用布隆过滤器的变体，被称作可扩展的布隆过滤器
+①。
+它们通过一种特别的方法
+②把误差率不同的多个布隆过滤器串联在一起来工作。通
+过这样做，我们能够保证一个总体的误差率，并且当需要更多容量时，仅仅增加一
+个新的布隆过滤器。为了检测我们之前是否曾经看到过一个条目，我们只是在所有
+的子布隆过滤器上进行遍历，直到我们找到该对象或者消耗完列表。这种结构的一
+个简单实现可以在例11-25 中见到，我们使用了之前的布隆过滤器作为底层机能，
+并且有一个计数器来简化了解什么时候该增加一个新的布隆过滤器。 
+例11-25  简单的扩展布隆过滤器实现 
+from bloomfilter import BloomFilter 
+ 
+class ScalingBloomFilter(object): 
+    def __init__(self, capacity, error=0.005, 
+                        
+① Almeida, P. S., Baquero, C., Preguica, N., and Hutchison, D.“可扩展布隆过滤器”。信息处理信件 101: 255　261. 
+doi:10.1016/j.ipl.2006.10.007。 
+② 错误值实际上会降低，类似于几何级数。这样，当你采用所有误差率的乘积时，它就趋近于所期望的误差率。 
+
+ 
+图使用更少的RAM 
+301 
+                     max_fill=0.8, error_tightening_ratio=0.5): 
+        self.capacity = capacity 
+        self.base_error = error 
+        self.max_fill = max_fill 
+        self.items_until_scale = int(capacity * max_fill) 
+        self.error_tightening_ratio = error_tightening_ratio 
+        self.bloom_filters = [] 
+        self.current_bloom = None 
+        self._add_bloom() 
+ 
+    def _add_bloom(self): 
+        new_error = self.base_error * 
+                    self.error_tightening_ratio ** len(self.bloom_filters) 
+        new_bloom = BloomFilter(self.capacity, new_error) 
+        self.bloom_filters.append(new_bloom) 
+        self.current_bloom = new_bloom 
+        return new_bloom 
+ 
+    def add(self, key): 
+        if key in self: 
+            return True 
+        self.current_bloom.add(key) 
+        self.items_until_scale -= 1 
+        if self.items_until_scale == 0: 
+            bloom_size = len(self.current_bloom) 
+            bloom_max_capacity = int(self.current_bloom.capacity * self.max_fill) 
+ 
+            # We may have been adding many duplicate values into the Bloom, so 
+            # we need to check if we actually need to scale or if we still have 
+            # space 
+            if bloom_size >= bloom_max_capacity: 
+                self._add_bloom() 
+                self.items_until_scale = bloom_max_capacity 
+            else: 
+                self.items_until_scale = int(bloom_max_capacity - bloom_size) 
+        return False 
+ 
+def __contains__(self, key): 
+        return any(key in bloom for bloom in self.bloom_filters) 
+ 
+def __len__(self): 
+        return sum(len(bloom) for bloom in self.bloom_filters) 
+ 
+处理这种情况的另一种方式就是使用一种称作计时布隆过滤器的方法。这种变体允
+许元素超时而被移出数据结构，这样就为更多的元素腾出了空间。对流处理尤其有
+效，因为我们能够让元素超时，比如说一小时之后，而且把容量设置得足够大以便
+能处理我们每小时看到的数据量。以这种方式使用布隆过滤器将会带给我们对最近
+一小时内发生的事情的良好视图。 
+
+302 
+第11 章 
+使用这种数据结构感觉和使用一个集合对象很像。在下面的交互中，我们使用可扩
+展的布隆过滤器来增加几个对象，测试下是否曾经见到过它们，接着尝试以实验的
+方法找到假阳性率： 
+>>> bloom = BloomFilter(100) 
+ 
+>>> for i in xrange(50): 
+   ....:     bloom.add(str(i)) 
+   ....: 
+ 
+>>> "20" in bloom 
+True 
+ 
+>>> "25" in bloom 
+True 
+ 
+>>> "51" in bloom 
+False 
+ 
+>>> num_false_positives = 0 
+ 
+>>> num_true_negatives = 0 
+ 
+>>> # None of the following numbers should be in the Bloom. 
+>>> # If one is found in the Bloom, it is a false positive. 
+>>> for i in xrange(51,10000): 
+   ....:     if str(i) in bloom: 
+   ....:         num_false_positives += 1 
+   ....:     else: 
+   ....:         num_true_negatives += 1 
+   ....: 
+ 
+>>> num_false_positives 
+54 
+ 
+>>> num_true_negatives 
+9895 
+ 
+>>> false_positive_rate = num_false_positives / float(10000 - 51) 
+ 
+>>> false_positive_rate 
+0.005427681173987335 
+ 
+>>> bloom.error 
+0.005  
+
+ 
+图使用更少的RAM 
+303 
+为了联合多个条目组，我们也可以用布隆过滤器做并集： 
+>>> bloom_a = BloomFilter(200) 
+ 
+>>> bloom_b = BloomFilter(200) 
+ 
+>>> for i in xrange(50): 
+   ...:     bloom_a.add(str(i)) 
+   ...: 
+ 
+>>> for i in xrange(25,75): 
+   ...:     bloom_b.add(str(i)) 
+   ...: 
+ 
+>>> bloom = BloomFilter.union(bloom_a, bloom_b) 
+ 
+>>> "51" in bloom_a # X 
+Out[9]: False 
+ 
+>>> "24" in bloom_b # Y 
+Out[10]: False 
+ 
+>>> "55" in bloom # Z 
+Out[11]: True 
+ 
+>>> "25" in bloom 
+Out[12]: True 
+ 
+X 值“51”不在bloom_a 中。 
+Y 同样，值“24”不在bloom_b 中。 
+Z 无论如何，bloom 对象包含了在bloom_a 和bloom_b 中的所有对象！ 
+使用它的一个警告就是你只能对两个具有相同容量和误差率的布隆过滤器做并集。
+而且，最终的布隆过滤器所使用的容量能够与组成它的两个做并集的布隆过滤器所
+使用的容量之和一样大。这意味着你可能从两个布隆过滤器开始，它们各自填满了
+不到一半容量，当你把它们做并集联合起来时，就会得到一个新的超过容量并且不
+可靠的布隆过滤器！ 
+11.6.4  LogLog 计数器 
+LogLog 类型的计数器基于散列函数的单个比特位也能被看作是随机的事实。那就
+是说，一个散列的第一个比特是1 的概率是50%，前两个比特是01 的概率是25%，
+而前三个比特是001 的概率是是12.5%。知道了这些概率，让散列在开始处保持最
+多的0（例如，最不可能的散列值），我们就能估算出我们曾经见到了多少项条目。 
+
+304 
+第11 章 
+一个对这种方法很好的类比就是投掷硬币。想象一下我们将要投掷一枚硬币32 次，
+而且每次都是正面朝上。32 这个数字来源于我们使用32 比特的散列函数的事实。
+如果我们投掷一次，它反面朝上，我们就存储数字0，因为我们的最佳尝试接连产
+生了0 次正面。既然我们知道在这枚硬币投掷背后的概率，我们也能够告诉你我们
+最长的序列就是0 长度的，你能估算出我们尝试实验了2^0 = 1 次。如果我们继
+续投掷硬币而且能够在得到一次反面之前得到10 次正面，那么我们就能存储数字
+10。使用相同的逻辑，你就能估算出我们尝试实验了2^10 = 1024 次。使用这
+个系统，我们所能计数的最大值就是我们所考虑投掷的最大次数（对于32 次投掷
+来说，这就是2 ^ 32 = 4294967296）。 
+为了使用LogLog 类型计数器对这个逻辑进行编码，我们对输入的散列值采用了二
+进制的表示，并且观察在我们看到第一个1 之前有多少个0。散列值能够被视作一
+个32 次硬币投掷的序列，0 意味着投掷出了一次正面朝上，1 意味着投掷出了一
+次反面朝上（例如，000010101101 意味着我们在得到第一次反面之前投掷出了
+4 次正面，010101101 意味着我们在第一次投掷出反面之前投掷出了一次正面）。
+这带给我们一个在得到这个散列值前尝试过几次的想法。在这个系统背后的数学问
+题几乎等价于Morris 计数器，除了一个主要的例外：我们是通过查看实际的输入
+而不是使用一个随机数生成器来获得“随机”值的。这意味着如果我们继续给一个
+LogLog 计数器增加相同的值，它的内部状态将不会改变。例11-26 展示了一个
+LogLog 计数器的简单实现。 
+例11-26  LogLog 计数器的简单实现 
+import mmh3 
+ 
+def trailing_zeros(number): 
+    """ 
+    Returns the index of the first bit set to 1 from the right side of a 32-bit 
+    integer 
+    >>> trailing_zeros(0) 
+    32 
+    >>> trailing_zeros(0b1000) 
+    3 
+    >>> trailing_zeros(0b10000000) 
+    7 
+    """ 
+    if not number: 
+        return 32 
+    index = 0 
+    while (number >> index) & 1 == 0: 
+        index += 1 
+    return index 
+ 
+
+ 
+图使用更少的RAM 
+305 
+class LogLogRegister(object): 
+    counter = 0 
+    def add(self, item): 
+        item_hash = mmh3.hash(str(item)) 
+        return self._add(item_hash) 
+ 
+    def _add(self, item_hash): 
+        bit_index = trailing_zeros(item_hash) 
+        if bit_index > self.counter: 
+            self.counter = bit_index 
+ 
+    def __len__(self): 
+        return 2**self.counter 
+ 
+这个方法的最大缺点就是我们可能得到一个一开始就增加计数器的散列值，这会歪
+曲我们的估算。这就类似于在第一次尝试时投掷出了32 次反面。为了弥补，我们
+应该让许多人同时投掷硬币并且组合他们的结果。大数定律告诉我们当增加越来越
+多的投掷者时，总体统计量越少受到单独的投掷者的异常样本的影响。我们组合多
+个结果的确切方式就是LogLog 类型方法的根本性差异（经典的LogLog、
+SuperLogLog、HyperLogLog、HyperLogLog++等）。 
+我们能够完成这个“多个投掷者”方法，通过采用散列值的首对比特位来指定我们
+的投掷者中哪一位投掷者具有特定的结果。如果我们采用散列值的前4 个比特，这
+意味着我们有2^4=16 个投掷者。既然我们这次选择了使用前4 个比特，我们只剩
+下了28 个比特（对应于每一个硬币投掷者独立地投掷28 次硬币），这意味着每一
+个计数器只能计数到2^28 = 268435456。此外，有一个依赖于投掷者数量的常
+数（alpha）对估算做正则化
+①。所有这些一起带给我们一个具有1.05/
+( )
+m 的准确
+度的算法，m 是所用寄存器的数量（或者说投掷者）。例11-27 展示了一个简单的
+LogLog 算法的实现。 
+例11-27  简单的LogLog 实现 
+from llregister import LLRegister 
+import mmh3 
+ 
+class LL(object): 
+    def __init__(self, p): 
+        self.p = p 
+        self.num_registers = 2**p 
+        self.registers = [LLRegister() for i in xrange(int(2**p))] 
+        self.alpha = 0.7213 / (1.0 + 1.079 / self.num_registers) 
+ 
+    def add(self, item): 
+        item_hash = mmh3.hash(str(item)) 
+                        
+① 一个对基础LogLog 和SuperLogLog 算法的完整描述可以在http://bit.ly/algo rithm_desc 中找到。 
+
+306 
+第11 章 
+        register_index = item_hash & (self.num_registers - 1) 
+        register_hash = item_hash >> self.p 
+        self.registers[register_index]._add(register_hash) 
+ 
+    def __len__(self): 
+        register_sum = sum(h.counter for h in self.registers) 
+        return self.num_registers * self.alpha * 
+                            2 ** (float(register_sum) / self.num_registers) 
+ 
+这个算法除了使用散列值作为一个指示器来把相似的条目去重之外，还有一个可调
+制的参数，能够用来在要达到哪种类型的准确度相对于你想要做出的空间妥协之间
+进行调拨。 
+在__len__方法中，我们对来自于所有单个LogLog 寄存器的估算值求它们的平均
+值。无论如何，这不是我们组合数据的最高效的方式！这是因为我们可能得到一些
+不幸的散列值使得某个特定的寄存器有孤峰值，而其他的则还处于低值。正因为如
+此，我们只能达到O
+1.30
+m
+⎛
+⎞
+⎜
+⎟
+⎝
+⎠的误差率，m 是所使用的寄存器的数量。 
+SuperLogLog
+①被设计用来修正这个问题。使用这个算法，只有最低的 70%的寄存
+器用来做大小估算，它们的值被一个由限制规则给出的最大值所束缚。这个附加特
+性把误差率减少到了O
+1.05
+m
+⎛
+⎞
+⎜
+⎟
+⎝
+⎠。 
+我们通过忽略信息的方式来得到一个更好的估算值，这是违反直觉的！ 
+最后，HyperLogLog
+②在2007 年出现，并且给我们带来了进一步的准确度收益。它
+仅仅通过改变对单个寄存器做平均的方法就做到了：我们使用了球状平均方案，对
+结构可能所处的不同的边缘情况都做了特殊的考虑，而不是仅仅做平均值。这带给
+我们当前最好的误差率O
+1.04
+m
+⎛
+⎞
+⎜
+⎟
+⎝
+⎠。此外，这个公式移除了对SuperLogLog 来说是必
+须的排序操作。当你设法插入大量条目时，这能大大提升数据结构的性能。例11-28
+展示了HyperLogLog 的一个简单实现。 
+例11-28  简单的HyperLogLog 实现 
+from ll import LL 
+import math 
+                        
+① Durand, M., and Flajolet, P. “大基数的LogLog 计数”。会刊：ESA 2003, 2832 (2003): 605　617. 
+doi:10.1007/978-3-540-39658-1_55。 
+② Flajolet, P., Fusy, E., Gandouet, O., et al. “HyperLogLog：对近似最优的基数估计算法的分析”。2007 年算
+法分析国际会议会刊，（2007）：127-146。 
+
+ 
+图使用更少的RAM 
+307 
+ 
+class HyperLogLog(LL): 
+    def __len__(self): 
+        indicator = sum(2**-m.counter for m in self.registers) 
+        E = self.alpha * (self.num_registers**2) / float(indicator) 
+ 
+        if E <= 5.0 / 2.0 * self.num_registers: 
+            V = sum(1 for m in self.registers if m.counter == 0) 
+            if V != 0: 
+                Estar = self.num_registers * 
+                        math.log(self.num_registers / (1.0 * V), 2) 
+            else: 
+                Estar = E 
+        else: 
+            if E <= 2**32 / 30.0: 
+                Estar = E 
+            else: 
+                Estar = -2**32 * math.log(1 - E / 2**32, 2) 
+        return Estar 
+ 
+if __name__ == "__main__": 
+    import mmh3 
+    hll = HyperLogLog(8) 
+    for i in xrange(100000): 
+        hll.add(mmh3.hash(str(i))) 
+    print len(hll) 
+ 
+HyperLogLog++是唯一的进一步增加了准确度的算法，当数据结构相对空时，增加
+了它的准确度。当更多的条蜜插入时，这个方案转向于标准的HyperLogLog。其实
+这是相当有用的，因为LogLog 类型计数器的统计量需要许多准确的数据——有一
+种允许使用更少量的条目来获取更高的准确度的方案大大提高了这种方法的可用
+性。这种额外的准确度通过一个更小的但是更准确的HyperLogLog 结构来达到，
+它以后能够被转换成一个原先所请求的更大的结构。也有一些根据经验得出的常数
+被用在大小估算中来消除偏差。 
+11.6.5  真实世界的例子 
+为了更好理解数据结构，我们首先创建了一个具有很多唯一键的数据集，接着创建
+一个具有重复条目的数据集。当我们把这些键输入这些数据结构后，只是观察它们
+并周期性地询问：“已经有多少唯一条目了？”，图11-5 和图11-6 展示了结果。我
+们能看到包含更多有状态的变量（例如HyperLogLog 和KMinValues）的数据结构
+做得更好，因为它们更健壮地处理了糟糕的统计量。另一方面，如果产生了一个不
+幸随机数或者不幸散列值，Morris 计数器和单个LogLog 寄存器就可能快速发生很
+高的误差率。无论如何，对于大多数算法而言，我们知道有状态变量的数量直接和
+所能确保的错误相关，所以这就是有意义的。 
+
+308 
+第11 章 
+ 
+图11-5  各种不同的概率数据结构对于重复数据的对比 
+只看具有最佳性能（实际上，你可能会使用的那些）的概率数据结构，我们可以总
+结出它们的效用和大概的内存使用（参见表11-2）。我们可以看到内存使用的巨大
+变化取决于我们所关心的问题。这仅仅强调了这样一个事实：当使用一个概率数据
+结构时，你必须首先考虑在继续进行之前，有关数据集的什么问题是你真正需要回
+答的。也要注意只有布隆过滤器的大小取决于元素的数量。HyperLogLog 和
+KMinValue 的大小只取决于误差率。 
+作为另一个更为真实的测试，我们选择使用了一个派生自维基百科文本的数据集。
+我们运行了一个很简单的脚本来从所有的文章中抽取出具有5 个字符的所有单词
+符号，并把它们存储在一个用换行符分隔的文件中。那么问题就是：“有多少唯一
+的符号？”在表11-3 中能看到结果。此外，我们企图使用来自于11.4 节中的datrie
+树来回答相同的问题（这个trie 树被选来与其他数据结构做对比，因为它提供了良
+好的压缩性，然而却还是足够鲁棒来处理完整的数据集）。 
+来自于这个实验的主要副品就是如果你能够特殊化你的代码，你就能得到令人惊叹
+
+ 
+图使用更少的RAM 
+309 
+的速度和内存收益。贯穿于整本书，这都是真实的：当你对6.4.2 节中的代码进行
+特殊化处理时，我们就同样能得到速度提升。 
+表11-2 
+主要概率数据结构的比较 
+ 
+误差率 
+并集a 
+交集 
+是否包含
+大小b 
+HyerLogLog 
+是（O 1.04
+m
+⎛
+⎞
+⎜
+⎟
+⎝
+⎠
+） 
+是 
+不c 
+不 
+2.704MB 
+KMinValues 
+是（O
+2
+(
+2)
+m m
+⎛
+⎞
+⎜
+⎟
+⎜
+⎟
+−
+⎝
+⎠
+） 
+是 
+是 
+不 
+20.372MB 
+布隆过滤器 
+是（O 0.78
+m
+⎛
+⎞
+⎜
+⎟
+⎝
+⎠
+） 
+是 
+不c 
+是 
+192.8MB 
+a．并集操作不会增加误差率。 
+b．数据结构大小，具有0.05%的误差率，100000000 个唯一元素，使用一个64 比特的散列函数。 
+c．这些操作能够做，但是对准确度有一个不可忽视的惩罚。 
+ 
+ 
+图11-6  各种不同的概率数据结构对于唯一数据的对比 
+增加的条目
+
+310 
+第11 章 
+概率数据结构是一种对你的代码做特殊化处理的算法。我们只存储所需的数据来
+以给定的错误上界回答特定的问题。通过只处理所给信息的子集，我们不仅能够
+让内存占用空间减少很多，而且也能够在这些结构上更快地执行大部分操作（就
+如在表11-3 中所能见到的那样，插入datrie 树的时间比任何一种概率数据结构要
+来得多）。 
+表11-3 
+对维基百科中的唯一单词的数量的估计 
+ 
+元素 
+相对误差 
+处理时间a 
+结构大小b 
+Morris 计数器c 
+1 073 741 824 
+6.52% 
+751 秒 
+5bit 
+LogLog 寄存器 
+1 048 576 
+78.84% 
+1 690 秒 
+5bit 
+LogLog 
+4 522 232 
+8.76% 
+2 112 秒 
+5bit 
+HyperLogLog 
+4 983 171 
+-0.54% 
+2 907 秒 
+40KB 
+KMinValues 
+4 912 818 
+0.88% 
+3 503 秒 
+256KB 
+可扩展布隆过滤器
+4 949 358 
+0.14% 
+10 392 秒 
+11509KB 
+datrie 树 
+4 505 514d 
+0.00% 
+14 620 秒 
+114068KB 
+真值 
+4 956 262 
+0.00% 
+----- 
+49558KBe 
+a．处理时间已经被调整过，移除了从磁盘读取数据集的时间。我们也使用之前所提供的简单实
+现来做测试。 
+b．结构大小是在给出数据量前提下的理论值，因为所用的实现没有去优化。 
+c．因为Morris 计数器不会对输入去重，结构体大小和相对误差按照值的总数量给出。 
+d．因为一些编码问题，datrie 树不能加载所有的键。 
+e．只考虑唯一的符号，数据集是49558KB，考虑所有的符号，则是8.742GB。 
+ 
+作为结果，无论你是否使用概率数据结构，你应该总是记住你打算要问你的数据哪
+些问题，以及你如何能够最高效地存储数据以便去问那些特别的问题。这可能归结
+于使用一种特定类型的列表，使用一种特定类型的数据库索引，或者甚至可能使用
+一个概率数据结构来抛弃掉除了相关数据以外的所有数据！ 

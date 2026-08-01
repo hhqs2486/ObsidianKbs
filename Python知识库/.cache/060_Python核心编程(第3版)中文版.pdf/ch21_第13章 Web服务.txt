@@ -1,0 +1,740 @@
+ 
+ 
+ 
+第13 章  Web 服务 
+我没有对Twitter 上瘾。我只在有空的时候刷推特，比如，吃饭的时候、休息的时候、这
+个时候、那个时候、所有时候。 
+—佚名，早于2010 年5 月 
+ 
+本章内容： 
+• 简介； 
+• Yahoo!金融股票报价服务器； 
+• Twitter 的微博。 
+13 
+
+第13 章  Web 服务 531 
+ 
+本章将简要介绍如何使用当今可接触到的一些Web 服务，如较老的Yahoo!金融股票报价
+服务器以及较新的Twitter。 
+13.1  简介 
+网络上有许多Web 服务和应用，分别提供不同的功能。大部分较大的公司，如Yahoo!、
+Google、Twitter 和Amazon，都会为这些服务提供应用编程接口（API）。过去，API 仅仅用
+来在使用服务时访问数据。但今日的API 有所不同，不但有更加丰富的功能，而且通过这些
+API 可以将服务整合到个人网站和页面中，这种方式通常称为“mash-up”。 
+这是个非常有趣的领域，后面会进一步探讨其他一些技术（REST、XML、JSON、RSS、
+Atom 等）。现在先回头看看一个已经存在很久但仍然很有用的API，即Yahoo!提供的股票报
+价服务器，参见http://finance.yahoo.com。 
+13.2  Yahoo!金融股票报价服务器 
+如果访问Yahoo! Finance 网站，选择任意一只股票的报价，会在页面下方，报价数据下
+面的“Toolbox”中发现一个标为“Download Data”的URL 链接。用户通过这个链接下载.csv
+文件，以导入Microsoft Excel 或Intuit Quicken 中。如果访问的是GOOG 的股票，则URL 类
+似下面这样。 
+http://quote.yahoo.com/d/quotes.csv?s=GOOG&f=sl1d1t1c1ohgv&e=.csv 
+如果浏览器的MIME 设置是正确的，浏览器会启动在系统中配置过用来处理CSV 数据
+的软件，它们通常是类似Excel 或LibreOffice Calc 这样的电子表格应用。这主要是因为链接
+中的最后一个变量（键值对）是“e=.csv”。服务器实际不使用这个变量，而它总是返回CSV
+格式的数据。 
+如果使用urllib2.urlopen()，会返回的一个CSV 字符串，其中含有股票代号。 
+ 
+>>> from urllib2 import urlopen 
+>>> url = 'http://quote.yahoo.com/d/quotes.csv?s=goog&f=sl1d1c1p2' 
+>>> u = urlopen(url, 'r') 
+>>> for row in u: 
+...   print row 
+... 
+"GOOG",600.14,"10/28/2011",+1.47,"+0.25%" 
+ 
+>>> u.close() 
+ 
+
+532 第2 部分  Web 开发 
+ 
+接着需要手动解析这个字符串（去除末尾空格，以及根据逗号分割符切分）。除了自行解
+析数据字符串之外，也可以使用csv 模块（Python 2.3 新增），该模块可以切分字符串并去除
+空格。通过csv，可以使用下面的代码替换掉前面示例中的for 循环，其他内容不变。 
+ 
+>>> import csv 
+>>> for row in csv.reader(u): 
+...      print row 
+... 
+['GOOG', '600.14', '10/28/2011', '+1.47', '+0.25%'] 
+ 
+通过分析由URL 字符串传递给服务器的参数字段f，以及阅读Yahoo!针对该服务的在线
+帮助，可以发现符号（sl1d1c1p2）分别对应股票代号、收盘价、日期、变化量、变化百分比。 
+更多信息可以阅读Yahoo! Finance 帮助页面，只须在该页面搜索“download data”或
+“download spreadsheet format”即可。进一步分析API 会发现更多选项，如上一次收盘价、52
+周内的最高和最低价等。表13-1 总结了这些选项，以及返回的格式（这是15 年前真实的Yahoo!
+股价，不要感到惊讶）。 
+表13-1  Yahoo！股票报价服务器参数 
+股票报价数据 
+字段名
+① 
+返回格式
+② 
+股票代号 
+s 
+"YHOO" 
+上次交易价格 
+l1 
+328 
+上次交易日期 
+d1 
+"2/2/2000" 
+上次交易时间 
+t1 
+"4:00pm" 
+与上次收盘价比较 
+c1 
++10.625 
+与上次收盘价比较百分比 
+p2 
+"+3.35%" 
+上次收盘价 
+p 
+317.375 
+上次开盘价 
+o 
+321.484375 
+当日最高价 
+h 
+337 
+当日最低价 
+g 
+317 
+过去52 周股价范围 
+w 
+"110 - 500.125" 
+交易量 
+v 
+6703300 
+市值 
+j1 
+86.343B 
+每股收益 
+e 
+0.20 
+市盈率 
+r 
+1586.88 
+公司名称 
+n 
+"YAHOO INC" 
+① 字段名称的第一个字符是字母，第二个字符（如果存在）是数字。 
+② 有些返回值含有额外的引号，尽管这些值都是作为服务器返回的单个CSV 字符串的一部分。 
+ 
+
+第13 章  Web 服务 533 
+ 
+服务器根据用户指定的顺序显示字段名称。将这些字段连接起来，组成单个字段参数f，
+作为请求URL 的一部分。就像在表13-1 脚注②中提到的，有些返回的组件分别用引号括起
+来。这取决于解析器提取数据的方式。观察前面例子中手动解析与使用csv 模块分别得到的
+结果子字符串。如果无法获得相应的值，报价服务器会返回“N/A”，如下面的代码所示。 
+例如，如果使用f=sl1d1c1p2 向服务器发起一个字段请求，会得到下面这样的字符串（这
+是我在2000 年运行的查询结果）。 
+ 
+"YHOO",166.203125,"2/23/2000",+12.390625,"+8.06%" 
+ 
+而对于不再公开交易的股票，会得到下面这样的内容（注意，即使是N/A 也会用引号括
+起来）： 
+ 
+"PBLS.OB",0.00,"N/A",N/A,"N/A" 
+ 
+还可以指定多个股票代号，输出结果中每一行显示一个公司的数据。但要注意Yahoo! 
+Finace 帮助页面上说的：“在Yahoo!上显示的任何数据都严格禁止再次发布”，所以只能将这
+些数据作为个人用途。另外还要注意，这些下载得到的报价有延迟。 
+根据这些内容，来构建一个读取并显示一些关注的互联网公司股票报价数据的应用，如
+示例13-1 所示。 
+示例13-1  Yahoo! Finance 股票报价示例（stock.py） 
+该脚本从Yahoo! quote 服务器下载并显示股票价格。 
+ 
+ 
+当运行该脚本时，输出结果如下所示。 
+$ stock.py 
+ 
+Prices quoted as of: Sat Oct 29 02:06:24 2011 PDT 
+TICKER PRICE CHANGE %AGE 
+
+534 第2 部分  Web 开发 
+ 
+------ ----- ------ ---- 
+"YHOO" 16.56 -0.07 "-0.42%" 
+"DELL" 16.31 -0.01 "-0.06%" 
+"COST" 84.93 -0.29 "-0.34%" 
+"ADBE" 29.02 +0.68 "+2.40%" 
+"INTC" 24.98 -0.15 "-0.60%" 
+逐行解释 
+第1～7 行 
+这个Python 2 脚本使用time.ctime()显示股票信息从Yahoo!下载下来的时间点，
+urllib2.urlopen()连接到Yahoo!的服务以获取股票数据。接下来是股票代号的导入语句，以及
+获取所有数据的固定URL。 
+第9～12 行 
+这一小块代码显示下载股票信息的时间点，并使用urllib2.ulropen()获取请求的数据（如
+果读过本书之前的版本，会注意到这里简化了输出代码，感谢之前眼尖的读者！）。 
+第14～18 行 
+从Web 下载下来的数据作为一个文件类型的对象打开，遍历该对象获取每一行，分隔由
+逗号间隔的列表，接着显示到屏幕上。 
+与从文本文件读取类似，这里依然保留了行末的终止符，所以需要向每个print 语句的末
+尾添加一个逗号，来消除换行符的影响；否则，每个数据行之间会有两个空行。 
+最后，注意，有些返回的字段含有引号。本章末尾会有若干练习，用来改进默认的输出格式。 
+13.3  Twitter 微博 
+这一节将会介绍通过Twitter 服务构成的微博世界。它首先简要介绍社交网络，描述
+Twitter 所扮演的角色，了解其提供的多种Python 接口，最后，分别介绍一个简单和一个相对
+较复杂的示例。 
+13.3.1  社交网络 
+过去五年多来，社交媒体得到了长足的发展。它首先仅仅是一个简单的概念，如Web 登
+录，或发布一些简短的消息。这种类型的服务需要用户登录账号，用户可以发布文章或其他
+形式的文体。可以将其想象为公共在线期刊或日记，人们可以对当前事件发布观点或批评，
+或任何想让别人知道的事情。 
+但在线意味着全世界都会知道分享的内容。用户无法只针对特定的人或组织，如朋友或
+家人，发布信息。因此诞生了社交网络，MySpace、Facebook、Twitter 和Google+就是最广
+为人知的。通过这些系统，用户可以与他们的朋友、家人、同事，以及社交圈内的人沟通。
+
+第13 章  Web 服务 535 
+ 
+尽管对于用户来说，这些服务大同小异。但这些社交网络依然有各自的区别。比如各自的交
+互方式就不同，因此，这些社交网络之间并不是完全处于竞争关系。首先介绍各个社交工具，
+接着深入了解Twitter。 
+MySpace 主要面向年轻人（初中或高中），侧重于音乐。Facebook 原先专注于大学生，
+但现在面向所有人群。与MySpace 相比，Facebook 是个更加通用的平台，可以在上面托管应
+用，这是让Facebook 成为主流社交工具的特性之一。Twitter 是微型博客服务，与传统博客相
+比，用户在Twitter 上发布状态，通常是对某件事的观点。而Google+是这个因特网巨人最近
+对该领域的尝试，试图提供与其他工具相似的功能，同时也包括一些新的功能。 
+在这些常见的社交媒体应用中，最基本的是Twitter。用户可以使用Twitter 发布短小的状
+态信息，称为推文。其他人可以“关注”你，即订阅你的推文。同样，你也可以关注其他感
+兴趣的人。 
+将Twitter 称为微型博客服务是因为与标准博客不同，标准博客允许用户创建任何长度的
+博文，而每条推文最长限制为140 个字符。这个长度限制主要是因为该服务原先是面向手机
+的，它是通过短消息服务（Short Message Service，SMS）支持的Web 和文本信息，SMS 只
+能处理160 个ASCII 字符。这样用户不用阅读冗长的内容，而发布者则必须在140 个字符内
+将事情表述清楚。 
+13.3.2  Twitter 和Python 
+Twitter API 库中有若干Python 库。在Twitter 的开发者文档中有介绍（https://dev.twitter. 
+com/docs/twitter-libraries#python）。这些库之间既有相同点，又有各自的特点，所以建议读者自
+己分别试用一下，找到最适合自己的库。这里不做过多的限制，本章将会使用到Twython 和
+Tweepy。这两个库分别位于http://github.com/ryanmcgrath/twython 和http://tweepy.github.com。 
+与大多数Python 包相同，可以选择easy_intall 或pip 分别安装，也可以用一款工具同
+时安装这两个库。如果对库的源码感兴趣，可以在GitHub 上了解对应的代码库。另外，可
+以直接从GitHub 上下载最新的.tgz 或.zip 格式的文件，然后调用经典的setup.py install 命令
+安装。 
+ 
+$ sudo python setup.py install 
+Password: 
+running install 
+running bdist_egg 
+running egg_info 
+creating twython.egg-info 
+. . . 
+Finished processing dependencies for twython==1.4.4 
+ 
+
+536 第2 部分  Web 开发 
+ 
+类似Twython 这样的库需要通过一些额外的方式与Twitter 交互。其依赖于httplib2、
+oauth2 和simplejson。（最后一个在Python 2.5 之前作为外部json 库，从Python 2.6 开始成
+为标准库。） 
+起步 
+为了能开始上手，这里用一个简单的示例介绍如何使用Tweepy 库在Twitter 上进行搜索。 
+ 
+# tweepy-example.py 
+import tweepy 
+results = tweepy.api.search(q='twython3k') 
+for tweet in results: 
+    print '    User: @%s' % tweet.from_user 
+    print '    Date: %s' % tweet.created_at 
+    print '    Tweet: %s' % tweet.text 
+ 
+如果执行这个Python 2 脚本（在本书编写时，Tweepy 还不支持Python 3）进行查询，读
+者会注意到这个搜索的关键字是专门选定的，只能找到很少的搜索结果。也就是说，无论使用
+Python 3 版本的Twython 库，还是这个Tweepy 版，Twitter 只会返回几条推文（在本书编写时）。 
+ 
+$ python twython-example.py 
+    User: @wescpy 
+    Date: Tue, 04 Oct 2011 21:09:41 +0000 
+    Tweet: Testing posting to Twitter using Twython3k (another story of life on the bleeding edge) 
+ 
+    User: @wescpy 
+    Date: Tue, 04 Oct 2011 17:18:38 +0000 
+    Tweet: @ryanmcgrath cool... thx! i also have a &quot;real&quot; twython3k bug i 
+need to file... will do it officially on github. just giving you a heads-up! 
+ 
+    User: @wescpy 
+    Date: Tue, 04 Oct 2011 08:01:09 +0000 
+    Tweet: @ryanmcgrath Hey ryan, good work on Twython thus far! 
+Can you pls drop twitter_endpoints.py into twython3k? It's out-of- date. .. thx! :-) 
+ 
+调用Tweepy 库的search()会获得一个推文列表。代码遍历列表中的推文并显示其中感兴
+趣的部分。Twython 是一个类似的Python 库，提供了Twitter API。 
+Twython 与Tweepy 类似，但也有自己的特点。Twython 同时支持Python 2 和3，但输出
+的结果不用对象，而是用纯Python 字典来持有结果数据。将前面的tweepy-example.py 与这
+里的twython-example.py 脚本进行比较，后者兼容Python 2 和3。 
+ 
+# twython-example.py 
+from distutils.log import warn as printf 
+try: 
+    import twython 
+
+第13 章  Web 服务 537 
+ 
+except ImportError: 
+    import twython3k as twython 
+ 
+TMPL = '''\ 
+    User: @%(from_user)s 
+    Date: %(created_at)s 
+    Tweet: %(text)s 
+''' 
+ 
+twitter = twython.Twython() 
+data = twitter.searchTwitter(q='twython3k') 
+for tweet in data['results']: 
+    printf(TMPL % tweet) 
+ 
+distutils.log.warn()函数是Python 2 中print 语句和Python 3 中print 函数的代理。同时读
+者还可以尝试导入Python 2 和3 中的Twython 库，希望至少有一个会成功。 
+Twython.searchTwitter()的输出结果是一个字典，该对象在字典的“results”键中，每个对
+象都是一个字典列表，表示一条推文。因为结果是个字典，这样就可以简化显示，还可以更
+方便地调用（付出的代价是需要使用字符串模板来展开字典中含有的键值）。 
+这里还有其他改动，如不使用纯单行输出，将所有字符串放到一个大的字符串模板中，
+然后将输出的字典传递给字符串模板。这样做的原因是在实际应用中经常会使用某种形式的
+模板（无论是字符串模板还是Web 模板）。 
+这里输出的结果与Tweepy 版本相同，所以这里就不重复了。 
+13.3.3  稍微长一点的API 组合应用示例 
+这些简单短小的示例可以快速地让读者上手。但在现实当中会遇到不同的场景，因此可
+能需要使用或集成多种类似的API。下面通过一个稍微长一点的示例来练习。这里将编写一
+个兼容库，通过同时使用Tweepy 和Twython 来支持一些基本的Twitter 命令。这个练习会帮
+助读者学习这两个库，并更加熟悉Twitter 的API。 
+验证 
+在继续这个练习之前，读者需要一个Twitter 账号。如果没有，访问http:// twitter.com 并
+注册一个。一般需要用户名和密码进行验证（更现代的方式包括生物方式的验证，如指纹或
+视网膜扫描）。这些凭证仅用于身份验证，数据访问则是另外一回事。 
+授权 
+验证并不意味着可以访问数据（任何人的数据都不行），还需要正确的授权。在通过Twitter
+或第三方授权后才能访问自己或其他人的数据，如允许外部应用下载Twitter 消息或通过
+Twitter 账号发布状态来更新Twitter 账号。 
+
+538 第2 部分  Web 开发 
+ 
+为了通过Twitter 获取授权凭证，需要创建一个应用。可以在http://dev.twitter.com 中完成这个
+任务。至少拥有一个应用，然后再单击需要授权的应用。URL 类似于https://dev.twitter.com/apps/ 
+APP-ID/show，这里可以看到访问Twitter数据所需的OAuth设置，它包括4个重要的部分：consumer 
+key、consumer secret、access token 和access token secret，它们都用来访问Twitter 上的数据。 
+获取这4 块有价值的数据后，将其放置在一个安全的地方，也就是说，不能放在源码中！
+在这个例子中，将这些数据另存到一个名为tweet_auth.py 模块的4 个全局变量里。在最终的
+应用中会导入这个模块。实际应用中，要么发布编译过的字节码.pyc（不是纯文本），要么通
+过数据库或网络上的其他位置访问这些数据，最好是加密过的。现在所有内容都设置完毕，
+在描述代码前先介绍应用本身。 
+一个混合的Twitter API 应用 
+这个应用执行4 个操作：首先它输出在Twitter 上搜索的结果；接着，它获取并输出当前
+应用更详细的信息；然后，它获取并输出当前用户发布消息的时间线；最后，它为当前用户
+发布一条推文。这4 个操作都执行两次：一次使用Tweepy 库，另一次使用Twython 库。为
+了完成这个任务，需要支持4 个Twitter API 命令，如表13-2 所示。 
+表13-2  混合Twitter API 应用的4 个命令 
+命    令 
+描    述 
+search 
+采用最近匹配优先的方法在Twitter 上进行搜索。这是未经验证的调用（应用中只有这一
+个），意味着任何人都能调用 
+verify_credentials 
+判断已验证用户的身份是否合法 
+user_timeline 
+获取已验证用户最新的推文 
+update_status 
+更新已验证用户的状态，也就是说发布一条新的推文 
+ 
+这款应用同时使用了Twython 和Tweepy。最后，代码会在Python 2 和Python 3 中运行。
+也就是说，代码中有这4 个命令，并实例化两个库，接着含有支持每个命令的代码。准备好
+了吗？查看示例13-2 中的twapi.py。 
+示例13-2  Twitter API 组合库示例（twapi.py） 
+这里演示使用Twython 和Tweepy 库与Twitter 交互。 
+ 
+
+第13 章  Web 服务 539 
+ 
+ 
+ 
+
+540 第2 部分  Web 开发 
+ 
+ 
+
+第13 章  Web 服务 541 
+ 
+ 
+
+542 第2 部分  Web 开发 
+ 
+ 
+ 
+在介绍这个脚本之前，先运行并查看其输出。要确保首先创建一个tweet_auth.py 文件，
+其中含有以下这些变量（以及Twitter 应用中正确的对应值）。 
+ 
+# tweet_auth.py 
+consumer_key = 'SOME_CONSUMER_KEY' 
+consumer_secret = 'SOME_CONSUMER_SECRET' 
+access_token = 'SOME_ACCESS_TOKEN' 
+access_token_secret = 'SOME_ACCESS_TOKEN_SECRET' 
+ 
+现在可以开始了。当然，这是在编写本书时执行程序得到的输出结果，读者得到的肯定
+会与此不同。下面是执行时的状态（“...”表示省略了一些输出内容以缩短篇幅）。 
+ 
+$ twapi.py 
+ 
+*** SEARCH 
+TWYTHON 
+---------------------------------------- 
+@ryanmcgrath 
+Status: #twython is now version 1.4.4; should fix some utf-8 decoding 
+issues, twython3k should be caught up, etc: http://t.co/s6fTVh0P /cc 
+@wescpy 
+Posted at: Thu, 06 Oct 2011 20:25:17 +0000 
+---------------------------------------- 
+@wescpy 
+Status: Testing posting to Twitter using Twython3k (another story of 
+life on the bleeding edge) 
+Posted at: Tue, 04 Oct 2011 21:09:41 +0000 
+---------------------------------------- 
+@wescpy 
+Status: @ryanmcgrath cool... thx! i also have a &quot;real&quot; 
+twython3k bug i need to file... will do it officially on github. just 
+giving you a heads-up! 
+Posted at: Tue, 04 Oct 2011 17:18:38 +0000 
+---------------------------------------- 
+@wescpy 
+
+第13 章  Web 服务 539 
+ 
+ 
+ 
+
+544 第2 部分  Web 开发 
+ 
+Status: I'm wondering: will future Apple products visually be designed 
+as well & have as much impact on the market? What do you think? 
+Posted at: Thu Oct 06 00:02:16 +0000 2011 
+---------------------------------------- 
+. . . 
+---------------------------------------- 
+TWEEPY 
+---------------------------------------- 
+Status: .@imusicmash That's great that you're enjoying corepython.com! 
+Note: there will be lots of cookies at #SVCC: yfrog.com/kh1azqznj 
+Posted at: 2011-10-07 22:37:37 
+. . . 
+---------------------------------------- 
+*** UPDATE STATUS 
+Posted at: Sat Oct 08 05:18:51 +0000 2011 
+---------------------------------------- 
+Posted at: 2011-10-08 05:18:51 
+---------------------------------------- 
+*** RESULTS WRAPPER 
+.. 
+--------------------------------------------------------------------- 
+- 
+Ran 2 tests in 0.000s 
+ 
+OK 
+$  
+从中可以看到运行了4 个函数，这4 个函数执行时分别使用了Tweepy 库和Twython 库。
+如果安装没有问题，在Windows 上执行脚本时会获得相同的结果。因为代码也兼容Python 3，
+所以在Python 3 中也得到类似的输出，但只能看到Twython 的输出，因为Tweepy 在本书编
+写时还不支持Python 3。现在来进一步了解代码。 
+逐行解释 
+第1～5 行 
+这里含有一些导入语句，包括导入标准库（使用distutils.log.warn()作为print 语句或函数
+的代理，具体取决于是Python 2 还是Python 3，还有一些在Python 中运行单元测试的基本属
+性），以及Twitter 授权凭证。 
+还要提醒的是，在一般情况下，不鼓励使用“from module import *”（第5 行），因为标
+准库和第三方库中可能含有与该模块相同的变量名称，这样会有潜在的问题。在这里，完全
+了解tweet_auth.py 并知道其中所有（4 个）变量。该模块的唯一目的是隐藏用户的凭证信息。
+在实际生产环境中，这样一个文件要么作为编译过的字节码（.pyc）或优化过的文件（.pyo），
+要么来自数据库或网络调用，需要说明的是，.pyc 和.pyo 两者都是人类不可读的。 
+
+第13 章  Web 服务 545 
+ 
+第7～38 行 
+第一块实际代码只完成了一件事，即让Python 解释器了解可以使用哪个Twitter 客户端
+库，就这样。 
+CMD 是一个字典，其中还有两个字典项，分别是Twython(twython)和Tweepy(tweepy)。
+在本章末尾的练习中，会添加第三个库。 
+对于每个库，提供方法名表示前4 个方法对应的Twitter API 命令。如果该值是None，
+这意味着方法名完全匹配。如果使用其他值（即不是None），即表示方法名与API 命令
+不一致。 
+Tweepy 较为简单，其方法名与命令完全匹配。因此，使用dict.fromkeys()创建字典时，
+所有键的值都是None。Twython 就有点麻烦，因为其使用驼峰命名法，且有与规则不一致的
+地方。第71～80 行描述了为什么使用这些名称和方法。 
+在第22 行，将所有支持的API 放到集合中。在Python 中，最快速检测是否包含的方式
+是使用集合数据结构，同时遍历这个变量中的所有API。到目前为止，仅创建了可能的API，
+现在需要看实际当中可能使用哪些，把不能用的去除。 
+第25～33 行的代码尝试导入各个库，将无法导入的API 移动到另一个含有不存在的API
+的remove 集合中。循环结束后，就知道缺少哪些API，把这些缺失的API 从全体API 中删
+除（第35 行）。如果两个库都不可用，则在第36～38 行抛出NotImplementedError 异常。 
+第40～71 行 
+Twitter 类是该应用的头等对象。该类定义了初始化函数，获取api（在这里，要么是
+twython，要么是tweepy），以及可选的auth 标记。该标记默认为True，因为大部分时候
+需要验证和授权才能访问用户数据（Search 是唯一不需要验证的函数），然后将选定的API
+缓存到self.api 中。 
+这一节剩余的部分用来（第48～71 行）实例化Twitter，并将该实例赋值给self.twitter。
+该对象是执行Twitter API 命令的处理程序。 
+第73～81 行 
+_get_meth()方法处理特殊情况，将每个API 的调用与正确的方法名称整合到一起。注意，
+该方法前面有单条下划线。这种标记法表示该方法不应该由用户调用，而它是一个内部方法，
+由该类中的其他方法调用。 
+可以在该方法中直接使用self.api，但众所周知，最佳实践是将经常使用的实例属性赋值
+给局部变量。使用self.api 需要两次查询，而“api”只需一次，从CPU 时间上来看，另一次
+查询并不耗时很多，但如果在类型循环中或经常执行它，开销就会增大。这就是为什么在第
+74 行赋值给局部变量。 
+下一行中，查询来自请求API 里相应的命令，并赋值给meth_name。如果它是None，则
+默认行为是命令与方法名称相同。对于Tweepy，很简单，前面提到过，其方法名与命令名完
+全相同。接下来的几行用于处理特殊情况，来获得正确的名称。 
+
+546 第2 部分  Web 开发 
+ 
+前面提到过，Twython 使用驼峰命名法，而不是通过下划线分割单词。这意味着必须先根
+据下划线将每个单词分开，接着将其追加到第一个单词后面（第79～80 行）。最后一个行为是
+使用这个名字从请，求的API 中获取方法对象，这是个头等对象，把它直接返回给调用者。 
+第83～102 行 
+支持的4 个Twitter 命令由4 个函数实现：search()、verify_credentials()、user_timeline()、
+update_status()。除了search()之外，其他三个很简单，两个库的使用方式几乎相同。首先看
+后面三个，最后再深入了解search()。 
+验证已经通过身份验证的用户信息仅仅是verify_credentials 命令能做的其中一件事。该
+命令同时能用编程方式最快地访问最新的推文。用户信息会打包成ResultsWrapper（后面会
+进一步介绍），接着返回给调用者。关于使用这条命令的更多信息可以参考Twitter 文档
+（http://dev.twitter.com/docs/api/1/get/account/verify_credentials）。 
+用户的时间线由最近发布的推文和转推组成。user_timeline 这个Twitter 命令默认情况下
+返回最近的20 条，而使用count 参数可以最多请求200 条，不过这里没有用到，但本章末尾
+的一个练习中会用到。关于该函数的更多信息可以参考http://dev. twitter.com/docs/api/1/get/ 
+statuses/user_timeline。与verify_credentials()不同，user_timeline 封装每条单独的推文，而不
+是返回来自Twitter 的整个结果，返回一个生成器表达式，迭代返回推文。 
+Twitter 最基本的功能是用户可以更新自己的状态，也就是，发布推文。如果没有这个功
+能，就不能称之为Twitter 了。从代码中可以看出，update_status 接受额外的参数s，这是推
+文的文本。返回值是推文本身（同样被ResultsWrapper 封装），通过最重要的特性（created_at
+字段），表示推文已经创建并已发布。下面代码中的created_at 演示了这个功能。关于该函数
+的更多用法，参考http://dev.twitter.com/docs/api/1/post/statuses/update。 
+现在返回search。Twython 和Tweepy 两个库对这个API 调用方式有所区别，所以代码要
+比普通情形多。Twython 试图原原本本解释Twitter 返回的结果，将JSON 装成Python 字典。
+这种数据结构含有多个元数据，在“results”键下还会发现一些有用的信息（需要在第86 行
+进行查找）。 
+而Tweepy 更加现实，直接以列表形式对象返回搜索结果，实际上，ResultsSet 是列表的
+子类，因为开发者知道用户实际上想要什么。这样更加方便，节省了将来查找的时间。那么
+额外的元数据呢？那些只是返回的ResultsSet 的属性而已。 
+第104～124 行 
+这一块代码是通用类，可以在任何地方使用，包括在这个应用之外。该类与Twitter 库没
+有关系，仅仅用来方便用户，为这些库返回的对象提供通用接口。 
+读者是否因为不一致的对象类型而感到挫败过，比如字典类型或对象类型？我的意思是
+对于字典对象，需要通过__getitem__()调用获取值，即foo['bar']，而对于对象，需要处理对
+象的属性接口，即foo.bar。能否做到不管是什么对象，可以同时使用这两个方式？这就是
+ResultsWrapper 类的工作。 
+
+第13 章  Web 服务 547 
+ 
+在编写本书时，我刚刚接触这些，所以可能不够完善，但其思想是将任何Python 对象封
+装到一个对象中，将查询（通过__getitem__()或__getattr__()）委托给封装对象（对于委托的
+内容，可以阅读Core Python Programming 或者Core Python Language Fundamentals 的
+Object-Oriented Programming）。 
+在初始化函数中（第106～107 行）封装对象。然后使用__str__以字符串的形式表示对象
+（第109～113 行）。大多数变化发生在__getattr__()中。当请求一个没有识别的属性时，
+__getattr__()检查在封装对象中是否是存在该属性（第116～117 行）。如果没有，也许在字典
+对象中，所以检查它是否是一个“键”（第118～119 行）。当然，在使用in 操作符之前，需
+要检查该对象是否支持这种类型的检查或访问，即首先检查对象是否含有__contains__属性。
+如果所有else 都失败，则告知用户处理失败（第120～122 行）。 
+最后一行（第124 行）用来应对用户试图用字典的方式访问属性，即将属性名称作为键
+来使用。我们希望__getitem__有与__getattr__()完全相同的行为。因此，无论封装的对象类型
+是什么，都能获得并返回用户需要的内容。 
+第126～165 行 
+_demo_*() 函数的名副其实：_demo_search() 演示了使用所有可用API 搜索条目 
+“twython3k”，并显示搜索推文的结果数据。_demo_ver_creds()执行verify_credentials 命令，并
+显示已验证用户最近的推文；_demo_user_timeline()获取最新的20 条推文，显示每条推文的内
+容和时间戳。最后，_demo_update_status()发布新的推文，新推文介绍了所用到的API。 
+第167～184 行 
+这一部分代码用于测试ResultsWrapper 类。_unit_*_wrap()函数测试每个封装的字典（或
+类似字典的对象），以及含有属性接口的对象。这两个都通过属性访问，无论是通过obj['foo']，
+还是通过obj.foo 都会返回相同的结果“bar”。最后通过TestSequenceFunctions 测试类完成这
+种验证（第179～184 行）。 
+第186～196 行 
+main()函数显示正在测试哪个函数，并调用特定的_demo_*()函数显示其输出。最后一个
+调用针对unittest.main()函数，用于执行单元测试。 
+13.3.4  总结 
+通过这一节的内容，希望读者扎实地掌握了一些Web 服务的接口，如Yahoo!的股票报价
+服务器，以及Twitter。更重要的是，认识到Yahoo 的接口完全是由URL 驱动的，无须授权。
+而Twitter 提供了完全的REST API 和用于访问安全数据的OAuth 授权。我们能够使用Python
+代码发挥这些强大的功能来完成工作。 
+这里只介绍了两个Web 服务，网络上还有许多其他的服务。下一章还会回顾这两个
+服务。 
+
+548 第2 部分  Web 开发 
+ 
+13.3.5  额外在线资源 
+Yahoo! Finance 
+• 
+http://gummy-stuff.org/Yahoo-data.htm 
+• 
+http://gummy-stuff.org/forex.htm 
+Twitter 
+• 
+http://dev.twitter.com/docs/twitter-libraries#python 
+• 
+http://github.com/ryanmcgrath/twython 
+• 
+http://tweepy.github.com 
+13.4  练习 
+Web 服务 
+13-1  Web 服务。使用自己的语言描述什么是Web 服务。在网上找到这样一些服务，并
+描述其工作方式。包括服务的API 以及如何访问这些数据。是否需要认证或授权？ 
+13-2  REST 和Web 服务。学习REST 和XML 或JSON 是如何应用在现代Web 服务API
+和应用中的。与Yahoo!报价服务器（它使用URL 参数）这样的老系统相比，这三
+者提供了哪些额外功能？ 
+13-3  REST 和Web 服务。使用Python 中对REST 和XML 的支持构建一个应用框架，
+该框架允许共享并重用一些代码。这些代码包括使用如今新的Web 服务和API。
+展示使用Yahoo!、Google、eBay、Amazon API 的代码。 
+ 
+练习13-4～13-11 涉及本章前面介绍的Yahoo!股票报价示例（stock.py）。 
+13-4  Web 服务。更新stock.py 中下载股票报价数据的内容，添加表13-1 中列出的额外
+参数。可以直接在本章前面的stock.py 基础上添加新功能。 
+13-5  字符串处理。读者会注意到有些返回的字段含有引号，移除这些引号。读者能想
+到几种移除引号的方法？ 
+13-6  字符串处理。并不是所有股票代号长度都是4 个字符。同样，并不是所有股价都
+在10～99.99 美元之间。每日涨跌幅和百分比也是如此。对脚本进行适当的修改，
+让其可以应对不同长度的结果。对于所有股票输出结果依然需要是格式化的、对
+齐的和一致的。下面是一个示例。 
+ 
+C:\py>python stock.py 
+
+第13 章  Web 服务 549 
+ 
+ 
+Prices quoted as of: Sat Oct 29 02:38:53 2011 
+ 
+TICKER  PRICE  
+CHANGE  
+%AGE 
+------  -----  
+------  
+---- 
+YHOO  
+ 16.56  
+ -0.07  
+-0.42% 
+GOOG  
+600.14  
+ +1.47  
++0.25% 
+T  
+ 
+ 29.74  
+ +0.60  
++2.06% 
+AMZN  
+217.32  
++10.54  
++5.10% 
+BAC   
+   7.35   +0.30  
++4.26% 
+BRK-B  
+  79.96  +0.065  
++0.08% 
+ 
+13-7  文件。更新应用，将股票数据保存到文件中，而不是显示在屏幕上。附加题：修
+改脚本，让用户选择将股票信息显示出来还是保存到文件中。 
+13-8  Web 服务和csv 模块。原来的stock.py 文件使用普通的for 循环，并手动解析数据。
+将其转成使用csv 模块解析输入数据，类似在示例代码段中做的那样。 
+13-9  健壮性。Yahoo!倾向于不断修改下载的主机名。今天可能是quote.yahoo.com，明天可
+能会变成finace.yahoo.com。本书示例运行时的链接是“download.finance.yahoo.com”。
+有时主机名又会变成老的。维护一个主机列表，ping 这些主机上的Web 服务器，
+在获取股价之前先查看服务器是否可用，以此来构建一个健壮的应用。可以定期
+访问Yahoo!股票报价页面，从页面底部Toolbox 部分的Download Data 链接中抓
+取主机名。 
+13-10  扩展API。Yahoo!报价服务器还有许多其他命令。完整的列表可以访问http: 
+//gummy-stuff.org/Yahoo-data.htm。选择若干新的数据点，并将其集成到
+stock.py 脚本中。 
+13-11  Python 3。将stock.py 移植到Python 3 中，重命名为stock3.py。附加题：通过某
+种方式让脚本同时运行在Python 2.x 和3.x 中，并描述用到的方法。 
+13-12  外汇。Yahoo!报价服务器还可以查询货币汇率。查看http:// gummy-stuff.org/forex.htm，
+并创建一个新的forex.py 脚本，查询汇率。 
+13-13  股票图。Yahoo!还提供了自动生成图的方式。下面是一些示例URL，可以用于了
+解这个服务。 
+小图： 
+1 天: http://chart.yahoo.com/t?s=GOOG 
+5 天: http://chart.yahoo.com/v?s=GOOG 
+1 年: http://chart.yahoo.com/c/bb/m/GOOG 
+大图： 
+1 天://chart.yahoo.com/b?s=GOOG 
+5 天: http://chart.yahoo.com/w?s=GOOG 
+
+550 第2 部分  Web 开发 
+ 
+3 个月: http://chart.yahoo.com/c/3m/GOOG 
+6 个月: http://chart.yahoo.com/c/6m/GOOG 
+1 年: http://chart.yahoo.com/c/1y/GOOG 
+两年: http://chart.yahoo.com/c/2y/GOOG 
+5 年: http://chart.yahoo.com/c/5y/GOOG 
+最大时间：http://chart.yahoo.com/c/my/GOOG 
+与练习13-9 的健壮性类似，域名会在chart.yahoo.com、ichart.yahoo.com 和
+ichar.finance. yahoo.com 之间轮换，所以要使用所有这些来检查数据。创建一个应用，
+允许用户生成股票投资组合图。同时提供在浏览器中访问的功能，直接显示股票图页
+面。提示：webbrowser 模块会有帮助。 
+13-14  历史数据。ichart.financial.yahoo.com 还提供历史价格查询。使用下面这个示例的URL
+了解其工作方式，并创建一个应用，用于查询股票历史价格：http://chart.yahoo. 
+com/table. csv?s=GOOG&a =06&b=12&c=2006&d=10&e=2&f=2007。 
+Twitter 
+13-15  Twitter 服务。用自己的语言描述Twitter 服务。介绍什么是推文，并指出推文的
+一些限制。 
+13-16  Twitter 库。描述Twython 和Tweepy 这两个Python 库的异同点。 
+13-17  Twitter 库。了解其他可以访问Twitter API 的Python 库。这些库与本章用到的库
+有什么区别与联系？ 
+13-18  Twitter 库。如果既不喜欢Twython，也不喜欢Tweepy Python 库。那么自己从头写
+一个与Twitter 交互的安全且RESTful 的库。可以从https://dev.twitter.com/docs 开始。 
+ 
+下面的练习需要改进本章的twapi.py 示例。 
+13-19  用户查询。添加新功能来查询用户在Twitter 界面上的名称。并返回对应的ID。
+注意，有些用户的界面名称就是整数，所以要确保允许用户输入这些数字作为潜
+在的界面名称，使用ID 获取用户最新的推文。 
+13-20  发布推文。改进搜索功能，不仅让用户搜索推文，还可以让其转发选择的推文。
+可以提供命令行、Web 或GUI 来支持这个功能。 
+13-21  删除推文。与练习13-20 类似，让用户可以删除自己发布的推文。注意，这只是
+从Twitter 删除推文，而推文的内容可能已经扩散到其他地方了。 
+13-22  关注。添加查看用户关注者（粉丝）ID 以及被关注者ID 的功能。 
+13-23  Twitter 库。向twapi.py 添加对不同Python/Twitter 客户端库的支持。例如，可以
+尝试支持python-twitter，该库参见http://code.google.com/p/python-twitter，其他
+库可以在http://dev.twitter.com/docs/twitter-libraries#python 中找到。 
+
+第13 章  Web 服务 551 
+ 
+13-24  编辑个人资料。让用户可以更新自己的资料，以及上传新的头像。选做题：允许
+用户更新个人资料的颜色和背景图片。 
+13-25  计数。user_timeline()这个Twitter 函数还支持count 变量。默认情况下，Twitter
+返回用户时间线上最新的20 条推文。向twapi.py 添加对count 和其他可选参数
+的支持。 
+13-26  直接消息。支持直接消息（Direct Message），将这些消息发送给指定用户，获取
+当前已发送的DM 列表、已接收的DM 列表，并可以删除DM。 
+ 
+在twapi.py 示例中，能够检测并修改Twitter 流，因为应用拥有所有必需的授权信息。
+但如果需要编写一个应用来帮助用户发送推文就是另外一回事了。在这种情况下，为了
+能获得access token 和secret token，需要支持OAuth 的完整流程。 
+ 
+最后几个练习需要花点时间，因为必须学习OAuth 的内容。可以先阅读这两个文档：
+https://dev.twitter.com/docs/auth/oauth
+和
+https://dev.twitter.com/docs/auth/moving-from-basic- 
+auth-to-oauth。 
+13-27  推文归档。创建一个Twitter 归档服务。由于Twitter 只保存最近的200 条推文，
+因此很快就会丢失以前的推文。构建一个Twitter 归档服务，保存已注册用户的
+推文。如果在网上搜索“twitter archive”或“twitter research tools”，会得到很多
+内容。希望通过这个练习，能够在读者中诞生下一代Twitter 分析工具！ 
+13-28  短链接、Feed 轮询。为个人或工作博客创建周期扫描器（RSS 或其他），当发布
+新博客时，自动发布一条短链接以及该博客标题的前N 个单词。 
+13-29  其他Web 服务。阅读关于Google 的Prediction API（http://code.google.com 
+/apis/predict），尝试学习其中的“Hello World”教程。上手以后，开发一个自己
+的模型，来扫描不同的推文（自己或别人的都可以）。创建并训练预测模型，判
+断一条推文是积极的、消极的，还是中性的。当训练完成后，使用工具以相同的
+方式判断新的推文。为了完成这个练习，需要在Google 的API 控制台
+（http://code.google.com/apis/console）上创建一个项目，启用Google Prediction 和
+Google Storage。如果不想创建Google 账号，也可以使用其他类似的API。 
+ 
+
+ 
+ 
+ 
+第3 部分 
+补充/实验章节 
+III 

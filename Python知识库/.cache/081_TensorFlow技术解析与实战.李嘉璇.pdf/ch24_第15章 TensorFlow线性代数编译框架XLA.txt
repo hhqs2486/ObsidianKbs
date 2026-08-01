@@ -1,0 +1,136 @@
+第15 章 
+TensorFlow 线性代数编译框架XLA 
+XLA（Accelerated Linear Algebra）是用于线性代数领域的专用编译器（domain-specific 
+compiler），用于优化TensorFlow 计算。XLA 通过即时（just-in-time，JIT）编译或提前
+（ahead-of-time，AOT）编译来进行实验，尤其有助于面向硬件加速的开发者。XLA 框架目前还
+是处于试验阶段的。
+本章我们主要讲述XLA 的优势、工作原理和XLA 的一些应用。
+① 
+15.1  XLA 的优势 
+XLA 是一个线性代数的领域专用编译器，能在执行速度、内存的使用、对自定义操作的依
+赖、移动端的内存占用和可移植性等方面优化了TensorFlow 的计算。 
+●
+提高执行速度。通过编译子图来减少生命周期较短的操作的执行时间，通过融合管道
+化的操作来减少内存占用。
+●
+提高内存的使用。分析和规划内存的使用需求，消除许多中间结果的缓存。
+●
+减少对自定义操作的依赖。通过提高自动化融合底层操作（low-level op）的性能，达
+到原先需要手动融合自定义操作（custom op）的效果。
+●
+减少移动端的内存占用（移动端的应用详见第19 章）。一是通过提前（AOT）编译子
+图来减少TensorFlow 的执行时间，二是通过共享头文件对（如xxx.o 和xxx.h）被其他
+程序直接链接。这两个操作能够使移动端预测的内存占用减少几个数量级。
+●
+提高可移植性。可以用XLA 为新的硬件设备开发一个新的后端，使TensorFlow 不需要
+更改很多代码就可以用在新的硬件设备上。
+①
+本章内本主要本本TensorFlow 官方网站：https://www.tensorflow.org/versions/master/experimental/xla/。
+
+第15 章 TensorFlow 线性代数编译框架XLA ee 237 
+15.2  XLA 的工作原理 
+学过C 语言的人可能知道，LLVM 是一个编译器的框架系统，用C++编写而成，用于优化
+以任意编程语言编写的程序的编译时间（compile time）、链接时间（link time）、运行时间（run 
+time）以及空闲时间（idle time）。
+① 
+在基于LLVM 的编译器中，前端负责解析、验证和诊断输入代码中的错误，然后将解析的代
+码转换为LLVM 中间表示（intermediate representation，IR）。该IR 通过一系列分析和优化过程来
+改进代码，然后发送到代码生成器中，以产生本地机器代码。如图15-1 所示，这是一个非常直接
+的三相设计的LLVM 实现。设计中最重要的是LLVM IR，在编译器中IR 被用来表示代码。 
+图15-1
+② 
+XLA 的输入语言称为HLO IR，XLA 使用在HLO 中定义的图形，并将它们编译成各种体
+系结构的机器指令。图15-2 展示的是XLA 中的编译过程。
+③ 
+图15-2
+③ 
+①
+本本百度百百 “LLVM”：http://baike.baidu.com/link?url=0c67Vs4dGqctjTSoQ9xpF2yWxmUxaj8SN4UhPAtq4t3xtai22h9-
+ L3IY_qSuabj9FYyJyfXvrqbllf80Sg19s_。 
+② 本图本本http://www.aosabook.org/en/llvm.html。 
+③ 本图本本TensorFlow 官方网站：https://www.tensorflow.org/versions/master/experimental/xla/。
+
+238 ff 第三篇 提高篇 
+如图15-2 所示，XLA 首先进行目标无关的优化和分析，如公共子表达式消除（common 
+subexpression elimination，CSE）、目标无关的操作融合（如将多个操作融合成一个操作）和运
+行时内存的缓冲区分析等。
+接着，XLA 将HLO 计算发送到后端。后端执行进一步的HLO 级目标相关的优化和分析。例
+如，XLA GPU 后端可以执行对GPU 编程模型有益的操作融合，并且确定如何将计算划分成流。 
+下一步是生成目标特定的代码。XLA 里面的CPU 和GPU 后端使用LLVM 进行中间表示、
+优化及代码生成。这些后端用LLVM IR 来表示XLA HLO 计算。 
+XLA 目前支持在x86-64 和NVIDIA GPU 上进行JIT 编译，以及在x86-64 和ARM 上进行
+AOT 编译。因此，AOT 编译方式更适合移动端和嵌入式的深度学习使用。下面我们就以JIT
+编译为例进行说明。
+15.3  JIT 编译方式 
+TensorFlow 的XLA JIT 编译器通过XLA 编译和运行TensorFlow 计算图的一部分。与标准
+TensorFlow 实现相比，XLA 可以将多个操作（内核）融合到少量编译内核中，融合操作符可以
+减少存储器带宽需求并提高性能。
+通过XLA 运行TensorFlow 计算有两种方法，一是打开CPU 或GPU 设备上的JIT 编译，
+二是将操作符放在XLA_CPU 或XLA_GPU 设备上。 
+15.3.1 打开JIT 编译 
+打开JIT 编译可以有两种方式。下面是在会话上打开，这种方式会把所有可能的操作符编
+程成XLA 计算。用法示例如下： 
+config = tf.ConfigProto() 
+config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1 
+sess = tf.Session(config=config) 
+另一种方式是为一个或多个操作符手动打开JIT 编译。这是通过使用属性_XlaCompile = 
+true 标记要编译的操作符来完成的。用法示例如下： 
+jit_scope = tf.contrib.compiler.jit.experimental_jit_scope 
+x = tf.placeholder(np.float32) 
+with jit_scope(): 
+  y = tf.add(x, x) 
+15.3.2 将操作符放在XLA 设备上 
+目前有效的设备是XLA_CPU 或XLA_GPU，示例如下： 
+
+第15 章 TensorFlow 线性代数编译框架XLA ee 239 
+with tf.device("/job:localhost/replica:0/task:0/device:XLA_GPU:0"): 
+  output = tf.add(input1, input2) 
+15.4  JIT 编译在MNIST 上的实现 
+下面我们就用MNIST 的softmax 版本来尝试使用XLA 和不使用XLA 的差异。代码位于
+tensorflow-1.1.0/tensorflow/examples/tutorials/mnist/mnist_softmax_xla.py 中。 
+不使用XLA 来运行时，如下： 
+python mnist_softmax_xla.py --xla=false 
+运行完成后生成时间线文件timeline.ctf.json，使用Chrome 跟踪事件分析器（在浏览器中访
+问chrome://tracing），打开该时间线文件，呈现的时间线如图15-3 所示。 
+图15-3 
+图15-3 中最左侧一列列出了本机的4 个GPU。可以清晰地看到图中MatMul 操作符，跨越
+4 个CPU 的时间消耗情况。 
+让我们使用XLA 来训练模型，如下： 
+TF_XLA_FLAGS=--xla_generate_hlo_graph=.* python mnist_softmax_xla.py 
+运行完成后，得到的时间线图像如图15-4 所示。 
+图15-4 
+我们看看如何调用JIT 编译，关键的训练代码如下。下面讲解了如何开启XLA 的JIT 编译，
+以及如何将训练追踪写入时间线文件。
+  config = tf.ConfigProto() 
+  jit_level = 0 
+  if FLAGS.xla: 
+    # 开启XLA 的JIT 编译 
+    jit_level = tf.OptimizerOptions.ON_1 
+  config.graph_options.optimizer_options.global_jit_level = jit_level 
+
+240 ff 第三篇 提高篇 
+  run_metadata = tf.RunMetadata() 
+  sess = tf.Session(config=config) 
+  tf.global_variables_initializer().run(session=sess) 
+  # 训练 
+  train_loops = 1000 
+  for i in range(train_loops): 
+    batch_xs, batch_ys = mnist.train.next_batch(100) 
+    # 在最后一次循环中，创建时间线文件，可以用chrome://tracing/打开和分析 
+    if i == train_loops - 1: 
+sess.run(train_step, 
+feed_dict={x: batch_xs, y_: batch_ys}, 
+options=tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE), 
+run_metadata=run_metadata) 
+trace = timeline.Timeline(step_stats=run_metadata.step_stats) 
+trace_file = open('xlatimeline.ctf.json', 'w') 
+trace_file.write(trace.generate_chrome_trace_format()) 
+    else: 
+sess.run(train_step, feed_dict={x: batch_xs, y_: batch_ys}) 
+目前XLA 框架还处于试验阶段，AOT 主要应用场景是一些内存较小的嵌入式设备、手机、
+树莓派等，对于性能要求较高的读者可以做进一步探索和发现。
+ 15.5  小结 
+本节主要讲述了TensorFlow 的线性代数编译框架XLA 的工作原理，JIT 编译和AOT 编译
+的适用范围，重点讲解了JIT 编译方式的两种实现方法。最后用MNIST 数据集展现了如何使用
+JIT 编译。XLA 是TensorFlow 1.0 版本加入的新特性，还有待完善。本章重点面向开发中对性
+能要求较高的开发者。

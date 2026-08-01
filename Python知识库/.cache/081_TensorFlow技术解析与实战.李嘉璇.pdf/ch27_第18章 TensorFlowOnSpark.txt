@@ -1,0 +1,217 @@
+第18 章 
+TensorFlowOnSpark 
+在第14 章我们讲了TensorFlow 的分布式运行，在第17 章又介绍了使用Kubernetes 集群对
+TensorFlow 节点进行调度、监控和失败重启等功能。我们知道，Hadoop 生态的大数据系统一般可以分
+为Yarn、HDFS 和MapReduce 计算框架，TensorFlow 本身的分布式就相当于MapReduce 计算框架部
+分，而Kubernetes 就相当于Yarn 调度系统。本章要讲的TensorFlowOnSpark 是利用远程直接内存访问
+（Remote Direct Memory Access，RDMA）解决了存储功能和调度，实现了深度学习和大数据的融合。 
+TensorFlowOnSpark（TFoS）是雅虎推出的开源项目
+①，支持使用Apache Spark 集群进行分
+布式TensorFlow 训练和预测。其实，TensorFlow 的程序并不能直接作为Spark 的程序运行，
+TensorFlowOnSpark 提供了一个程序来进行桥接，本质上是每个Spark Executor 启动一个对应的
+TensorFlow 进程，然后通过远程进程通信（RPC）进行交互。 
+ 18.1  TensorFlowOnSpark 的架构
+② 
+要把一个训练程序改到使用Spark 的集群上运行，在运用TensorFlowOnSpark 后，就只需要改非
+常少量的代码（官方认为不到10 行）。TensorFlowOnSpark 通过下面的步骤来管理Spark 集群。 
+（1）预留：为在Executor 上执行的每个TensorFlow 进程保留一个端口，并启动数据消息的
+监听器。
+（2）启动：在Executor 上启动Tensorflow 主函数。 
+（3）数据获取：这里提供了两种不同的模式来提取训练数据和测试数据。 
+●
+Readers和QueueRunners：利用TensorFlow的Readers和QueueRunners机制直接从HDFS
+文件中读取数据文件。Spark 不涉及访问数据。
+●
+Feeding：将Spark RDD 数据发送到TensorFlow 节点，随后的数据将通过feed_dict 机制
+传入TensorFlow 图中。
+①
+https://github.com/yahoo/TensorFlowOnSpark
+② 本节本本本本https://github.com/yahoo/TensorFlowOnSpark。 
+
+256 ff 第三篇 提高篇 
+（4）关闭：关闭Executor 上的TensorFlow 计算节点和本数服务节点。 
+TensorFlowOnSpark 系统的架构如图18-1 所示。 
+图18-1
+① 
+TFoS 曾做过一个图像分类的实验，结果非常令人鼓舞。以同一准确度作为评判标准，准确度
+达到0.730，单计算节点工作需要46 小时，双计算节点需要22.5 小时，4 计算节点需要13 小时，8
+计算节点需要7.5 小时，如图18-2 所示。因此，实现了接近模型训练的近线性可扩展性。 
+图18-2
+② 
+①
+本图本本http://yahoohadoop.tumblr.com/post/157196317141/open-sourcing-tensorflowonspark-distributed-deep。
+② 本图本本http://yahoohadoop.tumblr.com/post/157196317141/open-sourcing-tensorflowonspark-distributed-deep。
+
+第18 章 TensorFlowOnSpark ee 257 
+下面我们就以MNIST 数据集为例，看看如何在Spark 上进行部署、训练以及预测。 
+18.2  TensorFlowOnSpark 在MNIST 上的实践
+① 
+采用Standalone 模式的Spark 集群，仅需要一台计算机就够，下面以此为例看看如何应用
+TensorFlowOnSpark。 
+首先，安装Spark 和Hadoop，这里所用的计算机的操作系统是OS X 10.10.5，并且已经部
+署好了Java 1.8.0 的JDK，从http://spark.apache.org/downloads.html 下载Spark，这里选用2.1.0
+版本，从http://hadoop.apache.org/#Download+Hadoop 下载Hadoop，这里选用2.7.3 版本。在2017
+年3 月，这个框架对TensorFlow 0.12.1 版本的支持较好，但对TensorFlow 1.0 版本尚有些问题，
+还需要读者本己适配好。
+安装后，修改必要的配置文件，设置环境变量后，启动Hadoop： 
+$HADOOP_HOME/sbin/start-all.sh 
+然后，检出TensorFlowOnSpark 源代码，如下： 
+git clone --recurse-submodules https://github.com/yahoo/TensorFlowOnSpark.git 
+cd TensorFlowOnSpark 
+git submodule init 
+git submodule update --force 
+git submodule foreach --recursive git clean -dfx 
+接着，将源代码部分打包，供提交任务时使用，如下：
+cd TensorFlowOnSpark/src 
+zip -r ../tfspark.zip * 
+设置TensorFlowOnSpark 根目录的环境变量，接下来会用到： 
+cd TensorFlowOnSpark  
+export TFoS_HOME=$(pwd) 
+接着，启动Spark 主节点（master）： 
+${SPARK_HOME}/sbin/start-master.sh 
+配置两个工作节点（worker）实例，通过master-spark-URL 和主节点连接： 
+export MASTER=spark://$(hostname):7077 
+①
+本节实本过程本本https://github.com/yahoo/TensorFlowOnSpark/wiki/GetStarted_standalone。 
+
+258 ff 第三篇 提高篇 
+export SPARK_WORKER_INSTANCES=2 
+export CORES_PER_WORKER=1  
+export TOTAL_CORES=$((${CORES_PER_WORKER}*${SPARK_WORKER_INSTANCES}))  
+${SPARK_HOME}/sbin/start-slave.sh -c $CORES_PER_WORKER -m 3G ${MASTER} 
+接下来，提交任务，将MNIST 的zip 文件转换为HDFS 上的RDD 数据集： 
+${SPARK_HOME}/bin/spark-submit \ 
+--master ${MASTER} --conf spark.ui.port=4048 --verbose \ 
+${TFoS_HOME}/examples/mnist/mnist_data_setup.py \ 
+--output examples/mnist/csv \ 
+--format csv 
+运行完毕后，可以通过如下命令看到处理过的数据集：
+hadoop fs -ls hdfs://localhost:9000/user/jiaxuan/examples/mnist/csv 
+Found 2 items 
+drwxr-xr-x   - jiaxuan supergroup           0 2017-03-10 04:27  
+hdfs://localhost:9000/user/jiaxuan/examples/mnist/csv/test 
+drwxr-xr-x   - jiaxuan supergroup           0 2017-03-10 04:27  
+hdfs://localhost:9000/user/jiaxuan/examples/mnist/csv/train 
+可以查看保存后的图片和标记向量，分别共有10 份： 
+hadoop fs -ls hdfs://localhost:9000/user/jiaxuan/examples/mnist/csv/train/labels 
+-rw-r--r--   1 jiaxuan supergroup           0 2017-03-10 04:27  
+hdfs://localhost:9000/user/jiaxuan/examples/mnist/csv/train/labels/_SUCCESS 
+-rw-r--r--   1 jiaxuan supergroup       204800 2017-03-10 04:27  
+hdfs://localhost:9000/user/jiaxuan/examples/mnist/csv/train/labels/part-00000 
+-rw-r--r--   1 jiaxuan supergroup       245760 2017-03-10 04:27  
+hdfs://localhost:9000/user/jiaxuan/examples/mnist/csv/train/labels/part-00001 
+-rw-r--r--   1 jiaxuan supergroup       245760 2017-03-10 04:27  
+hdfs://localhost:9000/user/jiaxuan/examples/mnist/csv/train/labels/part-00002 
+-rw-r--r--   1 jiaxuan supergroup       245760 2017-03-10 04:27  
+hdfs://localhost:9000/user/jiaxuan/examples/mnist/csv/train/labels/part-00003 
+-rw-r--r--   1 jiaxuan supergroup       245760 2017-03-10 04:27  
+hdfs://localhost:9000/user/jiaxuan/examples/mnist/csv/train/labels/part-00004 
+-rw-r--r--   1 jiaxuan supergroup       245760 2017-03-10 04:27  
+hdfs://localhost:9000/user/jiaxuan/examples/mnist/csv/train/labels/part-00005 
+-rw-r--r--   1 jiaxuan supergroup       245760 2017-03-10 04:27  
+hdfs://localhost:9000/user/jiaxuan/examples/mnist/csv/train/labels/part-00006 
+-rw-r--r--   1 jiaxuan supergroup       245760 2017-03-10 04:27  
+hdfs://localhost:9000/user/jiaxuan/examples/mnist/csv/train/labels/part-00007 
+-rw-r--r--   1 jiaxuan supergroup       245760 2017-03-10 04:27  
+hdfs://localhost:9000/user/jiaxuan/examples/mnist/csv/train/labels/part-00008 
+-rw-r--r--   1 jiaxuan supergroup       229120 2017-03-10 04:27  
+hdfs://localhost:9000/user/jiaxuan/examples/mnist/csv/train/labels/part-00009 
+MNIST 训练集共有60 000 条数据，有10 个文件，每个文件有6 000 条数据左右，里面存
+
+第18 章 TensorFlowOnSpark ee 259 
+储的格式和标记向量格式如图18-3 所示。 
+图18-3 
+图片向量格式如图18-4 所示。 
+图18-4 
+这里，我们主要是把训练集和测试集分别保存成RDD 数据，具体代码本见${TFoS_HOME}/ 
+examples/mnist/mnist_data_setup.py。关键代码如下： 
+writeMNIST(sc, "mnist/train-images-idx3-ubyte.gz", "mnist/train-labels-idx1- 
+ubyte.gz", args.output + "/train", args.format, args.num_partitions) 
+writeMNIST(sc, "mnist/t10k-images-idx3-ubyte.gz", "mnist/t10k-labels-idx1- 
+ubyte.gz", args.output + "/test", args.format, args.num_partitions) 
+调用writeMNIST 函数，将RDDs 保存为特定格式： 
+def writeMNIST(sc, input_images, input_labels, output, format, num_partitions): 
+  """将MNIST 图像和标记向量写入HDFS 上""" 
+  with open(input_images, 'rb') as f: 
+    images = numpy.array(mnist.extract_images(f)) 
+  with open(input_labels, 'rb') as f: 
+    labels = numpy.array(mnist.extract_labels(f, one_hot=True)) 
+  shape = images.shape 
+  print("images.shape: {0}".format(shape)) 
+# 60000 x 28 x 28 
+  print("labels.shape: {0}".format(labels.shape))  # 60000 x 10 
+  imageRDD = sc.parallelize(images.reshape(shape[0], shape[1] * shape[2]), 
+num_partitions) 
+  labelRDD = sc.parallelize(labels, num_partitions) 
+  output_images = output + "/images" 
+  output_labels = output + "/labels" 
+  # 将RDDs 保存为特定格式 
+  if format == "pickle": 
+
+260 ff 第三篇 提高篇 
+    imageRDD.saveAsPickleFile(output_images) 
+    labelRDD.saveAsPickleFile(output_labels) 
+  elif format == "csv": 
+    imageRDD.map(toCSV).saveAsTextFile(output_images) 
+    labelRDD.map(toCSV).saveAsTextFile(output_labels) 
+接着，提交训练任务，开始训练，命令如下，我们最终在HDFS 上生成了mnist_model： 
+${SPARK_HOME}/bin/spark-submit \ 
+--master ${MASTER} \ 
+--py-files  
+${TFoS_HOME}/tfspark.zip,${TFoS_HOME}/examples/mnist/spark/mnist_dist.py \ 
+--conf spark.cores.max=${TOTAL_CORES} \ 
+--conf spark.task.cpus=${CORES_PER_WORKER} \ 
+--conf spark.executorEnv.JAVA_HOME="$JAVA_HOME" \ 
+${TFoS_HOME}/examples/mnist/spark/mnist_spark.py \ 
+--cluster_size ${SPARK_WORKER_INSTANCES} \ 
+--images examples/mnist/csv/train/images \ 
+--labels examples/mnist/csv/train/labels \ 
+--format csv \ 
+--mode train \ 
+--model mnist_model 
+这里的mnist_dist.py 主要是构建TensorFlow 分布式任务，其中定义了分布式任务的主函数，
+也就是启动TensorFlow 的主函数map_fun，采用的数据获取方式是Feeding。这里用到的
+TensorFlowOnSpark 代码主要是获取TensorFlow 集群和服务器实例，如下： 
+cluster, server = TFNode.start_cluster_server(ctx, 1, args.rdma) 
+其中TFNode 调用我们刚才打包好的tfspark.zip 中的TFNode.py 文件。 
+mnist_spark.py 文件是我们训练的主程序，体现了TensorFlowOnSpark 的部署步骤，如下： 
+sc = SparkContext(conf=SparkConf().setAppName("mnist_spark")) 
+executors = sc._conf.get("spark.executor.instances") 
+num_executors = int(executors) if executors is not None else 1 
+num_ps = 1 
+…… 
+cluster = TFCluster.reserve(sc, args.cluster_size, num_ps, args.tensorboard,  
+TFCluster.InputMode.SPARK) #1.为在Executor 执行上的每个TensorFlow 进程保留一个端口 
+cluster.start(mnist_dist.map_fun, args) # 2.启动Tensorflow 主函数 
+if args.mode == "train": 
+  cluster.train(dataRDD, args.epochs) # 3.训练 
+else: 
+  labelRDD = cluster.inference(dataRDD) # 预测 
+  labelRDD.saveAsTextFile(args.output)  
+cluster.shutdown() # 4.关闭Executor 上的TensorFlow 计算节点和本数服务节点 
+预测的过程也类似，运行如下命令：
+
+第18 章 TensorFlowOnSpark ee 261 
+${SPARK_HOME}/bin/spark-submit \ 
+--master ${MASTER} \ 
+--py-files  
+${TFoS_HOME}/tfspark.zip,${TFoS_HOME}/examples/mnist/spark/mnist_dist.py \ 
+--conf spark.cores.max=${TOTAL_CORES} \ 
+--conf spark.task.cpus=${CORES_PER_WORKER} \ 
+--conf spark.executorEnv.JAVA_HOME="$JAVA_HOME" \ 
+${TFoS_HOME}/examples/mnist/spark/mnist_spark.py \ 
+--cluster_size ${SPARK_WORKER_INSTANCES} \ 
+--images examples/mnist/csv/test/images \ 
+--labels examples/mnist/csv/test/labels \ 
+--mode inference \ 
+--format csv \ 
+--model mnist_model \ 
+--output predictions 
+最终输出的预测文件如下：
+2017-03-10T23:29:17.009563 Label: 7, Prediction: 7 
+2017-03-10T23:29:17.009677 Label: 2, Prediction: 2 
+其实，除了单机版的Standalone 模式外，官方网站上还介绍了在Amazon EC2 上运行以及
+在Hadoop 集群上采用YARN 模式运行，请读者本行本本。 
+ 18.3  小结 
+本章主要介绍了雅虎公司的开源工具TensorFlowOnSpark 的架构及使用。读者只需要改很
+少的代码就可以将TensorFlow 和Spark 结合，真正实现大数据的深度学习训练。 

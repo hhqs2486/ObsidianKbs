@@ -1,0 +1,1322 @@
+第       章 
+粒子系统 
+在计算机图形世界中，粒子系统是用许多小图元（如点、线、
+三角形和多边形）来表示的物体，如烟雾、火焰，甚至头发，没
+有明确的几何形状，因此很难用标准技术来建模。
+例如，如何在计算机上制造一次爆炸效果？设想爆炸从空间
+中的一个点开始，然后向外扩张，作为一个快速扩大的、复杂的
+三维实体，随时间而改变形状和颜色。不夸张地说，尝试建立数
+学模型就令人望而生畏。
+但现在设想一下，爆炸包含一群细小的粒子，每个粒子有关联的位置和颜色。
+爆炸开始时，粒子在空间中的一个点上聚成一图。随着时间的推移，它们根据一定
+的数学规则向外移动，并改变颜色，让你定期绘制所有粒子，从而生成爆炸的动画。
+利用好的数学模型、大量粒子，以及透明度和公告板（billboarding）这样的渲染技
+术，可以创建逼真的效果，如图10-1 所示。 
+本项目会制定粒子运动的数学模型，将它表示为时间的函数，并利用图形处理
+单元（GPU）的着色器进行计算。然后，会设计一种渲染方案，利用一种名为公告
+板的技术，它让二维图像一直面向观众，从而使二维图像看起来像是三维的，用一
+种令人信服的方式来绘制这些粒子。还会用OpenGL 着色器让粒子旋转，并生成动
+画场景。你可以通过按键来打开或关闭各种效果，进行比较。
+10 
+
+146 Python 极客项目编程 
+图10-1  已完成项目的运行示例 
+数学模型将设置每个粒子的初始位置和速度，并决定粒子如何随时间运动。你
+可以让每个纹理的黑色区域透明，利用正方形图像创建火花，保持每个火花面向观
+众，使它们看起来有立体感。你会生成粒子的动画，定期更新它们的位置，其亮度
+随着时间的推移逐渐减弱。
+下面是将要探索的一些概念：
+•
+制定喷泉粒子系统的数学模型；
+•
+利用GPU 着色器计算；
+•
+利用纹理和公告板模拟复杂的三维对象；
+•
+利用OpenGL 渲染功能，如混合、深度遮掩和Alpha 通道，绘制半透明物体； 
+•
+利用相机模型绘制三维透视图。
+10.1  工作原理 
+要创建动画，就需要一个数学模型。从一个固定点开始，移动一些粒子，随
+时间推移沿抛物线轨迹运动，形成火花喷泉，如图10-2 所示。这就是喷泉粒子
+系统。
+
+第10 章  粒子系统 147 
+图10-2  5 个示例火花在喷泉粒子系统中的轨迹 
+我们的粒子系统应具有以下特性：
+•
+粒子应该从固定点的出现，它们的运动轨迹应该是抛物线；
+•
+粒子应该能相对于喷泉的垂直轴（z 轴或高度），运动预定距离；
+•
+较接近喷泉垂直轴中心的粒子，应该比离中心较远的粒子初速度更大；
+•
+要产生更逼真的效果，粒子不应全部同时喷射；
+•
+粒子的亮度应该随时间推移逐渐淡出。
+10.1.1  为粒子运动建模 
+假设粒子系统包含N 个粒子。第i 个粒子的运动方程如下： 
+2
+0
+0
+1
+2
+i
+i
+tP
+P
+V t
+at
+=
++
++
+这里，Pt 是在时间t 的位置。P0 为粒子的初始位置，V0 是粒子的初始速度，a
+是加速度。可以认为a 是系统中的重力加速度，让粒子沿向下的弧线运动。 
+这些参数都是三维向量，可以表示为三维坐标。例如，使用加速度值是（0，0，
+—9.8），这是地球在z 轴（垂直）方向的重力加速度，单位是米每平方秒。 
+10.1.2  设置最大范围 
+要让喷泉看起来逼真，粒子应相对于圆锥体的z 轴，以不同的角度飞出。但也
+要设置一个最大范围，让每个粒子的初始速度在一定范围内，让这些粒子呈漏斗状，
+形成喷泉的样子。为了实现这个目标，将速度与垂直轴的最大角度确定为20 度，
+如图10-3 所示。 
+
+148 Python 极客项目编程 
+图10-3  限制每个粒子的初始速度范围。每个粒子分配的速度在阴影圆内 
+在图10-3 中，方位角φ是速度向量与x 轴的夹角。倾斜角θ 是速度向量与z 轴
+的夹角。倾斜角的选择范围让速度向量处于图中浅灰色阴影区域内。
+速度方向应该从大圆圈包围的半球部分中随机选择。这些方向的端点处于一个
+单位半径的球面上，这样就可以用球坐标系来计算它们。此外，我们希望速度值随
+着与轴的夹角增大而减小。考虑到这一点，粒子的初始速度如下：
+i
+2
+0
+(1
+)
+V
+V
+α
+=
+−
+这里，α 是粒子的倾斜角与最大角度（这个例子中是20 度）之比。因此，随着
+这个比值逐渐变为1.0，速度（二次地）下降。速度V 是单位球面上一个点，像下
+面这样：
+(cos( )sin(
+),sin e( )sin(
+),cos(
+))
+V
+θ
+Φ
+θ
+Φ
+Φ
+=
+ 
+在[0，20]度范围内随机选择一个倾斜角，在[0，360]度范围内随机选择一个
+方位角：
+random([0,20]),
+random([0,360])
+θ =
+Φ =
+这个方程让粒子指向图10-3 中圆圈区域内的一个随机点（注意，在这个程序中，
+所有角度计算需要用弧度，不是度）。
+
+第10 章  粒子系统 149 
+我们也希望确保粒子不在同一时间开始（原因请参阅10.10 节）。要做到这一点，
+为每个粒子计算一个时间延迟，稍后在计算粒子位置时使用。第i 个粒子的延迟计
+算如下：
+tag
+t
+0.05
+i
+i
+=
+这些方程中随意采用的数值常数是怎么来的？例如，为什么用0.05 作为延迟时
+间，用20 度作为最大角度？答案是实验。重要的是创建一个基本模型，然后调整这
+些常数，以获得最佳视觉效果。改变程序中的这些参数，看看不同的值如何影响结果。 
+10.1.3  渲染粒子 
+渲染粒子的一种简单方式，就是将它们绘制为点。OpenGL 有GL_POINTS 图
+元，本质上是屏幕上的一个点；你可以控制点的像素大小和颜色。但我们希望粒子
+看起来像小火花，并且随着喷发而旋转。
+从头开始绘制火花太复杂了，所以需要一张火花的照片，作为纹理粘贴到一个
+矩形（也称为“四边形”）。喷泉中的每个粒子都被绘制成火花的三角形纹理图像。
+但是，这提出两个问题。首先，不希望正方形火花，因为那显得很假。其次，如果
+从其他角度看喷泉，四边形的方向会不对。
+10.1.4  利用OpenGL 混合来创建更逼真火花 
+为了创造更逼真的火花，我们利用OpenGL 的混合（blending）。结合传入的
+片段（片段着色器执行之后）和帧缓冲区中已有的内容。这项操作通常涉及Alpha
+通道。
+例如，假设在屏幕上绘制两个多边形，并想将它们混合在一起。你可以用alpha
+混合的技巧，它的工作原理是将两个透明片重叠起来。alpha 通道表示像素的不透
+明度，它是透明程度的量度。除了表示一个像素颜色的红、绿、蓝分量之外，还
+可以存储一个alpha 值，得到的颜色方案称为RGBA。对于32 位的RGBA 颜色方
+案，alpha 值的范围是[0,255]，0 是完全透明，255 是完全不透明。alpha 通道本身
+不做任何事情。只有用alpha 值来改变像素的最终RGB 值时，才会创建各种透明
+效果。
+OpenGL 提供了几种方法来定制混合方程。对于喷泉粒子，我们将使用图10-4
+所示的纹理，但要让纹理的黑色区域消失，这样就会只看到火花。
+启用OpenGL 的混合，用片段的alpha 值乘以纹理的颜色，可以让黑色区域消
+失。对于黑色区域，RGB 颜色值是（0，0，0），如果乘以alpha 值，将得到0。因
+此，经过混合，黑色区域在最终图像中的不透明度是0，你看到的只是背景颜色，
+实际上去掉了火花纹理的黑色区域（alpha 值在片段着色器中设置，在10.3.5 节中
+有介绍）。
+
+150 Python 极客项目编程 
+图10-4  火花纹理，标有RGB 值（0，0，0）为黑色，（255，255，255）为白色 
+注意
+除了在着色器中设置alpha 值，也可以利用纹理图像中的alpha 通道，为黑
+色和白色区域设定不同的alpha 值，从而控制透明度。在着色器中使用alpha 值，
+创建带有黑色背景的纹理，再让所有黑色区域透明，这更简单，优于在纹理中
+使用alpha 通道，让特定区域有不同的透明度值。 
+10.1.5  使用公告板 
+对于第二个问题（如果从其他角度看喷泉，四边形的方向不对），我们将使用
+公告板。我们不是绘制复杂的三维物体，而是放置一个二维的图片，让你总是看到
+其正面（面向观看的方向），作为一种公告板。例如，在开发三维游戏时，背景是
+树木景观，可以用一个带纹理的多边形公告板来替代树木景观。只要玩家靠得不太
+近，假的“图片树”看起来就很逼真。
+现在来看看放置多边形背后的数学，以便让它总是面向观看的方向。图10-5
+展示了如何将一个纹理四边形变成一个公告板。
+图10-5  公告板 
+
+第10 章  粒子系统 151 
+对准是相对于四边形上的定位点来说的。在这个例子中，会选择四边形的中心。
+要对准四边形，需要三个正交向量，创建一个小坐标系统。我们感兴趣的第一个向
+量是n，代表四边形的法线向量。法线向量垂直于四边形所在的平面，这意味着设
+定的法线向量方向，就是四边形面向的方向。我们希望四边形面向观看的方向，即
+v，所以n 向量需要对准该向量，但方向相反。因为观看的方向朝向屏幕，所以四
+边形的法线向量应该指向相反的方向：从屏幕向外。
+这意味着我们希望方向n = -v。现在，选择一个向量u，这是四边形最终位置的
+近似向上向量。选择u 为（0，0，1），因为z 方向指“向上”（说这个向量是近似
+的，是因为虽然我们事先知道四边形的法线向量，但不知道摄像头的方向）。然后
+计算第三个向量r，这里r = u×n（两个向量的叉积）。现在有了两个正交向量，n 和
+r，都在四边形的平面中。叉积这两个向量，得到一个新向量。因此，得到了新的向
+上向量u' = n×r =n× (u×n)。我们需要一个新的向上向量，以确保这3 个向量是正交
+的，或彼此垂直。最后，在计算过程中，这些向量都需要归一化，让长度等于一个
+单位，从而创建一个正交坐标系（其中所有向量是单位长度并且正交）。有了这3
+个向量，就可以根据三维图形理论，用一个旋转矩阵进行任意方向的旋转。旋转矩
+阵R 将位于原点的正交坐标系统旋转到r、u' 和n 构成的坐标系统： 
+0
+0
+0
+0
+0
+0
+1
+x
+x
+x
+y
+y
+y
+z
+z
+z
+r
+u
+n
+r
+u
+n
+R
+r
+u
+n
+′
+
+
+
+
+′
+
+
+= 
+
+′
+
+
+
+
+
+
+应用这个旋转矩阵，将带纹理的四边形正确地对准观看的方向，使其成为一个
+公告板。
+10.1.6  生成火花动画 
+要生成火花喷泉的动画，就要利用GLFW 库，通过更新渲染和时间，定时绘制
+粒子系统的各个位置。
+10.2  所需模块 
+我们将用PyOpenGL（一个流行的Python OpenGL 绑定）来渲染，用numpy 的
+数组来表示三维坐标变换矩阵。
+10.3  粒子系统的代码 
+我们开始先定义喷泉中使用的粒子的三维几何形状。然后，再看看如何创建动
+
+152 Python 极客项目编程 
+画中粒子之间的时间延迟，如何为粒子设置初始速度，以及如何在程序中使用
+OpenGL 的顶点和片段着色器。最后，看看如何将所有这些整合起来，渲染粒子系
+统。整个项目的代码，请直接跳到10.4 节。 
+喷泉的代码封装在一个类中，名为ParticleSystem，它创建了粒子系统，建立了
+OpenGL 着色器，用OpenGL 渲染系统，每隔五秒钟重新开始动画。 
+10.3.1  定义粒子的几何形状 
+首先，创建一个顶点数组对象（VBO）来管理后续的顶点属性数组，从而定义
+这些粒子的几何形状。
+ # create Vertex Array Object (VAO) 
+ self.vao = glGenVertexArrays(1) 
+ # bind VAO 
+ glBindVertexArray(self.vao) 
+每个粒子是一个正方形，其顶点和纹理坐标定义如下：
+   # vertices 
+ s = 0.2 
+ 
+ quadV = [ 
+ -s, s, 0.0, 
+ -s, -s, 0.0, 
+ s, s, 0.0, 
+ s, -s, 0.0, 
+ s, s, 0.0, 
+ -s, -s, 0.0 
+ ] 
+ 
+ vertexData = numpy.array(numP*quadV, numpy.float32) 
+ 
+ self.vertexBuffer = glGenBuffers(1) 
+ 
+ glBindBuffer(GL_ARRAY_BUFFER, self.vertexBuffer) 
+ 
+ glBufferData(GL_ARRAY_BUFFER, 4*len(vertexData), vertexData, 
+ GL_STATIC_DRAW) 
+ # texture coordinates 
+ 
+ quadT = [ 
+ 0.0, 1.0, 
+ 0.0, 0.0, 
+ 1.0, 1.0, 
+ 1.0, 0.0, 
+ 1.0, 1.0, 
+ 0.0, 0.0 
+   ] 
+ tcData = numpy.array(numP*quadT, numpy.float32) 
+ self.tcBuffer = glGenBuffers(1) 
+ glBindBuffer(GL_ARRAY_BUFFER, self.tcBuffer) 
+ glBufferData(GL_ARRAY_BUFFER, 4*len(tcData), tcData, GL_STATIC_DRAW) 
+在行，定义了正方形的顶点，各边以原点为中心，长度为0.4。对于两个
+GL_TRIANGLES，顶点的排序是相同的。然后，在行，将这些顶点重复numP 次，
+创建一个numpy 数组：每个四边形表示系统中的一个粒子（所有要绘制的几何图形
+都放入到一个大数组）。
+
+第10 章  粒子系统 153 
+接下来，将这些顶点放入一个顶点缓冲区对象，就像在第9 章中所做的一样。
+在行创建VBO，在行绑定。然后在行，用顶点数据填充绑定的缓冲区。代码
+4 * len(vertexData)指明在vertexData 数组中，每个元素需要4 个字节。 
+最后，在行定义四边形的纹理坐标，随后几行代码设置了相关的VBO。 
+10.3.2  为粒子定义时间延迟数组 
+接下来，为粒子定义时间延迟数组。我们希望每组四个顶点的时间延迟一样，
+这代表一个正方形的粒子，如以下代码所示：
+ # time lags 
+ 
+ timeData = numpy.repeat(0.005*numpy.arange(numP, dtype=numpy.float32), 
+   4) 
+ self.timeBuffer = glGenBuffers(1) 
+ glBindBuffer(GL_ARRAY_BUFFER, self.timeBuffer) 
+ glBufferData(GL_ARRAY_BUFFER, 4*len(timeData), timeData, 
+ GL_STATIC_DRAW) 
+在行，numpy.arange()创建了一个数组，包含不断增加的值，即[0，1，...，
+numP-1]。将这个数组乘以0.005，用参数4 调用numpy.repeat()，产生一个数组，即
+[0.0，0.0，0.0，0.0，0.005，0.005，0.005，0.005，...]。接下来的代码设置了VBO。 
+10.3.3  设置粒子初始速度 
+接下来生成粒子的初始速度。我们的目标是生成一些随机的速度，它们与垂直
+轴的夹角不超过某个最大值。下面是代码：
+ # velocites 
+ velocities = [] 
+ # cone angle 
+ 
+ coneAngle = math.radians(20.0) 
+ # set up particle velocities 
+ for i in range(numP): 
+ # inclination 
+ 
+ angleRatio = random.random() 
+ a = angleRatio*coneAngle 
+ # azimuth 
+ 
+ t = random.random()*(2.0*math.pi) 
+ # get velocity on sphere 
+ 
+ vx = math.sin(a)*math.cos(t) 
+ vy = math.sin(a)*math.sin(t) 
+ vz = math.cos(a) 
+ # speed decreases with angle 
+ 
+ speed = 15.0*(1.0 - angleRatio*angleRatio) 
+ # add a set of calculated velocities 
+ 
+ velocities += 6*[speed*vx, speed*vy, speed*vz] 
+ # set up velocity vertex buffer 
+ self.velBuffer = glGenBuffers(1) 
+ glBindBuffer(GL_ARRAY_BUFFER, self.velBuffer) 
+ 
+ velData = numpy.array(velocities, numpy.float32) 
+ glBufferData(GL_ARRAY_BUFFER, 4*len(velData), velData, GL_STATIC_DRAW) 
+
+154 Python 极客项目编程 
+在行，定义了限制喷泉粒子轨迹的锥角。（注意，用内置math.radians()方法，
+将角度转换为弧度。）接下来，用10.1.1 节中讨论的公式，计算每个粒子的速度。 
+在行，生成一个随机分数，后面一行用它乘以最大倾斜角，来计算当前倾斜
+角。接着，在行生成方位角，因为random.random()返回值在[0，1]之间，所以用
+该值乘以2.0 * math.pi，得到0 至2 的一个随机弧度。 
+从行开始，利用球坐标公式，计算单位球面上的速度向量。在行，用行
+得到的角度比算出一个速度，它与垂直角度成反比。在行，计算粒子的最终速度，
+并针对两个三角形的所有6 个顶点，重复这个值。在行，利用Python 列表创建一
+个numpy 的数组，这就可以为这些速度创建一个VBO 了。最后，启用所有的顶点
+属性，并为顶点缓冲区设置数据格式（因为这个过程类似于第9 章，这里略过，直
+接讨论顶点着色器）。
+10.3.4  创建顶点着色器 
+顶点着色器处理各个顶点，从而计算粒子系统的轨迹。下面是它的代码：
+#version 330 core 
+in vec3 aVel; 
+in vec3 aVert; 
+in float aTime0; 
+in vec2 aTexCoord; 
+uniform mat4 uMVMatrix; 
+uniform mat4 uPMatrix; 
+uniform mat4 bMatrix; 
+uniform float uTime; 
+uniform float uLifeTime; 
+uniform vec4 uColor; 
+uniform vec3 uPos; 
+out vec4 vCol; 
+out vec2 vTexCoord; 
+顶点着色器对四边形的每个顶点执行，对粒子系统中的所有四边形。它首先定
+义属性数组中的一些变量，它代表要传入VBO 的数组。然后定义一些uniform 变量，
+它们在执行着色器时保持不变。最后定义out 数量，它们在顶点着色器中设置，并
+传递给片段着色器进行插值。
+现在，来看看着色器的main()函数： 
+void main() { 
+ // set position 
+ 
+ float dt = uTime - aTime0; 
+ 
+ float alpha = clamp(1.0 - 2.0*dt/uLifeTime, 0.0, 1.0); 
+ 
+ if(dt < 0.0 || dt > uLifeTime || alpha < 0.01) { 
+ // out of sight! 
+ gl_Position = vec4(0.0, 0.0, -1000.0, 1.0); 
+
+第10 章  粒子系统 155 
+ } 
+ else { 
+ // calculate new position 
+ 
+ vec3 accel = vec3(0.0, 0.0, -9.8); 
+ // apply a twist 
+ float PI = 3.14159265358979323846264; 
+ 
+ float theta = mod(100.0*length(aVel)*dt, 360.0)*PI/180.0; 
+ 
+ mat4 rot = mat4(vec4(cos(theta), sin(theta), 0.0, 0.0), 
+ vec4(-sin(theta), cos(theta), 0.0, 0.0), 
+ vec4(0.0, 0.0, 1.0, 0.0), 
+ vec4(0.0, 0.0, 0.0, 1.0)); 
+ // apply billboard matrix 
+ 
+ vec4 pos2 = bMatrix*rot*vec4(aVert, 1.0); 
+ // calculate position 
+ 
+ vec3 newPos = pos2.xyz + uPos + aVel*dt + 0.5*accel*dt*dt; 
+ // apply transformations 
+ 
+ gl_Position = uPMatrix * uMVMatrix * vec4(newPos, 1.0); 
+ } 
+ // set color 
+ 
+ vCol = vec4(uColor.rgb, alpha); 
+ // set texture coordinates 
+ vTexCoord = aTexCoord; 
+} 
+ 
+在行，针对特定的粒子计算当前经过的时间，这是当前时间步骤与该粒子的
+延迟时间之间的差。然后在行为顶点计算alpha 值，该值随着时间的流逝而减小，
+让粒子逐渐淡出。利用GLSL 中的clamp()，将值限制在范围[0，1]之内。 
+为了在粒子生命周期结束时让粒子消失，将它们放在OpenGL 的视锥之外，
+这样它们会被裁剪掉。在行，检查粒子的生命周期是否结束（根据粒子系统
+构造函数中的设置），或者其alpha 值低于特定值，这时将最终位置设置到视锥
+之外。
+在行，设置粒子加速度为9.8 米/秒2，即由于地球引力而产生的加速度。当
+粒子以较高的初始速度飞出喷泉时，为了让它们快速旋转，使用mod()方法（类似
+于Python 的取模运算%），在行，将角度值限制在范围[0，360]之内。在行，利
+用这个计算出的角度，绕四边形的z 轴旋转，根据绕z 轴旋转角度的变换矩阵公式，
+像下面这样：
+,z
+cos( )
+sin( )
+0.0
+0.0
+sin( )
+cos( )
+0.0
+0.0
+0.0
+0.0
+0.0
+0.0
+0.0
+0.0
+0.0 1.0
+R
+θ
+θ
+θ
+θ
+θ
+
+
+
+
+−
+
+
+= 
+
+
+
+
+
+在行，对粒子的顶点应用两个转换：刚刚计算出的旋转和用bMatrix 的公告
+板旋转。在行，利用前面讨论的运动方程，计算顶点的当前位置（该行中的uPos
+只是让你任意指定喷泉原点的位置）。
+
+156 Python 极客项目编程 
+在行，对粒子位置应用模型视图和投影矩阵。最后，在行和下一行中，设
+置的颜色和纹理坐标，传入片段着色器用于插值（请注意，在行基于计算设置顶
+点的alpha 值）。 
+10.3.5  创建片段着色器 
+现在，来看看片段着色器，它设置像素的颜色。
+#version 330 core 
+uniform sampler2D uSampler; 
+in vec4 vCol; 
+in vec2 vTexCoord; 
+out vec4 fragColor; 
+void main() { 
+ // get the texture color 
+ 
+ vec4 texCol = texture2D(uSampler, vec2(vTexCoord.s, vTexCoord.t)); 
+ // multiply texture color by set vertex color; use the vertex color alpha 
+ 
+ fragColor = vec4(texCol.rgb*vCol.rgb, vCol.a); 
+} 
+ 
+在行，用GLSL 的texture2D()方法，利用从顶点着色器传入的纹理坐标，为
+火花图像查找基础纹理颜色（从用作纹理的图像中查找的颜色）。然后，将这个纹
+理颜色值乘以火花喷泉的颜色，并将得到的颜色设置给输出变量fragColor。喷泉
+的颜色是在每个粒子系统重新启动时，由ParticleSystem 的restart()方法随机设置的。
+alpha 值是根据顶点着色器中的计算来设置的，并在渲染时用于混合。 
+10.3.6  渲染 
+代码按照以下步骤来渲染喷泉粒子系统：
+1．启用顶点/片断程序； 
+2．设置模型视图和投影矩阵； 
+3．基于当前摄像机的观看方向，计算并设置公告板矩阵； 
+4．针对位置、时间、生命周期和颜色，设置uniform 变量； 
+5．针对顶点、纹理坐标、时间延迟和速度，设置顶点属性数组； 
+6．启用纹理并绑定到粒子火花纹理； 
+7．禁用深度缓冲写入； 
+8．启用OpenGL 的混合； 
+9．绘制几何图形。 
+让我们来看看实现其中一些步骤的代码片段。
+计算公告板的旋转矩阵 
+这段代码计算公告板的旋转矩阵：
+
+第10 章  粒子系统 157 
+ N = camera.eye - camera.center 
+ 
+ N /= numpy.linalg.norm(N) 
+ U = camera.up 
+ U /= numpy.linalg.norm(U) 
+ R = numpy.cross(U, N) 
+ U2 = numpy.cross(N, R) 
+ 
+ bMatrix = numpy.array([R[0], U2[0], N[0], 0.0, 
+ R[1], U2[1], N[1], 0.0, 
+ R[2], U2[2], N[2], 0.0, 
+ 0.0, 0.0, 0.0, 1.0], numpy.float32) 
+ 
+ glUniformMatrix4fv(self.bMatrixU, 1, GL_TRUE, bMatrix) 
+你已经看到了构造一个旋转矩阵背后的理论，该矩阵让四边形保持为“公告
+板”，即对准观看方向（这是必需的，以便让喷泉粒子总是面对观察的方向）。在
+行，用numpy.linalg.norm()对向量规一化（这使得向量的大小等于1）。在行，将
+旋转矩阵组装为一个numpy 数组，然后在行将它放入程序中。 
+主要的渲染代码 
+主要的渲染代码用alpha 混合，让粒子系统有透明性。这种技术在OpenGL 中
+常用于渲染半透明物体。
+ # enable texture 
+ 
+ glActiveTexture(GL_TEXTURE0) 
+ 
+ glBindTexture(GL_TEXTURE_2D, self.texid) 
+ 
+ glUniform1i(self.samplerU, 0) 
+ # turn depth mask off 
+ if self.disableDepthMask: 
+ 
+ glDepthMask(GL_FALSE) 
+ # enable blending 
+ if self.enableBlend: 
+ 
+ glBlendFunc(GL_SRC_ALPHA, GL_ONE) 
+ 
+ glEnable(GL_BLEND) 
+ # bind VAO 
+ 
+ glBindVertexArray(self.vao) 
+ # draw 
+ 
+ glDrawArrays(GL_TRIANGLES, 0, 6*self.numP) 
+在行，激活第一个OpenGL 纹理单元（GL_TEXTURE0）。我们只有一个纹理
+单元，但由于在OpenGL 上下文中，同一时间可以激活多个纹理单元，所以针对每
+个纹理单元显式调用是良好的编程习惯。在行，激活纹理对象，它是在
+ParticalSystem 的构造函数中，利用glutils.loadTexture()和火花图像创建的。 
+纹理利用采样在着色器中访问，在行，设置采样变量使用第一个纹理单元
+GL_TEXTURE0。然后，利用OpenGL 混合切除纹理中的黑色像素，但这些“看不
+见”的像素仍然具有关联的深度值，可以掩盖那些在它们后面的、其他粒子的某些
+部分。为了避免这种情况，在行禁用深度缓存写入。 
+
+158 Python 极客项目编程 
+注意
+严格来说，这是错误的绘制方式，因为如果混合这些半透明的物体和不透
+明的物体，它们的深度测试就不正确。渲染这样的场景，正确的做法应该是先
+绘制不透明的物体，然后启用混合，按深度从后到前对半透明物体排序，最后
+绘制它们。但是，因为有这么多运动的粒子，这个简单的近似是可以接受的，
+而且最后，它看起来不错，而这才是你关心的。
+在行，设置OpenGL 混合功能，以便使用从片段着色器传入的源像素的alpha
+值，在行，启用OpenGL 混合。然后，在行绑定到创建的VAO，这启用了你建
+立的所有的顶点属性，在行，在屏幕上绘制绑定的顶点缓冲区对象。 
+10.3.7  Camera 类 
+最后，Camera 类设置了OpenGL 的观看参数： 
+# a simple camera class 
+class Camera: 
+ """helper class for viewing""" 
+ 
+ def __init__(self, eye, center, up): 
+ self.r = 10.0 
+ self.theta = 0 
+ self.eye = numpy.array(eye, numpy.float32) 
+ self.center = numpy.array(center, numpy.float32) 
+ self.up = numpy.array(up, numpy.float32) 
+ def rotate(self): 
+ """rotate eye by one step""" 
+ 
+ self.theta = (self.theta + 1) % 360 
+ # recalculate eye 
+ 
+ self.eye = self.center + numpy.array([ 
+ self.r*math.cos(math.radians(self.theta)), 
+ self.r*math.sin(math.radians(self.theta)), 
+ 0.0], numpy.float32) 
+三维立体图的特征通常在于3 个参数：眼睛位置、向上向量和方向向量。Camera
+类包含这些参数，并提供了一种便捷的方式，在每一个时间步骤旋转。
+在行的构造函数设置了camera 对象的初始值。调用rotate()方法时，增加旋
+转角度，并计算旋转后新的眼睛位置和方向。 
+注意
+点(r cos(θ), r sin(θ))表示一个点，它在以原点为中心、半径为r 的圆上，
+θ 是该点到原点的连线与x 轴的夹角。转换中使用了center，确保即使旋转中
+心不在原点，也能工作。
+10.4  粒子系统完整代码 
+这是粒子系统的完整代码。也可以在https://github.com/electronut/pp/tree/master/ 
+
+第10 章  粒子系统 159 
+particle-system/ps.py 找到它。 
+import sys, random, math 
+import OpenGL 
+from OpenGL.GL import * 
+import numpy 
+import glutils 
+strVS = """ 
+#version 330 core 
+in vec3 aVel; 
+in vec3 aVert; 
+in float aTime0; 
+in vec2 aTexCoord; 
+uniform mat4 uMVMatrix; 
+uniform mat4 uPMatrix; 
+uniform mat4 bMatrix; 
+uniform float uTime; 
+uniform float uLifeTime; 
+uniform vec4 uColor; 
+uniform vec3 uPos; 
+out vec4 vCol; 
+out vec2 vTexCoord; 
+void main() { 
+ // set position 
+ float dt = uTime - aTime0; 
+ float alpha = clamp(1.0 - 2.0*dt/uLifeTime, 0.0, 1.0); 
+ if(dt < 0.0 || dt > uLifeTime || alpha < 0.01) { 
+ // out of sight! 
+ gl_Position = vec4(0.0, 0.0, -1000.0, 1.0); 
+ } 
+ else { 
+ // calculate new position 
+ vec3 accel = vec3(0.0, 0.0, -9.8); 
+ // apply a twist 
+ float PI = 3.14159265358979323846264; 
+ float theta = mod(100.0*length(aVel)*dt, 360.0)*PI/180.0; 
+ mat4 rot = mat4(vec4(cos(theta), sin(theta), 0.0, 0.0), 
+ vec4(-sin(theta), cos(theta), 0.0, 0.0), 
+ vec4(0.0, 0.0, 1.0, 0.0), 
+ vec4(0.0, 0.0, 0.0, 1.0)); 
+ // apply billboard matrix 
+ vec4 pos2 = bMatrix*rot*vec4(aVert, 1.0); 
+ // calculate position 
+ vec3 newPos = pos2.xyz + uPos + aVel*dt + 0.5*accel*dt*dt; 
+ // apply transformations 
+ gl_Position = uPMatrix * uMVMatrix * vec4(newPos, 1.0); 
+ } 
+ // set color 
+ vCol = vec4(uColor.rgb, alpha); 
+ // set tex coords 
+ vTexCoord = aTexCoord; 
+} 
+""" 
+strFS = """ 
+
+160 Python 极客项目编程 
+#version 330 core 
+uniform sampler2D uSampler; 
+in vec4 vCol; 
+in vec2 vTexCoord; 
+out vec4 fragColor; 
+void main() { 
+ // get texture color 
+ vec4 texCol = texture(uSampler, vec2(vTexCoord.s, vTexCoord.t)); 
+ // multiply by set vertex color; use the vertex color alpha 
+ fragColor = vec4(texCol.rgb*vCol.rgb, vCol.a); 
+} 
+""" 
+# a simple camera class 
+class Camera: 
+ """helper class for viewing""" 
+ def __init__(self, eye, center, up): 
+ self.r = 10.0 
+ self.theta = 0 
+ self.eye = numpy.array(eye, numpy.float32) 
+ self.center = numpy.array(center, numpy.float32) 
+ self.up = numpy.array(up, numpy.float32) 
+ def rotate(self): 
+ """rotate eye by one step""" 
+ self.theta = (self.theta + 1) % 360 
+ # recalculate eye 
+ self.eye = self.center + numpy.array([ 
+ self.r*math.cos(math.radians(self.theta)), 
+ self.r*math.sin(math.radians(self.theta)), 
+ 0.0], numpy.float32) 
+# particle system class 
+class ParticleSystem: 
+ # initialization 
+ def __init__(self, numP): 
+ # number of particles 
+ self.numP = numP 
+ # time variable 
+ self.t = 0.0 
+ self.lifeTime = 5.0 
+ self.startPos = numpy.array([0.0, 0.0, 0.5]) 
+ # load texture 
+ self.texid = glutils.loadTexture('star.png') 
+ # create shader 
+ self.program = glutils.loadShaders(strVS, strFS) 
+ glUseProgram(self.program) 
+ # set sampler 
+ texLoc = glGetUniformLocation(self.program, b"uTex") 
+ glUniform1i(texLoc, 0) 
+ # uniforms 
+ self.timeU = glGetUniformLocation(self.program, b"uTime") 
+ self.lifeTimeU = glGetUniformLocation(self.program, b"uLifeTime") 
+ self.pMatrixUniform = glGetUniformLocation(self.program, b'uPMatrix') 
+ self.mvMatrixUniform = glGetUniformLocation(self.program, b"uMVMatrix") 
+
+第10 章  粒子系统 161 
+ self.bMatrixU = glGetUniformLocation(self.program, b"bMatrix") 
+ self.colorU = glGetUniformLocation(self.program, b"uColor") 
+ self.samplerU = glGetUniformLocation(self.program, b"uSampler") 
+ self.posU = glGetUniformLocation(self.program, b"uPos") 
+ # attributes 
+ self.vertIndex = glGetAttribLocation(self.program, b"aVert") 
+ self.texIndex = glGetAttribLocation(self.program, b"aTexCoord") 
+ self.time0Index = glGetAttribLocation(self.program, b"aTime0") 
+ self.velIndex = glGetAttribLocation(self.program, b"aVel") 
+ # render flags 
+ self.enableBillboard = True 
+ self.disableDepthMask = True 
+ self.enableBlend = True 
+ # which texture to use 
+ self.useStarTexture = True 
+ # restart - first time 
+ self.restart(numP) 
+ # step 
+ def step(self): 
+ # increment time 
+ self.t += 0.01 
+ # restart particle system 
+ def restart(self, numP): 
+ # set number of particles 
+ self.numP = numP 
+ # time variables 
+ self.t = 0.0 
+ self.lifeTime = 5.0 
+ # color 
+ self.col0 = numpy.array([random.random(), random.random(), 
+ random.random(), 1.0]) 
+ # create Vertex Arrays Object (VAO) 
+ self.vao = glGenVertexArrays(1) 
+ # bind VAO 
+ glBindVertexArray(self.vao) 
+ # create attribute arrays and vertex buffers: 
+ # vertices 
+ s = 0.2 
+ quadV = [ 
+ -s, s, 0.0, 
+ -s, -s, 0.0, 
+ s, s, 0.0, 
+ s, -s, 0.0, 
+ s, s, 0.0, 
+ -s, -s, 0.0 
+ ] 
+ vertexData = numpy.array(numP*quadV, numpy.float32) 
+ self.vertexBuffer = glGenBuffers(1) 
+ glBindBuffer(GL_ARRAY_BUFFER, self.vertexBuffer) 
+ glBufferData(GL_ARRAY_BUFFER, 4*len(vertexData), vertexData, 
+
+162 Python 极客项目编程 
+   GL_STATIC_DRAW) 
+ # texture coordinates 
+ quadT = [ 
+ 0.0, 1.0, 
+ 0.0, 0.0, 
+ 1.0, 1.0, 
+ 1.0, 0.0, 
+ 1.0, 1.0, 
+ 0.0, 0.0 
+   ] 
+ tcData = numpy.array(numP*quadT, numpy.float32) 
+ self.tcBuffer = glGenBuffers(1) 
+ glBindBuffer(GL_ARRAY_BUFFER, self.tcBuffer) 
+ glBufferData(GL_ARRAY_BUFFER, 4*len(tcData), tcData, GL_STATIC_DRAW) 
+ # time lags 
+ timeData = numpy.repeat(0.005*numpy.arange(numP, dtype=numpy.float32), 
+   4) 
+ self.timeBuffer = glGenBuffers(1) 
+ glBindBuffer(GL_ARRAY_BUFFER, self.timeBuffer) 
+ glBufferData(GL_ARRAY_BUFFER, 4*len(timeData), timeData, 
+ GL_STATIC_DRAW) 
+ # velocites 
+ velocities = [] 
+ # cone angle 
+ coneAngle = math.radians(20.0) 
+ # set up particle velocities 
+ for i in range(numP): 
+ # inclination 
+ angleRatio = random.random() 
+ a = angleRatio*coneAngle 
+ # azimuth 
+ t = random.random()*(2.0*math.pi) 
+ # get veocity on sphere 
+ vx = math.sin(a)*math.cos(t) 
+ vy = math.sin(a)*math.sin(t) 
+ vz = math.cos(a) 
+ # speed decreases with angle 
+ speed = 15.0*(1.0 - angleRatio*angleRatio) 
+ # add a set of calculated velocities 
+ velocities += 6*[speed*vx, speed*vy, speed*vz] 
+ # set up velocity vertex buffer 
+ self.velBuffer = glGenBuffers(1) 
+ glBindBuffer(GL_ARRAY_BUFFER, self.velBuffer) 
+ velData = numpy.array(velocities, numpy.float32) 
+ glBufferData(GL_ARRAY_BUFFER, 4*len(velData), velData, GL_STATIC_DRAW) 
+ # enable arrays 
+ glEnableVertexAttribArray(self.vertIndex) 
+ glEnableVertexAttribArray(self.texIndex) 
+ glEnableVertexAttribArray(self.time0Index) 
+ glEnableVertexAttribArray(self.velIndex) 
+ # set buffers 
+ glBindBuffer(GL_ARRAY_BUFFER, self.vertexBuffer) 
+ glVertexAttribPointer(self.vertIndex, 3, GL_FLOAT, GL_FALSE, 0, None) 
+ glBindBuffer(GL_ARRAY_BUFFER, self.tcBuffer) 
+ glVertexAttribPointer(self.texIndex, 2, GL_FLOAT, GL_FALSE, 0, None) 
+
+第10 章  粒子系统 163 
+ glBindBuffer(GL_ARRAY_BUFFER, self.velBuffer) 
+ glVertexAttribPointer(self.velIndex, 3, GL_FLOAT, GL_FALSE, 0, None) 
+ glBindBuffer(GL_ARRAY_BUFFER, self.timeBuffer) 
+ glVertexAttribPointer(self.time0Index, 1, GL_FLOAT, GL_FALSE, 0, None) 
+ # unbind VAO 
+ glBindVertexArray(0) 
+ # render the particle system 
+ def render(self, pMatrix, mvMatrix, camera): 
+ # use shader 
+ glUseProgram(self.program) 
+ # set projection matrix 
+ glUniformMatrix4fv(self.pMatrixUniform, 1, GL_FALSE, pMatrix) 
+ # set modelview matrix 
+ glUniformMatrix4fv(self.mvMatrixUniform, 1, GL_FALSE, mvMatrix) 
+ # set up a billboard matrix to keep quad aligned to view direction 
+ if self.enableBillboard: 
+ N = camera.eye - camera.center 
+ N /= numpy.linalg.norm(N) 
+ U = camera.up 
+ U /= numpy.linalg.norm(U) 
+ R = numpy.cross(U, N) 
+ U2 = numpy.cross(N, R) 
+ bMatrix = numpy.array([R[0], U2[0], N[0], 0.0, 
+ R[1], U2[1], N[1], 0.0, 
+ R[2], U2[2], N[2], 0.0, 
+ 0.0, 0.0, 0.0, 1.0], numpy.float32) 
+   glUniformMatrix4fv(self.bMatrixU, 1, GL_TRUE, bMatrix) 
+ else: 
+ # identity matrix 
+ bMatrix = numpy.array([1.0, 0.0, 0.0, 0.0, 
+ 0.0, 1.0, 0.0, 0.0, 
+ 0.0, 0.0, 1.0, 0.0, 
+ 0.0, 0.0, 0.0, 1.0], numpy.float32) 
+   glUniformMatrix4fv(self.bMatrixU, 1, GL_FALSE, bMatrix) 
+ # set start position 
+ glUniform3fv(self.posU, 1, self.startPos) 
+ # set time 
+ glUniform1f(self.timeU, self.t) 
+ #set lifetime 
+ glUniform1f(self.lifeTimeU, self.lifeTime) 
+ # set color 
+ glUniform4fv(self.colorU, 1, self.col0) 
+ # enable texture 
+ glActiveTexture(GL_TEXTURE0) 
+ glBindTexture(GL_TEXTURE_2D, self.texid) 
+ glUniform1i(self.samplerU, 0) 
+  # turn depth mask off 
+ if self.disableDepthMask: 
+ glDepthMask(GL_FALSE) 
+ # enable blending 
+ if self.enableBlend: 
+
+164 Python 极客项目编程 
+ glBlendFunc(GL_SRC_ALPHA, GL_ONE) 
+ glEnable(GL_BLEND) 
+ # bind VAO 
+ glBindVertexArray(self.vao) 
+ # draw 
+ glDrawArrays(GL_TRIANGLES, 0, 6*self.numP) 
+ # unbind VAO 
+ glBindVertexArray(0) 
+ # disable blend 
+ if self.enableBlend: 
+ glDisable(GL_BLEND) 
+ # turn depth mask on 
+ if self.disableDepthMask: 
+ glDepthMask(GL_TRUE) 
+ # disable texture 
+ glBindTexture(GL_TEXTURE_2D, 0) 
+这是火花喷泉的所有代码，但我们还要画一个红色的盒子代表喷泉粒子系统的
+来源。
+10.5  盒子代码 
+要让观众的注意力集中于喷泉，只要画一个没有任何灯光的红色立方体就行了。 
+import sys, random, math 
+import OpenGL 
+from OpenGL.GL import * 
+import numpy 
+import glutils 
+strVS = """ 
+#version 330 core 
+in vec3 aVert; 
+uniform mat4 uMVMatrix; 
+uniform mat4 uPMatrix; 
+out vec4 vCol; 
+void main() { 
+ // apply transformations 
+ gl_Position = uPMatrix * uMVMatrix * vec4(aVert, 1.0); 
+ // set color 
+ vCol = vec4(0.8, 0.0, 0.0, 1.0); 
+} 
+""" 
+strFS = """ 
+#version 330 core 
+in vec4 vCol; 
+out vec4 fragColor; 
+void main() { 
+
+第10 章  粒子系统 165 
+ // use vertex color 
+ fragColor = vCol; 
+} 
+""" 
+class Box: 
+ def __init__(self, side): 
+ self.side = side 
+  # load shaders 
+ self.program = glutils.loadShaders(strVS, strFS) 
+ glUseProgram(self.program) 
+ s = side/2.0 
+ vertices = [ 
+ -s, s, -s, 
+ -s, -s, -s, 
+ s, s, -s, 
+ s, -s, -s, 
+ s, s, -s, 
+ -s, -s, -s, 
+ -s, s, s, 
+ -s, -s, s, 
+ s, s, s, 
+ s, -s, s, 
+ s, s, s, 
+ -s, -s, s, 
+ -s, -s, s, 
+ -s, -s, -s, 
+ s, -s, s, 
+ s, -s, -s, 
+ s, -s, s, 
+ -s, -s, -s, 
+ -s, s, s, 
+ -s, s, -s, 
+ s, s, s, 
+ s, s, -s, 
+ s, s, s, 
+ -s, s, -s, 
+ -s, -s, s, 
+ -s, -s, -s, 
+ -s, s, s, 
+ -s, s, -s, 
+ -s, s, s, 
+ -s, -s, -s, 
+ s, -s, s, 
+ s, -s,-s, 
+ s, s, s, 
+ s, s, -s, 
+ s, s, s, 
+ s, -s,-s 
+ ] 
+ # set up vertex array object (VAO) 
+
+166 Python 极客项目编程 
+ self.vao = glGenVertexArrays(1) 
+ glBindVertexArray(self.vao) 
+ # set up VBOs 
+ vertexData = numpy.array(vertices, numpy.float32) 
+ self.vertexBuffer = glGenBuffers(1) 
+ glBindBuffer(GL_ARRAY_BUFFER, self.vertexBuffer) 
+ glBufferData(GL_ARRAY_BUFFER, 4*len(vertexData), vertexData, 
+   GL_STATIC_DRAW) 
+ #enable arrays 
+ self.vertIndex = glGetAttribLocation(self.program, "aVert") 
+ glEnableVertexAttribArray(self.vertIndex) 
+ # set buffers 
+ glBindBuffer(GL_ARRAY_BUFFER, self.vertexBuffer) 
+ glVertexAttribPointer(self.vertIndex, 3, GL_FLOAT, GL_FALSE, 0, None) 
+ # unbind VAO 
+ glBindVertexArray(0) 
+def render(self, pMatrix, mvMatrix): 
+ # use shader 
+ glUseProgram(self.program) 
+ # set projection matrix 
+ glUniformMatrix4fv(glGetUniformLocation(self.program, 'uPMatrix'), 
+   1, GL_FALSE, pMatrix) 
+ # set modelview matrix 
+ glUniformMatrix4fv(glGetUniformLocation(self.program, 'uMVMatrix'), 
+ 1, GL_FALSE, mvMatrix) 
+ # bind VAO 
+ glBindVertexArray(self.vao) 
+ # draw 
+ glDrawArrays(GL_TRIANGLES, 0, 36) 
+ # unbind VAO 
+ glBindVertexArray(0) 
+盒子的代码使用简单的顶点和片段着色器来绘制一个立方体。这里使用的概念
+与本章前面和第9 章中讨论的相同。 
+10.6  主程序代码 
+该项目的主程序源文件是psmain.py，它设置了GLFW 窗口，处理了键盘事件，
+并创建粒子系统。如果想看到完整的程序代码，请跳到10.7 节。 
+class PSMaker: 
+ """GLFW Rendering window class for Particle System""" 
+ def __init__(self): 
+ 
+ self.camera = Camera([15.0, 0.0, 2.5], 
+ [0.0, 0.0, 2.5], 
+ [0.0, 0.0, 1.0]) 
+ self.aspect = 1.0 
+ self.numP = 300 
+ self.t = 0 
+ # flag to rotate camera view 
+ self.rotate = True 
+ # save current working directory 
+
+第10 章  粒子系统 167 
+ cwd = os.getcwd() 
+ # initialize glfw; this changes cwd 
+ 
+ glfw.glfwInit() 
+ # restore cwd 
+ os.chdir(cwd) 
+ # version hints 
+ glfw.glfwWindowHint(glfw.GLFW_CONTEXT_VERSION_MAJOR, 3) 
+ glfw.glfwWindowHint(glfw.GLFW_CONTEXT_VERSION_MINOR, 3) 
+ glfw.glfwWindowHint(glfw.GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE) 
+ glfw.glfwWindowHint(glfw.GLFW_OPENGL_PROFILE, 
+ glfw.GLFW_OPENGL_CORE_PROFILE) 
+ # make a window 
+ self.width, self.height = 640, 480 
+ self.aspect = self.width/float(self.height) 
+ self.win = glfw.glfwCreateWindow(self.width, self.height, 
+ b"Particle System") 
+ # make context current 
+ glfw.glfwMakeContextCurrent(self.win) 
+ # initialize GL 
+ glViewport(0, 0, self.width, self.height) 
+ glEnable(GL_DEPTH_TEST) 
+ glClearColor(0.2, 0.2, 0.2,1.0) 
+ # set window callbacks 
+ glfw.glfwSetMouseButtonCallback(self.win, self.onMouseButton) 
+ glfw.glfwSetKeyCallback(self.win, self.onKeyboard) 
+ glfw.glfwSetWindowSizeCallback(self.win, self.onSize) 
+ # create 3D 
+ 
+ self.psys = ParticleSystem(self.numP) 
+ 
+ self.box = Box(1.0) 
+ # exit flag 
+ 
+ self.exitNow = False 
+类PSMaker 创建粒子系统，处理GLFW 窗口，并负责渲染喷泉和表示其源头
+的盒子。在行，创建一个Camera 对象，它可以用于在OpenGL 中设置观看参数。
+从行开始的代码块设置了GLFW 窗口，在行，创建ParticleSystem 对象，在
+行，创建Box 对象。在行，是在主GLFW 渲染循环中使用的退出标志，接下来你
+会看到。
+10.6.1  每步更新这些粒子 
+通过在主程序循环中更新一个时间变量，我们创建了动画。主程序循环进而又
+更新顶点着色器中的时间变量。用这个新时间值，计算并渲染下一帧，从而更新这
+些粒子的位置。着色器计算粒子的新朝向，也让它们旋转。此外，着色器计算alpha
+值，它是时间变量的函数，将用于最后的渲染，实现火花逐渐淡出。
+
+168 Python 极客项目编程 
+step()方法为每个时间步骤更新粒子系统。 
+ def step(self): 
+ # increment time 
+ 
+ self.t += 10 
+ 
+ self.psys.step() 
+ # rotate eye 
+ if self.rotate: 
+ 
+   self.camera.rotate() 
+ # restart every 5 seconds 
+ if not int(self.t) % 5000: 
+ 
+ self.psys.restart(self.numP) 
+在行，增加时间变量，它以毫秒为单位记录流逝的时间。在行，调用
+ParticleSystem 的step()方法，这样它可以自行更新。如果设置了标志，就在行旋
+转相机。每5 秒钟（5000 毫秒），粒子系统在行重新启动. 
+10.6.2  键盘处理程序 
+现在，来看看GLFW 窗口的键盘处理程序。 
+ 
+ def onKeyboard(self, win, key, scancode, action, mods): 
+ #print 'keyboard: ', win, key, scancode, action, mods 
+ if action == glfw.GLFW_PRESS: 
+ # ESC to quit 
+ if key == glfw.GLFW_KEY_ESCAPE: 
+   self.exitNow = True 
+ elif key == glfw.GLFW_KEY_R: 
+   self.rotate = not self.rotate 
+ elif key == glfw.GLFW_KEY_B: 
+ # toggle billboarding 
+   self.psys.enableBillboard = not self.psys.enableBillboard 
+ elif key == glfw.GLFW_KEY_D: 
+ # toggle depth mask 
+ self.psys.disableDepthMask = not self.psys.disableDepthMask 
+ elif key == glfw.GLFW_KEY_T: 
+ # toggle transparency 
+ self.psys.enableBlend = not self.psys.enableBlend 
+行的键盘处理程序，主要在关闭用于绘制粒子系统的各种渲染技巧时，让你
+很容易看到所发生的事情。这段代码让你切换旋转、公告板、深度遮掩和透明度。 
+10.6.3  管理主程序循环 
+使用GLFW 时，必须管理自己的主程序循环。下面是这个程序中使用的循环： 
+ def run(self): 
+ # initializer timer 
+ glfw.SetTime(0) 
+ t = 0.0 
+ 
+ while not glfw.glfwWindowShouldClose(self.win) and not self.exitNow: 
+ # update every x seconds 
+ 
+ currT = glfw.glfwGetTime() 
+ if currT - t > 0.01: 
+ # update time 
+
+第10 章  粒子系统 169 
+ t = currT 
+ # clear 
+ glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT) 
+ # render 
+ pMatrix = glutils.perspective(100.0, self.aspect, 0.1, 100.0) 
+ # modelview matrix 
+ mvMatrix = glutils.lookAt(self.camera.eye, self.camera.center, 
+ self.camera.up) 
+ # draw nontransparent object first 
+ 
+ self.box.render(pMatrix, mvMatrix) 
+ # render 
+ 
+ self.psys.render(pMatrix, mvMatrix, self.camera) 
+ # step 
+ 
+ self.step() 
+ glfw.glfwSwapBuffers(self.win) 
+ # poll for and process events 
+ glfw.glfwPollEvents() 
+ # end 
+ glfw.glfwTerminate() 
+这段代码与第9 章中使用的循环几乎是相同的。在行，如果exit 标志已设置
+或GLFW 窗口关闭，while 循环就退出。在行和后面一行，使用GLFW 计时器，
+仅当时间流逝一定量（0.1 秒）时才进行渲染，从而控制渲染的帧速率。在行绘制
+盒子，在行绘制粒子系统（渲染的顺序很重要：透明物体总是最后绘制，这样它
+们能够与场景中不透明的物体正确地混合和深度缓冲）。在行，针对当前时间步骤
+更新粒子系统。
+10.7  完整主程序代码 
+下面是psmain.py 的完整代码。也可以在https://github.com/electronut/pp/tree/ 
+master/particle-system/找到这段代码。 
+import sys, os, math, numpy 
+import OpenGL 
+from OpenGL.GL import * 
+import numpy 
+from ps import ParticleSystem, Camera 
+from box import Box 
+import glutils 
+import glfw 
+class PSMaker: 
+ """GLFW Rendering window class for Particle System""" 
+ def __init__(self): 
+ self.camera = Camera([15.0, 0.0, 2.5], 
+ [0.0, 0.0, 2.5], 
+ [0.0, 0.0, 1.0]) 
+
+170 Python 极客项目编程 
+ self.aspect = 1.0 
+ self.numP = 300 
+ self.t = 0 
+ # flag to rotate camera view 
+ self.rotate = True 
+ # save current working directory 
+ cwd = os.getcwd() 
+ # initialize glfw; this changes cwd 
+ glfw.glfwInit() 
+ # restore cwd 
+ os.chdir(cwd) 
+ # version hints 
+ glfw.glfwWindowHint(glfw.GLFW_CONTEXT_VERSION_MAJOR, 3) 
+ glfw.glfwWindowHint(glfw.GLFW_CONTEXT_VERSION_MINOR, 3) 
+ glfw.glfwWindowHint(glfw.GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE) 
+ glfw.glfwWindowHint(glfw.GLFW_OPENGL_PROFILE, 
+ glfw.GLFW_OPENGL_CORE_PROFILE) 
+ # make a window 
+ self.width, self.height = 640, 480 
+ self.aspect = self.width/float(self.height) 
+ self.win = glfw.glfwCreateWindow(self.width, self.height, 
+ b"Particle System") 
+ # make context current 
+ glfw.glfwMakeContextCurrent(self.win) 
+ # initialize GL 
+ glViewport(0, 0, self.width, self.height) 
+ glEnable(GL_DEPTH_TEST) 
+ glClearColor(0.2, 0.2, 0.2,1.0) 
+ # set window callbacks 
+ glfw.glfwSetMouseButtonCallback(self.win, self.onMouseButton) 
+ glfw.glfwSetKeyCallback(self.win, self.onKeyboard) 
+ glfw.glfwSetWindowSizeCallback(self.win, self.onSize) 
+ # create 3D 
+ self.psys = ParticleSystem(self.numP) 
+ self.box = Box(1.0) 
+ # exit flag 
+ self.exitNow = False 
+ def onMouseButton(self, win, button, action, mods): 
+ #print 'mouse button: ', win, button, action, mods 
+ pass 
+ def onKeyboard(self, win, key, scancode, action, mods): 
+ #print 'keyboard: ', win, key, scancode, action, mods 
+ if action == glfw.GLFW_PRESS: 
+ # ESC to quit 
+ if key == glfw.GLFW_KEY_ESCAPE: 
+   self.exitNow = True 
+ elif key == glfw.GLFW_KEY_R: 
+ self.rotate = not self.rotate 
+
+第10 章  粒子系统 171 
+ elif key == glfw.GLFW_KEY_B: 
+ # toggle billboarding 
+   self.psys.enableBillboard = not self.psys.enableBillboard 
+ elif key == glfw.GLFW_KEY_D: 
+ # toggle depth mask 
+ self.psys.disableDepthMask = not self.psys.disableDepthMask 
+ elif key == glfw.GLFW_KEY_T: 
+ # toggle transparency 
+ self.psys.enableBlend = not self.psys.enableBlend 
+ def onSize(self, win, width, height): 
+ #print 'onsize: ', win, width, height 
+ self.width = width 
+ self.height = height 
+ self.aspect = width/float(height) 
+ glViewport(0, 0, self.width, self.height) 
+ def step(self): 
+ # increment time 
+ self.t += 10 
+ self.psys.step() 
+ # rotate eye 
+ if self.rotate: 
+   self.camera.rotate() 
+ # restart every 5 seconds 
+ if not int(self.t) % 5000: 
+ self.psys.restart(self.numP) 
+ def run(self): 
+ # initializer timer 
+ glfw.glfwSetTime(0) 
+ t = 0.0 
+ while not glfw.glfwWindowShouldClose(self.win) and not self.exitNow: 
+ # update every x seconds 
+ currT = glfw.glfwGetTime() 
+ if currT - t > 0.01: 
+ # update time 
+ t = currT 
+ # clear 
+ glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT) 
+ # render 
+ pMatrix = glutils.perspective(100.0, self.aspect, 0.1, 100.0) 
+ # modelview matrix 
+ mvMatrix = glutils.lookAt(self.camera.eye, self.camera.center, 
+ self.camera.up) 
+ # draw nontransparent object first 
+ self.box.render(pMatrix, mvMatrix) 
+ # render 
+ self.psys.render(pMatrix, mvMatrix, self.camera) 
+ # step 
+ self.step() 
+ glfw.glfwSwapBuffers(self.win) 
+ # poll for and process events 
+ glfw.glfwPollEvents() 
+
+172 Python 极客项目编程 
+ # end 
+ glfw.glfwTerminate() 
+# main() function 
+def main(): 
+ # use sys.argv if needed 
+ print('starting particle system...') 
+ prog = PSMaker() 
+ prog.run() 
+# call main 
+if __name__ == '__main__': 
+ main() 
+10.8  运行程序 
+要运行该项目，请输入以下命令：
+$ python3 psmain.py 
+本章开始的图10-1 展示了输出。 
+10.9  小结 
+本章用Python 和OpenGL 创建了喷泉粒子系统。我们学习了创建粒子系统的数
+学模型，建立了着色器程序，并利用了一些OpenGL 技巧，以逼真的方式渲染粒子。 
+10.10  实验 
+下面有一些想法，可以用更多的方式来试验粒子系统动画。
+1．如果每个粒子的喷射没有时间延迟，看看情况如何。 
+2．让喷泉中的粒子在喷射时逐渐变大（提示：缩放顶点着色器的四顶点）。 
+3．这些代码让每个粒子遵循完美的抛物线，因为它从喷泉喷出。请为粒子的
+路径增加一些随机性（提示：研究GLSL 的noise()方法，你可以在顶点着色器中
+使用）。
+4．在喷泉中的粒子遵循抛物线轨迹，上升，然后由于重力作用下落。你能让它
+们跌落到地板时反弹吗？可能需要增加粒子的寿命来实现（提示：地板位于z = 0.0
+处。在顶点着色器中，当粒子接近地面时，反转速度的z 分量）。 

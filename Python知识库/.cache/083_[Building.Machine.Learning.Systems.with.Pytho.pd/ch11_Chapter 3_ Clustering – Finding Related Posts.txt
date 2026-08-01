@@ -1,0 +1,879 @@
+Clustering – Finding 
+Related Posts
+In the previous chapter, we have learned how to find classes or categories of 
+individual data points. With a handful of training data items that were paired  
+with their respective classes, we learned a model that we can now use to classify 
+future data items. We called this supervised learning, as the learning was guided  
+by a teacher; in our case the teacher had the form of correct classifications.
+Let us now imagine that we do not possess those labels by which we could learn  
+the classification model. This could be, for example, because they were too expensive 
+to collect. What could we have done in that case?
+Well, of course, we would not be able to learn a classification model. Still, we could 
+find some pattern within the data itself. This is what we will do in this chapter, 
+where we consider the challenge of a "question and answer" website. When a user 
+browses our site looking for some particular information, the search engine will most 
+likely point him/her to a specific answer. To improve the user experience, we now 
+want to show all related questions with their answers. If the presented answer is not 
+what he/she was looking for, he/she can easily see the other available answers and 
+hopefully stay on our site.
+The naive approach would be to take the post, calculate its similarity to all other 
+posts, and display the top N most similar posts as links on the page. This will quickly 
+become very costly. Instead, we need a method that quickly finds all related posts.
+
+Clustering – Finding Related Posts
+[ 50 ]
+We will achieve this goal in this chapter using clustering. This is a method of 
+arranging items so that similar items are in one cluster and dissimilar items are in 
+distinct ones. The tricky thing that we have to tackle first is how to turn text into 
+something on which we can calculate similarity. With such a measurement for 
+similarity, we will then proceed to investigate how we can leverage that to quickly 
+arrive at a cluster that contains similar posts. Once there, we will only have to 
+check out those documents that also belong to that cluster. To achieve this, we will 
+introduce the marvelous Scikit library, which comes with diverse machine-learning 
+methods that we will also use in the following chapters.
+Measuring the relatedness of posts
+From the machine learning point of view, raw text is useless. Only if we manage 
+to transform it into meaningful numbers, can we feed it into our machine-learning 
+algorithms such as clustering. The same is true for more mundane operations on text, 
+such as similarity measurement.
+How not to do it
+One text similarity measure is the Levenshtein distance, which also goes by the name 
+edit distance. Let's say we have two words, "machine" and "mchiene". The similarity 
+between them can be expressed as the minimum set of edits that are necessary to turn 
+one word into the other. In this case, the edit distance would be 2, as we have to add 
+an "a" after "m" and delete the first "e". This algorithm is, however, quite costly, as it is 
+bound by the product of the lengths of the first and second words.
+Looking at our posts, we could cheat by treating the whole word as characters and 
+performing the edit distance calculation on the word level. Let's say we have two 
+posts (let's concentrate on the title for the sake of simplicity), "How to format my 
+hard disk" and "Hard disk format problems"; we would have an edit distance of  
+five (removing "how", "to", "format", "my", and then adding "format" and "problems" 
+at the end). Therefore, one could express the difference between two posts as the 
+number of words that have to be added or deleted so that one text morphs into 
+the other. Although we could speed up the overall approach quite a bit, the time 
+complexity stays the same.
+Even if it would have been fast enough, there is another problem. The post above the 
+word "format" accounts for an edit distance of two (deleting it first, then adding it). So 
+our distance doesn't seem to be robust enough to take word reordering into account.
+
+Chapter 3
+[ 51 ]
+How to do it
+More robust than edit distance is the so-called bag-of-word approach. It uses simple 
+word counts as its basis. For each word in the post, its occurrence is counted and 
+noted in a vector. Not surprisingly, this step is also called vectorization. The vector is 
+typically huge as it contains as many elements as the words that occur in the whole 
+dataset. Take for instance two example posts with the following word counts:
+Word
+Occurrences in 
+Post 1
+Occurrences in 
+Post 2
+disk
+1
+1
+format
+1
+1
+how
+1
+0
+hard
+1
+1
+my
+1
+0
+problems
+0
+1
+to
+1
+0
+The columns Post 1 and Post 2 can now be treated as simple vectors. We could 
+simply calculate the Euclidean distance between the vectors of all posts and take  
+the nearest one (too slow, as we have just found out). As such, we can use them  
+later in the form of feature vectors in the following clustering steps:
+1.	 Extract the salient features from each post and store it as a vector per post.
+2.	 Compute clustering on the vectors.
+3.	 Determine the cluster for the post in question.
+4.	 From this cluster, fetch a handful of posts that are different from the post in 
+question. This will increase diversity.
+However, there is some more work to be done before we get there, and before we  
+can do that work, we need some data to work on.
+Preprocessing – similarity measured as 
+similar number of common words
+As we have seen previously, the bag-of-word approach is both fast and robust. 
+However, it is not without challenges. Let's dive directly into them.
+
+Clustering – Finding Related Posts
+[ 52 ]
+Converting raw text into a bag-of-words
+We do not have to write a custom code for counting words and representing those 
+counts as a vector. Scikit's CountVectorizer does the job very efficiently. It also 
+has a very convenient interface. Scikit's functions and classes are imported via the 
+sklearn package as follows:
+>>> from sklearn.feature_extraction.text import CountVectorizer
+>>> vectorizer = CountVectorizer(min_df=1)
+The parameter min_df determines how CountVectorizer treats words that are not 
+used frequently (minimum document frequency). If it is set to an integer, all words 
+occurring less than that value will be dropped. If it is a fraction, all words that occur 
+less than that fraction of the overall dataset will be dropped. The parameter max_df 
+works in a similar manner. If we print the instance, we see what other parameters 
+Scikit provides together with their default values:
+>>> print(vectorizer)
+CountVectorizer(analyzer=word, binary=False, charset=utf-8, 
+charset_error=strict, dtype=<type 'long'>, input=content, 
+lowercase=True, max_df=1.0, max_features=None, max_n=None, 
+min_df=1, min_n=None, ngram_range=(1, 1), preprocessor=None, 
+stop_words=None, strip_accents=None, token_pattern=(?u)\b\w\w+\b, 
+tokenizer=None, vocabulary=None)
+We see that, as expected, the counting is done at word level (analyzer=word)  
+and the words are determined by the regular expression pattern token_pattern.  
+It would, for example, tokenize "cross-validated" into "cross" and "validated". Let  
+us ignore the other parameters for now.
+>>> content = ["How to format my hard disk", " Hard disk format 
+problems "]
+>>> X = vectorizer.fit_transform(content)
+>>> vectorizer.get_feature_names() 
+[u'disk', u'format', u'hard', u'how', u'my', u'problems', u'to']
+The vectorizer has detected seven words for which we can fetch the  
+counts individually:
+>>> print(X.toarray().transpose())
+array([[1, 1],
+       [1, 1],
+       [1, 1],
+       [1, 0],
+       [1, 0],
+       [0, 1],
+       [1, 0]], dtype=int64)
+
+Chapter 3
+[ 53 ]
+This means that the first sentence contains all the words except for "problems", while 
+the second contains all except "how", "my", and "to". In fact, these are exactly the 
+same columns as seen in the previous table. From X, we can extract a feature vector 
+that we can use to compare the two documents with each other.
+First we will start with a naive approach to point out some preprocessing 
+peculiarities we have to account for. So let us pick a random post, for which we 
+will then create the count vector. We will then compare its distance to all the count 
+vectors and fetch the post with the smallest one.
+Counting words
+Let us play with the toy dataset consisting of the following posts:
+Post 
+filename
+Post content
+01.txt
+This is a toy post about machine learning. Actually, it contains 
+not much interesting stuff.
+02.txt
+Imaging databases can get huge.
+03.txt
+Most imaging databases safe images permanently.
+04.txt
+Imaging databases store images.
+05.txt
+Imaging databases store images. Imaging databases store 
+images. Imaging databases store images.
+In this post dataset, we want to find the most similar post for the short post  
+"imaging databases".
+Assuming that the posts are located in the folder DIR, we can feed CountVectorizer 
+with it as follows:
+>>> posts = [open(os.path.join(DIR, f)).read() for f in 
+os.listdir(DIR)]
+>>> from sklearn.feature_extraction.text import CountVectorizer
+>>> vectorizer = CountVectorizer(min_df=1)
+We have to notify the vectorizer about the full dataset so that it knows upfront what 
+words are to be expected, as shown in the following code:
+>>> X_train = vectorizer.fit_transform(posts)
+>>> num_samples, num_features = X_train.shape
+>>> print("#samples: %d, #features: %d" % (num_samples,  
+num_features)) #samples: 5, #features: 25
+
+Clustering – Finding Related Posts
+[ 54 ]
+Unsurprisingly, we have five posts with a total of 25 different words. The following 
+words that have been tokenized will be counted:
+>>> print(vectorizer.get_feature_names()) 
+[u'about', u'actually', u'capabilities', u'contains', u'data',  
+u'databases', u'images', u'imaging', u'interesting', u'is', u'it',  
+u'learning', u'machine', u'most', u'much', u'not', u'permanently',  
+u'post', u'provide', u'safe', u'storage', u'store', u'stuff',  
+u'this', u'toy']
+Now we can vectorize our new post as follows:
+>>> new_post = "imaging databases"
+>>> new_post_vec = vectorizer.transform([new_post])
+Note that the count vectors returned by the transform method are sparse. That is, 
+each vector does not store one count value for each word, as most of those counts 
+would be zero (post does not contain the word). Instead, it uses the more memory 
+efficient implementation coo_matrix (for "COOrdinate"). Our new post, for instance, 
+actually contains only two elements:
+>>> print(new_post_vec)
+  (0, 7)1
+  (0, 5)1
+Via its member toarray(), we can again access full ndarray as follows:
+>>> print(new_post_vec.toarray()) 
+[[0 0 0 0 0 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]]
+We need to use the full array if we want to use it as a vector for similarity 
+calculations. For the similarity measurement (the naive one), we calculate the 
+Euclidean distance between the count vectors of the new post and all the old  
+posts as follows:
+>>> import scipy as sp
+>>> def dist_raw(v1, v2):
+>>> delta = v1-v2
+>>> return sp.linalg.norm(delta.toarray())
+The norm() function calculates the Euclidean norm (shortest distance). With dist_
+raw, we just need to iterate over all the posts and remember the nearest one:
+>>> import sys
+>>> best_doc = None
+>>> best_dist = sys.maxint
+>>> best_i = None
+>>> for i in range(0, num_samples):
+
+Chapter 3
+[ 55 ]
+...     post = posts[i]
+...     if post==new_post:
+...         continue
+...     post_vec = X_train.getrow(i)
+...     d = dist(post_vec, new_post_vec)
+...     print "=== Post %i with dist=%.2f: %s"%(i, d, post)
+...     if d<best_dist:
+...         best_dist = d
+...         best_i = i
+>>> print("Best post is %i with dist=%.2f"%(best_i, best_dist))
+=== Post 0 with dist=4.00: This is a toy post about machine learning. 
+Actually, it contains not much interesting stuff.
+=== Post 1 with dist=1.73: Imaging databases provide storage 
+capabilities.
+=== Post 2 with dist=2.00: Most imaging databases safe images 
+permanently.
+=== Post 3 with dist=1.41: Imaging databases store data.
+=== Post 4 with dist=5.10: Imaging databases store data. Imaging 
+databases store data. Imaging databases store data.
+Best post is 3 with dist=1.41
+Congratulations! We have our first similarity measurement. Post 0 is most dissimilar 
+from our new post. Quite understandably, it does not have a single word in common 
+with the new post. We can also understand that Post 1 is very similar to the new 
+post, but not to the winner, as it contains one word more than Post 3 that is not 
+contained in the new post.
+Looking at posts 3 and 4, however, the picture is not so clear any more. Post 4 is the 
+same as Post 3, duplicated three times. So, it should also be of the same similarity to 
+the new post as Post 3.
+Printing the corresponding feature vectors explains the reason:
+>>> print(X_train.getrow(3).toarray())
+[[0 0 0 0 1 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0]]
+>>> print(X_train.getrow(4).toarray())
+[[0 0 0 0 3 3 0 3 0 0 0 0 0 0 0 0 0 0 0 0 0 3 0 0 0]]
+Obviously, using only the counts of the raw words is too simple. We will have to 
+normalize them to get vectors of unit length.
+
+Clustering – Finding Related Posts
+[ 56 ]
+Normalizing the word count vectors
+We will have to extend dist_raw to calculate the vector distance, not on the raw 
+vectors but on the normalized ones instead:
+>>> def dist_norm(v1, v2):
+...    v1_normalized = v1/sp.linalg.norm(v1.toarray())
+...    v2_normalized = v2/sp.linalg.norm(v2.toarray())
+...    delta = v1_normalized - v2_normalized
+...    return sp.linalg.norm(delta.toarray())
+This leads to the following similarity measurement:
+=== Post 0 with dist=1.41: This is a toy post about machine learning. 
+Actually, it contains not much interesting stuff.
+=== Post 1 with dist=0.86: Imaging databases provide storage 
+capabilities.
+=== Post 2 with dist=0.92: Most imaging databases safe images 
+permanently.
+=== Post 3 with dist=0.77: Imaging databases store data.
+=== Post 4 with dist=0.77: Imaging databases store data. Imaging 
+databases store data. Imaging databases store data.
+Best post is 3 with dist=0.77
+This looks a bit better now. Post 3 and Post 4 are calculated as being equally similar. 
+One could argue whether that much repetition would be a delight to the reader, but 
+from the point of counting the words in the posts, this seems to be right.
+Removing less important words
+Let us have another look at Post 2. Of its words that are not in the new post, we have 
+"most", "safe", "images", and "permanently". They are actually quite different in the 
+overall importance to the post. Words such as "most" appear very often in all sorts of 
+different contexts, and words such as this are called stop words. They do not carry 
+as much information, and thus should not be weighed as much as words such as 
+"images", that don't occur often in different contexts. The best option would be to 
+remove all words that are so frequent that they do not help to distinguish between 
+different texts. These words are called stop words.
+As this is such a common step in text processing, there is a simple parameter in 
+CountVectorizer to achieve this, as follows:
+>>> vectorizer = CountVectorizer(min_df=1, stop_words='english')
+
+Chapter 3
+[ 57 ]
+If you have a clear picture of what kind of stop words you would want to remove, 
+you can also pass a list of them. Setting stop_words to "english" will use a set of 
+318 English stop words. To find out which ones they are, you can use get_stop_
+words():
+>>> sorted(vectorizer.get_stop_words())[0:20]
+['a', 'about', 'above', 'across', 'after', 'afterwards', 'again', 
+'against', 'all', 'almost', 'alone', 'along', 'already', 'also', 
+'although', 'always', 'am', 'among', 'amongst', 'amoungst']
+The new word list is seven words lighter:
+[u'actually', u'capabilities', u'contains', u'data', u'databases', 
+u'images', u'imaging', u'interesting', u'learning', u'machine', 
+u'permanently', u'post', u'provide', u'safe', u'storage', u'store', 
+u'stuff', u'toy']
+Without stop words, we arrive at the following similarity measurement:
+=== Post 0 with dist=1.41: This is a toy post about machine learning. 
+Actually, it contains not much interesting stuff.
+=== Post 1 with dist=0.86: Imaging databases provide storage 
+capabilities.
+=== Post 2 with dist=0.86: Most imaging databases safe images 
+permanently.
+=== Post 3 with dist=0.77: Imaging databases store data.
+=== Post 4 with dist=0.77: Imaging databases store data. Imaging 
+databases store data. Imaging databases store data.
+Best post is 3 with dist=0.77
+Post 2 is now on par with Post 1. Overall, it has, however, not changed much as our 
+posts are kept short for demonstration purposes. It will become vital when we look 
+at real-world data.
+Stemming
+One thing is still missing. We count similar words in different variants as different 
+words. Post 2, for instance, contains "imaging" and "images". It would make sense to 
+count them together. After all, it is the same concept they are referring to.
+We need a function that reduces words to their specific word stem. Scikit does not 
+contain a stemmer by default. With the Natural Language Toolkit (NLTK), we can 
+download a free software toolkit, which provides a stemmer that we can easily plug 
+into CountVectorizer.
+
+Clustering – Finding Related Posts
+[ 58 ]
+Installing and using NLTK
+How to install NLTK on your operating system is described in detail at  
+http://nltk.org/install.html. Basically, you will need to install the two 
+packages NLTK and PyYAML.
+To check whether your installation was successful, open a Python interpreter and 
+type the following:
+>>> import nltk
+You will find a very nice tutorial for NLTK in the book Python 
+Text Processing with NLTK 2.0 Cookbook. To play a little bit with a 
+stemmer, you can visit the accompanied web page http://text-
+processing.com/demo/stem/.
+NLTK comes with different stemmers. This is necessary, because every language has 
+a different set of rules for stemming. For English, we can take SnowballStemmer.
+>>> import nltk.stem 
+>>> s= nltk.stem.SnowballStemmer('english')
+>>> s.stem("graphics")
+u'graphic'
+>>> s.stem("imaging")
+u'imag'
+>>> s.stem("image")
+u'imag'
+>>> s.stem("imagination")u'imagin'
+>>> s.stem("imagine")
+u'imagin'
+Note that stemming does not necessarily have to result into valid 
+English words.
+It also works with verbs as follows:
+>>> s.stem("buys")
+u'buy'
+>>> s.stem("buying")
+u'buy'
+>>> s.stem("bought")
+u'bought'
+
+Chapter 3
+[ 59 ]
+Extending the vectorizer with NLTK's stemmer
+We need to stem the posts before we feed them into CountVectorizer. The class 
+provides several hooks with which we could customize the preprocessing and 
+tokenization stages. The preprocessor and tokenizer can be set in the constructor 
+as parameters. We do not want to place the stemmer into any of them, because we 
+would then have to do the tokenization and normalization by ourselves. Instead,  
+we overwrite the method build_analyzer as follows:
+>>> import nltk.stem
+>>> english_stemmer = nltk.stem.SnowballStemmer('english')
+>>> class StemmedCountVectorizer(CountVectorizer):
+...     def build_analyzer(self):
+...         analyzer = super(StemmedCountVectorizer, self).build_
+analyzer()
+...         return lambda doc: (english_stemmer.stem(w) for w in 
+analyzer(doc))
+>>> vectorizer = StemmedCountVectorizer(min_df=1, stop_
+words='english')
+This will perform the following steps for each post:
+1.	 Lower casing the raw post in the preprocessing step (done in the parent class).
+2.	 Extracting all individual words in the tokenization step (done in the parent 
+class).
+3.	 Converting each word into its stemmed version.
+As a result, we now have one feature less, because "images" and "imaging" collapsed 
+to one. The set of feature names looks like the following:
+[u'actual', u'capabl', u'contain', u'data', u'databas', u'imag', 
+u'interest', u'learn', u'machin', u'perman', u'post', u'provid', 
+u'safe', u'storag', u'store', u'stuff', u'toy']
+Running our new stemmed vectorizer over our posts, we see that collapsing 
+"imaging" and "images" reveals that Post 2 is actually the most similar post to our 
+new post, as it contains the concept "imag" twice:
+=== Post 0 with dist=1.41: This is a toy post about machine learning. 
+Actually, it contains not much interesting stuff.
+=== Post 1 with dist=0.86: Imaging databases provide storage 
+capabilities.
+=== Post 2 with dist=0.63: Most imaging databases safe images 
+permanently.
+
+Clustering – Finding Related Posts
+[ 60 ]
+=== Post 3 with dist=0.77: Imaging databases store data.
+=== Post 4 with dist=0.77: Imaging databases store data. Imaging 
+databases store data. Imaging databases store data.
+Best post is 2 with dist=0.63
+Stop words on steroids
+Now that we have a reasonable way to extract a compact vector from a noisy  
+textual post, let us step back for a while to think about what the feature values 
+actually mean.
+The feature values simply count occurrences of terms in a post. We silently assumed 
+that higher values for a term also mean that the term is of greater importance to the 
+given post. But what about, for instance, the word "subject", which naturally occurs 
+in each and every single post? Alright, we could tell CountVectorizer to remove it 
+as well by means of its max_df parameter. We could, for instance, set it to 0.9 so that 
+all words that occur in more than 90 percent of all posts would be always ignored. 
+But what about words that appear in 89 percent of all posts? How low would we be 
+willing to set max_df? The problem is that however we set it, there will always be the 
+problem that some terms are just more discriminative than others.
+This can only be solved by counting term frequencies for every post, and in addition, 
+discounting those that appear in many posts. In other words, we want a high value 
+for a given term in a given value if that term occurs often in that particular post and 
+very rarely anywhere else.
+This is exactly what term frequency – inverse document frequency (TF-IDF) 
+does; TF stands for the counting part, while IDF factors in the discounting. A naive 
+implementation would look like the following:
+>>> import scipy as sp
+>>> def tfidf(term, doc, docset):
+...     tf = float(doc.count(term))/sum(doc.count(w) for w in docset)
+...     idf = math.log(float(len(docset))/(len([doc for doc in docset 
+            if term in doc])))
+...     return tf * idf
+For the following document set, docset, consisting of three documents that are 
+already tokenized, we can see how the terms are treated differently, although all 
+appear equally often per document:
+>>> a, abb, abc = ["a"], ["a", "b", "b"], ["a", "b", "c"]
+>>> D = [a, abb, abc]
+>>> print(tfidf("a", a, D))
+
+Chapter 3
+[ 61 ]
+0.0
+>>> print(tfidf("b", abb, D))
+0.270310072072
+>>> print(tfidf("a", abc, D))
+0.0
+>>> print(tfidf("b", abc, D))
+0.135155036036
+>>> print(tfidf("c", abc, D))
+0.366204096223
+We see that a carries no meaning for any document since it is contained everywhere. 
+b is more important for the document abb than for abc as it occurs there twice.
+In reality, there are more corner cases to handle than the above example does. 
+Thanks to Scikit, we don't have to think of them, as they are already nicely packaged 
+in TfidfVectorizer, which is inherited from CountVectorizer. Sure enough, we 
+don't want to miss our stemmer:
+>>> from sklearn.feature_extraction.text import TfidfVectorizer
+>>> class StemmedTfidfVectorizer(TfidfVectorizer):
+...     def build_analyzer(self):
+...         analyzer = super(TfidfVectorizer,
+                             self).build_analyzer()
+...         return lambda doc: (
+                english_stemmer.stem(w) for w in analyzer(doc))
+>>> vectorizer = StemmedTfidfVectorizer(min_df=1,
+                    stop_words='english', charset_error='ignore')
+The resulting document vectors will not contain counts any more. Instead, they will 
+contain the individual TF-IDF values per term.
+Our achievements and goals
+Our current text preprocessing phase includes the following steps:
+1.	 Tokenizing the text.
+2.	 Throwing away words that occur way too often to be of any help in detecting 
+relevant posts.
+
+Clustering – Finding Related Posts
+[ 62 ]
+3.	 Throwing away words that occur so seldom that there is only a small chance 
+that they occur in future posts.
+4.	 Counting the remaining words.
+5.	 Calculating TF-IDF values from the counts, considering the whole  
+text corpus.
+Again we can congratulate ourselves. With this process, we are able to convert  
+a bunch of noisy text into a concise representation of feature values.
+But, as simple and as powerful as the bag-of-words approach with its extensions is,  
+it has some drawbacks that we should be aware of. They are as follows:
+•	
+It does not cover word relations. With the previous vectorization  
+approach, the text "Car hits wall" and "Wall hits car" will both have the  
+same feature vector.
+•	
+It does not capture negations correctly. For instance, the text "I will eat ice 
+cream" and "I will not eat ice cream" will look very similar by means of their 
+feature vectors, although they contain quite the opposite meaning. This 
+problem, however, can be easily changed by not only counting individual 
+words, also called unigrams, but also considering bigrams (pairs of words)  
+or trigrams (three words in a row).
+•	
+It totally fails with misspelled words. Although it is clear to the readers that 
+"database" and "databas" convey the same meaning, our approach will treat 
+them as totally different words.
+For brevity's sake, let us nevertheless stick with the current approach, which we  
+can now use to efficiently build clusters from.
+Clustering
+Finally, we have our vectors that we believe capture the posts to a sufficient degree. 
+Not surprisingly, there are many ways to group them together. Most clustering 
+algorithms fall into one of the two methods, flat and hierarchical clustering.
+
+Chapter 3
+[ 63 ]
+Flat clustering divides the posts into a set of clusters without relating the clusters to 
+each other. The goal is simply to come up with a partitioning such that all posts in 
+one cluster are most similar to each other while being dissimilar from the posts in all 
+other clusters. Many flat clustering algorithms require the number of clusters to be 
+specified up front.
+In hierarchical clustering, the number of clusters does not have to be specified. 
+Instead, the hierarchical clustering creates a hierarchy of clusters. While similar posts 
+are grouped into one cluster, similar clusters are again grouped into one uber-cluster. 
+This is done recursively, until only one cluster is left, which contains everything. In 
+this hierarchy, one can then choose the desired number of clusters. However, this 
+comes at the cost of lower efficiency.
+Scikit provides a wide range of clustering approaches in the package sklearn.
+cluster. You can get a quick overview of the advantages and drawbacks of each  
+of them at http://scikit-learn.org/dev/modules/clustering.html.
+In the following section, we will use the flat clustering method, KMeans, and play  
+a bit with the desired number of clusters.
+KMeans
+KMeans is the most widely used flat clustering algorithm. After it is initialized with 
+the desired number of clusters, num_clusters, it maintains that number of so-called 
+cluster centroids. Initially, it would pick any of the num_clusters posts and set the 
+centroids to their feature vector. Then it would go through all other posts and assign 
+them the nearest centroid as their current cluster. Then it will move each centroid 
+into the middle of all the vectors of that particular class. This changes, of course, the 
+cluster assignment. Some posts are now nearer to another cluster. So it will update 
+the assignments for those changed posts. This is done as long as the centroids move 
+a considerable amount. After some iterations, the movements will fall below a 
+threshold and we consider clustering to be converged.
+Downloading the example code
+You can download the example code files for all Packt books you 
+have purchased from your account at http://www.packtpub.
+com. If you purchased this book elsewhere, you can visit http://
+www.packtpub.com/support and register to have the files 
+e-mailed directly to you.
+
+Clustering – Finding Related Posts
+[ 64 ]
+Let us play this through with a toy example of posts containing only two words. 
+Each point in the following chart represents one document:
+After running one iteration of KMeans, that is, taking any two vectors as starting 
+points, assigning labels to the rest, and updating the cluster centers to be the new 
+center point of all points in that cluster, we get the following clustering:
+
+Chapter 3
+[ 65 ]
+Because the cluster centers are moved, we have to reassign the cluster labels and 
+recalculate the cluster centers. After iteration 2, we get the following clustering:
+The arrows show the movements of the cluster centers. After five iterations in this 
+example, the cluster centers don't move noticeably any more (Scikit's tolerance 
+threshold is 0.0001 by default).
+After the clustering has settled, we just need to note down the cluster centers 
+and their identity. When each new document comes in, we have to vectorize and 
+compare it with all the cluster centers. The cluster center with the smallest distance  
+to our new post vector belongs to the cluster we will assign to the new post.
+Getting test data to evaluate our ideas on
+In order to test clustering, let us move away from the toy text examples and find a 
+dataset that resembles the data we are expecting in the future so that we can test our 
+approach. For our purpose, we need documents on technical topics that are already 
+grouped together so that we can check whether our algorithm works as expected 
+when we apply it later to the posts we hope to receive.
+
+Clustering – Finding Related Posts
+[ 66 ]
+One standard dataset in machine learning is the 20newsgroup dataset, which 
+contains 18,826 posts from 20 different newsgroups. Among the groups' topics are 
+technical ones such as comp.sys.mac.hardware or sci.crypt as well as more 
+politics- and religion-related ones such as talk.politics.guns or soc.religion.
+christian. We will restrict ourselves to the technical groups. If we assume each 
+newsgroup is one cluster, we can nicely test whether our approach of finding related 
+posts works.
+The dataset can be downloaded from http://people.csail.mit.edu/
+jrennie/20Newsgroups. Much more simple, however, is to download it from 
+MLComp at http://mlcomp.org/datasets/379 (free registration required). 
+Scikit already contains custom loaders for that dataset and rewards you with very 
+convenient data loading options.
+The dataset comes in the form of a ZIP file, dataset-379-20news-18828_WJQIG.
+zip, which we have to unzip to get the folder 379, which contains the datasets. 
+We also have to notify Scikit about the path containing that data directory. It 
+contains a metadata file and three directories test, train, and raw. The test and 
+train directories split the whole dataset into 60 percent of training and 40 percent 
+of testing posts. For convenience, the dataset module also contains the function 
+fetch_20newsgroups, which downloads that data into the desired directory.
+The website http://mlcomp.org is used for comparing machine-
+learning programs on diverse datasets. It serves two purposes: 
+finding the right dataset to tune your machine-learning program and 
+exploring how other people use a particular dataset. For instance, 
+you can see how well other people's algorithms performed on 
+particular datasets and compare them.
+Either you set the environment variable MLCOMP_DATASETS_HOME or you specify the 
+path directly with the mlcomp_root parameter when loading the dataset as follows:
+>>> import sklearn.datasets
+>>> MLCOMP_DIR = r"D:\data"
+>>> data = sklearn.datasets.load_mlcomp("20news-18828", mlcomp_
+root=MLCOMP_DIR)
+>>> print(data.filenames)
+array(['D:\\data\\379\\raw\\comp.graphics\\1190-38614',
+       'D:\\data\\379\\raw\\comp.graphics\\1383-38616',
+       'D:\\data\\379\\raw\\alt.atheism\\487-53344',
+       ...,
+       'D:\\data\\379\\raw\\rec.sport.hockey\\10215-54303',
+       'D:\\data\\379\\raw\\sci.crypt\\10799-15660',
+
+Chapter 3
+[ 67 ]
+       'D:\\data\\379\\raw\\comp.os.ms-windows.misc\\2732-10871'],
+      dtype='|S68')
+>>> print(len(data.filenames))
+18828
+>>> data.target_names
+['alt.atheism', 'comp.graphics', 'comp.os.ms-windows.misc', 'comp.sys.
+ibm.pc.hardware', 'comp.sys.mac.hardware', 'comp.windows.x', 'misc.
+forsale', 'rec.autos', 'rec.motorcycles', 'rec.sport.baseball', 'rec.
+sport.hockey', 'sci.crypt', 'sci.electronics', 'sci.med', sci.space', 
+'soc.religion.christian', 'talk.politics.guns', 'talk.politics.
+mideast', 'talk.politics.misc', 'talk.religion.misc']
+We can choose among training and test sets as follows:
+>>> train_data = sklearn.datasets.load_mlcomp("20news-18828", "train", 
+mlcomp_root=MLCOMP_DIR)
+>>> print(len(train_data.filenames))
+13180
+>>> test_data = sklearn.datasets.load_mlcomp("20news-18828",  
+"test", mlcomp_root=MLCOMP_DIR)
+>>> print(len(test_data.filenames))
+5648
+For simplicity's sake, we will restrict ourselves to only some newsgroups so that the 
+overall experimentation cycle is shorter. We can achieve this with the categories 
+parameter as follows:
+>>> groups = ['comp.graphics', 'comp.os.ms-windows.misc', 'comp.sys.
+ibm.pc.hardware', 'comp.sys.ma c.hardware', 'comp.windows.x', 'sci.
+space']
+>>> train_data = sklearn.datasets.load_mlcomp("20news-18828", "train", 
+mlcomp_root=MLCOMP_DIR, categories=groups)
+>>> print(len(train_data.filenames))
+3414
+Clustering posts
+You must have already noticed one thing – real data is noisy. The newsgroup 
+dataset is no exception. It even contains invalid characters that will result in 
+UnicodeDecodeError.
+We have to tell the vectorizer to ignore them:
+>>> vectorizer = StemmedTfidfVectorizer(min_df=10, max_df=0.5, 
+...              stop_words='english', charset_error='ignore')
+>>> vectorized = vectorizer.fit_transform(dataset.data)
+
+Clustering – Finding Related Posts
+[ 68 ]
+>>> num_samples, num_features = vectorized.shape
+>>> print("#samples: %d, #features: %d" % (num_samples, num_features))
+#samples: 3414, #features: 4331
+We now have a pool of 3,414 posts and extracted for each of them a feature vector of 
+4,331 dimensions. That is what KMeans takes as input. We will fix the cluster size to 
+50 for this chapter and hope you are curious enough to try out different values as an 
+exercise, as shown in the following code:
+>>> num_clusters = 50
+>>> from sklearn.cluster import KMeans
+>>> km = KMeans(n_clusters=num_clusters, init='random', n_init=1,
+verbose=1) 
+>>> km.fit(vectorized)
+That's it. After fitting, we can get the clustering information out of the members of 
+km. For every vectorized post that has been fit, there is a corresponding integer label 
+in km.labels_:
+>>> km.labels_
+array([33, 22, 17, ..., 14, 11, 39])
+>>> km.labels_.shape
+(3414,)
+The cluster centers can be accessed via km.cluster_centers_.
+In the next section we will see how we can assign a cluster to a newly arriving post 
+using km.predict.
+Solving our initial challenge
+We now put everything together and demonstrate our system for the following new 
+post that we assign to the variable new_post:
+Disk drive problems. Hi, I have a problem with my hard disk. 
+After 1 year it is working only sporadically now. 
+I tried to format it, but now it doesn't boot any more. 
+Any ideas? Thanks.
+
+Chapter 3
+[ 69 ]
+As we have learned previously, we will first have to vectorize this post before we 
+predict its label as follows:
+>>> new_post_vec = vectorizer.transform([new_post])
+>>> new_post_label = km.predict(new_post_vec)[0]
+Now that we have the clustering, we do not need to compare new_post_vec to all 
+post vectors. Instead, we can focus only on the posts of the same cluster. Let us fetch 
+their indices in the original dataset:
+>>> similar_indices = (km.labels_==new_post_label).nonzero()[0]
+The comparison in the bracket results in a Boolean array, and nonzero converts that 
+array into a smaller array containing the indices of the True elements.
+Using similar_indices, we then simply have to build a list of posts together with 
+their similarity scores as follows:
+>>> similar = []
+>>> for i in similar_indices:
+...    dist = sp.linalg.norm((new_post_vec - vectorized[i]).toarray())
+...    similar.append((dist, dataset.data[i]))
+>>> similar = sorted(similar)
+>>> print(len(similar))
+44
+We found 44 posts in the cluster of our post. To give the user a quick idea of what 
+kind of similar posts are available, we can now present the most similar post (show_
+at_1), the least similar one (show_at_3), and an in-between post (show_at_2), all of 
+which are from the same cluster as follows:
+>>> show_at_1 = similar[0]
+>>> show_at_2 = similar[len(similar)/2]
+>>> show_at_3 = similar[-1]
+
+Clustering – Finding Related Posts
+[ 70 ]
+The following table shows the posts together with their similarity values:
+Position
+Similarity
+Excerpt from post
+1
+1.018
+BOOT PROBLEM with IDE controller
+Hi,
+I've got a Multi I/O card (IDE 
+controller + serial/parallel interface) 
+and two floppy drives (5 1/4, 3 1/2) and 
+a Quantum ProDrive 80AT connected to 
+it. I was able to format the hard disk, 
+but I could not boot from it. I can boot 
+from drive A: (which disk drive does not 
+matter) but if I remove the disk from 
+drive A and press the reset switch, the 
+LED of drive A: continues to glow, and 
+the hard disk is not accessed at all. I 
+guess this must be a problem of either 
+the Multi I/o card\nor floppy disk drive 
+settings (jumper configuration?) Does 
+someone have any hint what could be the 
+reason for it. […]
+2
+1.294
+IDE Cable
+I just bought a new IDE hard drive for 
+my system to go with the one I already 
+had. My problem is this. My system only 
+had a IDE cable for one drive, so I had 
+to buy cable with two drive connectors 
+on it, and consequently have to switch 
+cables. The problem is, the new hard 
+drive\'s manual refers to matching pin 
+1 on the cable with both pin 1 on the 
+drive itself and pin 1 on the IDE card. 
+But for the life of me I cannot figure 
+out how to tell which way to plug in 
+the cable to align these. Secondly, the 
+cable has like a connector at two ends 
+and one between them. I figure one end 
+goes in the controller and then the 
+other two go into the drives. Does it 
+matter which I plug into the "master" 
+drive and which into the "Slave"? any 
+help appreciated […]
+
+Chapter 3
+[ 71 ]
+Position
+Similarity
+Excerpt from post
+3
+1.375
+Conner CP3204F info please
+How to change the cluster size Wondering 
+if somebody could tell me if we can 
+change the cluster size of my IDE drive. 
+Normally I can do it with Norton's 
+Calibrat on MFM/RLL drives but dunno if 
+I can on IDE too. […]
+It is interesting how the posts reflect the similarity measurement score. The first 
+post contains all the salient words from our new post. The second one also revolves 
+around hard disks, but lacks concepts such as formatting. Finally, the third one is 
+only slightly related. Still, for all the posts, we would say that they belong to the 
+same domain as that of the new post.
+Another look at noise
+We should not expect a perfect clustering, in the sense that posts from the same 
+newsgroup (for example, comp.graphics) are also clustered together. An example 
+will give us a quick impression of the noise that we have to expect:
+>>> post_group = zip(dataset.data, dataset.target)
+>>> z = (len(post[0]), post[0], dataset.target_names[post[1]]) for 
+post in post_group
+>>> print(sorted(z)[5:7])
+[(107, 'From: "kwansik kim" <kkim@cs.indiana.edu>\nSubject: Where 
+is FAQ ?\n\nWhere can I find it ?\n\nThanks, Kwansik\n\n', 'comp.
+graphics'), (110, 'From: lioness@maple.circa.ufl.edu\nSubject: What is 
+3dO?\n\n\nSomeone please fill me in on what 3do.\n\nThanks,\n\nBH\n', 
+'comp.graphics')]
+For both of these posts, there is no real indication that they belong to comp.
+graphics, considering only the wording that is left after the preprocessing step:
+>>> analyzer = vectorizer.build_analyzer() 
+>>> list(analyzer(z[5][1]))
+[u'kwansik', u'kim', u'kkim', u'cs', u'indiana', u'edu', u'subject', 
+u'faq', u'thank', u'kwansik']
+>>> list(analyzer(z[6][1]))
+[u'lioness', u'mapl', u'circa', u'ufl', u'edu', u'subject', u'3do', 
+u'3do', u'thank', u'bh']
+
+Clustering – Finding Related Posts
+[ 72 ]
+This is only after tokenization, lower casing, and stop word removal. If we also 
+subtract those words that will be later filtered out via min_df and max_df, which  
+will be done later in fit_transform, it gets even worse:
+>>> list(set(analyzer(z[5][1])).intersection(
+         vectorizer.get_feature_names()))
+[u'cs', u'faq', u'thank'] 
+>>> list(set(analyzer(z[6][1])).intersection(
+vectorizer.get_feature_names()))
+[u'bh', u'thank']
+Furthermore, most of the words occur frequently in other posts as well, as we 
+can check with the IDF scores. Remember that the higher the TF-IDF, the more 
+discriminative a term is for a given post. And as IDF is a multiplicative factor here,  
+a low value of it signals that it is not of great value in general:
+>>> for term in ['cs', 'faq', 'thank', 'bh', 'thank']:
+...     print('IDF(%s)=%.2f'%(term, 
+             vectorizer._tfidf.idf_[vectorizer.vocabulary_[term]])
+IDF(cs)=3.23
+IDF(faq)=4.17
+IDF(thank)=2.23
+IDF(bh)=6.57
+IDF(thank)=2.23
+So, except for bh, which is close to the maximum overall IDF value of 6.74,  
+the terms don't have much discriminative power. Understandably, posts from  
+different newsgroups will be clustered together.
+For our goal, however, this is no big deal, as we are only interested in cutting down 
+the number of posts that we have to compare a new post to. After all, the particular 
+newsgroup from where our training data came from is of no special interest.
+Tweaking the parameters
+So what about all the other parameters? Can we tweak them all to get better results?
+Sure. We could, of course, tweak the number of clusters or play with the vectorizer's 
+max_features parameter (you should try that!). Also, we could play with different 
+cluster center initializations. There are also more exciting alternatives to KMeans 
+itself. There are, for example, clustering approaches that also let you use different 
+similarity measurements such as Cosine similarity, Pearson, or Jaccard. An exciting 
+field for you to play.
+
+Chapter 3
+[ 73 ]
+But before you go there, you will have to define what you actually mean by "better". 
+Scikit has a complete package dedicated only to this definition. The package is called 
+sklearn.metrics and also contains a full range of different metrics to measure 
+clustering quality. Maybe that should be the first place to go now, right into the 
+sources of the metrics package.
+Summary
+That was a tough ride, from preprocessing over clustering to a solution that  
+can convert noisy text into a meaningful concise vector representation that we  
+can cluster. If we look at the efforts we had to do to finally be able to cluster, it  
+was more than half of the overall task, but on the way, we learned quite a bit on  
+text processing and how simple counting can get you very far in the noisy  
+real-world data.
+The ride has been made much smoother though, because of Scikit and its powerful 
+packages. And there is more to explore. In this chapter we were scratching the 
+surface of its capabilities. In the next chapters we will see more of its powers.
+

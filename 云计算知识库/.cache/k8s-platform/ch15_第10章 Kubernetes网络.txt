@@ -1,0 +1,492 @@
+. .. 
+, . ... 
+a 
+m--- 
+..... 
+... 
+· 
+.... 
+.... 
+... 
+·· 
+.... 
+.... 
+醺
+... 
+ONγ矿／＂＇~ 10 ；第10 章
+……………………………….....· 
+Kubernetes 网络
+与Docker 默认的网络模型不同，
+Kubemetes 形成一套自己的网络模型，该网络模型
+更加适应传统的网络模式，应用能够平滑地从非容器环境迁移到Kubemetes 环境中。本章
+将对比分析Kubernetes 和Docker 的网络模型，然后详细讲解Kubernetes 网络模型的实现
+细节。
+自从Docker 容器出现，容器的网络通信一直是众人关注的焦点，而容器的网络方案又
+可以分为两大部分：
+1 ）单主机的容器间通信；
+2 ）跨主机的容器间通信。本章及后续章节
+分别针对这两大部分进行详细介绍，以帮助大家更好地使用Docker 。
+10.l 
+单主机Docker 网络通信
+利用Net N amespace 可以为Docker 容器创建隔离的网络环境，容器具有完全独立的网
+络枝，与宿主机隔离。也可以使Docker 容器共享主机或者其他容器的网络命名空间，基本
+可以满足开发者在各种场景下的需要。
+我们在使用docker run 创建Docker 容器时，可以用…net 选项指定容器的网络模式。
+Docker 有以下4 种网络模式：
+1 ) host 模式，使用－－net=host 指定，不支持多主机。
+2 ) container 模式，使用一net=container:NAME
+or
+工D 指定，不支持多主机。
+3) none 模式，使用一net=none 指定，不支持多主机。
+4) bridge 模式，使用－－net=bridge 指定，默认设置，不支持多主机。
+下面分别介绍Docker 的各个网络模式。
+
+第10 章
+Kubernetes 网络•!• 135 
+10.1 .1 
+Host 模式
+启动容器的时候使用Hos t 模式，那么该容器将不会获得一个独立的Network
+Namespace ，而是与宿主机共用一个Network Namespace ，因此容器将不会虚拟自己的网
+卡、配置自己的IP 等，而是使用宿主机的IP 和端口。
+采用Host 模式（如图10 - 1 所示）的容器，可以直
+接使用宿主机的IP 地址与外界进行通信，无需额外进
+行NAT 转换。由于容器通信时，不再需要通过Linux
+Bri dge 等方式转发或者数据包的拆封，性能上有很大
+优势。
+当然，
+Host 模式有利也有弊，主要包括以下
+缺点：
+1 ）容器没有隔离、独立的网络拢。容器因与宿主
+机共用网络技而争抢网络资源，并且容器崩溃也可能
+导致宿主机崩溃，这在生产环境中是不允许发生的。
+2 ）容器不再拥有所有的端口资源，因为一些端口
+已经被宿主机服务、
+Bridge 模式的容器端口绑定等其
+他服务占用了。
+Node I 
+容器1
+|| 容器2
+10.1.5.4:×××× 1110.1.5.4: ×××× 
+主
+I 10.1.5.4/24 
+也B
+图10-1
+Host 模式
+例如，在10.1.5.4/24 的机器上使用Host 模式启动含有Web 应用的Docker 容器，监
+昕TCP80 端口。在容器中执行ifconfig 命令查看网络环境时，显示的都是宿主机上的信息。
+外界使用10 .1.5.4 :80 将可直接访问容器中的应用，不用任何NAT 转换。需要补充说明的
+是，
+Hos t 模式下的容器仅仅是网络命名空间与主机相同，但容器的文件系统、进程列表等
+还是和与宿主机隔离的。
+#docker run -tid - - net=host --n缸ne dockerhostl ubuntu-base:v3 
+#dock巳r run -tid --net=host --n缸ne dockerhost2 ubuntu-base: v3 
+#docker exec -ti dockerhostl / bin/bash 
+#docker exec -ti dockerhost2 /bin/ bash 
+#ifconfig -a 
+#route -n 
+10.1.2 
+Containe「模式
+Node! 
+172.17.1.1/24 
+DockerO 
+Container 模式（如图10-2 所示）是一种特殊的网
+络模式。该模式下的容器使用其他容器的网络命名空
+间，网络隔离性会处于Bridge 模式与Host 模式之间。
+也就是说，当容器与其他容器共享网络命名空间时，
+这两个容器间不存在网络隔离，但它们与宿主机及其
+图10-2
+Container 模式
+
+136 
+•！•
+基于Kubernetes 的窑器云平台实战
+他容器又存在网络隔离。
+Container 模式的容器可以通过localhost 来与同一网络命名空间下的其他容器通信，传
+输效率高。这种模式节约了一定数量的网络资源，但并没有改变容器与外界的通信方式。
+在Kubernetes 体系架构下引人Pod 概念，
+Kubernetes 为Pod 创建一个基础设施容器，同－
+Pod 下的其他容器都以C ontainer 模式共享这个基础设施容器的网络命名空间，相互之间以
+localhost 访问，构成一个统一的整体。
+#docker run -tid --net=container:docker bril --name docker conl ubuntu-base:v3 
+#docker exec -ti docker conl /bin/bash 
+#docker exec -ti docker bril /bin/bash 
+#i fconfig - a 
+#route - n 
+10.1.3 
+None 模式
+与前两种不同，
+None 模式（如图
+10-3 所示）的
+Docker 容器拥有自己的Network Namespace ，但并不
+为Docker 容器进行网络配置。也就是说，该Docker
+容器没有网卡、
+IP 、路由等信息。需要用户为Docker
+容器添加网卡、配置IP 等。
+Node 1 
+｜容器l
+| 
+｜容器2
+I 
+南10 . 1.5.4/24 
+图10 -3
+Non巳模式
+#docker run -tid - -net=none --name docker nonl ubuntu-base:v3 
+#docker exec - ti docker nonl /bi n/bash 
+#ifconfig -a 
+#route - n 
+10.1.4 
+Bridge 模式
+Bridge 模式是Dock巳r 默认的网络模式，也是开发
+者最常使用的网络模式。在这种模式下，
+Dock巳r 为容
+器创建独立的网络枝，保证容器内的进程使用独立的
+网络环境，实现容器之间、容器与宿主机之间的网络
+技隔离。同时，通过宿主机上的DockerO 网桥，容器
+可以与宿主机乃至外界进行网络通信。其网络模型可
+以参考图10-4 。
+从图10-4 的网络模型可以看出，容器是可以与宿
+主机乃至外界的其他机器通信的。同一宿主机上，容
+器之间都是连接在Docker。这个网桥上，
+DockerO 作为
+虚拟交换机使容器间相互通信。但是，由于宿主机的
+Node I 
+图
+10-4
+Bridge 模式
+
+第10 章
+Kubernetes 网络•!• 137 
+IP 地址与容器veth pair 的IP 地址均不在同一个网段，故仅仅依靠v巳th pair 和NameSpace
+的技术并不足以使宿主机以外的网络主动发现容器的存在。
+Docker 采用了端口绑定的方式
+（通过iptables 的NAT ），将宿主机上的端口流量转发到容器内的端口上，这样一来，外界就
+可以与容器中的进程进行通信。
+举个简单的例子，使用如下命令创建容器，并将宿主机的3306 端口绑定到容器的33 06
+端口：
+docker run -tid －－口ame db -p 3306:3306 mysql 
+在宿主机上，可以通过“ iptables -t nat -L -n ”，查到一条DNAT 规则：
+DNAT tcp -- 0.0.0.0/0 0 .0 .0.0 /0 tcp dpt:3306 to:l72.17.0.5:3306 
+上面的172 . 17 . 0 .5 即为Bridge 模式下创建的容器IP 。
+显然，
+Bridge 模式的容器与外界通信时，必定会占用宿主机上的端口，从而与宿主机
+竞争端口资源，这会造成对宿主机端口管理很复杂。同时，由于容器与外界通信是基于三
+层上
+iptable s NAT ，性能和效率损耗是显而易见的。
+10.1.5 基础网络模型的优缺点分析
+在宿主机上虚拟一个Docker 网桥（DockerO ，使用Linux 桥接实现），
+Docker 启动一个
+容器时会根据Docker 网桥的网段分配容器的IP ，同时每个容器的默认网关是Docker 网桥
+地址。在同一宿主机内的容器都接入同－个网桥，因此容器之间可通过容器的IP 地址直接
+通信，
+Docker 网桥是宿主机虚拟出来的内部网络设备，外部无法直接访问容器。如果希望
+外部网络可访问容器，就需要通过映射容器端口到宿主机端口（端口映射），即使用docker
+run 创建容器时通过－P 或－P 参数来启用，访问容器的时候通过“ ［宿主机IP ] : ［容器端
+口］”访问。
+端口映射通过在iptables 的NAT 表中添加相应的规则，称之为NAT 方式。在早期组建
+Docker 机器集群的方案中，往往是选择NAT 方式的网络模型。这种网络模型对使用的便利性
+是有意义的，但因为要做端口映射，这会限制宿主机的能力，在容器编排上也增加了复杂度。
+端口是一个稀缺资源，这就需要解决端口冲突和动态分配端口问题。这不但使调度复
+杂化，而且应用程序的配置也将变得复杂，具体表现为端口冲突、重用和耗尽。
+NAT 将地址空间分段的做法引入了额外的复杂度。比如容器中应用所见的IP 并不是对
+外暴露的IP ，因为网络隔离，容器中的应用实际上只能检测到容器的IP ，但是需要对外宣
+称的则是宿主机的IP ，这种信息的不对称将带来诸如破坏自注册机制等问题。
+10.2 
+跨主机Docker 网络通信
+常见的跨主机通信方案主要有以下几种：
+
+138
+令基于Kubernetes 的窑器云平台实战
+• Host 模式：容器直接使用宿主机的网络，这样天生就可以支持跨主机通信。这种方
+式虽然可以解决跨主机通信问题，但应用场景很有限，容易出现端口冲突，也无法
+做到隔离网络环境，一个容器崩溃很可能引起整个宿主机的崩溃。
+·端口绑定：通过绑定容器端口到宿主机端口，跨主机通信时使用
+“主机IP＋端口
+”
+的方式访问容器中的服务。显然，这种方式仅能支持网络技的4层及以上的应用，
+并且容器与宿主机紧桐合，很难灵活地处理问题，可扩展性不佳。
+固定义容器网络：使用Open vSwitch 或Flannel 等第三方SDN 工具，为容器构建可以
+跨主机通信的网络环境。这类方案一般要求各个主机上的DockerO 网桥的cidr 不同，
+以避免出现IP 冲突的问题，限制容器在宿主机上可获取的IP 范围。并且在容器需
+要对集群外提供服务时，需要比较复杂的配置，对部署实施人员的网络技能要求比
+较高。
+容器网络发展到现在，形成了两大阵营：1) Docker 的CNM ; 2 ) Google 、CoreOS,
+Kuberenetes 主导的CNI。注意，CNM 和CNI 是网络规范或者网络体系，并不是网络实现，
+因此并不关心容器网络的实现方式（Flannel 或者Calico 等），CNM 和CNI 关心的只是网络
+管理。
+CNM ( Container Network Model) : CNM 的优势在于原生，容器网络和Docker 容器
+生命周期结合紧密；缺点是被Docker “绑架
+” 。支持CNM 网络规范的容器网络实现包括：
+Docker Swarm overlay、Macvlan & IP networkdrivers 、Calico 、Contiv 、Weave 等。
+CNI ( Container Network Interface) : CNI 的优势是兼容其他容器技术（如此t）及上层
+编排系统（Kubernetes&Mesos），而且社区活跃势头迅猛；缺点是非Docker 原生。支持CNI
+网络规范的容器网络实现包括：Kubernetes 、Weave、Macvlan 、Calico 、Flannel、Contiv 、
+Mesos CNI 等。
+但从网络实现角度，又可分为：
+1 ）隧道方案：隧道方案在IaaS 层的网络中应用也比较多，它的主要缺点是随着节点规
+模的增长复杂度会提升，而且出了网络问题后跟踪起来比较麻烦，大规模集群情况下这是
+需要考虑的一个问题。
+• Weave: UDP 广播，本机建立新的BR，通过PCAP 互通。
+• Open vSwitch ( OVS）：基于VxLan 和GRE 协议，但是性能方面损失比较严重。
+• Flannel: UDP 广播，VxLan。
+• Rach er: IP sec。
+2 ）路由方案：一般是基于3 层或者2 层实现网络隔离和跨主机容器互通的，出了问题
+也很容易排查。
+• Calico ：基于BGP 协议的路由方案，支持很细致的ACL 控制，对混合云亲和度比
+较高。
+• Macvlan：从逻辑和Kernel 层来看，是隔离性和性能最优的方案。基于二层隔离，所
+仅供才｜商业用
+
+仅供二ll0nli业用途或交流学习伎JfJ
+第10 章
+Kubernetes 网络•!• 139 
+以需要二层路由器支持，大多数云服务商不支持，所以泪合云上比较难以实现。
+由于多机网络方案众多，很难一一介绍，下面主要介绍几个主流的网络方案。
+10.2.1 
+Flannel 网络方案
+Flannel 是由CoreOS 维护的一个虚拟网络方案，由Golang 语言编写，是Kubernetes 默
+认的网络。
+Flannel 之所以可以搭建Kubernetes 依赖的底层网络，是因为：
+1 ）它为每个Node 上的Docker 容器分配互不冲突的IP 地址。
+2 ）它能为这些IP 地址之间建立一个叠加网络，通过叠加网络将数据包原封不动地传
+递到目标容器内。
+Flannel 设计目的是为集群中的所有节点重新规划IP 地址的使用规则，从而使得不同节
+点上的容器能够获得同属一个内网且不重复的IP 地址，并让属于不同节点上的容器能够直
+接通过内网IP 通信。
+Flannel 实质上是一种叠加网络（Overlay Network ），也就是将TCP 数据包装在另一种
+网络包里面进行路由转发和通信，目前已经支持UDP 、
+vxlan 、
+host-gw 、
+aws-vpc ,
+gee 和
+alloc 路由等数据转发方式，默认的节点间数据通信方式是UDP 转发。
+Flannel 网络模型如
+图
+10 - 5 所示。
+图10-5
+Flannel 网络模型
+一条网络报文从一个容器发送到另外－个容器需要经过如下过程：
+I"" 
+Out« I
+皿』，也1’＇l. lO!D. 1曲
+IP 
+I d偶C l!lllO!.O.lOO 
+i
+υOP 
+仅供
+Ii＇商业m 淦旦旦交流学习使用
+
+140 •！•
+基于Kubernetes 的窑器云平台实战
+1 ）容器直接使用目标容器的IP 访问，默认通过容器内部的ethO 发送出去。
+2）报文通过veth pair 被发送到vethXXX。
+3) vethXXX 是直接连接到虚拟交换机DockerO 的，报文通过虚拟bridge DockerO 发送
+出去。
+4）查找路由表，外部容器IP 的报文都会转发到flannelO 虚拟网卡，这是一个P2P 的
+虚拟网卡，然后报文就被转发到监听在另一端的flanneld。
+5) flanneld 通过etcd 维护了各个节点之间的路由表，把原来的报文UDP 封装一层，通
+过配置的iface 发送出去。
+6）报文通过主机之间的网络找到目标主机。
+7）报文继续往上送，到达传输层，交给监昕在8285 端口的flanneld 程序处理。
+8 ）数据被解包，然后发送给flannelO 虚拟网卡。
+9）查找路由表，发现对应容器的报文要交给DockerO。
+10) DockerO 找到连到自己的容器，把报文发送过去。
+10.2.2 Calico网络方案
+Calico 把每个操作系统的协议桔当作一个路由器，然后认为所有的容器是连在这个路由
+器上的网络终端，在路由器之间运行标准的路
+由协议一－BGP，然后让它们自己去学习这个
+网络拓扑该如何转发。所以，Calico 方案其实
+是一个纯三层的方案，也就是说让每台机器的
+协议校的三层去确保两个容器、跨主机容器之
+间的三层连通性。其网络模型如图10-6 所示。
+对于控制平面，其每个节点上会运行两
+个主要的程序，
+一个是Felix，它会监昕巳tcd,
+并从etcd 获取事件，如该节点新增容器或者
+增加IP 地址等。当在这个节点上创建出一个
+容器，并将其网卡、IP、MAC 都设置好后，
+图I0-6 Calico 网络模型
+Felix 在内核的路由表里面写一条数据，注明这个IP 应该配置到这张网卡。图10-6 深色部
+分是一个标准的路由程序，它会从内核里面获取哪一些IP 的路由发生了变化，然后通过标
+准BGP 的路由协议扩散到整个其他宿主机上，通知外界这个IP 在这里。
+由于Calico 是一种纯三层的实现，因此可以避免与二层方案相关的数据包封装的操作，
+中间没有任何的NAT，没有任何的Overlay，所以它的转发效率可能是所有方案中最高的。
+因为它的包直接走原生TCP/IP 的协议拢，它的隔离也因为这个战而变得好做。因为TCP/
+IP 的协议技提供了一整套的防火墙规则，所以它可以通过iptables 的规则达到比较复杂的
+隔离逻辑。
+
+第10章
+Kubernetes网络令141
+Calico实现方案
+Calico的实现方案如图10-7所示。
+图10-7
+Calico实现方案
+如图10-7所示，Calico的核心组件包括：Felix、etcd、BGPClient ( BIRD）、BGP
+Route Reflector。
+• Felix，即Calico代理，“跑
+” 在Kubernetes的Node节点上，主要负责配置路由及
+ACL等信息来确保Endpoint的连通状态。
+• etcd，分布式键值存储，主要负责网络元数据一致性，确保Calico网络状态的准确
+性，可以与Kubernetes共用。
+• BGP Client ( BIRD），主要负责把Felix写入Kernel的路由信息分发到当前Calico网
+络，确保workload间通信的有效性。
+• BGP Route Reflector，大规模部署时使用，摒弃所有节点互联的Mesh模式，通过一
+个或者多个BGP Route Reflector来完成集中式路由分发。
+通过将整个互联网的可扩展IP网络原则压缩到数据中心级别，Calico在每一个计算节
+点利用LinuxKernel实现了一个高效的vRouter来负责数据转发，而每个vRouter通过BGP
+协议把在其上运行的容器的路由信息向整个Calico网络内传播，小规模部署可以直接互联，
+大规模下可通过指定的BGP Route Reflector来完成。这样保证最终所有的容器间的数据流
+量都是通过IP包的方式完成互联的。图10-8所示为Calico方案下数据流的传播。
+First IP top 
+唔
+One or more IP hops 
+--------------------------------------------
+源主机
+目的主机
+rout吨，ψtables I Data Center Fabric I rout吨，甲tables
+图10-8
+Calico数据流
+Calico节点组网可以直接利用数据中心的网络结构（无论是L2或者L3），不需要额外
+
+142 •！•
+基于Kubernetes 的窑器云平台实战
+的NAT、隧道或者OverlayNetwork。图I0-9为Calico方案下数据包的解包过程。
+Outer 
+Outer 
+Outer I v:t I 
+VM 
+MAC 
+IP 
+UDP 
+MAC 
+IP I TCP/UDP I 
+Data 
+1气
+Host 
+VM 
+MAC 
+IP I TCP/UDP I Data 
+图10-9
+数据包解包过程
+如图10-9所示，这个方案能保证数据流通的简单可控，而且没有封包解包，节约CPU
+计算资源的同时提高了整个网络的性能。实验测试Calico网络性能非常接近物理机的性能。
+此外，Calico基于iptables还提供了丰富而灵活的网络策略，保证通过各个节点上
+的ACL来提供Work load的多租户隔离、安全组以及其他可达性限制等功能，如图I0-10 
+所示。
+图l0-10 Calico 路由交换
+从上面的通信过程来看，跨主机通信时整个通信路径完全没有使用NAT或者UDP封
+装，性能上的损耗确实比较低，如图10-11所示。但正是由于Calico的通信机制是完全基
+于三层的，这种机制也带来了一些缺陷，例如：
+• Calico目前只支持TCP、UDP、ICMP, ICMPv6协议，如果使用其他四层协议（如
+NetBIOS协议），建议使用Weave、原生叠加等其他叠加网络实现。
+·基于三层实现通信，在二层上没有任何加密包装，因此只能在私有的可靠网络上
+使用。
+·流量隔离基于iptables实现，并且从巳tcd中获取需要生成的隔离规则，因此会有一
+些性能上的隐患。
+每个主机上都部署了Calico/Node作为虚拟路由器，并且可以通过Calico将宿主机组织
+成任意的拓扑集群。当集群中的容器需要与外界通信时，就可以通过BGP协议将网关物理路
+
+第10章
+Kubernetes网络•!• 143 
+由器加入到集群中，使外界可以直接访问容器IP，而不需要做任何NAT之类的复杂操作。
+3实施ACL控制
+3实随AC_L控制
+ 
+ 
+图10-11
+下发ACL规则
+10.2.3 利用Kury「整合OpenStack与Kubernetes网络
+Kubernetes Kuryr是OpenStack Neutron的子项目，其主要目标是通过该项目来整合
+OpenStack与Kubernetes的网络。该项目在Kubernetes中实现了原生Neutron-based的网
+络，因此使用Kuryr可以让OpenStack VM与Kubernetes Pod能够选择在同一个子网上运
+作，并且能够使用Neutron的L3与Security Group 来对网络进行路由，
+以及阻挡特定来源
+的Port。图10-12给出了Kuryr的架构。
+Neutron 
+Port 
+Network 
+Subnet 
+Router 
+VIP 
+DB 
+Neutron 
+履行增删改查行动
+计算节点
+plug 
+查看增删改查
+对资源注释
+Kubemetes 
+API Server 
+POD 
+Service 
+EndPoints 
+Namespace 
+查看Kàbernetes
+增删改查事件注释
+图10-12
+Kuryr架构
+
+144令基于Kubernetes的窑器云平台实战
+Kuryr架构有两个主要组成部分：
+Kuryr Controller : Controller的主要作用是监控KubernetesAPI从而获取Kubernetes资
+源的变化，然后依据Kubernetes资源的需求来执行子资源的分配和资源管理。
+Kuryr CNI：主要是依据KuryrController分配的资源来绑定网络至Pod上。
+10.2.4 
+网络方案对比分析
+除了前文介绍的以外还有很多跨节点容器网络方案，如Weave、MACVian等。每种网
+络解决方案各有优缺点，用户需要根据自身的应用场景需求选择合适的网络解决方案。网
+络方案对比分析如表10-1 所示。
+表10-1
+网络方案对比分析
+Flannel 
+Calico 
+Kuryr 
+原生叠加网络
+网络模型
+vxlan或山P 隧道
+三层路由模型
+可
+选（vxlan,
+vxlan 
+vlan、flat)
+性能
+尚可
+高
+高
+尚可
+协议支持
+所有
+TCP, UDP, ICMP等
+所有
+所有
+适用场景
+单租户，中低性能
+高性能、小容量、私有网
+大规模、高性能、
+中小型容主I
+场景、小容量
+大容量、私有云
+多租户
+或许
+不支持
+支持
+或许
+优势
+部署简单，
+性能
+性能好、可控性高、隔
+性能好、可控性
+原生，兼容性好
+尚可
+离好
+高、隔离好
+性能不高；隔离性
+操作难度高；对underlay
+内核版本要求高（＞3.16);
+差；无法实现IP 不变
+复杂度高；依赖依赖Docker Deamon ；性能
+劣势
+的Pod 跨主机漂移；网络有要求；很多公有云不Openstack
+有待提高；开启多租户功能，
+无法实现多子网隔离
+支持
+增大网络开销

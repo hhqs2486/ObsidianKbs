@@ -1,0 +1,204 @@
+第9章　Kubernetes Dashboard
+Kubernetes不仅提供强大的命令行管理工具，还提供了基于
+Web的图形化管理界面，这就是本章将要介绍的Dashboard（仪表
+盘）。通过Kubernetes Dashboard，管理员可以非常方便地管理集
+群。
+本章涉及的知识点有：
+Kubernetes Dashboard 配置文件：主要介绍官方提供的
+Kubernetes Dashboard配置文件及其内容。
+安装Dashboard：介绍Kubernetes Dashboard的安装方法。
+Dashboard使用方法：主要介绍如何使用Kubernetes Dashboard
+管理集群。
+9.1　Kubernetes Dashboard配置文件
+Kubernetes官方为Dashboard专门提供了一个YAML配置文
+件，用来给用户部署Dashboard。本节将对这个官方的YAML配置进
+行详细介绍，以便于后面的Dashboard部署。
+9.1.1　Kubernetes角色控制
+Kubernetes提供了基于角色的安全控制以及授权机制。其中，
+涉及了几个非常重要的概念，例如用户、角色、角色绑定以及Secret
+等，下面分别进行介绍。
+1．用户
+
+Kubernetes提供了两种用户，分别为User和ServiceAccount。
+其中User是给管理员使用的，而ServiceAccount则是为Pod中的进
+程提供身份信息。当Pod的进程访问API Server时，它们会与一个
+ServiceAccount，即服务账号相关联，通过该服务账号来判断该进程
+是否有权限访问API Server。
+当用户在创建Pod时，如果没有指定ServiceAccount，则系统会
+自动在与该Pod 所在的命名空间下，为其指定一个特殊的
+ServiceAccount，其名称为default。
+管理员可以通过以下命令查看当前系统中的ServiceAccount，如
+下所示：
+从上面的输出结果可知，当前集群中存在2个名为default的
+ServiceAccount，分别属于default和kube-system这2个命名空
+间。
+2．角色
+与其他的系统一样，在Kubernetes中，角色也是代表一系列权
+限的集合，权限以纯粹的累加形式累计。Kubernetes支持2种角色，
+分别为Role和ClusterRole。其中Role在命名空间内有效，不可以跨
+命名空间；ClusterRole则是在整个集群范围内都有效，可以跨命名
+空间。
+例如，下面的代码定义了一个Role：
+
+可以得知，上面的Role可以访问的资源为pods，可以使用的操作
+有get、watch和list。
+ClusterRole除了可以授予与Role相同的权限之外，还可以授权
+集群范围内的资源、非资源类型的对象，以及跨命名空间的资源的访
+问权限。
+3．角色绑定
+角色绑定的作用是将角色映射到用户，从而让这些用户拥有该角
+色的权限。与2种角色相对应，角色绑定也分为2种，即RoleBinding
+和ClusterRoleBinding。
+4．Secret
+关于Secret，前面已经介绍过了。所谓Secret，是一个包含少量
+敏感信息如密码、令牌或秘钥的对象。把这些信息保存在Secret对象
+中，可以在使用这些信息时加以控制，并可以降低信息泄露的风险。
+9.1.2　kubernetes-dashboard.yaml
+Kubernetes官方为Dashboard提供了一个标准的YAML配置文
+件
+，
+其
+网
+址
+为
+：
+
+https://raw.githubusercontent.com/kubernetes/dashboard/
+master/aio/deploy/recommended/kubernetes-
+dashboard.yaml。
+我们将该文件下载下来，分析一下它的代码。
+
+
+
+
+
+从上面的代码可知，kubernetes-dashboard.yaml文件分为6个
+部分，这6个部分分别为Dashboard Secrets、Dashboard Service
+Account 、Dashboard Role 、Role Binding 、Dashboard
+Deployment和Dashboard Service。
+其中，第17 ～37 行定义了2 个Secret ，第1 个Secret 名为
+kubernetes-dashboard-certs ，第2 个Secret 名为kubernetes-
+dashboard-csrf。这2个Secret的类型都为Opaque，位于kube-
+system命名空间中。
+第42 ～48 行定义了名为kubernetes-dashboard 的
+ServiceAccount，即Dashboard的用户。
+第53～85行定义了Role，即Dashboard的角色信息，其角色名
+称为kubernetes-dashboard-minimal，rules字段中列出了其拥有
+的多个权限。通过名称我们可以猜到，这个权限级别是比较低的。
+第88～100行定义了RoleBinding，即Dashboard的角色绑定，
+其名称为kubernetes-dashboard-minimal，roleRef字段用来指定
+被绑定的角色，也叫kubernetes-dashboard-minimal，即上面定义
+的角色，subjects字段指定绑定的用户为kubernetes-dashboard。
+第105～158行定义了Deployment。从上面第154行可知，
+Dashboard 的Deployment 指定了其使用的ServiceAccount 是
+kubernetes-dashboard。此外，第137行将Secret kubernetes-
+dashboard-certs通过volumes挂载到pod内部的/certs路径。由于
+
+在第130 行指定了参数--auto-generate-certificates ，因此
+Dashboard会自动生成证书。
+第163～175行定义Service，暴露了服务端口为443，并且指定
+其目前端口为8443，选择器为k8s-app: kubernetes-dashboard。
+可以发现，上面的代码定义了与Dashboard有关的各种资源。尽
+管上面的定义非常详细，但是由于网络原因，用户不可以直接通过上
+面的代码创建Dashboard。
+9.2　安装Kubernetes Dashboard
+Dashboard是以Pod的形式提供服务的，所以安装Dashboard
+并不需要新的知识。本节将详细介绍Dashboard的安装方法。
+9.2.1　官方安装方法
+由于Kubernetes官方已经为Dashboard提供了一个YAML配置
+文件，该配置文件包含了Dashboard所需要的各种资源对象，因此用
+户可以直接使用以下命令快速部署Dashboard：
+ 
+    [root@localhost ~]# kubectl apply -f 
+https://raw.githubusercontent.com/
+kubernetes/dashboard/master/aio/deploy/recommended/kubernet
+es-dashboard.yaml
+在通过以上命令部署Dashboard的过程中，会从k8s.gcr.io拉取
+所需要的kubernetes-dashboard-amd64镜像文件。
+9.2.2　自定义安装方法
+
+尽管官方提供的安装方法非常简洁，但是在国内的网络环境中，
+用户却常常无法访问k8s.gcr.io去下载所需要的镜像，因此导致Pod
+创建失败。用户在查看Dashboard的Pod时，会发现它的状态为
+ImagePullBackOff。
+为了避免这个问题，用户可以通过国内的镜像服务器，预先将
+kubernetes-dashboard的镜像下载下来，然后再部署Dashboard。
+这种国内的镜像服务器非常多，例如中国科学技术大学就提供了一个
+k8s.gcr.io的镜像服务器，用户可以通过以下命令下载镜像文件：
+ 
+    [root@localhost ~]# docker pull 
+gcr.mirrors.ustc.edu.cn/google-containers/
+kubernetes-dashboard-amd64:v2.1.0
+下载完成之后，用户还需要设置镜像标签，如下所示：
+ 
+    [root@localhost ~]# docker tag 
+gcr.mirrors.ustc.edu.cn/google-containers/
+kubernetes-dashboard-amd64:v2.1.0 k8s.gcr.io/kubernetes-
+dashboard-amd64:v2.1.0
+接下来就是编辑YAML配置文件。为了能够使读者更加清楚
+Dashboard的部署方法，我们在官方代码的基础上进行了简化和修
+改，去掉了与用户授权有关的内容，仅仅保留部署和服务这两部分，
+如下所示：
+
+
+
+此外，在上面的代码中，将Dashboard的访问方式由HTTPS修
+改为HTTP，去掉了与证书有关的代码。第27行将服务端口修改为
+9090 。第38 行将模式改为HTTP 。第59 行将服务类型修改为
+NodePort，以便于测试。
+将以上代码保存为kubernetes-dashboard.yaml，然后通过以
+下命令进行部署：
+ 
+   [root@localhost ~]# kubectl apply -f kubernetes-
+dashboard.yaml
+查看Pod的状态，如下所示：
+从上面的输出结果可知，刚才创建的Pod已经处于运行状态了。
+查询该Pod的日志，可以发现该Pod已经开始监听9090端口了：
+
+查看所创建的服务的状态，如下所示：
+从上面的输出结果可知，服务的ClusterIP为10.254.175.41，
+服务所监听的9090端口被映射到节点的30963端口。
+继续查看服务的详细信息，可以发现，该服务所对应的
+Endpoints为172.17.0.2:9090正是我们前面创建的Pod的服务端
+口。
+
+9.3　Dashboard使用方法
+Dashboard为管理员提供了一个可视化的，基于浏览器的管理界
+面。通过Dashboard，可以完成绝大部分的集群管理工作，从而可以
+在一定程度上代替kubectl命令。本节将详细介绍Dashboard的使用
+方法。
+9.3.1　Dashboard概况
+在成功部署Dashboard之后，用户就可以通过节点IP加上端口来
+访问Dashboard。例如，在上面的例子中，NodePort为30963，所
+以用户可以通过浏览器访问以下网址：
+http://192.168.21.137:30963
+Dashboard的主界面如图9-1所示。
+主界面左侧为菜单栏，包括集群、概况、工作负载、服务发现与
+负载均衡以及配置与存储等功能模块。每个功能模块下面又有多个子
+模块，例如，集群菜单下面就包括了命名空间、节点、持久化存储
+卷、角色以及存储类等管理模块。
+
+主界面的右上角为创建按钮，用户可以通过该按钮创建各种资
+源，如图9-2所示。
+图9-1　Dashboard主界面
+
+图9-2　创建资源
+创建资源界面包括3个标签页，分别为从文本输入框创建、从文
+件创建以及创建应用。其中，从文本输入框创建提供了一个多行文本
+框，用户可以在该文本框中输入YAML或者JSON配置文件。然后点
+击底部的上传按钮即可。从文件创建标签页提供了一个文件上传按
+钮，用户可以直接在本地编辑好YAML或者JSON配置文件，然后上
+传上去即可。创建应用标签页为用户提供了一个创建应用系统的便捷
+方式。
+9.3.2　通过Dashboard创建资源
+接下来，介绍一下如何通过Dashboard创建Kubernetes资源对
+象。点击图9-2所示窗口右上角的创建按钮，选择从文本输入框创建
+标签页，在文本框中输入以下代码：
+
+点击底部的“上传”按钮，即可完成创建操作。
+选择左侧的工作负载中的容器组菜单项，可以查看到刚才创建的
+3个Pod，如图9-3所示。
+图9-3　通过Dashboard查看容器组
+
+通过Dashboard创建其他的资源对象的方法与上面的操作基本相
+同，读者可以自己去尝试，这里不再详细介绍。

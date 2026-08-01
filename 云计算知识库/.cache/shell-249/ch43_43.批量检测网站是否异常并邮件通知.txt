@@ -1,0 +1,53 @@
+42.监控多台服务器磁盘利用率脚本
+ 
+43.批量检测网站是否异常并邮件通知
+ 
+#!/bin/bash
+eth0=$1
+echo  -e    "流量进入--流量传出    "
+while true; do
+ old_in=$(cat /proc/net/dev |grep $eth0 |awk '{print $2}')
+ old_out=$(cat /proc/net/dev |grep $eth0 |awk '{print $10}')
+ sleep 1
+ new_in=$(cat /proc/net/dev |grep $eth0 |awk '{print $2}')
+ new_out=$(cat /proc/net/dev |grep $eth0 |awk '{print $10}')
+ in=$(printf "%.1f%s" "$((($new_in-$old_in)/1024))" "KB/s")
+ out=$(printf "%.1f%s" "$((($new_out-$old_out)/1024))" "KB/s")
+ echo "$in $out"
+done
+#!/bin/bash
+HOST_INFO=host.info
+for IP in $(awk '/^[^#]/{print $1}' $HOST_INFO); do
+ #取出用户名和端口
+    USER=$(awk -v ip=$IP 'ip==$1{print $2}' $HOST_INFO)
+    PORT=$(awk -v ip=$IP 'ip==$1{print $3}' $HOST_INFO)
+ #创建临时文件，保存信息
+    TMP_FILE=/tmp/disk.tmp
+ #通过公钥登录获取主机磁盘信息
+    ssh -p $PORT $USER@$IP 'df -h' > $TMP_FILE
+ #分析磁盘占用空间
+    USE_RATE_LIST=$(awk 'BEGIN{OFS="="}/^\/dev/{print $NF,int($5)}' $TMP_FILE)
+ #循环磁盘列表，进行判断
+    for USE_RATE in $USE_RATE_LIST; do
+  #取出等号（=）右边的值 挂载点名称
+        PART_NAME=${USE_RATE%=*}  
+  #取出等号（=）左边的值  磁盘利用率
+        USE_RATE=${USE_RATE#*=}
+  #进行判断
+        if [ $USE_RATE -ge 80 ]; then
+            echo "Warning: $PART_NAME Partition usage $USE_RATE%!"
+    echo "服务器$IP的磁盘空间占用过高，请及时处理" | mail -s "空间不足警告" 你的qq@qq.com
+  else
+   echo "服务器$IP的$PART_NAME目录空间良好"
+        fi
+    done
+done
+#!/bin/bash  
+URL_LIST="www.baidu.com www.ctnrs.com www.der-matech.net.cn www.der-matech.com.cn 
+www.der-matech.cn www.der-matech.top www.der-matech.org"
+for URL in $URL_LIST; do
+    FAIL_COUNT=0
+    for ((i=1;i<=3;i++)); do
+        HTTP_CODE=$(curl -o /dev/null --connect-timeout 3 -s -w "%{http_code}" 
+$URL)
+        if [ $HTTP_CODE -eq 200 ]; then

@@ -1,0 +1,616 @@
+C H A P T E R   17 
+ 
+■ ■ ■ 
+291
+FTP 
+The File Transfer Protocol (FTP) was once among the most widely used protocols on the Internet, 
+invoked whenever a user wanted to transfer files between Internet-connected computers. 
+Alas, the protocol has seen better days; today, a better alternative exists for every one of its major 
+roles. There were four primary activities that it once powered. 
+The first, and overwhelming, use of FTP was for file download. Just like people who browse the Web 
+today, earlier generations of Internet users were able to consume far more content than they each 
+tended to generate. Lists of “anonymous” FTP servers that allowed public access were circulated, and 
+users connected to retrieve documents, the source code to new programs, and media like images or 
+movies. (You logged into them with the username “anonymous” or “ftp,” and then—out of politeness, so 
+they would know who was using their bandwidth—you typed your e-mail address as the password.) And 
+FTP was always the protocol of choice when files needed to be moved between computer accounts, 
+since trying to transfer large files with Telnet clients was often a dicey proposition. 
+Second, FTP was often jury-rigged to provide for anonymous upload. Many organizations wanted 
+outsiders to be able to submit documents or files, and their solution was to set up FTP servers that 
+allowed files to be written into a directory whose contents could not, then, be listed back again. That 
+way, users could not see (and hopefully could not guess!) the names of the files that other users had just 
+submitted and get to them before the site administrators did. 
+Third, the protocol was often in use to support the synchronization of entire trees of files between 
+computer accounts. By using a client that provided for “recursive” FTP operations, users could push 
+entire directory trees from one of their accounts to another, and server administrators could clone or 
+install new services without having to re-build them from scratch on a new machine. When using FTP 
+like this, users were generally not aware of how the actual protocol worked, or of the many separate 
+commands needed to transfer so many different files: instead, they hit a button and a large batch 
+operation would run and then complete. 
+Fourth and finally, FTP was used for its original purpose: interactive, full-fledged file management. 
+The early FTP clients presented a command-line prompt that felt something like a Unix shell account 
+itself, and—as we shall see—the protocol borrows from shell accounts both the idea of a “current 
+working directory” and of a cd command to move from one directory to another. Later clients mimicked 
+the idea of a Mac-like interface, with folders and files drawn on the computer screen. But in either case, 
+in the activity of filesystem browsing the full capabilities of FTP finally came into play: it supported not 
+only the operations of listing directories and uploading and downloading files, but of creating and 
+deleting directories, adjusting file permissions, and re-naming files. 
+What to Use Instead of FTP 
+Today, there are better alternatives than the FTP protocol for pretty much anything you could want to do 
+with it. You will still occasionally see URLs that start with ftp:, but they are becoming quite rare. Use this 
+chapter either because you have a legacy need to speak FTP from your Python program, or because you 
+want to learn more about file transfer protocols in general and FTP is a good, historical place to start. 
+
+CHAPTER 17 ■ FTP 
+292 
+The biggest problem with the protocol is its lack of security: not only files, but usernames and 
+passwords are sent completely in the clear and can be viewed by anyone observing network traffic. 
+A second issue is that an FTP user tends to make a connection, choose a working directory, and do 
+several operations all over the same network connection. Modern Internet services, with millions of 
+users, prefer protocols like HTTP (see Chapter 9) that consist of short, completely self-contained 
+requests, instead of long-running FTP connections that require the server to remember things like a 
+current working directory. 
+A final big issue is filesystem security. The early FTP servers, instead of showing users just a sliver of 
+the host filesystem that the owner wanted exposed, tended to simply expose the entire filesystem, letting 
+users cd to / and snoop around to see how the system was configured. True, you could run the server 
+under a separate ftp user and try to deny that user access to as many files as possible; but many areas of 
+the Unix filesystem need to be publicly readable simply so that normal users can use the programs there. 
+While servers were eventually written that exposed only part of the host filesystem, this more or less 
+violated the original intention: that an FTP session would look like a Telnet command-line prompt, even 
+down to the fact that full pathnames were used that started at the filesystem root. 
+So what are the alternatives? 
+• 
+For file download, HTTP (Chapter 9) is the standard protocol on today’s Internet, 
+protected with SSL when necessary for security. Instead of exposing system-
+specific file name conventions like FTP, HTTP supports system-independent 
+URLs. 
+• 
+Anonymous upload is a bit less standard, but the general tendency is to use a form 
+on a web page that instructs the browser to use an HTTP POST operation to 
+transmit the file that the user selects. 
+• 
+File synchronization has improved immeasurably since the days when a recursive 
+FTP file copy was the only common way to get files to another computer. Instead 
+of wastefully copying every file, modern commands like rsync or rdist efficiently 
+compare files at both ends of the connection and copy only the ones that are new 
+or have changed. (They are not covered in this book; try Googling for them.) 
+• 
+Full filesystem access is actually the one area where FTP can still commonly be 
+found on today’s Internet: thousands of cut-rate ISPs continue to support FTP, 
+despite its insecurity, as the means by which users copy their media and 
+(typically) PHP source code into their web account. A much better alternative 
+today is for service providers to support SFTP instead (see Chapter 16). 
+■ Note The FTP standard is RFC959, available at http://www.faqs.org/rfcs/rfc959.html. 
+Communication Channels 
+FTP is unusual because, by default, it actually uses two TCP connections during operation. One 
+connection is the control channel, which carries commands and the resulting acknowledgments or error 
+codes. The second connection is the data channel, which is used solely for transmitting file data or other 
+blocks of information, such as directory listings. Technically, the data channel is full duplex, meaning 
+that it allows files to be transmitted in both directions simultaneously. However, in actual practice, this 
+capability is rarely used. 
+In the traditional sense, the process of downloading a file from an FTP server ran mostly like this: 
+
+CHAPTER 17 ■ FTP 
+293
+1. 
+First, the FTP client establishes a command connection by connecting to the 
+FTP port on the server. 
+2. 
+The client authenticates itself, usually with username and password. 
+3. 
+The client changes directory on the server to where it wants to deposit or retrieve files. 
+4. 
+The client begins listening on a new port for the data connection, and then 
+informs the server about that port. 
+5. 
+The server connects to the port the client requested. 
+6. 
+The file is transmitted. 
+7. 
+The data connection is closed. 
+This worked well in the early days of the Internet; back then, most every machine that could run FTP 
+had a public IP address, and firewalls were relatively rare. Today, however, the picture is more 
+complicated. Firewalls blocking incoming connections to desktop and laptop machines are now quite 
+common, and many wireless, DSL, and in-house business networks do not offer client machines real 
+public IP addresses anyway. 
+To accommodate this situation, FTP also supports what is known as passive mode. In this scenario, 
+the data connection is made backward: the server opens an extra port, and tells the client to make the 
+second connection. Other than that, everything behaves the same way. 
+Passive mode is today the default with most FTP clients, as well as Python’s ftplib module, which 
+this chapter will teach you about. 
+Using FTP in Python 
+The Python module ftplib is the primary interface to FTP for Python programmers. It handles the 
+details of establishing the various connections for you, and provides convenient ways to automate 
+common commands. 
+■ Tip If you are interested only in downloading files, the urllib2 module introduced in Chapter 1 supports FTP, 
+and may be easier to use for simple downloading tasks; just run it with an ftp:// URL. In this chapter, we 
+describe ftplib because it provides FTP-specific features that are not available with urllib2. 
+Listing 17–1 shows a very basic ftplib example. The program connects to a remote server, displays 
+the welcome message, and prints the current working directory. 
+Listing 17–1. Making a Simple FTP Connection 
+#!/usr/bin/env python 
+# Basic connection - Chapter 17 - connect.py 
+ 
+from ftplib import FTP 
+ 
+f = FTP('ftp.ibiblio.org') 
+ 
+print "Welcome:", f.getwelcome() 
+
+CHAPTER 17 ■ FTP 
+294 
+f.login() 
+print "Current working directory:", f.pwd() 
+f.quit() 
+The welcome message will generally have no information that could be usefully parsed by your 
+program, but you might want to display it if a user is calling your client interactively. The login() 
+function can take several parameters, including a username, password, and a third, rarely used 
+authentication token that FTP calls an “account.” Here we have called it without parameters, which 
+makes it log in as the user “anonymous” with a generic value for the password. 
+Recall that an FTP session can visit different directories, just like a shell prompt can move between 
+locations with cd. Here, the pwd() function returns the current working directory on the remote site of 
+the connection. Finally, the quit() function logs out and closes the connection. 
+Here is what the program outputs when run: 
+$ ./connect.py 
+Welcome: 220 ProFTPD Server (Bring it on...) 
+Current working directory: / 
+ASCII and Binary Files 
+When making an FTP transfer, you have to decide whether you want the file treated as a monolithic 
+block of binary data, or whether you want it parsed as a text file so that your local machine can paste its 
+lines back together using whatever end-of-line character is native to your platform. 
+A file transferred in so-called “ASCII mode” is delivered one line at a time, so that you can glue the 
+lines back together on the local machine using its own line-ending convention. Take a look at Listing 17–
+2 for a Python program that downloads a well-known text file and saves it in your local directory. 
+Listing 17–2. Downloading an ASCII File 
+#!/usr/bin/env python 
+# ASCII download - Chapter 17 - asciidl.py 
+# Downloads README from remote and writes it to disk. 
+ 
+import os 
+from ftplib import FTP 
+ 
+if os.path.exists('README'): 
+»   raise IOError('refusing to overwrite your README file') 
+ 
+def writeline(data): 
+»   fd.write(data) 
+»   fd.write(os.linesep) 
+f = FTP('ftp.kernel.org') 
+f.login() 
+f.cwd('/pub/linux/kernel') 
+ 
+fd = open('README', 'w') 
+f.retrlines('RETR README', writeline) 
+fd.close() 
+ 
+f.quit() 
+
+CHAPTER 17 ■ FTP 
+295
+In the listing, the cwd() function selects a new working directory on the remote system. Then the 
+retrlines() function begins the transfer. Its first parameter specifies a command to run on the remote 
+system, usually RETR, followed by a file name. Its second parameter is a function that is called, over and 
+over again, as each line of the text file is retrieved; if omitted, the data is simply printed to standard 
+output. The lines are passed with the end-of-line character stripped, so the homemade writeline() 
+function simply appends your system’s standard line ending to each line as it is written out. 
+Try running this program; there should be a file in your current directory named README after the 
+program is done. 
+Basic binary file transfers work in much the same way as text-file transfers; Listing 17–3 shows an 
+example.  
+Listing 17–3. Downloading a Binary File 
+#!/usr/bin/env python 
+# Binary upload - Chapter 17 - binarydl.py 
+ 
+import os 
+from ftplib import FTP 
+ 
+if os.path.exists('patch8.gz'): 
+»   raise IOError('refusing to overwrite your patch8.gz file') 
+ 
+f = FTP('ftp.kernel.org') 
+f.login() 
+f.cwd('/pub/linux/kernel/v1.0') 
+ 
+fd = open('patch8.gz', 'wb') 
+f.retrbinary('RETR patch8.gz', fd.write) 
+fd.close() 
+ 
+f.quit() 
+When run, it deposits a file named patch8.gz in your current working directory. The retrbinary() 
+function simply passes blocks of data to the specified function. This is convenient, since a file object’s 
+write() function expects just such data—so in this case, no custom function is necessary. 
+Advanced Binary Downloading 
+The ftplib module provides a second function that can be used for binary downloading: 
+ntransfercmd(). This command provides a lower-level interface, but can be useful if you want to know a 
+little bit more about what’s going on during the download. 
+In particular, this more advanced command lets you keep track of the number of bytes transferred, 
+and you can use that information to display status updates for the user. Listing 17–4 shows a sample 
+program that uses ntransfercmd(). 
+Listing 17–4. Binary Download with Status Updates 
+#!/usr/bin/env python 
+# Advanced binary download - Chapter 17 - advbinarydl.py 
+ 
+import os, sys 
+from ftplib import FTP 
+ 
+
+CHAPTER 17 ■ FTP 
+296 
+if os.path.exists('linux-1.0.tar.gz'): 
+»   raise IOError('refusing to overwrite your linux-1.0.tar.gz file') 
+ 
+f = FTP('ftp.kernel.org') 
+f.login() 
+ 
+f.cwd('/pub/linux/kernel/v1.0') 
+f.voidcmd("TYPE I") 
+ 
+datasock, size = f.ntransfercmd("RETR linux-1.0.tar.gz") 
+bytes_so_far = 0 
+fd = open('linux-1.0.tar.gz', 'wb') 
+ 
+while 1: 
+»   buf = datasock.recv(2048) 
+»   if not buf: 
+»   »   break 
+»   fd.write(buf) 
+»   bytes_so_far += len(buf) 
+»   print "\rReceived", bytes_so_far, 
+»   if size: 
+»   »   print "of %d total bytes (%.1f%%)" % ( 
+»   »   »   size, 100 * bytes_so_far / float(size)), 
+»   else: 
+»   »   print "bytes", 
+»   sys.stdout.flush() 
+ 
+print 
+fd.close() 
+datasock.close() 
+f.voidresp() 
+f.quit() 
+There are a few new things to note here. First comes the call to voidcmd(). This passes an FTP 
+command directly to the server, checks for an error, but returns nothing. In this case, the raw command 
+is TYPE I. That sets the transfer mode to “image,” which is how FTP refers internally to binary files. In the 
+previous example, retrbinary() automatically ran this command behind the scenes, but the lower-level 
+ntransfercmd() does not. 
+Next, note that ntransfercmd() returns a tuple consisting of a data socket and an estimated size. 
+Always bear in mind that the size is merely an estimate, and should not be considered authoritative; the 
+file may end sooner, or it might go on much longer, than this value. Also, if a size estimate from the FTP 
+server is simply not available, then the estimated size returned will be None. 
+The object datasock is, in fact, a plain TCP socket, which has all of the behaviors described in the 
+first section of this book (see Chapter 3 in particular). In this example, a simple loop calls recv() until it 
+has read all of the data from the socket, writing it out to disk along the way and printing out status 
+updates to the screen. 
+
+CHAPTER 17 ■ FTP 
+297
+■ Tip Notice two things about the status updates printed to the screen by Listing 17–4, by the way. First, rather 
+than printing a scrolling list of lines that disappear out of the top of the terminal, we begin each line with a carriage 
+return '\r', which moves the cursor back to your terminal’s left edge so that each status line overwrites the 
+previous one and creates the illusion of an increasing, animated percentage. Second, because we are ending each 
+print statement with a comma and are never actually letting them finish a line of output, we have to flush() the 
+standard output to make sure that the status updates immediately reach the screen. 
+After receiving the data, it is important to close the data socket and call voidresp(), which reads the 
+command response code from the server, raising an exception if there was any error during 
+transmission. Even if you do not care about detecting errors, failing to call voidresp() will make future 
+commands likely to fail because the server’s output socket will be blocked waiting for you to read the 
+results. 
+Here is an example of running this program: 
+$ ./advbinarydl.py 
+Received 1259161 of 1259161 bytes (100.0%) 
+Uploading Data 
+File data can also be uploaded through FTP. As with downloading, there are two basic functions for 
+uploading: storbinary() and storlines(). Both take a command to run, and a file-like object to 
+transmit. The storbinary() function will call the read() method repeatedly on that object until its 
+content is exhausted, while storlines(), by contrast, calls the readline() method. 
+Unlike the corresponding download functions, these methods do not require you to provide a 
+callable function of your own. (But you could, of course, pass a file-like object of your own crafting 
+whose read() or readline() method computes the outgoing data as the transmission proceeds!) 
+Listing 17–5 shows how to upload a file in binary mode. 
+Listing 17–5. Binary Upload 
+#!/usr/bin/env python 
+# Binary download - Chapter 17 - binaryul.py 
+ 
+from ftplib import FTP 
+import sys, getpass, os.path 
+ 
+if len(sys.argv) != 5: 
+»   print "usage: %s <host> <username> <localfile> <remotedir>" % ( 
+»   »   sys.argv[0]) 
+»   exit(2) 
+ 
+host, username, localfile, remotedir = sys.argv[1:] 
+password = getpass.getpass( 
+»   "Enter password for %s on %s: " % (username, host)) 
+ 
+
+CHAPTER 17 ■ FTP 
+298 
+f = FTP(host) 
+f.login(username, password) 
+f.cwd(remotedir) 
+ 
+fd = open(localfile, 'rb') 
+f.storbinary('STOR %s' % os.path.basename(localfile), fd) 
+fd.close() 
+ 
+f.quit() 
+This program looks quite similar to our earlier efforts. Since most anonymous FTP sites do not 
+permit file uploading, you will have to find a server somewhere to test it against; I simply installed the 
+old, venerable ftpd on my laptop for a few minutes and ran the test like this: 
+$ python binaryul.py localhost brandon test.txt /tmp 
+I entered my password at the prompt (brandon is my username on this machine). When the program 
+finished, I checked and, sure enough, a copy of the test.txt file was now sitting in /tmp. Remember not 
+to try this over a network to another machine, since FTP does not encrypt or protect your password! 
+You can modify this program to upload a file in ASCII mode by simply changing storbinary() to 
+storlines(). 
+Advanced Binary Uploading 
+Just like the download process had a complicated raw version, it is also possible to upload files “by 
+hand” using ntransfercmd(), as shown in Listing 17–6. 
+Listing 17–6. Uploading Files a Block at a Time 
+#!/usr/bin/env python 
+# Advanced binary upload - Chapter 17 - advbinaryul.py 
+ 
+from ftplib import FTP 
+import sys, getpass, os.path 
+ 
+BLOCKSIZE = 8192  # chunk size to read and transmit: 8 kB 
+ 
+if len(sys.argv) != 5: 
+»   print "usage: %s <host> <username> <localfile> <remotedir>" % ( 
+»   »   sys.argv[0]) 
+»   exit(2) 
+ 
+host, username, localfile, remotedir = sys.argv[1:] 
+password = getpass.getpass("Enter password for %s on %s: " % \ 
+»   »   (username, host)) 
+f = FTP(host) 
+f.login(username, password) 
+f.cwd(remotedir) 
+f.voidcmd("TYPE I") 
+fd = open(localfile, 'rb') 
+datasock, esize = f.ntransfercmd('STOR %s' % os.path.basename(localfile)) 
+size = os.stat(localfile)[6] 
+bytes_so_far = 0 
+
+CHAPTER 17 ■ FTP 
+299
+ 
+while 1: 
+»   buf = fd.read(BLOCKSIZE) 
+»   if not buf: 
+»   »   break 
+»   datasock.sendall(buf) 
+»   bytes_so_far += len(buf) 
+»   print "\rSent", bytes_so_far, "of", size, "bytes", \ 
+»   »   "(%.1f%%)\r" % (100 * bytes_so_far / float(size)) 
+»   sys.stdout.flush() 
+ 
+print 
+datasock.close() 
+fd.close() 
+f.voidresp() 
+f.quit() 
+Note that the first thing we do when finished with our transfer is to call datasock.close(). When 
+uploading data, closing the socket is the signal to the server that the upload is complete! If you fail to 
+close the data socket after uploading all your data, the server will keep waiting for the rest of the data to 
+arrive. 
+Now we can perform an upload that continuously displays its status as it progresses: 
+$ python binaryul.py localhost brandon patch8.gz /tmp 
+Enter password for brandon on localhost: 
+Sent 6408 of 6408 bytes (100.0%) 
+Handling Errors 
+Like most Python modules, ftplib will raise an exception when an error occurs. It defines several 
+exceptions of its own, and it can also raise socket.error and IOError. As a convenience, it offers a tuple, 
+named ftplib.all_errors, that lists all of the exceptions that can possibly be raised by ftplib. This is 
+often a useful shortcut for writing a try…except clause. 
+One of the problems with the basic retrbinary() function is that, in order to use it easily, you will 
+usually wind up opening the file on the local end before beginning the transfer on the remote side. If 
+your command aimed at the remote side retorts that the file does not exist, or if the RETR command 
+otherwise fails, then you will have to close and delete the local file you have just created (or else wind up 
+littering the filesystem with zero-length files). 
+With the ntransfercmd() method, by contrast, you can check for a problem prior to opening a local 
+file. Listing 17–6 already follows these guidelines: if ntransfercmd() fails, the exception will cause the 
+program to terminate before the local file is opened. 
+Scanning DirectoriesFTP provides two ways to discover information about server files and directories. 
+These are implemented in ftplib as the nlst() and dir() methods. 
+The nlst() method returns a list of entries in a given directory—all of the files and directories inside. 
+However, the bare names are all that is returned. There is no other information about which particular 
+entries are files or are directories, on the sizes of the files present, or anything else. 
+The more powerful dir() function returns a directory listing from the remote. This listing is in a 
+system-defined format, but typically contains a file name, size, modification date, and file type. On UNIX 
+servers, it is typically the output of one of these two shell commands: 
+$ ls -l 
+$ ls -la 
+
+CHAPTER 17 ■ FTP 
+300 
+Windows servers may use the output of dir. While the output may be useful to an end user, it is
+difficult for a program to use, due to the varying output formats. Some clients that need this data
+implement parsers for the many different formats that ls and dir produce across machines and
+operating system versions; others can only parse the one format in use in a particular situation. 
+Listing 17–7 shows an example of using nlst() to get directory information.  
+Listing 17–7. Getting a Bare Directory Listing 
+#!/usr/bin/env python 
+# NLST example - Chapter 17 - nlst.py 
+from ftplib import FTP 
+f = FTP('ftp.ibiblio.org') 
+f.login() 
+f.cwd('/pub/academic/astronomy/')
+entries = f.nlst()
+entries.sort() 
+print len(entries), "entries:"
+for entry in entries: 
+»   print entry 
+f.quit() 
+Listing 17–7 shows an example of using nlst() to get directory information. When you run this
+program, you will see output like this: 
+$ python nlst.py 
+13 entries: 
+INDEX 
+README
+ephem_4.28.tar.Z
+hawaii_scope
+incoming
+jupitor-moons.shar.Z
+lunar.c.Z
+lunisolar.shar.Z
+moon.shar.Z
+planetary
+sat-track.tar.Z
+stars.tar.Z
+xephem.tar.Z 
+If you were to use an FTP client to manually log on to the server, you would see the same files listed.
+Notice that the file names are in a convenient format for automated processing—a bare list of file
+names—but that there is no extra information. The result will be different when we try another file
+listing command in Listing 17–8. 
+Listing 17–8. Getting a Fancy Directory Listing 
+#!/usr/bin/env python 
+# dir() example - Chapter 17 - dir.py 
+from ftplib import FTP 
+f = FTP('ftp.ibiblio.org') 
+Download from www.eBookTM.Com
+
+CHAPTER 17 ■ FTP 
+301
+f.login() 
+f.cwd('/pub/academic/astronomy/') 
+entries = [] 
+f.dir(entries.append) 
+print "%d entries:" % len(entries) 
+for entry in entries: 
+»   print entry 
+f.quit() 
+Notice that the filenames are in a convenient format for automated processing — a bare list of 
+filenames — but that is no extra information. Contrast the bare list of file names we saw earlier with the 
+output from Listing 17–8, which uses dir(): 
+$ python dir.py 
+13 entries: 
+-rw-r--r--   1 (?) »    (?) »   »     750 Feb 14  1994 INDEX 
+-rw-r--r--   1 root »   bin »   »     135 Feb 11  1999 README 
+-rw-r--r--   1 (?) »    (?) »      341303 Oct  2  1992 ephem_4.28.tar.Z 
+drwxr-xr-x   2 (?) »    (?) »   »    4096 Feb 11  1999 hawaii_scope 
+drwxr-xr-x   2 (?) »    (?) »   »    4096 Feb 11  1999 incoming 
+-rw-r--r--   1 (?) »    (?) »   »    5983 Oct  2  1992 jupitor-moons.shar.Z 
+-rw-r--r--   1 (?) »    (?) »   »    1751 Oct  2  1992 lunar.c.Z 
+-rw-r--r--   1 (?) »    (?) »   »    8078 Oct  2  1992 lunisolar.shar.Z 
+-rw-r--r--   1 (?) »    (?) »   »   64209 Oct  2  1992 moon.shar.Z 
+drwxr-xr-x   2 (?) »    (?) »   »    4096 Jan  6  1993 planetary 
+-rw-r--r--   1 (?) »    (?) »      129969 Oct  2  1992 sat-track.tar.Z 
+-rw-r--r--   1 (?) »    (?) »   »   16504 Oct  2  1992 stars.tar.Z 
+-rw-r--r--   1 (?) »    (?) »      410650 Oct  2  1992 xephem.tar.Z 
+The dir() method takes a function that it calls for each line, delivering the directory listing in pieces 
+just like retrlines() delivers the contents of particular files. Here, we simply supply the append() 
+method of our plain old Python entries list. 
+Detecting Directories and Recursive Download 
+If you cannot guarantee what information an FTP server might choose to return from its dir() 
+command, how are you going to tell directories from normal files—an essential step to downloading 
+entire trees of files from the server? 
+The answer, shown in Listing 17–9, is to simply try a cwd() into every name that nlst() returns and, 
+if you succeed, conclude that the entity is a directory! This sample program does not do any actual 
+downloading; instead, to keep things simple (and not flood your disk with sample data), it simply prints 
+out the directories it visits to the screen. 
+Listing 17–9. Trying to Recurse into Directories 
+#!/usr/bin/env python 
+# Recursive downloader - Chapter 17 - recursedl.py 
+ 
+import os, sys 
+from ftplib import FTP, error_perm 
+ 
+def walk_dir(f, dirpath): 
+»   original_dir = f.pwd() 
+
+CHAPTER 17 ■ FTP 
+302 
+»   try: 
+»   »   f.cwd(dirpath) 
+»   except error_perm: 
+»   »   return  # ignore non-directories and ones we cannot enter 
+»   print dirpath 
+»   names = f.nlst() 
+»   for name in names: 
+»   »   walk_dir(f, dirpath + '/' + name) 
+»   f.cwd(original_dir)  # return to cwd of our caller 
+ 
+f = FTP('ftp.kernel.org') 
+f.login() 
+walk_dir(f, '/pub/linux/kernel/Historic/old-versions') 
+f.quit() 
+This sample program will run a bit slow—there are, it turns out, quite a few files in the old-versions 
+directory on the Linux Kernel Archive—but within a few dozen seconds, you should see the resulting 
+directory tree displayed on the screen: 
+$ python recursedl.py 
+/pub/linux/kernel/Historic/old-versions 
+/pub/linux/kernel/Historic/old-versions/impure 
+/pub/linux/kernel/Historic/old-versions/old 
+/pub/linux/kernel/Historic/old-versions/old/corrupt 
+/pub/linux/kernel/Historic/old-versions/tytso 
+By adding a few print statements, you could supplement this list of directories by displaying every 
+one of the files that the recursive process is (slowly) discovering. And by adding another few lines of 
+code, you could be downloading the files themselves to corresponding directories that you create locally. 
+But the only really essential logic for a recursive download is already operating in Listing 17–9: the only 
+foolproof way to know if an entry is a directory that you are allowed to enter is to try running cwd() 
+against it. 
+Creating Directories, Deleting Things 
+Finally, FTP supports file deletion, and supports both the creation and deletion of directories. These 
+more obscure calls are all described in the ftplib documentation: 
+• 
+delete(filename) will delete a file from the server. 
+• 
+mkd(dirname) attempts to create a new directory. 
+• 
+rmd(dirname) will delete a directory; note that most systems require the directory 
+to be empty first. 
+• 
+rename(oldname, newname) works, essentially, like the Unix command mv: if both 
+names are in the same directory, the file is essentially re-named; but if the 
+destination specifies a name in a different directory, then the file is actually 
+moved. 
+Note that these commands, like all other FTP operations, are performed more or less as though you 
+were really logged on to the remote server command line as the same username with which you logged 
+into FTP—and the chances of your having permission to manipulate files on a given server are lower 
+than being able to download files, or even to create new files in an upload directory. Still, it is because of 
+
+CHAPTER 17 ■ FTP 
+303
+these last few commands that FTP can be used to back file-browser applications that let users drag and 
+drop files and directories seamlessly between their local system and the remote host. 
+Doing FTP Securely 
+Though we noted at the beginning of this chapter that there are far better protocols to adopt than FTP 
+for pretty much anything you could use FTP to accomplish—in particular the robust and secure SFTP 
+extension to SSH (see Chapter 16)—we should be fair and note that some few FTP servers support TLS 
+encryption (see Chapter 6) and that Python’s ftplib does provide this protection if you want to take 
+advantage of it. 
+To use TLS, create your FTP connection with the FTP_TLS class instead of the plain FTP class; simply 
+by doing this, your username and password and, in fact, the entire FTP command channel will be 
+protected from prying eyes. If you then additionally run the class’s prot_p() method (it takes no 
+arguments), then the FTP data connection will be protected as well. Should you for some reason want to 
+return to using an un-encrypted data connection during the session, there is a prot_c() method that 
+returns the data stream to normal. Again, your commands will continue to be protected as long as you 
+are using the FTP_TLS class. 
+Check the Python Standard Library documentation for more details (they include a small code 
+sample) if you wind up needing this extension to FTP: 
+http://docs.python.org/library/ftplib.html#ftplib.FTP_TLS 
+Summary 
+FTP lets you transfer files between a client running on your machine and a remote FTP server. Though 
+the protocol is insecure and outdated when compared to better choices like SFTP, you might still find 
+services and machines that require you to use it. In Python, the ftplib library is used to talk to FTP 
+servers. 
+FTP supports binary and ASCII transfers. ASCII transfers are usually used for text files, and permit 
+line endings to be adjusted as the file is transferred. Binary transfers are used for everything else. The 
+retrlines() function is used to download a file in ASCII mode, while retrbinary() downloads a file in 
+binary mode. 
+You can also upload files to a remote server. The storlines() function uploads a file in ASCII mode, 
+and storbinary() uploads a file in binary mode. 
+The ntransfercmd() function can be used for binary uploads and downloads. It gives you more 
+control over the transfer process and is often used to support a progress bar for the user. 
+The ftplib module raises exceptions on errors. The special tuple ftplib.all_errors can be used to 
+catch any error that it might raise. 
+You can use cwd() to change to a particular directory on the remote end. The nlst() command 
+returns a simple list of all entries (files or directories) in a given directory. The dir() command returns a 
+more detailed list but in server-specific format. Even with only nlst(), you can usually detect whether an 
+entry is a file or directory by attempting to use cwd() to change to it and noting whether you get an error. 
+
+CHAPTER 17 ■ FTP 
+304 
+ 

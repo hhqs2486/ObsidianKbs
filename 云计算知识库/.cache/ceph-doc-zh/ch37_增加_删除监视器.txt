@@ -1,0 +1,227 @@
+11. 从保存ceph.conf 主拷贝的主机，把更新过的ceph.conf 拷贝到集群其他主机
+的/etc/ceph 目录下。
+增加/删除监视器
+你的集群启动并运行后，可以在运行时增加、或删除监视器。请参考手动部署或监视器自举启
+动完成初始设置。
+增加监视器
+Ceph 监视器是轻量级进程，它维护着集群运行图的主副本。一个集群可以只有一个监视器，
+我们推荐生产环境至少3 个监视器。Ceph 使用Paxos 算法的一个变种对各种图、以及其它
+对集群来说至关重要的信息达成共识。由于Paxos 算法天生要求大部分监视器在运行，以形
+成法定人数（并因此达成共识）。
+It is advisable to run an odd-number of monitors but not mandatory. An odd-number of
+monitors has a higher resiliency to failures than an even-number of monitors. For instance,
+on a 2 monitor deployment, no failures can be tolerated in order to maintain a quorum; with 3
+monitors, one failure can be tolerated; in a 4 monitor deployment, one failure can be
+tolerated; with 5 monitors, two failures can be tolerated. This is why an odd-number is
+advisable. Summarizing, Ceph needs a majority of monitors to be running (and able to
+communicate with each other), but that majority can be achieved using a single monitor, or 2
+out of 2 monitors, 2 out of 3, 3 out of 4, etc.
+For an initial deployment of a multi-node Ceph cluster, it is advisable to deploy three
+monitors, increasing the number two at a time if a valid need for more than three exists.
+正因为监视器是轻量级的，所以有可能在作为OSD 的主机上同时运行它；然而，我们推荐运
+行于单独主机，因为与内核的fsync 问题会影响性能。
+Note
+这里的大多数监视器之间必须能互通，这样才能形成法定人数。
+
+部署硬件
+如果你增加新监视器时要新增一台主机，关于其最低硬件配置请参见硬件推荐。要增加一个监
+视器主机，首先要安装最新版的Linux （如Ubuntu 12.04 或者RHEL 7 ）。
+把监视器主机安装上架，连通网络。
+安装必要软件
+手动部署的集群，Ceph 软件包必须手动装，详情参见安装软件包。应该配置一个用户，使之
+可以无密码登录SSH 、且有root 权限。
+增加监视器（手动）
+本步骤创建ceph-mon 数据目录、获取监视器运行图和监视器密钥环、增加一个ceph-
+mon 守护进程。如果这导致只有2 个监视器守护进程，你可以重演此步骤来增加一或多个监
+视器，直到你拥有足够多ceph-mon 达到法定人数。
+现在该指定监视器的标识号了。传统上，监视器曾用单个字母（a 、b 、c ……）命名，但
+你可以指定任何形式。在本文档里，要记住{mon-id} 应该是你所选的标识号，不包
+含mon. 前缀，如在mon.a 中，其{mon-id} 是a 。
+1.
+在新监视器主机上创建默认目录：
+2. ssh {new-mon-host}
+sudo mkdir /var/lib/ceph/mon/ceph-{mon-id}
+3.
+创建临时目录{tmp} ，用以保存此过程中用到的文件。此目录要不同于前面步骤创
+建的监视器数据目录，且完成后可删除。
+mkdir {tmp}
+
+4.
+获取监视器密钥环，{tmp} 是密钥环文件保存路径、{filename} 是包含密钥的
+文件名。
+ceph auth get mon. -o {tmp}/{key-filename}
+5.
+获取监视器运行图，{tmp} 是获取到的监视器运行图、{filename} 是包含监视
+器运行图的文件名。
+ceph mon getmap -o {tmp}/{map-filename}
+6.
+准备第一步创建的监视器数据目录。必须指定监视器运行图路径，这样才能获得监视
+器法定人数和它们fsid 的信息；还要指定监视器密钥环路径。
+sudo ceph-mon -i {mon-id} --mkfs --monmap
+{tmp}/{map-filename} --keyring {tmp}/{key-filename}
+7.
+启动新监视器，它会自动加入机器。守护进程需知道绑定到哪个地址，通过--
+public-addr {ip:port} 或在ceph.conf 里的相应段设置mon addr 可以
+指定。
+ceph-mon -i {mon-id} --public-addr {ip:port}
+删除监视器
+从集群删除监视器时，必须认识到，Ceph 监视器用PASOX 算法关于主集群运行图达成共识。
+必须有足够多的监视器才能对集群运行图达成共识。
+删除监视器（手动）
+本步骤从集群删除ceph-mon 守护进程，如果此步骤导致只剩2 个监视器了，你得增加或删
+除一个监视器，直到凑足法定人数所必需的ceph-mon 数。
+1.
+停止监视器。
+
+service ceph -a stop mon.{mon-id}
+2.
+从集群删除监视器。
+ceph mon remove {mon-id}
+3.
+删除ceph.conf 对应条目。
+从不健康集群删除监视器
+本步骤从不健康集群删除ceph-mon ，例如集群内的监视器不能形成法定人数。
+1.
+停止所有监视器主机上的所有ceph-mon 守护进程。
+2. ssh {mon-host}
+3. service ceph stop mon || stop ceph-mon-all
+# 要在所有监视器主机上执行
+4.
+找出一个活着的监视器并登录其所在主机。
+ssh {mon-host}
+5.
+提取monmap 副本。
+6. ceph-mon -i {mon-id} --extract-monmap {map-path}
+7. # 多数情况下都是：
+
+ceph-mon -i `hostname` --extract-monmap /tmp/monmap
+8.
+删除不保留或有问题的监视器。例如，如果你有3 个监视
+器mon.a 、mon.b 和mon.c ，其中仅保留mon.a ，按如下步骤：
+9. monmaptool {map-path} --rm {mon-id}
+10.
+# 例如
+11.
+monmaptool /tmp/monmap --rm b
+monmaptool /tmp/monmap --rm c
+12. 把去除过监视器后剩下的运行图注入存活的监视器。比如，用下列命令把一张运行图
+注入mon.a 监视器：
+13.
+ceph-mon -i {mon-id} --inject-monmap {map-path}
+14.
+# for example,
+ceph-mon -i a --inject-monmap /tmp/monmap
+15. 只启动保留下来的监视器。
+16. 确认这些监视器形成了法定人数（ceph -s ）。
+17. 你也许得把已删除监视器的数据目录/var/lib/ceph/mon 备份到安全位置，如
+果您对其余监视器很有信心、或者有足够的冗余，也可以删除。
+更改监视器的IP 地址
+Important
+
+现有监视器不应该更改其IP 地址。
+监视器是Ceph 集群的关键组件，它们要维护一个法定人数，这样整个系统才能正常工作。要
+确立法定人数，监视器得互相发现对方，Ceph 对监视器的发现要求严格。
+Ceph 客户端及其它Ceph 守护进程用ceph.conf 发现监视器，然而，监视器之间用监视器
+运行图发现对方，而非ceph.conf 。例如，你看过的增加监视器（手动），会发现创建新
+监视器时得获取当前集群的monmap ，因为它是ceph-mon -i {mon-id} \ --
+mkfs 命令的必要参数。下面几段解释了Ceph 监视器的一致性要求，和几种改IP 的安全方
+法。
+一致性要求
+监视器发现集群内的其它监视器时总是参照monmap 的本地副本，用monmap 而
+非ceph.conf 可避免因配置错误（例如在ceph.conf 指定监视器地址或端口时拼写错误）
+而损坏集群。正因为监视器用monmaps 相互发现、且共享于客户端和其它Ceph 守护进程间，
+所以monmap 给监视器提供了苛刻的一致性保证。
+苛刻的一致性要求也适用于monmap 的更新，因为任何有关监视器的更新、monmap 的更改
+都通过名为Paxos 的分布式一致性算法运行。为保证法定人数里的所有监视器都持有同版本
+monmap ，所有监视器都要赞成monmap 的每一次更新，像增加、删除监视器。monmap 的
+更新是增量的，这样监视器都有最近商定的版本以及一系列之前版本，这样可使一个有较老
+monmap 的监视器赶上集群当前的状态。
+如果监视器通过Ceph 配置文件而非monmap 相互发现，就会引进额外风险，因为Ceph 配
+置文件不会自动更新和发布。监视器有可能用了较老的ceph.conf 而导致不能识别某监视
+器、掉出法定人数、或者发展为一种Paxos 不能精确确定当前系统状态的情形。总之，更改
+现有监视器的IP 地址必须慎之又慎。
+更改监视器IP 地址（正确方法）
+仅仅在ceph.conf 里更改监视器的IP 不足以让集群内的其它监视器接受更新。要更改一个
+监视器的IP 地址，你必须以先以想用的IP 地址增加一个监视器（见增加监视器（手动）），
+确保新监视器成功加入法定人数，然后删除用旧IP 的监视器，最后更新ceph.conf 以确保
+客户端和其它守护进程得知新监视器的IP 地址。
+例如，我们假设有3 个监视器，如下：
+
+[mon.a]
+host = host01
+addr = 10.0.0.1:6789
+[mon.b]
+host = host02
+addr = 10.0.0.2:6789
+[mon.c]
+host = host03
+addr = 10.0.0.3:6789
+要把host04 上mon.c 的IP 改为10.0.0.4 ，按照增加监视器（手动）里的步骤增加一
+个新监视器mon.d ，确认它运行正常后再删除mon.c ，否则会破坏法定人数；最后依照删
+除监视器（手动）删除mon.c 。3 个监视器都要更改的话，每次都要重复一次。
+更改监视器IP 地址（凌乱方法）
+可能有时候监视器不得不挪到不同的网络、数据中心的不同位置、甚至不同的数据中心，这是
+可能的，但过程有点惊险。
+在这种情形下，一种方法是用所有监视器的新IP 地址生成新monmap ，并注入到集群内的所
+有监视器。对大多数用户来说，这并不简单，好在它不常见。再次重申，监视器不应该更改
+IP 地址。
+以前面的监视器配置为例，假设你想把所有监视器的IP 从10.0.0.x 改为10.1.0.x ，并
+且两个网络互不相通，步骤如下：
+1.
+获取监视器运行图，其中{tmp} 是所获取的运行图路径，{filename} 是监视器
+运行图的文件名。
+
+ceph mon getmap -o {tmp}/{filename}
+2.
+下面是一个monmap 内容示例：
+3. $ monmaptool --print {tmp}/{filename}
+4.
+5. monmaptool: monmap file {tmp}/{filename}
+6. epoch 1
+7. fsid 224e376d-c5fe-4504-96bb-ea6332a19e61
+8. last_changed 2012-12-17 02:46:41.591248
+9. created 2012-12-17 02:46:41.591248
+10.
+0: 10.0.0.1:6789/0 mon.a
+11.
+1: 10.0.0.2:6789/0 mon.b
+2: 10.0.0.3:6789/0 mon.c
+12. 删除现有监视器。
+13.
+$ monmaptool --rm a --rm b --rm c
+{tmp}/{filename}
+14.
+15.
+monmaptool: monmap file {tmp}/{filename}
+16.
+monmaptool: removing a
+
+17.
+monmaptool: removing b
+18.
+monmaptool: removing c
+monmaptool: writing epoch 1 to {tmp}/{filename} (0
+monitors)
+19. 添加新监视器位置。
+20.
+$ monmaptool --add a 10.1.0.1:6789 --add b
+10.1.0.2:6789 --add c 10.1.0.3:6789 {tmp}/{filename}
+21.
+22.
+monmaptool: monmap file {tmp}/{filename}
+monmaptool: writing epoch 1 to {tmp}/{filename} (3
+monitors)
+23. 检查新内容。
+24.
+$ monmaptool --print {tmp}/{filename}
+25.
+26.
+monmaptool: monmap file {tmp}/{filename}
+27.
+epoch 1
+28.
+fsid 224e376d-c5fe-4504-96bb-ea6332a19e61
+29.
+last_changed 2012-12-17 02:46:41.591248
+30.
+created 2012-12-17 02:46:41.591248

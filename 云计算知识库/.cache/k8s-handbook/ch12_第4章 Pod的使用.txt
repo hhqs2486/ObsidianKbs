@@ -1,0 +1,464 @@
+第4章 Pod的使用
+本章将分为两个部分。
+●原理介绍。
+●上手实战。
+首先介绍Pod原理。
+4.1 Pod原理
+在虚拟化（virtualization）的世界中，虚拟机（Virtual
+Machine, VM）是进行调度的最小单元。因此，在虚拟化环境中部署应
+用即在VM中对应用进行调度。
+在Docker的世界中，最小单元是容器。这意味着在Docker中部署
+应用即在容器中进行应用的调度。
+在Kubernetes的世界中，最小单元是Pod。因此，在Kubernetes中
+部署应用即在Pod中进行应用的部署。
+这是理解Kubernetes的根本，请将“虚拟化管理VM、Docker管理
+容器、Kubernetes管理Pod”印在脑子里（见图4.1）。
+更多IT书籍请关注：www.cmsblogs.cn
+
+图4.1
+既然Pod是在Kubernetes中进行部署的基本单位，那么理解其工作
+原理就非常重要。
+注：本章中将会就Pod展开详细介绍。不过请注意，Pod只是所部
+署应用的承载工具。
+4.1.1 Pod和容器
+第3章提到，Pod中托管了一个或多个容器。从“规格”的角度来
+看，Pod介于容器和VM之间——它比容器大，又远小于VM。
+更确切地说，一个Pod就是由一个或多个容器共享的运行环境。
+最简单的模型是一个Pod中仅包含一个容器的情况，但是多容器的
+Pod也正在获得越来越多的应用，并且在高级配置中发挥重要作用。
+而对于多容器Pod来说，其中一个“以应用为中心”的使用场景，
+就是用于承载被共同调度的紧耦合的工作负载。比如，集群中共享内
+存的两个容器，在被调度到不同的节点上时将无法正常运行的情况。
+通过将两个容器置于同一个Pod中，可以确保它们被调度到同一个节
+点，并且共享同样的执行环境。
+多容器Pod的一个“以基础设施为中心”的使用场景，就是服务网
+格（Service Mesh）。在服务网格模型中，每个Pod会塞入一个代理容
+器（proxy container）。由代理容器来处理所有进出Pod的网络流
+量，这样就可以方便地实现类似流量加密、网络检测、智能路由等特
+性。
+4.1.2 多容器Pod：典型示例
+更多IT书籍请关注：www.cmsblogs.cn
+
+举个例子来对比单容器和多容器Pod：启用文件同步的Web服务。
+在本例中，我们有两个明确的需求点（concern）。
+1.提供Web页面服务。
+2.保持页面内容是最新版。
+问题在于如何满足这两个需求点，是置于一个容器中还是两个容
+器中？
+这里所谓的需求点是指一个需求或任务。一般来说，在微服务的
+设计模式中应当分离需求点，意思就是一个容器实现一个需求点。
+对刚才的例子来说，就需要两个容器：一个用于提供Web服务，另
+一个用于提供文件同步服务。
+分离需求点的方式有许多好处，包括以下几点。
+●可以由不同的团队来负责不同的需求点。
+●每个服务都可以实现独立的扩/缩容。
+●每个服务都可以单独开发和迭代。
+●每个服务都可以遵循其单独的发布节奏。
+●即使一个服务宕掉，其他服务还能够保持运行。
+尽管分离需求点有诸多好处，但还是经常需要将这些分离的容器
+置于一个Pod中同时调度。这样可以确保它们被调度到同一个节点，并
+且共享同样的执行环境（Pod环境）。
+多容器Pod的使用场景包括：两个容器需要共享内存或卷
+（volume），如图4.2所示。
+更多IT书籍请关注：www.cmsblogs.cn
+
+图4.2
+实现卷共享的最简单的方式就是使两个容器运行在同一个Pod中。
+这可以确保它们总是运行在同一个节点上，并共享同样的执行环境
+（包括卷）。
+总之，通常的设计原则就是通过设计只完成一个单独任务的容器
+来分离需求点。最简单的模型是在每个Pod中调度一个单独的容器，不
+过更加高级的用户场景会需要在一个Pod中放置多个容器。
+4.1.3 如何部署Pod
+请牢记，Pod只是运行应用的载具。因此，无论何时，在提到“运
+行或部署Pod”时，等同于是说“运行或部署应用”。
+如果要在Kubernetes集群中部署一个Pod，则需要在一个部署清单
+（manifest）文件中进行定义，并将该文件POST到API Server。控制
+更多IT书籍请关注：www.cmsblogs.cn
+
+平面（control plane）会检查这个YAML格式的配置文件，并将其作为
+一条部署意图的记录（a record of intent）写入集群存储中，然后
+调度器会选择一个健康的有充足可用资源的节点来部署它。无论是单
+容器的还是多容器的Pod，这一过程都是一样的，如图4.3所示。
+图4.3
+下面进行更深入的探讨。
+4.1.4 “解剖”Pod
+总体来说，Pod就是被一个或多个容器共享的执行环境。所谓共享
+的执行环境，是指Pod中的一系列被其内部每个容器所共享的资源。这
+些资源包括IP地址、端口、主机名、套接字、内存、卷，等等。
+在使用Docker作为容器运行时，Pod实际上是一个名为pause
+container的特殊容器。没错，Pod就是一种特殊容器的花哨称谓。这
+意味着，运行在Pod中的容器实际上是运行在容器中的。想要对此有更
+多了解，不妨看一下由克里斯托弗·诺兰导演，莱昂纳多·迪卡普里
+奥主演的《盗梦空间》。
+更多IT书籍请关注：www.cmsblogs.cn
+
+不开玩笑了，Pod（pause container）就是一些系统资源的集
+合，并且能够被其中运行的容器继承和共享。这些系统资源就是内核
+命名空间（kernel namespace），包括以下几部分。
+●网络命名空间：IP地址、端口范围、路由表……
+●UTS命名空间：主机名。
+●IPC命名空间：UNIX域套接字（domain socket）……
+由此来说，Pod中的所有容器都共享主机名、IP地址、内存地址空
+间以及卷。
+下面来看一下这将如何影响网络。
+4.1.5 Pod与共享网络
+每个Pod会创建其自己的网络命名空间。其中包括一个IP地址、一
+组TCP和UDP端口范围，以及一个路由表。即使是多容器Pod也是如此
+——其中的每个容器共享Pod的IP、端口范围和路由表。
+图4.4示意了两个Pod，各自都有属于自己的IP。虽然其中一个Pod
+是多容器的，但它依然只有一个IP。
+在图4.4中，若要从Pod1的外部访问内部的容器，需要使用IP地址
+和容器所关联的端口号。例如，通过10.0.10.15:80可以访问到主容
+器。内部容器间则通过Pod的localhost适配器进行通信。例如，主容
+器可以通过localhost:5000访问辅助容器。
+最后再强调一遍（如果感觉我有些絮叨，非常抱歉）：Pod中的每
+个容器都共享Pod的整个网络命名空间——IP地址、localhost适配
+器、端口范围、路由表等。
+不过，正如前面所言，共享的资源不止网络。Pod中的所有容器都
+可以访问相同的卷、内存和IPC套接字等资源。严格来说，Pod持有所
+有的命名空间，并被Pod中的所有容器继承和共享。
+更多IT书籍请关注：www.cmsblogs.cn
+
+图4.4
+这样的网络模型使Pod内的通信变得非常简单。集群中的每个Pod
+都有各自的完全可以在Pod网络中路由的IP地址。如果读者阅读了第3
+章的话，在3.5节末尾以及介绍kubeadm的部分，就会了解到如何创建
+一个Pod网络。由于每个Pod都获取到其可路由的IP地址，因此Pod网络
+上的每个Pod都可以与其他Pod进行直接通信，而无须借助令人生厌的
+端口映射，如图4.5所示。
+图4.5
+前面提到，Pod内通信——属于同一个Pod的两个容器间的通信—
+可以借助Pod的localhost接口实现，如图4.6所示。
+更多IT书籍请关注：www.cmsblogs.cn
+
+图4.6
+如果需要从外部访问Pod内的容器，则需要分别将其暴露在不同的
+端口上。每个容器都有其自己的端口，同一个Pod中的容器不能使用同
+一个端口。
+总而言之，Kubernetes中的所有都是基于Pod的，Pod被部署、Pod
+获取IP、Pod拥有所有的命名空间，等等。Pod即是Kubernetes的核
+心。
+4.1.6 Pod与CGroup
+总体来讲，控制组（Control Group, CGroup）用于避免某个容器
+消耗掉节点上所有可用的CPU、RAM和IOPS。可以说是CGroup限制了资
+源的使用。
+每个容器有其自己的CGroup限额。
+更多IT书籍请关注：www.cmsblogs.cn
+
+也就是说，同一个Pod中的两个容器可以有不同的CGroup限额。这
+是一种强大而又灵活的模式。回想本章前面提到的多容器Pod的例子，
+我们可以对负责文件同步任务的容器设置比提供Web服务的容器更低的
+CGroup限额。这将降低Web服务容器无CPU或内存资源可用的风险。
+4.1.7 Pod的原子部署
+部署一个Pod是一种原子操作。也就是说，这一操作要么整体成
+功，要么全部失败——没有Pod被“部分”部署成功的状态。同样也意
+味着，Pod中的所有容器将被调度到同一个节点上。
+一旦所有的Pod资源就绪，Pod就变为可用状态。
+4.1.8 Pod的生命周期
+典型的Pod生命周期是这样的：用户定义一个YAML格式的清单文
+件，并将其POST到API Server。一旦发送成功，清单文件中的内容就
+被作为一条意图记录（a record of intent）——即“期望状态”
+（desired state）——持久化记录在集群存储中，然后Pod被调度到
+一个健康的、有充足资源的节点上。一旦完成调度，就会进入等待状
+态（pending state），此时节点会下载镜像并启动容器。在所有资源
+就绪前，Pod的状态都保持在等待状态。一切就绪后，Pod进入运行状
+态（running state）。在完成所有任务后，会停止并进入成功状态
+（succeeded state）。
+当Pod无法启动时，保持在等待状态（pending state）或进入失
+败状态（failed state），如图4.7所示。
+更多IT书籍请关注：www.cmsblogs.cn
+
+图4.7
+通过Pod清单文件部署的Pod是单例的——它没有副本（not
+replicated），也没有自愈能力（self-healing capabilities）。正
+因如此，我们几乎都会基于Deployment和DaemonSet等更高级的对象来
+部署Pod，因为它们可以在Pod宕掉的时候进行重新调度。
+从这个角度来说，理解到“Pod有生老病死”这一点是很重要的。
+在它“死亡”之后就会消失，而不会被复活。这也符合“宠物vs牲
+畜”的类比，并且Pod应该被作为牲畜对待——如果“挂了”，就用另
+外一个来代替。旧的Pod被清理，新的Pod——同样的配置，不同的ID
+和IP——奇迹般地出现并补位。
+这也是在开发应用的时候应当注意不要保存Pod的状态（state）
+的原因，也是不应依赖Pod的IP的原因。单例的Pod是不可靠的！
+4.1.9 小结
+1.Pod是Kubernetes中被调度的最小单位。
+2.Pod中可能包含多个容器。单容器Pod是最简单的，但是多容器
+Pod对于紧耦合的容器使用场景来说更加适用，多容器Pod非常适用于
+日志和服务网格。
+更多IT书籍请关注：www.cmsblogs.cn
+
+3.Pod被调度到节点上——一个Pod不能被调度为跨多个节点。
+4.Pod是被基于声明式的方式定义在一个清单文件中的，该文件会
+被POST到API Server，然后被调度器分配到节点上。
+5.几乎总是通过更高级的部署对象来部署Pod。
+4.2 Pod实战
+是时候上手实战一下了。
+本章剩余内容的示例均使用如图4.8所示的3节点集群。
+图4.8
+这个集群部署在哪以及如何部署都无所谓。只需要将3个Linux主
+机配置为Kubernetes集群，并且一个为主节点、两个为工作节点即
+可。当然，还需要安装kubectl，并且配置为与该集群连接即可。
+如果手头上没有练习环境，可以到Play with Kubernetes的网站
+快速构建一个集群，这很容易而且还是免费的。
+下面将遵循Kubernetes的清单文件编写格式与规范定义Pod，然后
+将清单文件POST到API Server，并最终让调度器在集群中将Pod实例
+化。
+4.2.1 Pod清单文件
+更多IT书籍请关注：www.cmsblogs.cn
+
+本章的例子使用如下的Pod清单。下面的代码可以在本书的GitHub
+库的Pods目录下的Pod.yml文件中找到。
+apiVersion: v1  
+kind: Pod  
+metadata:  
+  name: hello-Pod   
+  labels:  
+    zone: prod  
+    version: v1  
+spec:  
+  containers:  
+  - name: hello-ctr  
+    image: nigelpoulton/k8sbook:latest   
+    ports:  
+    - containerPort: 8080
+下面详细解释一下该YAML文件的内容。
+首先可以看到4个顶级资源（top-level resource）。
+●apiVersion。
+●kind。
+●metadata。
+●spec。
+apiVersion定义了两个属性：用来创建部署对象的API组和API版
+本。通常来说，其格式是<api-group>/<version>。不过，Pod对象定
+义在一个名为Core的特殊的API组（API Group），可以忽略api-group
+部分。例如，StorageClass对象是在v1版本的storage.k8s.ioAPI组中
+定义的，那么在YAML文件中就可以写作storage.k8s.io/v1。而定义
+Pod所在的Core API组是特殊的，可以忽略组名，故而在YAML文件中只
+写v1即可。
+对于某一个资源来说，它有可能是在某个API组的多个版本里有定
+义的。例如some-api group/v1和somp-api-group/v2。在这种情况
+更多IT书籍请关注：www.cmsblogs.cn
+
+下，更新的定义中可能包含最新添加的特性或属性，从而附带更多功
+能。可以把version看作是对schema的定义——通常版本越新越好。有
+趣的是，在部署的时候，如果查看返回的版本值，可能会发现它与
+YAML文件中定义的版本号不一致。比如，在YAML文件中指定了部署对
+象的版本为v1，而运行部署命令后返回的值却是v1beta1。这是正常情
+况。
+本例中，Pod是定义在v1版本下的。
+kind属性告诉Kubernetes要部署的对象类型。
+到目前为止，从本YAML文件中可以得出的是，要部署一个在Core
+API组的v1版本中定义的Pod对象。
+metadata部分可以用来定义名称和标签（label）。这些信息有助
+于在集群中识别所部署的对象，标签有助于建立一种相对较弱的关联
+关系。用户还可以对要部署的对象指定namespace（命名空间）。简单
+来说，namespace可以用于从管理层面对集群进行逻辑上的划分。实际
+使用过程中，强烈建议使用namespace，不过，它并不能作为安全屏障
+来使用。
+metadata中为Pod起名为hello-Pod，并分配了两个标签。标签就
+是简单的键值对，但是却非常有用。后续随着内容的展开将继续介绍
+与标签相关的内容。
+metadata中并未指定namespace，因此会使用default命名空间。
+不过在生产环境中，并不建议使用default命名空间。
+spec部分中定义Pod所运行的容器。本例所部署的Pod中只有一个
+基于镜像nigelpoulton/k8sbook:latest的容器。这个容器被命名为
+hello-ctr并且通过端口8080暴露出来。
+如果这是一个多容器的Pod，那么就可以在.spec部分增加关于其
+他容器的定义。
+更多IT书籍请关注：www.cmsblogs.cn
+
+4.2.2 清单文件：共情即代码
+临时插个话题。
+类似Kubernetes清单文件等配置文件，其实是一种非常好的文
+档。同时，它们还有其他的好处，包括如下两点。
+●帮助团队新成员快速熟悉过程。
+●弥合开发人员与运维人员之间的隔阂。
+例如，如果团队新进成员需要了解所开发产品的基本功能和需
+求，那么就可以读一下Kubernetes清单文件。
+同样的，如果运维团队抱怨开发人员没有给出确切的需求和文
+档，那么让开发人员使用Kubernetes吧。Kubernetes会强制开发人员
+使用清单文件来描述所开发的产品，运维人员可通过清单文件了解程
+序的运行方法以及对运行环境的需求。
+这种好处即可表述为“共情即代码”（empathy as code），这种
+说法是尼尔马尔·梅塔（Nirmal Mehta）在2017年DockerCon的题为
+“A Strong Belief, Loosely Held: Bringing Empathy to IT”的演
+讲中提出的。
+我理解将这样的YAML文件描述为“共情即代码”听起来有点极
+端。但是这一概念确实有助于理解。
+书归正传……
+4.2.3 基于清单文件部署Pod
+继续进行本节的示例，将前面所述的清单文件保存为当前目录下
+的Pod.yml，然后执行如下的kubectl命令将其POST到API Server。
+更多IT书籍请关注：www.cmsblogs.cn
+
+$ kubectl apply -f Pod.yml 
+Pod/hello-Pod created 
+虽然从输出来看Pod已经被创建，但可能尚未完全部署好。这是因
+为下载镜像需要一些时间。
+执行kubectl get Pods命令来检查状态。
+$ kubectl get Pods  
+NAME        READY   STATUS             RESTARTS  AGE 
+hello-Pod   0/1     ContainerCreating  0         9s
+可见容器仍然在创建过程中——估计是在等待镜像从Docker Hub
+完成下载。
+读者可以对kubectl get Pods命令添加--watch参数来监控它，以
+便在状态发生变化时能够及时看到。
+太棒了！Pod已经被调度到集群的一个健康的节点上，并且被本地
+的Kubelet进程监控。Kubelet进程是Kubernetes在节点上的代理
+（agent）程序。
+在后续章节中，会介绍如何连接到Pod中运行的Web Server。
+4.2.4 查看运行中的Pod
+对于kubectl get Pods命令来说，返回的结果缺乏细节。不过不
+用担心，还有许多查看Pod信息的方法。
+首先，kubectl get命令就提供了一些参数，用来获取更多信息。
+-o wide参数能够多输出几列信息，不过依然是单行输出。
+-o yaml参数更进一步。它能够返回集群存储中的一份完整的关于
+Pod的清单。输出的内容大体分为两块。
+●期望状态（spec）。
+更多IT书籍请关注：www.cmsblogs.cn
+
+●当前（观测）状态（status）。
+以下是kubectl get Pods hello-Pod -o yaml命令的部分输出内
+容。
+$ kubectl get Pods hello-Pod -o yaml   
+apiVersion: v1  
+kind: Pod  
+metadata:  
+  annotations:   
+    kubectl.kubernetes.io/last-applied-configuration: |  
+      ...  
+  name: hello-Pod  
+  namespace: default  
+spec:  #期望状态  
+  containers:  
+  - image: nigelpoulton/k8sbook:latest  
+    imagePullPolicy: Always  
+    name: hello-ctr  
+    ports:  
+status: #当前状态  
+  conditions:  
+  - lastProbeTime: null  
+    lastTransitionTime: 2019-11-19T15:24:24Z  
+    state:  
+      running:  
+        startedAt: 2019-11-19T15:26:04Z  
+... 
+可见输出的内容比以前的13行的YAML文件增加了不少内容。这些
+额外的信息来自哪里呢？
+两个主要的来源如下。
+●Kubernetes的Pod对象有比清单文件中定义的内容多得多的配
+置。没有配置的值就会由默认值代替。
+●当执行带-o yaml参数的kubectl get Pods命令时，除了Pod的
+期望状态，还会获取当前状态。当前状态放在status片段中。
+更多IT书籍请关注：www.cmsblogs.cn
+
+4.2.5 kubectl describe
+Kubernetes还有一个好用的查看命令，就是kubectl describe。
+该命令会打印出所查看对象的总览信息，其多行格式易于阅读。内容
+中还包含对象的重要的生命周期事件。下面用该命令查看hello-Pod的
+状态。
+$ kubectl describe Pods hello-Pod   
+Name:         hello-Pod   
+Namespace:    default  
+Node:         k8s-slave-lgpkjg/10.48.0.35  
+Start Time:   Tue, 19 Nov 2019 16:24:24 +0100  
+Labels:       version=v1  
+              zone=prod  
+Status:       Running  
+IP:           10.1.0.21  
+Containers:  
+  hello-ctr:   
+    Image:          nigelpoulton/k8sbook:latest  
+    Port:           8080/TCP  
+    Host Port:      0/TCP  
+    State:          Running  
+Conditions:  
+  Type           Status  
+  Initialized    True  
+  Ready          True  
+  PodScheduled   True  
+...  
+Events:  
+  Type    Reason     Age   Message  
+  ----    ------     ----  -------  
+  Normal  Scheduled  2m   Successfully assigned...  
+  Normal  Pulling    2m   pulling image 
+"nigelpoulton/K8sbook:latest"  
+  Normal  Pulled     2m   Successfully pulled image  
+  Normal  Created    2m   Created container  
+ Normal  Started    2m   Started container
+输出的内容由于篇幅过长进行了裁剪。
+更多IT书籍请关注：www.cmsblogs.cn
+
+4.2.6 kubectl exec：在Pod中执行命令
+另一种查看运行中的Pod的方法是进入容器执行命令，这可以通过
+kubectl exec命令实现。下面的示例演示了如何在hello-Pod的第一个
+容器中执行ps aux命令。
+$ kubectl exec hello-Pod -- ps aux  
+PID   USER     TIME   COMMAND   
+  1   root     0:00   node ./app.js 
+ 11   root     0:00   ps aux  
+同时，也可以通过执行kubectl exec命令登录（log-in）到运行
+的容器内部。此时，终端的命令提示符可能会发生变化，以表明目前
+的会话是运行在Pod的容器内部的，此时就可以执行命令了（需要容器
+内安装相关命令的二进制包）。
+以下的kubectl exec命令就可以登录到hello-container这个Pod
+的第一个容器中。一旦进入容器，就可以安装curl工具，并执行curl
+命令来获取在8080端口的进程上监听的数据。
+$ kubectl exec -it hello-Pod -- sh   
+  
+# apk add curl  
+<Snip>  
+  
+#curl localhost:8080  
+<html><head><title>Pluralsight Rocks</title><link 
+rel="stylesheet" href="http://  
+netdna.bootstrapcdn.co\m/bootstrap/3.1.1/css/bootstrap.min
+.css"/></head><body><div 
+class="container"><div class="jumbotron"><\h1>Yo 
+Pluralsighters!!!</h1><p>Click the  
+button below to head over to my Podcast...</p><p><a 
+href="http://intechwetrustPodcast. 
+com"class="btn btn-primary">Podcast </a></p><p></p></div>
+</div></body></html\>  
+更多IT书籍请关注：www.cmsblogs.cn
+
+参数-it的作用在于使exec的会话成为交互式（interactive）
+的，并且把当前终端的STDIN和STDOUT与Pod中第一个容器的STDIN和
+STDOUT连接起来。
+对于Pod中有多个容器的情况，需要在执行kubectl exec命令时添
+加--container参数，通过给出容器名称来指定想要创建exec会话的容
+器。如果不指定，则会进入Pod的第一个容器中执行。Pod中容器名称
+的顺序可以通过kubectl describe Pods <Pod>命令来查看。
+4.2.7 kubectl logs
+还有一个常用的查看Pod的命令是kubectl logs。和其他有关Pod
+的命令类似，如果不使用--container参数指定容器名称，则会对Pod
+中的第一个容器起作用。命令的格式为kubectl logs <Pod>。
+显然到此为止关于Pod还只介绍了冰山之一角。不过，已经足够入
+门了。
+如果正在容器内的exec会话中，可以通过输入exit来退出。还可
+以执行kubectl delete来删除Pod。
+# exit  
+$ kubectl delete -f Pod.yml 
+Pod "hello-Pod" deleted  
+4.3 总结
+在本章中，首先了解到的是在Kubernetes的世界，Pod是部署操作
+中的最小原子单位。每一个Pod由一个或多个容器构成，在集群中体现
+更多IT书籍请关注：www.cmsblogs.cn
+
+为一个独立的节点来部署。部署操作是一个原子操作，即“要么全部
+成功，要么什么都不做”（all-or-nothing）。
+Pod的定义和部署是通过声明式地使用一种YAML格式的清单文件来
+完成的，通常会使用诸如Deployment这样更高阶的controller来部署
+它们。用户可以使用kubectl命令来将清单文件POST到API Server，它
+（清单文件）会被保存在集群存储中，并且被转换为PodSpec，后者会
+被调度到集群中拥有足够资源的节点中。
+在工作节点上接收PodSpec的进程是kubelet。它是运行在集群中
+每个节点上的Kubernetes的代理。它负责根据PodSpec来拉取所有所需
+镜像并启动Pod中所有的容器。
+如果只是在集群中部署一个独立的Pod（不是通过controller部署
+的Pod），如果Pod所在的节点宕机，那么这个Pod不会被调度到其他的
+节点上。因此，绝大多数情况下应该借助更高阶的
+controller（Deployment和DaemonSet）来部署Pod。它们能够提供诸
+如自愈和回滚等能够真正发挥出Kubernetes威力的特性。
+更多IT书籍请关注：www.cmsblogs.cn

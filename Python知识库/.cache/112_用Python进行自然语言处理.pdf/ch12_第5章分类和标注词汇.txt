@@ -1,0 +1,1893 @@
+172
+第5 章分类和标注词汇
+早在小学你就学过名词、动词、形容词和副词之间的差异。这些“词类”不是闲置的文
+法家的发明，而是对许多语言处理任务都有用的分类。正如我们将看到的，这些分类源于对
+文本中词的分布的简单的分析。本章的目的是要回答下列问题：
+1.
+什么是词汇分类，在自然语言处理中它们是如何使用？
+2.
+一个好的存储词汇和它们的分类的Python 数据结构是什么？
+3.
+我们如何自动标注文本中词汇的词类？
+一路上，我们将介绍NLP 的一些基本技术，包括序列标注、N-gram 模型、回退和评估。
+这些技术在许多方面都很有用，标注为我们提供了一个表示它们的简单的上下文。我们还将
+看到标注为何是典型的NLP 流水线中继分词之后的第二个步骤。
+将词汇按它们的词性（parts-of-speech，POS）分类以及相应的标注它们的过程被称为词
+性标注（part-of-speech tagging, POS tagging）或干脆简称标注。词性也称为词类或词汇范
+畴。用于特定任务的标记的集合被称为一个标记集。我们在本章的重点是利用标记和自动标
+注文本。
+5.1
+5.1
+5.1
+5.1 使用词性标注器
+使用词性标注器
+使用词性标注器
+使用词性标注器
+一个词性标注器（part-of-speech tagger 或POS tagger）处理一个词序列，为每个词附
+加一个词性标记（不要忘记import nltk）：
+>>> text = nltk.word_tokenize("And now for something completely different")
+>>> nltk.pos_tag(text)
+[('And', 'CC'), ('now', 'RB'), ('for', 'IN'), ('something', 'NN'),
+('completely', 'RB'), ('different', 'JJ')]
+在这里我们看到and 是CC，并列连词；now 和completely 是RB，副词；for 是IN，介
+词；something 是NN，名词；different 是JJ，形容词。
+NLTK 中提供了每个标记的文档，可以使用标记来查询，如：nltk.help.u
+penn_tagset('RB')，或正则表达式，如：nltk.help.upenn_brown_tagset('N
+N.*')。一些语料库有标记集文档的README 文件；见nltk.name.readme
+()，用语料库的名称替换name。
+让我们来看看另一个例子，这次包括一些同形同音异义词：
+>>> text = nltk.word_tokenize("They refuse to permit us to obtain the refuse permit")
+>>> nltk.pos_tag(text)
+[('They', 'PRP'), ('refuse', 'VBP'), ('to', 'TO'), ('permit', 'VB'), ('us', 'PRP'),
+('to', 'TO'), ('obtain', 'VB'), ('the', 'DT'), ('refuse', 'NN'), ('permit', 'NN')]
+请注意refuse 和permit 都以一般现在时动词（VBP）和名词（NN）形式出现。例如：r
+efUSE 是一个动词，意为“拒绝”，而REFuse 是一个名词，意思是“垃圾”（即它们不是同
+音词）。因此，我们需要知道正在使用哪一个词以便能正确读课文。（出于这个原因，文本转
+语音系统通常要进行词性标注。）
+
+173
+轮到你来：很多词，如ski 和race，可以作为名词或动词而发音没有区别。你
+能想出其他的吗？提示：想想一个常见的东西，尝试把词to 放到它前面，看它
+是否也是一个动词；或者想想一个动作，尝试把the 放在它前面，看它是否也
+是一个名词。现在用这个词的两种用途造句，在这句话上运行POS 标注器。
+词汇类别，如“名词”，和词性标记，如NN，看上去似乎有其用途，但在细节上将使
+许多读者感到晦涩。你可能想知道为什么要引进这种额外的信息。这些类别中很多都源于对
+文本中词的分布的浅层的分析。考虑下面的分析，涉及woman（名词），bought（动词），o
+ver（介词）和the（限定词）。text.similar()方法为一个词w 找出所有上下文w1ww2，然
+后找出所有出现在相同上下文中的词w'，即w1w'w2。
+>>> text = nltk.Text(word.lower() for word in nltk.corpus.brown.words())
+>>> text.similar('woman')
+Building word-context index...
+man time day year car moment world family house country child boy
+state job way war girl place room word
+>>> text.similar('bought')
+made said put done seen had found left given heard brought got been
+was set told took in felt that
+>>> text.similar('over')
+in on to of and for with from at by that into as up out down through
+is all about
+>>> text.similar('the')
+a his this their its her an that our any all one these my in your no
+some other and
+请看搜索woman 找到名词；搜索bought 找到的大部分是动词；搜索over 一般会找到介
+词；搜索the 找到几个限定词。一个标注器能够正确识别一个句子的上下文中的这些词的标
+记。例如：The woman bought over $150,000 worth of clothes。
+一个标注器也可以为我们对未知词的认识过程建模；例如：我们可以根据词根scrobble
+猜测scrobbling 可能是一个动词，并有可能发生在he was scrobbling 这样的上下文中。
+5.2
+5.2
+5.2
+5.2 标注语料库
+标注语料库
+标注语料库
+标注语料库
+表示已标注的标识符
+按照NLTK 的约定，一个已标注的标识符使用一个由标识符和标记组成的元组来表示。
+我们可以使用函数str2tuple()从表示一个已标注的标识符的标准字符串创建一个这样的特
+殊元组：
+>>> tagged_token = nltk.tag.str2tuple('fly/NN')
+>>> tagged_token
+('fly', 'NN')
+>>> tagged_token[0]
+'fly'
+>>> tagged_token[1]
+
+174
+'NN'
+我们可以直接从一个字符串构造一个已标注的标识符的链表。第一步是对字符串分词以
+便能访问单独的词/标记字符串，然后将每一个转换成一个元组（使用str2tuple()）。
+>>> sent = '''
+... The/AT grand/JJ jury/NN commented/VBD on/IN a/AT number/NN of/IN
+... other/AP topics/NNS ,/, AMONG/IN them/PPO the/AT Atlanta/NP and/CC
+... Fulton/NP-tl County/NN-tl purchasing/VBG departments/NNS which/WDT it/PP
+... said/VBD ``/`` ARE/BER well/QL operated/VBN and/CC follow/VB generally/R
+... accepted/VBN practices/NNS which/WDT inure/VB to/IN the/AT best/JJT
+... interest/NN of/IN both/ABX governments/NNS ''/'' ./.
+... '''
+>>> [nltk.tag.str2tuple(t) for t in sent.split()]
+[('The', 'AT'), ('grand', 'JJ'), ('jury', 'NN'), ('commented', 'VBD'),
+('on', 'IN'), ('a', 'AT'), ('number', 'NN'), ... ('.', '.')]
+读取已标注的语料库
+NLTK 中包括的若干语料库已标注了词性。下面是一个你用文本编辑器打开一个布朗语
+料库的文件就能看到的例子：
+The/at Fulton/np-tl County/nn-tl Grand/jj-tl Jury/nn-tl said/vbd Friday/nr an/at inves-
+tigation/nn of/in Atlanta’s/np$ recent/jj primary/nn election/nn produced/vbd / no/at
+evidence/nn ''/'' that/cs any/dti irregularities/nns took/vbd place/nn ./.
+其他语料库使用各种格式存储词性标记。NLTK 中的语料库阅读器提供了一个统一的接
+口，使你不必理会这些不同的文件格式。与刚才提取并显示的上面的文件不同，布朗语料库
+的语料库阅读器按如下所示的方式表示数据。注意：部分词性标记已转换为大写的；自从布
+朗语料库发布以来，这已成为标准的做法。
+>>> nltk.corpus.brown.tagged_words()
+[('The', 'AT'), ('Fulton', 'NP-TL'), ('County', 'NN-TL'), ...]
+>>> nltk.corpus.brown.tagged_words(simplify_tags=True)
+[('The', 'DET'), ('Fulton', 'N'), ('County', 'N'), ...]
+只要语料库包含已标注的文本，NLTK 的语料库接口都将有一个tagged_words()方
+法。下面是一些例子，再次使用布朗语料库所示的输出格式：
+>>> print nltk.corpus.nps_chat.tagged_words()
+[('now', 'RB'), ('im', 'PRP'), ('left', 'VBD'), ...]
+>>> nltk.corpus.conll2000.tagged_words()
+[('Confidence', 'NN'), ('in', 'IN'), ('the', 'DT'), ...]
+>>> nltk.corpus.treebank.tagged_words()
+[('Pierre', 'NNP'), ('Vinken', 'NNP'), (',', ','), ...]
+并非所有的语料库都采用同一组标记；看前面提到的标记集的帮助函数和readme()
+方法中的文档。最初，我们想避免这些标记集的复杂化，所以我们使用一个内置的到一个简
+化的标记集的映射：
+>>> nltk.corpus.brown.tagged_words(simplify_tags=True)
+[('The', 'DET'), ('Fulton', 'NP'), ('County', 'N'), ...]
+>>> nltk.corpus.treebank.tagged_words(simplify_tags=True)
+
+175
+[('Pierre', 'NP'), ('Vinken', 'NP'), (',', ','), ...]
+NLTK 中还有其他几种语言的已标注语料库，包括中文，印地语，葡萄牙语，西班牙语，
+荷兰语和加泰罗尼亚语。这些通常含有非ASCII 文本，当输出较大的结构如列表时，Pytho
+n 总是以十六进制显示这些。
+>>> nltk.corpus.sinica_treebank.tagged_words()
+[('\xe4\xb8\x80', 'Neu'), ('\xe5\x8f\x8b\xe6\x83\x85', 'Nad'), ...]
+>>> nltk.corpus.indian.tagged_words()
+[('\xe0\xa6\xae\xe0\xa6\xb9\xe0\xa6\xbf\xe0\xa6\xb7\xe0\xa7\x87\xe0\xa6\xb0', 'NN'),
+('\xe0\xa6\xb8\xe0\xa6\xa8\xe0\xa7\x8d\xe0\xa6\xa4\xe0\xa6\xbe\xe0\xa6\xa8', 'NN'),
+...]
+>>> nltk.corpus.mac_morpho.tagged_words()
+[('Jersei', 'N'), ('atinge', 'V'), ('m\xe9dia', 'N'), ...]
+>>> nltk.corpus.conll2002.tagged_words()
+[('Sao', 'NC'), ('Paulo', 'VMI'), ('(', 'Fpa'), ...]
+>>> nltk.corpus.cess_cat.tagged_words()
+[('El', 'da0ms0'), ('Tribunal_Suprem', 'np0000o'), ...]
+如果你的环境设置正确，有适合的编辑器和字体，你应该能够以人可读的方式显示单个
+字符串。例如：图5-1 显示的使用nltk.corpus.indian 访问的数据。
+如果语料库也被分割成句子，将有一个tagged_sents()方法将已标注的词划分成句
+子，而不是将它们表示成一个大链表。在我们开始开发自动标注器时，这将是有益的，因为
+它们在句子链表上被训练和测试，而不是词。
+图5-1. 四种印度语言的词性标注数据：孟加拉语、印地语、马拉地语和泰卢固语。
+简化的词性标记集
+已标注的语料库使用许多不同的标记集约定来标注词汇。为了帮助我们开始，我们将看
+一看一个简化的标记集（表5-1 所示）。
+表5-1. 简化的标记集
+标记
+含义
+例子
+ADJ
+形容词
+new, good, high, special, big, local
+ADV
+动词
+really, already, still, early, now
+CNJ
+连词
+and, or, but, if, while, although
+DET
+限定词
+the, a, some, most, every, no
+EX
+存在量词
+there, there's
+FW
+外来词
+dolce, ersatz, esprit, quo, maitre
+MOD
+情态动词
+will, can, would, may, must, should
+
+176
+N
+名词
+year, home, costs, time, education
+NP
+专有名词
+Alison, Africa, April, Washington
+NUM
+数词
+twenty-four, fourth, 1991, 14:24
+PRO
+代词
+he, their, her, its, my, I, us
+P
+介词
+on, of, at, with, by, into, under
+TO
+词to
+to
+UH
+感叹词
+ah, bang, ha, whee, hmpf, oops
+V
+动词
+is, has, get, do, make, see, run
+VD
+过去式
+said, took, told, made, asked
+VG
+现在分词
+making, going, playing, working
+VN
+过去分词
+given, taken, begun, sung
+WH
+Wh 限定词
+who, which, when, what, where, how
+让我们来看看这些标记中哪些是布朗语料库的新闻类中最常见的：
+>>> from nltk.corpus import brown
+>>> brown_news_tagged = brown.tagged_words(categories='news', simplify_tags=True)
+>>> tag_fd = nltk.FreqDist(tag for (word, tag) in brown_news_tagged)
+>>> tag_fd.keys()
+['N', 'P', 'DET', 'NP', 'V', 'ADJ', ',', '.', 'CNJ', 'PRO', 'ADV', 'VD', ...]
+轮到你来：使用tag_fd.plot(cumulative=True)为上面显示的频率分布绘
+图。标注为上述列表中的前五个标记的词的百分比是多少？
+我们可以使用这些标记做强大的搜索，结合一个图形化的POS 一致性工具nltk.app.c
+oncordance()。用它来寻找任一词和POS 标记的组合，如：N N N N, hit/VD, hit/VN
+或the ADJ man。
+名词
+名词一般指的是人、地点、事情或概念，例如：女人、苏格兰、图书、情报。名词可能
+出现在限定词和形容词之后，可以是动词的主语或宾语，如表5-2 所示。
+表5-2 一些名词的句法模式
+词
+限定词之后
+动词的主语
+woman
+the woman who I saw yesterday ...
+the woman sat down
+Scotland
+the Scotland I remember as a child ...
+Scotland has five million people
+book
+the book I bought yesterday ...
+this book recounts the colonization of Australia
+intelligence
+the intelligence displayed by the child ...
+Mary's intelligence impressed her teachers
+简化的名词标记对普通名词是N，如：书，对专有名词是NP，如苏格兰。
+让我们检查一些已标注的文本，看看哪些词类出现在一个名词前，频率最高的在最前面。
+首先，我们构建一个双连词链表，它的成员是它们自己的词-标记对，例如：(('The', 'DET
+')，('Fulton', 'NP'))和(('Fulton', 'NP')，('County', 'N'))。然后，我们构建了一个双连
+词的标记部分的FreqDist。
+>>> word_tag_pairs = nltk.bigrams(brown_news_tagged)
+>>> list(nltk.FreqDist(a[1] for (a, b) in word_tag_pairs if b[1] == 'N'))
+['DET', 'ADJ', 'N', 'P', 'NP', 'NUM', 'V', 'PRO', 'CNJ', '.', ',', 'VG', 'VN', ...]
+这证实了我们的断言：名词出现在限定词和形容词之后，包括数字形容词（数词，标注
+
+177
+为NUM）。
+动词
+动词是用来描述事件和行动的词，例如：fall 和eat，如表5-3 所示。在一个句子中，动
+词通常表示涉及一个或多个名词短语所指示物的关系。
+表5-3. 一些动词的句法模式
+新闻文本中最常见的动词是什么？让我们按频率排序所有动词：
+>>> wsj = nltk.corpus.treebank.tagged_words(simplify_tags=True)
+>>> word_tag_fd = nltk.FreqDist(wsj)
+>>> [word + "/" + tag for (word, tag) in word_tag_fd if tag.startswith('V')]
+['is/V', 'said/VD', 'was/VD', 'are/V', 'be/V', 'has/V', 'have/V', 'says/V',
+'were/VD', 'had/VD', 'been/VN', "'s/V", 'do/V', 'say/V', 'make/V', 'did/VD',
+'rose/VD', 'does/V', 'expected/VN', 'buy/V', 'take/V', 'get/V', 'sell/V',
+'help/V', 'added/VD', 'including/VG', 'according/VG', 'made/VN', 'pay/V', ...]
+请注意，频率分布中计算的项目是词-标记对。由于词汇和标记是成对的，我们可以把
+词作作为条件，标记作为事件，使用条件-事件对的链表初始化一个条件频率分布。这让我
+们看到了一个给定的词的标记的频率顺序列表。
+>>> cfd1 = nltk.ConditionalFreqDist(wsj)
+>>> cfd1['yield'].keys()
+['V', 'N']
+>>> cfd1['cut'].keys()
+['V', 'VD', 'N', 'VN']
+我们可以颠倒配对的顺序，这样标记作为条件，词汇作为事件。现在我们可以看到对于
+一个给定的标记可能的词。
+>>> cfd2 = nltk.ConditionalFreqDist((tag, word) for (word, tag) in wsj)
+>>> cfd2['VN'].keys()
+['been', 'expected', 'made', 'compared', 'based', 'priced', 'used', 'sold',
+'named', 'designed', 'held', 'fined', 'taken', 'paid', 'traded', 'said', ...]
+要弄清VD（过去式）和VN（过去分词）之间的区别，让我们找到可以同是VD 和V
+N 的词汇，看看一些它们周围的文字：
+>>> [w for w in cfd1.conditions() if 'VD' in cfd1[w] and 'VN' in cfd1[w]]
+['Asked', 'accelerated', 'accepted', 'accused', 'acquired', 'added', 'adopted', ...]
+>>> idx1 = wsj.index(('kicked', 'VD'))
+>>> wsj[idx1-4:idx1+1]
+[('While', 'P'), ('program', 'N'), ('trades', 'N'), ('swiftly', 'ADV'),
+('kicked', 'VD')]
+>>> idx2 = wsj.index(('kicked', 'VN'))
+>>> wsj[idx2-4:idx2+1]
+[('head', 'N'), ('of', 'P'), ('state', 'N'), ('has', 'V'), ('kicked', 'VN')]
+词
+例子
+修饰符与修饰语（斜体字）
+fall
+Rome fell
+Dot com stocks suddenly fell like a stone
+eat
+Mice eat cheese
+John ate the pizza with gusto
+
+178
+在这种情况下，我们可以看到过去分词kicked 前面是助动词have 的形式。这是普遍真
+实的吗？
+轮到你来：通过cfd2['VN'].keys()指定一个过去分词的链表，尝试收集所有
+直接在链表中项目前面的词-标记对。
+形容词和副词
+另外两个重要的词类是形容词和副词。形容词修饰名词，可以作为修饰符（如：the la
+rge pizza 中的large）或谓语（如：the pizza is large）。英语形容词可以有内部结构（如：t
+he falling stocks 中的fall+ing）。副词修饰动词，指定时间、方式、地点或动词描述的事件
+的方向（如：the stocks fell quickly 中的quickly）。副词也可以修饰的形容词（如：Mary’
+s teacher was really nice 中的really）。
+英语中还有几个封闭的词类，如介词，冠词（也常称为限定词）（如：the，a），情态动
+词（如：should，may），人称代词（如：she，they）。每个词典和语法对这些词的分类都不
+同。
+轮到你来：如果你对这些词性中的一些不确定，使用nltk.app.concord
+ance()学习它们，或看YouTube 上的一些《School-house Rock!》语法视
+频，或查询5-9 节。
+未简化的标记
+让我们找出每个名词类型中最频繁的名词。例5-1 中的程序找出所有以NN 开始的标记，
+并为每个标记提供了几个示例词汇。你会看到有许多名词的变种；最重要的含有$的名词所
+有格,含有S 的复数名词（因为复数名词通常以s 结尾），以及含有P 的专有名词。此外，大
+多数的标记都有后缀修饰符：-NC 表示引用，-HL 表示标题中的词，-TL 表示标题（布朗标
+记的特征）。
+例5-1. 找出最频繁的名词标记的程序
+def findtags(tag_prefix, tagged_text):
+cfd = nltk.ConditionalFreqDist((tag, word) for (word, tag) in tagged_text
+if tag.startswith(tag_prefix))
+return dict((tag, cfd[tag].keys()[:5]) for tag in cfd.conditions())
+>>> tagdict = findtags('NN', nltk.corpus.brown.tagged_words(categories='news'))
+>>> for tag in sorted(tagdict):
+...
+print tag, tagdict[tag]
+...
+NN ['year', 'time', 'state', 'week', 'man']
+NN$ ["year's", "world's", "state's", "nation's", "company's"]
+NN$-HL ["Golf's", "Navy's"]
+NN$-TL ["President's", "University's", "League's", "Gallery's", "Army's"]
+NN-HL ['cut', 'Salary', 'condition', 'Question', 'business']
+
+179
+NN-NC ['eva', 'ova', 'aya']
+NN-TL ['President', 'House', 'State', 'University', 'City']
+NN-TL-HL ['Fort', 'City', 'Commissioner', 'Grove', 'House']
+NNS ['years', 'members', 'people', 'sales', 'men']
+NNS$ ["children's", "women's", "men's", "janitors'", "taxpayers'"]
+NNS$-HL ["Dealers'", "Idols'"]
+NNS$-TL ["Women's", "States'", "Giants'", "Officers'", "Bombers'"]
+NNS-HL ['years', 'idols', 'Creations', 'thanks', 'centers']
+NNS-TL ['States', 'Nations', 'Masters', 'Rules', 'Communists']
+NNS-TL-HL ['Nations']
+当我们开始在本章后续部分创建词性标注器时，我们将使用这些未简化的标记。
+探索已标注的语料库
+让我们简要地回过来探索语料库，我们在前面的章节中看到过，这次我们探索POS 标
+记。
+假设我们正在研究词often，想看看它是如何在文本中使用的。我们可以试着看看跟在
+often 后面的词汇：
+>>> brown_learned_text = brown.words(categories='learned')
+>>> sorted(set(b for (a, b) in nltk.ibigrams(brown_learned_text) if a == 'often'))
+[',', '.', 'accomplished', 'analytically', 'appear', 'apt', 'associated', 'assuming',
+'became', 'become', 'been', 'began', 'call', 'called', 'carefully', 'chose', ...]
+然而，它使用tagged_words()方法查看跟随词的词性标记可能更有指导性。
+>>> brown_lrnd_tagged = brown.tagged_words(categories='learned', simplify_tags=True)
+>>> tags = [b[1] for (a, b) in nltk.ibigrams(brown_lrnd_tagged) if a[0] == 'often']
+>>> fd = nltk.FreqDist(tags)
+>>> fd.tabulate()
+VN V VD DET ADJ ADV P CNJ , TO VG WH VBZ .
+15 12
+8
+5
+5
+4
+4
+3
+3
+1
+1
+1
+1
+1
+请注意often 后面最高频率的词性是动词。名词从来没有在这个位置出现（在这个特别
+的语料中）。
+接下来，让我们看一些较大范围的上下文，找出涉及特定标记和词序列的词（在这种情
+况下，“<Verb>到<Verb>”）。在例5-2 中，我们考虑句子中的每个三词窗口c，检查它
+们是否符合我们的标准d。如果标记匹配，我们输出对应的词e。
+例5-2. 使用POS 标记寻找三词短语。
+from nltk.corpus import brown
+def process(sentence):
+for (w1,t1), (w2,t2), (w3,t3) in nltk.trigrams(sentence): c
+if (t1.startswith('V') and t2 == 'TO' and t3.startswith('V')): d
+print w1, w2, w3 e
+>>> for tagged_sent in brown.tagged_sents():
+...
+process(tagged_sent)
+...
+combined to achieve
+
+180
+continue to place
+serve to protect
+wanted to wait
+allowed to place
+expected to become
+...
+最后，让我们看看与它们的标记关系高度模糊不清的词。了解为什么要标注这样的词是
+因为它们各自的上下文可以帮助我们弄清楚标记之间的区别。
+>>> brown_news_tagged = brown.tagged_words(categories='news', simplify_tags=True)
+>>> data = nltk.ConditionalFreqDist((word.lower(), tag)
+...
+for (word, tag) in brown_news_tagged)
+>>> for word in data.conditions():
+...
+if len(data[word]) > 3:
+...
+tags = data[word].keys()
+...
+print word, ' '.join(tags)
+...
+best ADJ ADV NP V
+better ADJ ADV V DET
+close ADV ADJ V N
+cut V N VN VD
+even ADV DET ADJ V
+grant NP N V -
+hit V VD VN N
+lay ADJ V NP VD
+left VD ADJ N VN
+like CNJ V ADJ P -
+near P ADV ADJ DET
+open ADJ V N ADV
+past N ADJ DET P
+present ADJ ADV V N
+read V VN VD NP
+right ADJ N DET ADV
+second NUM ADV DET N
+set VN V VD N -
+that CNJ V WH DET
+轮到你来：打开POS 一致性工具nltk.app.concordance()
+nltk.app.concordance()
+nltk.app.concordance()
+nltk.app.concordance()和加载完整的布朗语
+料库（简化标记集）。现在挑选一些上面代码例子末尾处列出的词，看看词的
+标记如何与词的上下文相关。例如：搜索near 会看到所有混合在一起的形式，
+搜索near/ADJ 会看到它作为形容词使用，near N 会看到只是名词跟在后面
+的情况，等等。
+
+181
+5.3
+5.3
+5.3
+5.3 使用
+使用
+使用
+使用Python
+Python
+Python
+Python 字典映射词及其属性
+字典映射词及其属性
+字典映射词及其属性
+字典映射词及其属性
+正如我们已经看到，(word, tag)形式的一个已标注词是词和词性标记的关联。一旦
+我们开始做词性标注，我们将会创建分配一个标记给一个词的程序，标记是在给定上下文中
+最可能的标记。我们可以认为这个过程是从词到标记的映射。在Python 中最自然的方式存
+储映射是使用所谓的字典数据类型（在其他的编程语言又称为关联数组或哈希数组）。在本
+节中，我们来看看字典，看它如何能表示包括词性在内的各种不同的语言信息。
+索引链表VS
+VS
+VS
+VS 字典
+我们已经看到，文本在Python 中被视为一个词链表。链表的一个重要的属性是我们可
+以通过给出其索引来“看”特定项目，例如：text1[100]。请注意我们如何指定一个数字，
+然后取回一个词。我们可以把链表看作一种简单的表格，如图5-2 所示。
+图5-2. 链表查找：一个整数索引帮助我们访问Python 链表的内容。
+对比这种情况与频率分布（1.3 节），在那里我们指定一个词然后取回一个数字，如：f
+dist['monstrous']，它告诉我们一个给定的词在文本中出现的次数。用词查询类似与使用
+一本字典。一些例子如图5-3 所示。
+图5-3. 字典查询：我们使用一个关键字，如某人的名字、一个域名或一个英文单词，访问
+一个字典的条目；映射（map）、哈希表（hashmap）、哈希（hash）、关联数组（associative
+array）是字典的其他名字。
+在电话簿中，我们用名字查找一个条目得到一个数字。当我们在浏览器中输入一个域名，
+计算机查找它得到一个IP 地址。一个词频表允许我们查一个词找出它在一个文本集合中的
+频率。在所有这些情况，都是从名称映射到数字，而不是其他如链表那样的方式。在一般情
+况下，我们希望能够在任意类型的信息之间映射。表5-4 列出了各种语言学对象以及它们的
+映射。
+表5-4. 语言学对象从键到值的映射
+语言学对象
+映射来自
+映射到
+文档索引
+词
+页面列表（找到词的地方）
+同义词
+词意
+同义词列表
+
+182
+词典
+中心词
+词条项（词性、意思定义、词源）
+比较单词列表
+注释术语
+同源词（词列表，每种语言一个）
+词形分析
+表面形式
+形态学分析（词素组件列表）
+大多数情况下，从一个“词”映射到一些结构化对象。例如：一个文档索引从一个词（可
+以表示为一个字符串）映射到页面列表（表示为一个整数列表）。本节中，我们将看到在Py
+thon 中如何表示这些映射。
+Python
+Python
+Python
+Python 字典
+Python 提供了一个字典数据类型，可用来做任意类型之间的映射。它更像是一个传统
+的字典，给你一种高效的方式来查找事物。然而，正如我们从表5-4 看到的，它具有更广泛
+的用途。
+为了说明这一点，我们定义pos
+pos
+pos
+pos 为一个空字典，然后给它添加四个项目，指定一些词的
+词性。使用熟悉的方括号将条目添加到字典。
+>>> pos = {}
+>>> pos
+{}
+>>> pos['colorless'] = 'ADJ' c
+>>> pos
+{'colorless': 'ADJ'}
+>>> pos['ideas'] = 'N'
+>>> pos['sleep'] = 'V'
+>>> pos['furiously'] = 'ADV'
+>>> pos d
+{'furiously': 'ADV', 'ideas': 'N', 'colorless': 'ADJ', 'sleep': 'V'}
+例子中，c说的是colorless 的词性是形容词，或者更具体地说：在字典pos 中，键'co
+lorless'被分配了值'ADJ'。当我们检查pos 的值d时，我们看到一个键-值对的集合。一旦我
+们以这样的方式填充了字典，就可以使用键来检索值：
+>>> pos['ideas']
+'N'
+>>> pos['colorless']
+'ADJ'
+当然，我们可能会无意中使用一个尚未分配值的键。
+>>> pos['green']
+Traceback (most recent call last):
+File "<stdin>", line 1, in ?
+KeyError: 'green'
+这就提出了一个重要的问题。与链表和字符串中我们可以用len()算出哪些整数是合法
+索引不同，我们如何算出一个字典的合法键？如果字典不是太大，我们可以简单地通过查看
+变量pos 检查它的内容。正如在前面d行中所看到，这为我们提供了键-值对。请注意它们
+的顺序与最初放入它们的顺序不同，这是因为字典不是序列而是映射（见图5-3），它的键
+并不按固有的顺序。
+另外，要找到键，我们可以将字典转换成一个链表c或在需要使用链表的地方使用字典，
+如作为sorted()的参数d或用在for 循环中e。
+
+183
+>>> list(pos) c
+['ideas', 'furiously', 'colorless', 'sleep']
+>>> sorted(pos) d
+['colorless', 'furiously', 'ideas', 'sleep']
+>>> [w for w in pos if w.endswith('s')] e
+['colorless', 'ideas']
+当你输入list(pos)时，你看到的可能会与这里显示的顺序不同。如果你想看
+到有序的键，只需要对它们进行排序。
+与使用一个for 循环遍历字典中的所有键一样，我们可以使用for 循环输出字典的内容：
+>>> for word in sorted(pos):
+... print word + ":", pos[word]
+...
+colorless: ADJ
+furiously: ADV
+sleep: V
+ideas: N
+最后，字典的方法keys()、values()和items()允许我们访问作为单独的链表的键、
+值以及键-值对。我们甚至可以按它们的第一个元素排序元组c（如果第一个元素相同，就
+使用它们的第二个元素）。
+>>> pos.keys()
+['colorless', 'furiously', 'sleep', 'ideas']
+>>> pos.values()
+['ADJ', 'ADV', 'V', 'N']
+>>> pos.items()
+[('colorless', 'ADJ'), ('furiously', 'ADV'), ('sleep', 'V'), ('ideas', 'N')]
+>>> for key, val in sorted(pos.items()): c
+... print key + ":", val
+...
+colorless: ADJ
+furiously: ADV
+ideas: N
+sleep: V
+我们要确保当我们在字典中查找某词时，一个键只得到一个值。现在假设我们试图用字
+典来存储可同时作为动词和名词的词sleep：
+>>> pos['sleep'] = 'V'
+>>> pos['sleep']
+'V'
+>>> pos['sleep'] = 'N'
+>>> pos['sleep']
+'N'
+一开始，pos['sleep']给的值是'V'。但是，它立即被一个新值'N'覆盖了。换句话说，
+字典中只能有'sleep'的一个条目。然而，有一个方法可以在该项目中存储多个值：我们使
+用一个链表值，例如：pos['sleep'] = ['N', 'V']。事实上，这就是我们在2.4 节中看到的
+
+184
+CMU 发音字典，它为一个词存储多个发音。
+定义字典
+我们可以使用键-值对格式创建字典。有两种方式做这个，我们通常会使用第一个：
+>>> pos = {'colorless': 'ADJ', 'ideas': 'N', 'sleep': 'V', 'furiously': 'ADV'}
+>>> pos = dict(colorless='ADJ', ideas='N', sleep='V', furiously='ADV')
+请注意：字典的键必须是不可改变的类型，如字符串和元组。如果我们尝试使用可变键
+定义字典会得到一个TypeError：
+>>> pos = {['ideas', 'blogs', 'adventures']: 'N'}
+Traceback (most recent call last):
+File "<stdin>", line 1, in <module>
+TypeError: list objects are unhashable
+默认字典
+如果我们试图访问一个不在字典中的键，会得到一个错误。然而，如果一个字典能为这
+个新键自动创建一个条目并给它一个默认值，如0 或者一个空链表，将是有用的。自从Pyt
+hon 2.5 以来，一种特殊的称为defaultdict 的字典已经出现。（考虑到有读者使用Python
+2.4，NLTK 提供了nltk.defaultdict。）为了使用它，我们必须提供一个参数，用来创建默
+认值，如：int、float、str、list、dict、tuple。
+>>> frequency = nltk.defaultdict(int)
+>>> frequency['colorless'] = 4
+>>> frequency['ideas']
+0
+>>> pos = nltk.defaultdict(list)
+>>> pos['sleep'] = ['N', 'V']
+>>> pos['ideas']
+[]
+这些默认值实际上是将其他对象转换为指定类型的函数（例如：int("2")、
+list("2")）。当它们被调用的时候没有参数——也就是说，int()、list()—
+—分别返回0 和[]。
+前面的例子中指定字典项的默认值为一个特定的数据类型的默认值。然而，也可以指定
+任何我们喜欢的默认值，只要提供可以无参数的被调用产生所需值的函数的名子。让我们回
+到我们的词性的例子，创建一个任一条目的默认值是'N'的字典c。当我们访问一个不存在
+的条目d时，它会自动添加到字典e。
+>>> pos = nltk.defaultdict(lambda: 'N') c
+>>> pos['colorless'] = 'ADJ'
+>>> pos['blog'] d
+'N'
+>>> pos.items()
+
+185
+[('blog', 'N'), ('colorless', 'ADJ')] e
+这个例子使用一个lambda 表达式，在4.4 节介绍过。这个lambda 表达式
+没有指定参数，所以我们用不带参数的括号调用它。因此，下面的f 和g
+的定义是等价的：
+>>> f = lambda: 'N'
+>>> f()
+'N'
+>>> def g():
+... return 'N'
+>>> g()
+'N'
+让我们来看看默认字典如何被应用在较大规模的语言处理任务中。许多语言处理任务—
+—包括标注——费很大力气来正确处理文本中只出现过一次的词。如果有一个固定的词汇和
+没有新词会出现的保证，它们会有更好的表现。我们可以预处理一个文本，在一个默认字典
+的帮助下，替换低频词汇为一个特殊的“超出词汇表”标识符，UNK（out of vocabulary）。
+（你能不看下面的想出如何做吗？）
+我们需要创建一个默认字典，映射每个词为它们的替换词。最频繁的n 个词将被映射到
+它们自己。其他的被映射到UNK。
+>>> alice = nltk.corpus.gutenberg.words('carroll-alice.txt')
+>>> vocab = nltk.FreqDist(alice)
+>>> v1000 = list(vocab)[:1000]
+>>> mapping = nltk.defaultdict(lambda: 'UNK')
+>>> for v in v1000:
+... mapping[v] = v
+...
+>>> alice2 = [mapping[v] for v in alice]
+>>> alice2[:100]
+['UNK', 'Alice', "'", 's', 'Adventures', 'in', 'Wonderland', 'by', 'UNK', 'UNK',
+'UNK', 'UNK', 'CHAPTER', 'I', '.', 'UNK', 'the', 'Rabbit', '-', 'UNK', 'Alice',
+'was', 'beginning', 'to', 'get', 'very', 'tired', 'of', 'sitting', 'by', 'her',
+'sister', 'on', 'the', 'bank', ',', 'and', 'of', 'having', 'nothing', 'to', 'do',
+':', 'once', 'or', 'twice', 'she', 'had', 'UNK', 'into', 'the', 'book', 'her',
+'sister', 'was', 'UNK', ',', 'but', 'it', 'had', 'no', 'pictures', 'or', 'UNK',
+'in', 'it', ',', "'", 'and', 'what', 'is', 'the', 'use', 'of', 'a', 'book', ",'",
+'thought', 'Alice', "'", 'without', 'pictures', 'or', 'conversation', "?'", ...]
+>>> len(set(alice2))
+1001
+递增地更新字典
+我们可以使用字典计数出现的次数，模拟图1-3 所示的计数词汇的方法。首先初始化一
+个空的defaultdict，然后处理文本中每个词性标记。如果标记以前没有见过，就默认计数
+为零。每次我们遇到一个标记，就使用+=运算符递增它的计数（见例5-3）。
+
+186
+例5-3. 递增地更新字典，按值排序。
+>>> counts = nltk.defaultdict(int)
+>>> from nltk.corpus import brown
+>>> for (word, tag) in brown.tagged_words(categories='news'):
+... counts[tag] += 1
+...
+>>> counts['N']
+22226
+>>> list(counts)
+['FW', 'DET', 'WH', "''", 'VBZ', 'VB+PPO', "'", ')', 'ADJ', 'PRO', '*', '-', ...]
+>>> from operator import itemgetter
+>>> sorted(counts.items(), key=itemgetter(1), reverse=True)
+[('N', 22226), ('P', 10845), ('DET', 10648), ('NP', 8336), ('V', 7313), ...]
+>>> [t for t, c in sorted(counts.items(), key=itemgetter(1), reverse=True)]
+['N', 'P', 'DET', 'NP', 'V', 'ADJ', ',', '.', 'CNJ', 'PRO', 'ADV', 'VD', ...]
+例5-3 的列表演示了一个重要的按值排序一个字典的习惯用法，按频率递减顺序显示词
+汇。sorted()的第一个参数是要排序的项目，它是由一个POS 标记和一个频率组成的元组
+的链表。第二个参数使用函数itemgetter()指定排序键。在一般情况下，itemgetter(n)
+返回一个函数，这个函数可以在一些其他序列对象上被调用获得这个序列的第n 个元素的。
+>>> pair = ('NP', 8336)
+>>> pair[1]
+8336
+>>> itemgetter(1)(pair)
+8336
+sorted()的最后一个参数指定项目是否应被按相反的顺序返回，即频率值递减。
+在例5-3 的开头还有第二个有用的习惯用法，那里我们初始化一个defaultdict，然后
+使用for 循环来更新其值。下面是一个示意图版本：
+>>> my_dictionary = nltk.defaultdict(function to create default value)
+>>> for item in sequence:
+...
+my_dictionary[item_key] is updated with information about item
+下面是这种模式的另一个实例，我们按它们最后两个字母索引词汇：
+>>> last_letters = nltk.defaultdict(list)
+>>> words = nltk.corpus.words.words('en')
+>>> for word in words:
+...
+key = word[-2:]
+...
+last_letters[key].append(word)
+...
+>>> last_letters['ly']
+['abactinally', 'abandonedly', 'abasedly', 'abashedly', 'abashlessly', 'abbreviately',
+'abdominally', 'abhorrently', 'abidingly', 'abiogenetically', 'abiologically', ...]
+>>> last_letters['zy']
+['blazy', 'bleezy', 'blowzy', 'boozy', 'breezy', 'bronzy', 'buzzy', 'Chazy', ...]
+下面的例子使用相同的模式创建一个颠倒顺序的词字典。（你可能会试验第3 行，以便
+能弄清楚为什么这个程序能运行。）
+
+187
+>>> anagrams = nltk.defaultdict(list)
+>>> for word in words:
+...
+key = ''.join(sorted(word))
+...
+anagrams[key].append(word)
+...
+>>> anagrams['aeilnrt']
+['entrail', 'latrine', 'ratline', 'reliant', 'retinal', 'trenail']
+由于积累这样的词是如此常用的任务，NLTK 以nltk.Index()的形式提供一个创建de
+faultdict(list)更方便的方式。
+>>> anagrams = nltk.Index((''.join(sorted(w)), w) for w in words)
+>>> anagrams['aeilnrt']
+['entrail', 'latrine', 'ratline', 'reliant', 'retinal', 'trenail']
+nltk.Index 是一个额外支持初始化的defaultdict(list)。类似的，nltk.
+FreqDist 本质上是一个额外支持初始化的defaultdict(int)（附带排序和
+绘图方法）。
+复杂的键和值
+我们可以使用具有复杂的键和值的默认字典。让我们研究一个词可能的标记的范围，给
+定词本身和它前一个词的标记。我们将看到这些信息如何被一个POS 标注器使用。
+>>> pos = nltk.defaultdict(lambda: nltk.defaultdict(int))
+>>> brown_news_tagged = brown.tagged_words(categories='news', simplify_tags=True)
+>>> for ((w1, t1), (w2, t2)) in nltk.ibigrams(brown_news_tagged): c
+...
+pos[(t1, w2)][t2] += 1 d
+...
+>>> pos[('DET', 'right')] e
+defaultdict(<type 'int'>, {'ADV': 3, 'ADJ': 9, 'N': 3})
+这个例子使用一个字典，它的条目的默认值也是一个字典（其默认值是int()，即0）。
+请注意我们如何遍历已标注语料库的双连词，每次遍历处理一个词-标记对c。每次通过循
+环时，我们更新字典pos 中的条目(t1, w2)，一个标记和它后面的词d。当我们在pos
+中查找一个项目时，我们必须指定一个复合键e，然后得到一个字典对象。一个POS 标注
+器可以使用这些信息来决定词right，前面是一个限定词时，应标注为ADJ。
+颠倒字典
+字典支持高效查找，只要你想获得任意键的值。如果d 是一个字典，k 是一个键，输入
+d[K]，就立即获得值。给定一个值查找对应的键要慢一些和麻烦一些：
+>>> counts = nltk.defaultdict(int)
+>>> for word in nltk.corpus.gutenberg.words('milton-paradise.txt'):
+...
+counts[word] += 1
+...
+
+188
+>>> [key for (key, value) in counts.items() if value == 32]
+['brought', 'Him', 'virtue', 'Against', 'There', 'thine', 'King', 'mortal',
+'every', 'been']
+如果我们希望经常做这样的一种“反向查找”，建立一个映射值到键的字典是有用的。
+在没有两个键具有相同的值情况，这是一个容易的事。只要得到字典中的所有键-值对，并
+创建一个新的值-键对字典。下一个例子演示了用键-值对初始化字典pos 的另一种方式。
+>>> pos = {'colorless': 'ADJ', 'ideas': 'N', 'sleep': 'V', 'furiously': 'ADV'}
+>>> pos2 = dict((value, key) for (key, value) in pos.items())
+>>> pos2['N']
+'ideas'
+首先让我们将我们的词性字典做的更实用些，使用字典的update()方法加入再一些词
+到pos 中，创建多个键具有相同的值的情况。这样一来，刚才看到的反向查找技术就将不
+再起作用（为什么不？）。作为替代，我们不得不使用append()积累词和每个词性，如下
+所示：
+>>> pos.update({'cats': 'N', 'scratch': 'V', 'peacefully': 'ADV', 'old': 'ADJ'})
+>>> pos2 = nltk.defaultdict(list)
+>>> for key, value in pos.items():
+...
+pos2[value].append(key)
+...
+>>> pos2['ADV']
+['peacefully', 'furiously']
+现在，我们已经颠倒了字典pos，可以查任意词性找到所有具有此词性的词。可以使用
+NLTK 中的索引支持更容易的做同样的事，如下所示：
+>>> pos2 = nltk.Index((value, key) for (key, value) in pos.items())
+>>> pos2['ADV']
+['peacefully', 'furiously']
+表5-5 了给出Python 字典方法的总结。
+表5-5. Python 字典方法：常用的方法与字典相关习惯用法的总结
+示例
+说明
+d = {}
+创建一个空的字典，并将分配给d
+d[key] = value
+分配一个值给一个给定的字典键
+d.keys()
+字典的键的链表
+list(d)
+字典的键的链表
+sorted(d)
+字典的键，排序
+key in d
+测试一个特定的键是否在字典中
+for key in d
+遍历字典的键
+d.values()
+字典中的值的链表
+dict([(k1,v1), (k2,v2), ...])
+从一个键-值对链表创建一个字典
+d1.update(d2)
+添加d2 中所有项目到d1
+defaultdict(int)
+一个默认值为0 的字典
+5.4
+5.4
+5.4
+5.4 自动标注
+自动标注
+自动标注
+自动标注
+本章的其余部分将探讨以不同的方式来给文本自动添加词性标记。我们将看到一个词的
+
+189
+标记依赖于这个词和它在句子中的上下文。出于这个原因，我们将处理（已标注）句子层次
+而不是词汇层次的数据。我们以加载将要使用的数据开始。
+>>> from nltk.corpus import brown
+>>> brown_tagged_sents = brown.tagged_sents(categories='news')
+>>> brown_sents = brown.sents(categories='news')
+默认标注器
+最简单的标注器是为每个标识符分配同样的标记。这似乎是一个相当平庸的一步，但它
+建立了标注器性能的一个重要的底线。为了得到最好的效果，我们用最有可能的标记标注每
+个词。让我们找出哪个标记是最有可能的（现在使用未简化标记集）：
+>>> tags = [tag for (word, tag) in brown.tagged_words(categories='news')]
+>>> nltk.FreqDist(tags).max()
+'NN'
+现在我们可以创建一个将所有词都标注成NN 的标注器。
+>>> raw = 'I do not like green eggs and ham, I do not like them Sam I am!'
+>>> tokens = nltk.word_tokenize(raw)
+>>> default_tagger = nltk.DefaultTagger('NN')
+>>> default_tagger.tag(tokens)
+[('I', 'NN'), ('do', 'NN'), ('not', 'NN'), ('like', 'NN'), ('green', 'NN'),
+('eggs', 'NN'), ('and', 'NN'), ('ham', 'NN'), (',', 'NN'), ('I', 'NN'),
+('do', 'NN'), ('not', 'NN'), ('like', 'NN'), ('them', 'NN'), ('Sam', 'NN'),
+('I', 'NN'), ('am', 'NN'), ('!', 'NN')]
+不出所料，这种方法的表现相当不好。在一个典型的语料库中，它只标注正确了八分之
+一的标识符，正如我们在这里看到的：
+>>> default_tagger.evaluate(brown_tagged_sents)
+0.13089484257215028
+默认的标注器给每一个单独的词分配标记，即使是之前从未遇到过的词。碰巧的是，一
+旦我们处理了几千词的英文文本之后，大多数新词都将是名词。正如我们将看到的，这意味
+着，默认标注器可以帮助我们提高语言处理系统的稳定性。我们将很快回来讲述这个。
+正则表达式标注器
+正则表达式标注器基于匹配模式分配标记给标识符。例如：我们可能会猜测任一以ed
+结尾的词都是动词过去分词，任一以's 结尾的词都是名词所有格。可以用一个正则表达式的
+列表表示这些：
+>>> patterns = [
+...
+(r'.*ing$', 'VBG'),
+# gerunds
+...
+(r'.*ed$', 'VBD'),
+# simple past
+...
+(r'.*es$', 'VBZ'),
+# 3rd singular present
+...
+(r'.*ould$', 'MD'),
+# modals
+...
+(r'.*\'s$', 'NN$'),
+# possessive nouns
+...
+(r'.*s$', 'NNS'),
+# plural nouns
+
+190
+...
+(r'^-?[0-9]+(.[0-9]+)?$', 'CD'),
+# cardinal numbers
+...
+(r'.*', 'NN')
+# nouns (default)
+... ]
+请注意，这些是顺序处理的，第一个匹配上的会被使用。现在我们可以建立一个标注器，
+并用它来标记一个句子。做完这一步会有约五分之一是正确的。
+>>> regexp_tagger = nltk.RegexpTagger(patterns)
+>>> regexp_tagger.tag(brown_sents[3])
+[('``', 'NN'), ('Only', 'NN'), ('a', 'NN'), ('relative', 'NN'), ('handful', 'NN'),
+('of', 'NN'), ('such', 'NN'), ('reports', 'NNS'), ('was', 'NNS'), ('received', 'VBD'),
+("''", 'NN'), (',', 'NN'), ('the', 'NN'), ('jury', 'NN'), ('said', 'NN'), (',', 'NN'),
+('``', 'NN'), ('considering', 'VBG'), ('the', 'NN'), ('widespread', 'NN'), ...]
+>>> regexp_tagger.evaluate(brown_tagged_sents)
+0.20326391789486245
+最终的正则表达式«.*»是一个全面捕捉的，标注所有词为名词。除了作为正则表达式
+标注器的一部分重新指定这个，这与默认标注器是等效的（只是效率低得多）。有没有办法
+结合这个标注器和默认标注器呢？我们将很快看到如何做到这一点。
+轮到你来：看看你能不能想出一些模式，提高上面所示的正则表达式标注器的
+性能。（请注意：6.1 节描述部分自动化这类工作的方法。）
+查询标注器
+很多高频词没有NN 标记。让我们找出100 个最频繁的词，存储它们最有可能的标记。
+然后我们可以使用这个信息作为“查找标注器”（NLTK UnigramTagger）的模型：
+>>> fd = nltk.FreqDist(brown.words(categories='news'))
+>>> cfd = nltk.ConditionalFreqDist(brown.tagged_words(categories='news'))
+>>> most_freq_words = fd.keys()[:100]
+>>> likely_tags = dict((word, cfd[word].max()) for word in most_freq_words)
+>>> baseline_tagger = nltk.UnigramTagger(model=likely_tags)
+>>> baseline_tagger.evaluate(brown_tagged_sents)
+0.45578495136941344
+现在应该并不奇怪，仅仅知道100 个最频繁的词的标记就使我们能正确标注很大一部分
+标识符（近一半，事实上）。让我们来看看它在一些未标注的输入文本上做的如何：
+>>> sent = brown.sents(categories='news')[3]
+>>> baseline_tagger.tag(sent)
+[('``', '``'), ('Only', None), ('a', 'AT'), ('relative', None),
+('handful', None), ('of', 'IN'), ('such', None), ('reports', None),
+('was', 'BEDZ'), ('received', None), ("''", "''"), (',', ','),
+('the', 'AT'), ('jury', None), ('said', 'VBD'), (',', ','),
+('``', '``'), ('considering', None), ('the', 'AT'), ('widespread', None),
+('interest', None), ('in', 'IN'), ('the', 'AT'), ('election', None),
+(',', ','), ('the', 'AT'), ('number', None), ('of', 'IN'),
+('voters', None), ('and', 'CC'), ('the', 'AT'), ('size', None),
+('of', 'IN'), ('this', 'DT'), ('city', None), ("''", "''"), ('.', '.')]
+
+191
+许多词都被分配了一个None 标签，因为它们不在100 个最频繁的词之中。在这些情
+况下，我们想分配默认标记NN。换句话说，我们要先使用查找表，如果它不能指定一个标
+记就使用默认标注器，这个过程叫做回退（5.5 节）。我们可以做到这个，通过指定一个标注
+器作为另一个标注器的参数，如下所示。现在查找标注器将只存储名词以外的词的词-标记
+对，只要它不能给一个词分配标记，它将会调用默认标注器。
+>>> baseline_tagger = nltk.UnigramTagger(model=likely_tags,
+...
+backoff=nltk.DefaultTagger('NN'))
+让我们把所有这些放在一起，写一个程序来创建和评估具有一定范围的查找标注器（例
+如5-4）。
+例5-4. 查找标注器的性能，使用不同大小的模型。
+def performance(cfd, wordlist):
+lt = dict((word, cfd[word].max()) for word in wordlist)
+baseline_tagger = nltk.UnigramTagger(model=lt, backoff=nltk.DefaultTagger('NN'))
+return baseline_tagger.evaluate(brown.tagged_sents(categories='news'))
+def display():
+import pylab
+words_by_freq = list(nltk.FreqDist(brown.words(categories='news')))
+cfd = nltk.ConditionalFreqDist(brown.tagged_words(categories='news'))
+sizes = 2 ** pylab.arange(15)
+perfs = [performance(cfd, words_by_freq[:size]) for size in sizes]
+pylab.plot(sizes, perfs, '-bo')
+pylab.title('Lookup Tagger Performance with Varying Model Size')
+pylab.xlabel('Model Size')
+pylab.ylabel('Performance')
+pylab.show()
+>>> display()
+观察图5-4，随着模型规模的增长，最初的性能增加迅速，最终达到一个稳定水平，这
+时模型的规模大量增加性能的提高很小。（这个例子使用pylab 绘图软件包，在4.8 节讨论
+过）。
+图5-4. 查找标注器
+
+192
+评估
+在前面的例子中，你会注意到对准确性得分的强调。事实上，这些工具的性能评估是N
+LP 的一个中心主题。回想图1-5 的处理流程；一个模块输出中的任何错误都在下游模块大
+大的放大。
+我们对比专家分配的标记来评估一个标注器的性能。由于我们通常很难获得专业和公正
+的人的判断，所以使用黄金标准测试数据来代替。这是一个已经手动标注并作为自动系统评
+估标准而被接受的语料库。当标注器对给定词猜测的标记与黄金标准标记相同，标注器被视
+为是正确的，。
+当然，设计和实施原始的黄金标准标注的也是人，更深入的分析可能会显示黄金标准中
+的错误，或者可能最终会导致一个修正的标记集和更复杂的指导方针。然而，黄金标准就目
+前有关的自动标注器的评估而言被定义成“正确的”。
+开发一个已标注语料库是一个重大的任务。除了数据，它会产生复杂的工具、
+文档和实践，为确保高品质的标注。标记集和其他编码方案不可避免地依赖于
+一些理论主张，不是所有的理论主张都被共享。然而，语料库的创作者往往竭
+尽全力使他们的工作尽可能理论中立，以最大限度地提高其工作的有效性。我
+们将在第11 章讨论创建一个语料库的挑战。
+5.5
+5.5
+5.5
+5.5 N-gram
+N-gram
+N-gram
+N-gram 标注
+标注
+标注
+标注
+一元标注（Unigram
+Unigram
+Unigram
+Unigram Tagging
+Tagging
+Tagging
+Tagging）
+一元标注器基于一个简单的统计算法：对每个标识符分配这个独特的标识符最有可能的
+标记。例如：它将分配标记JJ 给词frequent 的所有出现，因为frequent 用作一个形容词（例
+如：a frequent word）比用作一个动词（例如：I frequent this cafe）更常见。一个一元标
+注器的行为就像一个查找标注器（5.4 节），除了有一个更方便的建立它的技术，称为训练。
+在下面的代码例子中，我们训练一个一元标注器，用它来标注一个句子，然后评估：
+>>> from nltk.corpus import brown
+>>> brown_tagged_sents = brown.tagged_sents(categories='news')
+>>> brown_sents = brown.sents(categories='news')
+>>> unigram_tagger = nltk.UnigramTagger(brown_tagged_sents)
+>>> unigram_tagger.tag(brown_sents[2007])
+[('Various', 'JJ'), ('of', 'IN'), ('the', 'AT'), ('apartments', 'NNS'),
+('are', 'BER'), ('of', 'IN'), ('the', 'AT'), ('terrace', 'NN'), ('type', 'NN'),
+(',', ','), ('being', 'BEG'), ('on', 'IN'), ('the', 'AT'), ('ground', 'NN'),
+('floor', 'NN'), ('so', 'QL'), ('that', 'CS'), ('entrance', 'NN'), ('is', 'BEZ'),
+('direct', 'JJ'), ('.', '.')]
+>>> unigram_tagger.evaluate(brown_tagged_sents)
+0.9349006503968017
+我们训练一个UnigramTagger，通过在我们初始化标注器时指定已标注的句子数据作
+为参数。训练过程中涉及检查每个词的标记，将所有词的最可能的标记存储在一个字典里面，
+
+193
+这个字典存储在标注器内部。
+分离训练和测试数据
+现在，我们正在一些数据上训练一个标注器，必须小心不要在相同的数据上测试，如我
+们在前面的例子中的那样。一个只是记忆它的训练数据，而不试图建立一个一般的模型的标
+注器会得到一个完美的得分，但在标注新的文本时将是无用的。
+相反，我们应该分割数据，90％为测试数据，其余10％为测试数据：
+>>> size = int(len(brown_tagged_sents) * 0.9)
+>>> size
+4160
+>>> train_sents = brown_tagged_sents[:size]
+>>> test_sents = brown_tagged_sents[size:]
+>>> unigram_tagger = nltk.UnigramTagger(train_sents)
+>>> unigram_tagger.evaluate(test_sents)
+0.81202033290142528
+虽然得分更糟糕了，但是我们现在对这种标注器是无用的（如：它在前所未见的文本上
+的性能）有了一个更好地了解。
+一般的N-gram
+N-gram
+N-gram
+N-gram 的标注
+在基于unigrams 处理一个语言处理任务时，我们使用上下文中的一个项目。标注的时
+候，我们只考虑当前的标识符，与更大的上下文隔离。给定一个模型，我们能做的最好的是
+为每个词标注其先验的最可能的标记。这意味着我们将使用相同的标记标注一个词，如wi
+nd，不论它出现的上下文是the wind 还是to wind。
+一个n-gram
+n-gram
+n-gram
+n-gram 标注器是一个unigram 标注器的一般化，它的上下文是当前词和它前面n-
+1 个标识符的词性标记，如图5-5 所示。要选择的标记是圆圈里的tn，灰色阴影的是上下文。
+在图5-5 所示的n-gram 标注器的例子中，我们让n= 3，也就是说，我们考虑当前词的前两
+个词的标记。一个n-gram 标注器挑选在给定的上下文中最有可能的标记。
+图5-5. 标注器上下文
+
+194
+1-gram 标注器是一元标注器（unigram tagger）另一个名称：即用于标注
+一个标识符的上下文的只是标识符本身。2-gram 标注器也称为二元标注器
+（bigram taggers），3-gram 标注器也称为三元标注器（trigram taggers）。
+NgramTagger 类使用一个已标注的训练语料库来确定对每个上下文哪个词性标记最
+有可能。在这里，我们看到一个n-gram 标注器的特殊情况，即一个bigram 标注器。首先，
+我们训练它，然后用它来标注未标注的句子：
+>>> bigram_tagger = nltk.BigramTagger(train_sents)
+>>> bigram_tagger.tag(brown_sents[2007])
+[('Various', 'JJ'), ('of', 'IN'), ('the', 'AT'), ('apartments', 'NNS'),
+('are', 'BER'), ('of', 'IN'), ('the', 'AT'), ('terrace', 'NN'),
+('type', 'NN'), (',', ','), ('being', 'BEG'), ('on', 'IN'), ('the', 'AT'),
+('ground', 'NN'), ('floor', 'NN'), ('so', 'CS'), ('that', 'CS'),
+('entrance', 'NN'), ('is', 'BEZ'), ('direct', 'JJ'), ('.', '.')]
+>>> unseen_sent = brown_sents[4203]
+>>> bigram_tagger.tag(unseen_sent)
+[('The', 'AT'), ('population', 'NN'), ('of', 'IN'), ('the', 'AT'), ('Congo', 'NP'),
+('is', 'BEZ'), ('13.5', None), ('million', None), (',', None), ('divided', None),
+('into', None), ('at', None), ('least', None), ('seven', None), ('major', None),
+('``', None), ('culture', None), ('clusters', None), ("''", None), ('and', None),
+('innumerable', None), ('tribes', None), ('speaking', None), ('400', None),
+('separate', None), ('dialects', None), ('.', None)]
+请注意，bigram 标注器能够标注训练中它看到过的句子中的所有词，但对一个没见过
+的句子表现很差。只要遇到一个新词（如13.5），就无法给它分配标记。它不能标注下面的
+词（如：million)，即使是在训练过程中看到过的，只是因为在训练过程中从来没有见过它
+前面有一个None 标记的词。因此，标注器标注句子的其余部分也失败了。它的整体准确度
+得分非常低：
+>>> bigram_tagger.evaluate(test_sents)
+0.10276088906608193
+当n 越大，上下文的特异性就会增加，我们要标注的数据中包含训练数据中不存在的上
+下文的几率也增大。这被称为数据稀疏问题，在NLP 中是相当普遍的。因此，我们的研究
+结果的精度和覆盖范围之间需要有一个权衡（这与信息检索中的精度/召回权衡有关）。
+注意！
+N-gram 标注器不应考虑跨越句子边界的上下文。因此，NLTK 的标注器被
+设计用于句子链表，一个句子是一个词链表。在一个句子的开始，tn-1和前
+面的标记被设置为None。
+组合标注器
+解决精度和覆盖范围之间的权衡的一个办法是尽可能的使用更精确的算法，但却在很多
+时候落后于具有更广覆盖范围的算法。例如：我们可以按如下方式组合bigram 标注器、uni
+gram 标注器和一个默认标注器：
+
+195
+1.
+尝试使用bigram 标注器标注标识符。
+2.
+如果bigram 标注器无法找到一个标记，尝试unigram 标注器。
+3.
+如果unigram 标注器也无法找到一个标记，使用默认标注器。
+大多数NLTK 标注器允许指定一个回退标注器。回退标注器自身可能也有一个回退标
+注器：
+>>> t0 = nltk.DefaultTagger('NN')
+>>> t1 = nltk.UnigramTagger(train_sents, backoff=t0)
+>>> t2 = nltk.BigramTagger(train_sents, backoff=t1)
+>>> t2.evaluate(test_sents)
+0.84491179108940495
+轮到你来：通过定义一个名为t3 的TrigramTagger，扩展前面的例子，它是
+t2 的回退标注器。
+请注意，我们在标注器初始化时指定回退标注器，从而使训练能利用回退标注器。
+于是，如果在一个上下文中bigram 标注器将分配与它的unigram 回退标注器一样的标
+记，那么bigram 标注器丢弃训练的实例。这样保持尽可能小的bigram 标注器模型。我们可
+以进一步指定一个标注器需要看到一个上下文的多个实例才能保留它。例如：nltk.Bigram
+Tagger(sents, cutoff=2, backoff=t1)将会丢弃那些只看到一次或两次的上下文。
+标注生词
+我们标注生词的方法仍然是回退到一个正则表达式标注器或一个默认标注器。这些都无
+法利用上下文。因此，如果我们的标注器遇到词blog，训练过程中没有看到过，它会分配相
+同的标记，不论这个词出现的上下文是the blog 还是to blog。我们怎样才能更好地处理这
+些生词，或词汇表以外的项目？
+一个有用的基于上下文标注生词的方法是限制一个标注器的词汇表为最频繁的n 个词，
+使用5.3 节中的方法替代每个其他的词为一个特殊的词UNK。训练时，一个unigram 标注器
+可能会学到UNK 通常是一个名词。然而，n-gram 标注器会检测它的一些其他标记中的上下
+文。例如：如果前面的词是to（标注为TO），那么UNK 可能会被标注为一个动词。
+存储标注器
+在大语料库上训练一个标注器可能需要大量的时间。没有必要在每次我们需要的时候训
+练一个标注器，很容易将一个训练好的标注器保存到一个文件以后重复使用。让我们保存我
+们的标注器t2 到文件t2.pkl：
+>>> from cPickle import dump
+>>> output = open('t2.pkl', 'wb')
+>>> dump(t2, output, -1)
+>>> output.close()
+现在，我们可以在一个单独的Python 进程中载入我们保存的标注器：
+>>> from cPickle import load
+>>> input = open('t2.pkl', 'rb')
+>>> tagger = load(input)
+
+196
+>>> input.close()
+现在，让我们的检查它是否可以用来标注：
+>>> text = """The board's action shows what free enterprise
+... is up against in our complex maze of regulatory laws ."""
+>>> tokens = text.split()
+>>> tagger.tag(tokens)
+[('The', 'AT'), ("board's", 'NN$'), ('action', 'NN'), ('shows', 'NNS'),
+('what', 'WDT'), ('free', 'JJ'), ('enterprise', 'NN'), ('is', 'BEZ'),
+('up', 'RP'), ('against', 'IN'), ('in', 'IN'), ('our', 'PP$'), ('complex', 'JJ'),
+('maze', 'NN'), ('of', 'IN'), ('regulatory', 'NN'), ('laws', 'NNS'), ('.', '.')]
+性能限制
+一个n-gram 标注器的性能上限是什么？考虑一个trigram 标注器的情况。它遇到多少词
+性歧义的情况？我们可以根据经验决定这个问题的答案：
+>>> cfd = nltk.ConditionalFreqDist(
+...
+((x[1], y[1], z[0]), z[1])
+...
+for sent in brown_tagged_sents
+...
+for x, y, z in nltk.trigrams(sent))
+>>> ambiguous_contexts = [c for c in cfd.conditions() if len(cfd[c]) > 1]
+>>> sum(cfd[c].N() for c in ambiguous_contexts) / cfd.N()
+0.049297702068029296
+因此，1/20 的trigrams 是有歧义的。给定当前单词及其前两个标记，根据训练数据，在
+5％的情况中，有一个以上的标记可能合理地分配给当前词。假设我们总是挑选在这种含糊
+不清的上下文中最有可能的标记，可以得出trigram 标注器性能的一个下界。
+调查标注器性能的另一种方法是研究它的错误。有些标记可能会比别的更难分配，可能
+需要专门对这些数据进行预处理或后处理。一个方便的方式查看标注错误是混淆矩阵。它用
+图表表示期望的标记（黄金标准）与实际由标注器产生的标记：
+>>> test_tags = [tag for sent in brown.sents(categories='editorial')
+...
+for (word, tag) in t2.tag(sent)]
+>>> gold_tags = [tag for (word, tag) in brown.tagged_words(categories='editorial')]
+>>> print nltk.ConfusionMatrix(gold, test)
+基于这样的分析，我们可能会决定修改标记集。或许标记之间很难做出的区分可以被丢
+弃，因为它在一些较大的处理任务的上下文中并不重要。
+分析标注器性能界限的另一种方式来自人类标注者之间并非100％的意见一致。
+一般情况下，标注过程会消除区别：例如：当所有的人称代词被标注为PRP 时，词的
+特性通常会失去。与此同时，标注过程引入了新的区别从而去除了含糊之处：例如：deal
+标注为VB 或NN。这种消除某些区别并引入新的区别的特点是标注的一个重要的特征，有
+利于分类和预测。当我们引入一个标记集的更细的划分时，在n-gram 标注器决定什么样的
+标记分配给一个特定的词时，可以获得关于左侧上下文的更详细的信息。然而，标注器同时
+也将需要做更多的工作来划分当前的标识符，只是因为有更多可供选择的标记。相反，使用
+较少的区别（如简化的标记集），标注器有关上下文的信息会减少，为当前标识符分类的选
+择范围也较小。
+我们已经看到，训练数据中的歧义导致标注器性能的上限。有时更多的上下文能解决这
+
+197
+些歧义。然而，在其他情况下，如(Abney, 1996)中指出的，只有参考语法或现实世界的知识，
+才能解决歧义。尽管有这些缺陷，词性标注在用统计方法进行自然语言处理的兴起过程中起
+到了核心作用。1990 年代初，统计标注器令人惊讶的精度是一个惊人的示范：可以不用更
+深的语言学知识解决一小部分语言理解问题，即词性消歧。这个想法能再推进吗？第7 章中，
+我们将看到，它可以。
+跨句子边界标注
+一个n-gram 标注器使用最近的标记作为为当前的词选择标记的指导。当标记一个句子
+的第一个词时，trigram 标注器将使用前面两个标识符的词性标记，这通常会是前面句子的
+最后一个词和句子结尾的标点符号。然而，在前一句结尾的词的类别与下一句的开头的通常
+没有关系。
+为了应对这种情况，我们可以使用已标注句子的链表来训练、运行和评估标注器，如例
+5-5 所示。
+例5-5. 句子层面的N-gram 标注
+brown_tagged_sents = brown.tagged_sents(categories='news')
+brown_sents = brown.sents(categories='news')
+size = int(len(brown_tagged_sents) * 0.9)
+train_sents = brown_tagged_sents[:size]
+test_sents = brown_tagged_sents[size:]
+t0 = nltk.DefaultTagger('NN')
+t1 = nltk.UnigramTagger(train_sents, backoff=t0)
+t2 = nltk.BigramTagger(train_sents, backoff=t1)
+>>> t2.evaluate(test_sents)
+0.84491179108940495
+5.6
+5.6
+5.6
+5.6 基于转换的标注
+基于转换的标注
+基于转换的标注
+基于转换的标注
+n-gram 标注器的一个潜在的问题是它们的n-gram 表的大小（或语言模型）。如果使用各
+种语言技术的标注器部署在移动计算设备上，在模型大小和标注器性能之间取得平衡是很重
+要的。使用回退标注器的n-gram 标注器可能存储trigram 和bigram 表，这是很大的稀疏阵
+列，可能有数亿条条目。
+第二个问题是关于上下文的。n-gram 标注器从前面的上下文中获得的唯一的信息是标
+记，虽然词本身可能是一个有用的信息源。n-gram 模型使用上下文中的词的其他特征为条
+件是不切实际的。在本节中，我们考察Brill 标注，一种归纳标注方法，它的性能很好，使
+用的模型只有n-gram 标注器的很小一部分。
+Brill 标注是一种基于转换的学习，以它的发明者命名。一般的想法很简单：猜每个词
+的标记，然后返回和修复错误的。在这种方式中，Brill 标注器陆续将一个不良标注的文本
+转换成一个更好的。与n-gram 标注一样，这是有监督的学习方法，因为我们需要已标注的
+训练数据来评估标注器的猜测是否是一个错误。然而，不像n-gram 标注，它不计数观察结
+果，只编制一个转换修正规则链表。
+Brill 标注的的过程通常是与绘画类比来解释的。假设我们要画一棵树，包括大树枝、
+树枝、小枝、叶子和一个统一的天蓝色背景的所有细节。不是先画树然后尝试在空白处画蓝
+
+198
+色，而是简单的将整个画布画成蓝色，然后通过在蓝色背景上上色“修正”树的部分。以同
+样的方式，我们可能会画一个统一的褐色的树干再回过头来用更精细的刷子画进一步的细
+节。Brill 标注使用了同样的想法：以大笔画开始，然后修复细节，一点点的细致的改变。
+让我们看看下面的例子：
+(1) The President said he will ask Congress to increase grants to states for vocation
+al rehabilitation.（总统表示：他将要求国会增加拨款给各州用于职业康复。）
+我们将研究两个规则的运作：（a）当前面的词是TO 时，替换NN 为VB；（b）当下一
+个标记是NNS 时，替换TO 为IN。表5-6 说明了这一过程，首先使用unigram 标注器标注，
+然后运用规则修正错误。
+表5-6. Brill 标注的步骤
+Phrase
+Phrase
+Phrase
+Phrase
+to
+increase grants
+to
+states
+for
+vocational
+rehabilitation
+Unigram
+Unigram
+Unigram
+UnigramTO NN
+NNS
+TO NNS
+IN
+JJ
+NN
+Rule1
+Rule1
+Rule1
+Rule1
+VB
+Rule2
+Rule2
+Rule2
+Rule2
+IN
+Output
+Output
+Output
+Output
+TO VB
+NNS
+IN
+NNS
+IN
+JJ
+NN
+Gold
+Gold
+Gold
+Gold
+TO VB
+NNS
+IN
+NNS
+IN
+JJ
+NN
+在此表中，我们看到两个规则。所有这些规则由以下形式的模板产生：“替换T1 为T2
+在上下文C 中。”典型的上下文是之前或之后的词的内容或标记，或者当前词的两到三个词
+范围内出现的一个特定标记。在其训练阶段，T1，T2 和C 的标注器猜测值创造出数以千计
+的候选规则。每一条规则都根据其净收益打分：它修正的不正确标记的数目减去它错误修改
+的正确标记的数目。
+Brill 标注器的另一个有趣的特性：规则是语言学可解释的。与采用潜在的巨大的n-gra
+m 表的n-gram 标注器相比，我们并不能从直接观察这样的一个表中学到多少东西，而Brill
+标注器学到的规则可以。例5-6 演示了NLTK 中的Brill 标注器。
+例5-6. Brill 标注器演示：标注器有一个“X→Y 如果前面的词是Z”的形式的模板集合；
+这些模板中的变量是创建“规则”的特定词和标记的实例；规则的得分是它纠正的错误例子
+的数目减去正确的情况下它误报的数目；除了训练标注器，演示还显示了剩余的错误。
+>>> nltk.tag.brill.demo()
+Training Brill tagger on 80 sentences...
+Finding initial useful rules...
+Found 6555 useful rules.
+B
+|
+S
+F
+r
+O
+|
+Score = Fixed - Broken
+c
+i
+o
+t
+|
+R
+Fixed = num tags changed incorrect -> correct
+o
+x
+k
+h
+|
+u
+Broken = num tags changed correct -> incorrect
+r
+e
+e
+e
+|
+l
+Other = num tags changed incorrect -> incorrect
+e
+d
+n
+r
+|
+e
+------------------+-------------------------------------------------------
+12
+13
+1
+4
+| NN -> VB if the tag of the preceding word is 'TO'
+8
+9
+1
+23
+| NN -> VBD if the tag of the following word is 'DT'
+8
+8
+0
+9
+| NN -> VBD if the tag of the preceding word is 'NNS'
+6
+9
+3
+16
+| NN -> NNP if the tag of words i-2...i-1 is '-NONE-'
+5
+8
+3
+6
+| NN -> NNP if the tag of the following word is 'NNP'
+5
+6
+1
+0
+| NN -> NNP if the text of words i-2...i-1 is 'like'
+
+199
+5
+5
+0
+3
+| NN -> VBN if the text of the following word is '*-1'
+...
+>>> print(open("errors.out").read())
+left context |
+word/test->gold
+| right context
+-----------------------------------+--------------------------------+--------------------------
+|
+Then/NN->RB
+| ,/, in/IN the/DT guests/N
+, in/IN the/DT guests/NNS |
+'/VBD->POS
+| honor/NN ,/, the/DT speed
+'/POS honor/NN ,/, the/DT |
+speedway/JJ->NN
+| hauled/VBD out/RP four/CD
+NN ,/, the/DT speedway/NN|
+hauled/NN->VBD | out/RP four/CD drivers/NN
+DT speedway/NN hauled/VBD|
+out/NNP->RP
+| four/CD drivers/NNS ,/, c
+dway/NN hauled/VBD out/RP|
+four/NNP->CD
+| drivers/NNS ,/, crews/NNS
+hauled/VBD out/RP four/CD |
+drivers/NNP->NNS | ,/, crews/NNS and/CC even
+P four/CD drivers/NNS ,/,
+|
+crews/NN->NNS
+| and/CC even/RB the/DT off
+NNS and/CC even/RB the/DT|
+official/NNP->JJ
+| Indianapolis/NNP 500/CD a
+|
+After/VBD->IN
+| the/DT race/NN ,/, Fortun
+ter/IN the/DT race/NN ,/,
+|
+Fortune/IN->NNP
+| 500/CD executives/NNS dro
+s/NNS drooled/VBD like/IN |
+schoolboys/NNP->NNS | over/IN the/DT cars/NNS a
+olboys/NNS over/IN the/DT |
+cars/NN->NNS
+| and/CC drivers/NNS ./.
+5.7
+5.7
+5.7
+5.7 如何确定一个词的分类
+如何确定一个词的分类
+如何确定一个词的分类
+如何确定一个词的分类
+我们已经详细研究了词类，现在转向一个更基本的问题：如何决定一个词属于哪一类？
+首先应该考虑什么？在一般情况下，语言学家使用形态学、句法和语义线索确定一个词的类
+别。
+形态学线索
+一个词的内部结构可能为这个词分类提供有用的线索。举例来说：-ness 是一个后缀，
+与形容词结合产生一个名词，如happy→happiness，ill→illness。因此，如果我们遇到的一个
+以-ness 结尾的词，很可能是一个名词。同样的，-ment 是与一些动词结合产生一个名词的后
+缀，如govern→government 和establish→establishment。
+英语动词也可以是形态复杂的。例如：一个动词的现在分词以-ing 结尾，表示正在进行
+的还没有结束的行动（如：falling，eating）的意思。-ing 后缀也出现在从动词派生的名词中，
+如：the falling of the leaves（这被称为动名词）。
+句法线索
+另一个信息来源是一个词可能出现的典型的上下文语境。例如：假设我们已经确定了名
+词类。那么我们可以说，英语形容词的句法标准是它可以立即出现在一个名词前，或紧跟在
+词be 或very 后。根据这些测试，near 应该被归类为形容词：
+(2)
+a. the near window
+b. The end is (very) near.
+
+200
+语义线索
+最后，一个词的意思对其词汇范畴是一个有用的线索。例如：名词的众所周知的一个定
+义是根据语义的：“一个人、地方或事物的名称。”在现代语言学，词类的语义标准受到怀疑，
+主要是因为它们很难规范化。然而，语义标准巩固了我们对许多词类的直觉，使我们能够在
+不熟悉的语言中很好的猜测词的分类。例如：如果我们都知道荷兰语词verjaardag 的意思与
+英语词birthday 相同，那么我们可以猜测verjaardag 在荷兰语中是一个名词。然而，一些修
+补是必要的：虽然我们可能翻译zij is vandaag jarig as it’s her birthday today，词jarig
+在荷兰语中实际上是形容词，与英语并不完全相同。
+新词
+所有的语言都学习新的词汇。最近添加到牛津英语词典中的一个单词列表包括cybersla
+cker、fatoush、blamestorm、SARS、cantopop、bupkis、noughties、muggle 和robata。请注
+意，所有这些新词都是名词，这反映在名词被称为开放类。相反，介词被认为是一个封闭类。
+也就是说，只有有限的词属于这个类别（例如：above、along、at、below、beside、between、
+during、for、from、in、near、on、outside、over、past、through、towards、under、up、wit
+h），词类成员随着很长时间的推移才逐渐改变。
+词性标记集中的形态学
+普通标记集经常捕捉一些构词信息，即词借助它们的句法角色获得的一种形态标记的信
+息。例如：思考下面句子中词go 的不同语法形式的选集：
+(3)
+a. Go away!
+b. He sometimes goes to the cafe.
+c. All the cakes have gone.
+d. We went on the excursion.
+这些形态中的每一个——go、goes、gone 和went——是形态学上的区别。思考形式go
+es。它出现在受限制的语法环境中，需要一个第三人称单数的主语。因此，下面的句子是不
+合语法的。
+(4)
+a. *They sometimes goes to the cafe.
+b. *I sometimes goes to the cafe.
+相比之下，gone 是过去分词形式；需要出现在have 后面（在这个上下文中不能被goes
+替代），不能作为一个从句的主要动词出现。
+(5)
+a. *All the cakes have goes.
+b. *He sometimes gone to the cafe.
+我们可以很容易地想象一个刚才讨论的有四种不同语法形式的标记集都被标注为VB。
+虽然这对于某些目的已经足够了，更细粒度的标记集提供有关这些形式的有用信息，可以帮
+助尝试检测标记序列模式的其它处理者。布朗标记集捕捉这些区别，如表5-7 中的总结。
+表5-7. 布朗标记集的一些构词区别
+形式
+类别
+标记
+go
+基本
+VB
+
+201
+goes
+第三人称单数
+VBZ
+gone
+过去分词
+VBN
+going
+动名词
+VBG
+went
+一般过去时
+VBD
+除了这组动词标记，动词to be 的各种形式也有特殊的标记：be/BE，being/BEG，a
+m/BEM，are/BER，is/BEZ，been/BEN，were/BED 和was/BEDZ（加上额外的动词
+否定形式的标记）。总的来说，这种动词细粒度标记意味着使用此标记集的自动标注器能有
+效开展有限数量的形态分析。
+大多数词性标注集使用相同的基本类别，如名词、动词、形容词和介词。然而，标记集
+的相互区别不仅在于它们如何细致的将词分类，也在于它们如何界定其类别。例如：is 在一
+个标记集可能会被简单的标注为动词，而在另一个标记集中被标注为lexeme be 的不同形式
+（如在布朗语料库中）。这种标记集的变化是不可避免的，因为词性标记被以不同的方式用
+于不同的任务。换句话说，没有一个“正确的方式”来分配标记，只有根据目标不同或多或
+少有用的方法。
+5.8
+5.8
+5.8
+5.8 小结
+小结
+小结
+小结
+z
+词可以组成类，如名词、动词、形容词以及副词。这些类被称为词汇范畴或者词性。词
+性被分配短标签或者标记，如NN 和VB。
+z
+给文本中的词自动分配词性的过程称为词性标注、POS 标注或只是标注。
+z
+自动标注是NLP 流程中重要的一步，在各种情况下都十分有用，包括预测先前未见过
+的词的行为、分析语料库中词的使用以及文本到语音转换系统。
+z
+一些语言学语料库，如布朗语料库，已经做了词性标注。
+z
+有多种标注方法，如默认标注器、正则表达式标注器、unigram 标注器、n-gram 标注器。
+这些都可以结合一种叫做回退的技术一起使用。
+z
+标注器可以使用已标注语料库进行训练和评估。
+z
+回退是一个组合模型的方法：当一个较专业的模型（如bigram 标注器）不能为给定内
+容分配标记时，我们回退到一个较一般的模型（如unigram 标注器）
+z
+词性标注是NLP 中一个重要的早期的序列分类任务：利用局部上下文语境中的词和标
+记对序列中任意一点的分类决策。
+z
+字典用来映射任意类型之间的信息，如字符串和数字：freq['cat']=12。我们使用大括
+号来创建字典：pos = {}，pos = {'furiously': 'adv', 'ideas': 'n', 'colorless':
+'adj'}。
+z
+N-gram 标注器可以定义较大数值的n，但是当n 大于3 时，我们常常会面临数据稀疏
+问题；即使使用大量的训练数据，我们看到的也只是可能的上下文的一小部分。
+z
+基于转换的标注学习一系列“改变标记s 为标记t 在上下文c 中”形式的修复规则，每
+个规则会修复错误，也可能引入（较小的）错误。
+5.9
+5.9
+5.9
+5.9 深入阅读
+深入阅读
+深入阅读
+深入阅读
+本章的额外材料发布在http://www.nltk.org/，包括网上免费提供的资源的链接。关于使
+用NLTK 标注的更多的例子，请看在http://www.nltk.org/howto 上的标注HOWTO。(Jurafs
+ky & Martin, 2008)的第4 章和第5 章包含更多n-grams 和词性标注的高级材料。其他标注
+
+202
+方法涉及到机器学习方法（第6 章）。第7 章中，我们将看到被称为分块的标注的泛化，在
+那里为连续的词序列分配一个单独的标记。
+关于标记集的文档，请参阅nltk.help.upenn_tagset()和nltk.help.brown_tagset
+()。词汇范畴在很多语言学教科书中都有介绍，包括本书第1 章中所列的书籍。
+还有许多其他类型的标注。可以按语音合成器的指令标注，表示哪些词应强调；可以按
+词意数标注，表示词的哪个意思被使用；也可以按形态特征标注。每一个这些类别的标记的
+例子如下所示。由于篇幅所限，我们只显示一个词的标记。还要注意的是前两个例子使用X
+ML 风格的标签，尖括号中的元素括起已标注的词。
+Speech Synthesis Markup Language (W3C SSML)
+That
+That
+That
+That isisisis a <emphasis>big</emphasis>
+<emphasis>big</emphasis>
+<emphasis>big</emphasis>
+<emphasis>big</emphasis> car!
+car!
+car!
+car!
+SemCor: Brown Corpus tagged with WordNet senses
+Space
+Space
+Space
+Space in
+in
+in
+in any
+any
+any
+any <wf
+<wf
+<wf
+<wf pos="NN"
+pos="NN"
+pos="NN"
+pos="NN" lemma="form"
+lemma="form"
+lemma="form"
+lemma="form" wnsn="4">form</wf>
+wnsn="4">form</wf>
+wnsn="4">form</wf>
+wnsn="4">form</wf> isisisis completely
+completely
+completely
+completely
+measured
+measured
+measured
+measured by
+by
+by
+by the
+the
+the
+the three
+three
+three
+three dimensions.
+dimensions.
+dimensions.
+dimensions. (Wordnet form/nn sense 4: “shape, form, config-
+uration, contour, conformation”)
+Morphological tagging, from the Turin University Italian Treebank
+E'
+E'
+E'
+E' italiano
+italiano
+italiano
+italiano , come
+come
+come
+come progetto
+progetto
+progetto
+progetto e realizzazione
+realizzazione
+realizzazione
+realizzazione , ilililil primo
+primo
+primo
+primo (PRIMO
+(PRIMO
+(PRIMO
+(PRIMO ADJ
+ADJ
+ADJ
+ADJ ORDIN
+ORDIN
+ORDIN
+ORDIN M
+SING)
+SING)
+SING)
+SING) porto
+porto
+porto
+porto turistico
+turistico
+turistico
+turistico dell'
+dell'
+dell'
+dell' Albania
+Albania
+Albania
+Albania .
+请注意，标注也可以在更高层次进行。下面是一个对话的行为标注的例子，来自NLTK
+中的NPS 聊天语料库（Forsyth & Martell, 2007）。每个回合的对话按照它的交际功能分类：
+Statement
+User117 Dude..., I wanted some of that
+ynQuestion User120 m I missing something?
+Bye
+User117 I'm gonna go fix food, I'll be back later.
+System
+User122 JOIN
+System
+User2
+slaps User122 around a bit with a large trout.
+Statement
+User121 18/m pm me if u tryin to chat
+5.10
+5.10
+5.10
+5.10 练习
+练习
+练习
+练习
+1.
+○网上搜索“spoof newspaper headlines”，找到这种宝贝：British Left Waffles on Fal
+kland Islands 和Juvenile Court to Try Shooting Defendant。手工标注这些头条，看看
+词性标记的知识是否可以消除歧义。
+2.
+○和别人一起，轮流挑选一个既可以是名词也可以是动词的词（如：contest）；让对方
+预测哪一个可能是布朗语料库中频率最高的。检查对方的预测，为几个回合打分。
+3.
+○分词和标注下面的句子：They wind back the clock, while we chase after the wind。
+包含哪些不同的发音和词类？
+4.
+○回顾表5.4 中的映射。讨论你能想到的映射的其他的例子。它们从什么类型的信息映
+射到什么类型的信息？
+5.
+○在交互模式下使用Python 解释器，实验本章中字典的例子。创建一个字典d，添加
+一些条目。如果你尝试访问一个不存在的条目，如d['xyz']，会发生什么？
+6.
+○尝试从字典d 删除一个元素，使用语法del d['abc']。检查被删除的项目。
+7.
+○创建两个字典，d1 和d2，为每个添加一些条目。现在发出命令d1.update(d2)。
+这做了什么？它可能是有什么用？
+8.
+○创建一个字典e，表示你选择的一些词的一个单独的词汇条目。定义键如：headwo
+rd、part-of-speech、sense 和example，分配给它们适当的值。
+
+203
+9.
+○自己验证go 和went 在分布上的限制，也就是说，它们不能自由地在第5.7 节(3)中演
+示的那种上下文中互换。
+10. ○训练一个unigram 标注器，在一些新的文本上运行。观察有些词没有分配到标记。为
+什么没有？
+11. ○了解词缀标注器（输入help(nltk.AffixTagger)）。训练一个词缀标注器，在一些新
+的文本上运行。设置不同的词缀长度和最小词长做实验。讨论你的结果。
+12. ○训练一个没有回退标注器的bigram 标注器，在一些训练数据上运行。然后，在一些
+新的数据运行它。标注器的性能会发生什么？为什么呢？
+13. ○我们可以使用字典指定由一个格式化字符串替换的值。阅读关于格式化字符串的Pyt
+hon 库文档（http://docs.python.org/lib/typesseq-strings.html），使用这种方法以两种不同
+的格式显示今天的日期。
+14. ◑使用sorted()和set()获得布朗语料库使用的标记的排序的链表，删除重复。
+15. ◑写程序处理布朗语料库，找到以下问题的答案：
+a.
+哪些名词常以它们复数形式而不是它们的单数形式出现？（只考虑常规的复数形
+式，-s 后缀形式的）。
+b.
+哪个词的不同标记数目最多？它们是什么，它们代表什么？
+c.
+按频率递减的顺序列出标记。前20 个最频繁的标记代表什么？
+d.
+名词后面最常见的是哪些标记？这些标记代表什么？
+16. ◑探索有关查找标注器的以下问题：
+a.
+回退标注器被省略时，模型大小变化，标注器的性能会发生什么？
+b.
+思考图5-4 的曲线；为查找标注器推荐一个平衡内存和性能的好的规模。你能想出
+在什么情况下应该尽量减少内存使用，什么情况下性能最大化而不必考虑内存使
+用？
+17. ◑查找标注器的性能上限是什么？假设其表的大小没有限制。（提示：写一个程序算出
+被分配了最有可能的标记的词的标识符的平均百分比。）
+18. ◑生成已标注数据的一些统计数据，回答下列问题：
+a.
+总是被分配相同词性的词类的比例是多少？
+b.
+多少词是有歧义的，即：从某种意义上说，它们至少和两个标记一起出现？
+c.
+布朗语料库中这些有歧义的词的标识符的百分比是多少？
+19. ◑evaluate()方法算出一个文本上运行的标注器的精度。例如：如果提供的已标注文
+本是[('the', 'DT'), ('dog','NN')]，标注器产生的输出是[('the', 'NN'), ('dog', 'N
+N')]，那么得分为0.5。让我们尝试找出评价方法是如何工作的：
+a.
+一个标注器t 将一个词汇链表作为输入，产生一个已标注词链表作为输出。t.eval
+uate()只以一个正确标注的文本作为唯一的参数。执行标注之前必须对输入做些
+什么？
+b.
+一旦标注器创建了新标注的文本，evaluate()方法可能如何比较它与原来标注的
+文本，计算准确性得分？
+c.
+现在，检查源代码来看看这个方法是如何实现的。检查nltk.tag.api.__file__找
+到源代码的位置，使用编辑器打开这个文件（一定要使用文件api.py，而不是编译
+过的二进制文件api.pyc）。
+20. ◑编写代码，搜索布朗语料库，根据标记查找特定的词和短语，回答下列问题：
+a.
+产生一个标注为MD 的不同的词的按字母顺序排序的列表。
+b.
+识别可能是复数名词或第三人称单数动词的词（如deals，flies）。
+c.
+识别三个词的介词短语形式IN + DET + NN（如in the lab ）。
+
+204
+d.
+男性与女性代词的比例是多少？
+21. ◑表3-1 中我们看到动词adore、love、like 和prefer 及前面的限定符如really 的频率计
+数的表格。探讨这四个动词前出现的所有限定符（布朗标记QL）。
+22. ◑定义可以用来做生词的回退标注器的regexp_tagger。这个标注器只检查基数词。
+通过特定的前缀或后缀字符串进行测试，它应该能够猜测其他标记。例如：我们可以标
+注所有-s 结尾的词为复数名词。定义一个正则表达式标注器（使用RegexpTagger()），
+测试至少5 个单词拼写的其他模式。（使用内联文档解释规则。）
+23. ◑考虑上一练习中开发的正则表达式标注器，使用它的accuracy()方法评估标注器，
+尝试想办法提高其性能。讨论你找到的结果。客观的评估如何帮助开发过程？
+24. ◑数据稀疏问题有多严重？调查n-gram 标注器当n 从1 增加到6 时的性能。为准确性
+得分制表。估计这些标注器需要的训练数据，假设词汇量大小为105 而标记集的大小为
+102。
+25. ◑获取另一种语言的一些已标注数据，在其上测试和评估各种标注器。如果这种语言是
+形态复杂的，或者有词类的任何字形线索（如：capitalization），可以考虑为它开发一个
+正则表达式标注器（排在unigram 标注器之后，默认标注器之前）。对比同样的运行在
+英文数据上的标注器，你的tagger(s)的准确性如何？讨论你在运用这些方法到这种语言
+时遇到的问题。
+26. ◑例5-4 绘制曲线显示查找标注器的性能随模型的大小增加的变化。绘制当训练数据量
+变化时unigram 标注器的性能曲线。
+27. ◑检查5.5 节中定义的bigram 标注器t2 的混淆矩阵，确定简化的一套或多套标记。定
+义字典做映射，在简化的数据上评估标注器。
+28. ◑使用简化的标记集测试标注器（或制作一个你自己的，通过丢弃每个标记名中除第一
+个字母外所有的字母）。这种标注器需要做的区分更少，但由它获得的信息也更少。讨
+论你的结果。
+29. ◑回顾一个bigram 标注器训练过程中遇到生词，标注句子的其余部分为None 的例子。
+一个bigram 标注器只处理了句子的一部分就失败了，即使句子中没有包含生词（即使
+句子在训练过程中使用过），这可能吗？在什么情况下会出现这种情况呢？你可以写一
+个程序，找到一些这方面的例子吗？
+30. ◑预处理布朗新闻数据，替换低频词为UNK，但留下标记不变。在这些数据上训练和
+评估一个bigram 标注器。这样有多少帮助？unigram 标注器和默认标注器的贡献是什
+么？
+31. ◑修改例5-4 中的程序，通过将pylab.plot()替换为pylab.semilogx()，在X 轴上使
+用对数刻度。关于结果图形的形状，你注意到了什么？梯度告诉你什么呢？
+32. ◑阅读Brill 标注器演示函数的文档，使用help(nltk.tag.brill.demo)。通过设置不同
+的参数值试验这个标注器。是否有任何训练时间（语料库大小）和性能之间的权衡？
+33. ◑写代码构建一个集合的字典的字典。用它来存储一套可以跟在具有给定POS 标记的
+给定词后面的POS 标记，例如：wordi →tagi →tagi+1。
+34. ●布朗语料库中有264 个不同的词有3 种可能的标签。
+a.
+打印一个表格，一列中是整数1..10，另一列是语料库中有1..10 个不同标记的不同
+词的数目。
+b.
+对有不同的标记数量最多的词，输出语料库中包含这个词的句子，每个可能的标记
+一个。
+35. ●写一个程序，按照词must 后面的词的标记为它的上下文分类。这样可以区分must
+的“必须”和“应该”两种词意上的用法吗？
+
+205
+36. ●创建一个正则表达式标注器和各种unigram 以及n-gram 标注器，包括回退，在布朗
+语料库上训练它们。
+a.
+创建这些标注器的3 种不同组合。测试每个组合标注器的准确性。哪种组合效果最
+好？
+b.
+尝试改变训练语料的规模。它是如何影响你的结果的？
+37. ●我们标注生词的方法一直要考虑这个词的字母（使用RegexpTagger()），或完全忽
+略这个词，将它标注为一个名词（使用nltk.DefaultTagger()）。这些方法对于有新词
+却不是名词的文本不会很好。思考句子：I like to blog on Kim's blog。如果blog 是一
+个新词，那么查看前面的标记（TO 和NP$）可能会有所帮助，即我们需要一个对前面
+的标记敏感的默认标注器。
+a.
+创建一种新的unigram 标注器，查看前一个词的标记，而忽略当前词。（做到这一
+点的最好办法是修改UnigramTagger()的源代码，需要Python 中的面向对象编
+程的知识。）
+b.
+将这个标注器加入到回退标注器序列（包括普通的trigram 和bigram 标注器），放
+在常用默认标注器的前面。
+c.
+评价这个新的unigram 标注器的贡献。
+38. ●思考5-5 节中的代码，它确定一个trigram 标注器的准确性上限。回顾Abney 的关于
+精确标注的不可能性的讨论（Abney, 2006）。解释为什么正确标注这些例子需要获取词
+和标记以外的其他种类的信息。你如何估计这个问题的规模？
+39. ●使用nltk.probability 中的一些估计技术，例如Lidstone 或Laplace 估计，开发一种
+统计标注器，它在训练中没有遇到而测试中遇到的上下文中表现优于n-gram 回退标注
+器。
+40. ●检查Brill 标注器创建的诊断文件rules.out 和errors.out。通过访问源代码（http:/
+/www.nltk.org/code）获得演示代码，创建你自己版本的Brill 标注器。并根据你从检查r
+ules.out 了解到的，删除一些规则模板。增加一些新的规则模板，这些模板使用那些
+可能有助于纠正你在errors.out 看到的错误的上下文。
+41. ●开发一个n-gram 回退标注器，允许在标注器初始化时指定“anti-n-grams”，如：["t
+he","the"]。一个anti-n-grams 被分配一个数字0，被用来防止这个n-gram 回退（如避
+免估计P(the | the)而只做P(the)）。
+42. ●使用布朗语料库开发标注器时，调查三种不同的方式来定义训练和测试数据之间的分
+割：genre(category)、source(fileid)和句子。比较它们的相对性能，并讨论哪种方
+法最合理。（你可能要使用n-交叉验证，在6.3 节中讨论的，以提高评估的准确性。）
+43. ●开发你自己的NgramTagger，从NLTK 中的类继承，封装本章中所述的已标注的训
+练和测试数据的词汇表缩减方法。确保unigram 和默认回退标注器有机会获得全部词
+汇。

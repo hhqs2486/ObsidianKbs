@@ -1,0 +1,529 @@
+第6章　警报管理
+我认为我们应该让这些人走出困境。
+——《战争游戏》，1983年
+在前面几章中，我们安装配置了Prometheus，并且还完成了一些基本监控。现在我们将了解如何
+从监控数据中生成有用的警报。Prometheus是一个按功能划分的平台，指标的收集和存储与警报是分
+开的。警报管理功能由名为Alertmanager的工具提供，该工具是监控体系中的独立组件。我们需要在
+Prometheus服务器上定义警报规则，这些规则可以触发事件，然后传播到Alertmanager。接下来，
+Alertmanager会决定如何处理相应的警报，进而解决去重等问题，还会确定在发送警报时使用的机制：
+实时消息、电子邮件或通过PagerDuty和VictorOps等工具。
+在本章中，我们将讨论如何构建良好的警报机制，如何安装和配置Alertmanager，并了解如何使用
+它来路由通知和管理维护。然后，我们将在Prometheus服务器上定义警报规则（使用目前在本书中已
+经收集到的指标），继而触发一些警报。
+首先让我们谈谈警报本身。
+
+6.1　警报
+警报可以为我们提供一些指示，表明我们环境中的某些状态已发生变化，且通常会是比想象更糟
+的情况。一个好警报的关键是能够在正确的时间、以正确的理由和正确的速度发送，并在其中放入有
+用的信息。
+警报方法中最常见的反模式是发送过多的警报。对于监控来说，过多的警报相当于“狼来了”这样
+的故事。收件人会对警告变得麻木，然后将其拒之门外，而重要的警报常常被淹没在无关紧要的更新
+中。
+通常发送过多警报的原因可能包括：
+·警报缺少可操作性，它只是提供信息。你应关闭所有这些警报，或将其转换为计算速率的计数
+器，而不是发出警报。
+·故障的主机或服务上游会触发其下游的所有内容的警报。你应确保警报系统识别并抑制这些重复
+的相邻警报。
+·对原因而不是症状（symptom）进行警报。症状是应用程序停止工作的迹象，它们可能是由许多
+原因导致的各种问题的表现。API或网站的高延迟是一种症状，这种症状可能由许多问题导致：高数
+据库使用率、内存问题、磁盘性能等。对症状发送警报可以识别真正的问题。仅对原因（例如高数据
+库使用率）发出警报也可能识别出问题（但通常很可能不会）。对于这个应用程序，高数据库使用率
+可能是完全正常的，并且可能不会对最终用户或应用程序造成性能问题。作为一个内部状态，发送警
+报是没有意义的。这种警报可能会导致工程师错过更重要的问题，因为他们已经对大量不可操作且基
+于原因的警报变得麻木。你应该关注基于症状的警报，并依赖你的指标或其他诊断数据来确定原因。
+第二种最常见的反模式是警报的错误分类。有时，这也意味着重要的警报会隐藏在其他警报中。
+但有时候，警报会被发送到错误的地方或者带有不正确的紧急情况说明。
+第三种反模式是发送无用的警报，尤其当收件人通常是一个疲惫的、刚刚被叫醒的工程师（并且
+这可能是他在夜班中收到的第三个或第四个通知）时。以下是一个常见的Nagios警报的示例：
+代码清单6-1　Nagios警报
+
+这个通知似乎提供了一些有用的信息，但事实并非如此。这是由存储空间突增导致的？还是逐渐
+增长的结果？增长速度是多少？正如我们在第1章提到的，1 GB分区上9％的可用磁盘空间与1 TB磁盘
+上9％的可用磁盘空间完全不同。我们可以忽略或静音这类通知吗？还是需要立即采取行动？
+良好的警报应该具备以下几个关键特征：
+1.适当数量的警报，关注症状而不是原因。噪声警报会导致警报疲劳，最终警报会被忽略。修复
+警报不足比修复过度警报更容易。
+2.应设置正确的警报优先级。如果警报是紧急的，那么它应该快速路由到负责响应的一方。如果
+警报不紧急，那么我们应该以适当的速度发送警报，以便在需要时做出响应。
+3.警报应包括适当的上下文，以便它们立即可以使用。
+Google SRE手册中有一个很棒的关于警报的章节。
+现在，让我们来看看Alertmanager。
+
+6.2　Alertmanager如何工作
+Alertmanager[1]处理从客户端发来的警报，客户端通常是Prometheus服务器（如图6-1所示）。它
+还可以接收来自其他工具的警报，但这超出了本书讨论的范围。Alertmanager对警报进行去重、分组，
+然后路由到不同的接收器，如电子邮件、短信或SaaS服务（PagerDuty等）。你还可以使用Alertmanager
+管理维护。
+图6-1　Alertmanager架构
+我们将在Prometheus服务器上编写警报规则[2]，这些规则将使用我们收集的指标并在指定的阈值
+或标准上触发警报。我们还将看到如何为警报添加一些上下文。当指标达到阈值或标准时，会生成一
+个警报并将其推送到Alertmanager。警报在Alertmanager上的HTTP端点上接收。一个或多个Prometheus
+服务器可以将警报定向到单个Alertmanager，或者你可以创建一个高可用的Alertmanager集群，我们将
+在第7章进行介绍。
+收到警报后，Alertmanager会处理警报并根据其标签进行路由。一旦路径确定，它们将由
+Alertmanager发送到外部目的地，如电子邮件、短信或聊天工具。
+接下来，我们开始安装Alertmanager。
+
+[1] https://prometheus.io/docs/alerting/alertmanager/。
+[2] https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/。
+
+6.3　安装Alertmanager
+Alertmanager[1]是一个独立的Go二进制文件。在Prometheus.io下载页面[2]中包含特定平台的二进
+制文件，目前Alertmanager支持以下平台：
+·Linux：32位、64位和ARM。
+·Max OS X：32位和64位。
+·FreeBSD：32位、64位和ARM。
+·OpenBSD：32位、64位和ARM。
+·NetBSD：32位、64位和ARM。
+·Microsoft Windows：32位和64位。
+·DragonFly：64位。
+旧版本的Alertmanager可从GitHub Releases页面[3]获得。
+在撰写本书时，Alertmanager的版本为0.15.2。
+[1] https://github.com/prometheus/alertmanager。
+[2] https://prometheus.io/download/#alertmanager。
+[3] https://github.com/prometheus/alertmanager/releases。
+
+6.3.1　在Linux上安装Alertmanager
+要在64位Linux主机上安装Alertmanager，我们可以下载压缩的tar包。可以使用wget或curl从下载站
+点获取文件。
+代码清单6-2　下载Alertmanager tar包
+现在让我们从tar包解压alertmanager二进制文件，放在合适的目录下，并将其所有权更改为root用
+户。
+代码清单6-3　解压alertmanager二进制文件
+我们也将amtool二进制文件复制到对应的路径中。amtool二进制文件用于帮助管理Alertmanager，
+并可以从命令行安排维护窗口。
+代码清单6-4　移动amtool二进制文件
+我们现在可以通过检查其版本来测试Alertmanager是否安装成功。
+代码清单6-5　检查Linux上的Alertmanager版本
+同样的方法也适用于Mac OS X上Darwin版本的Alertmanager二进制文件。
+
+6.3.2　在Windows上安装Alertmanager
+要在Microsoft Windows上安装Alertmanager，我们需要下载alertmanager.exe可执行文件并将其放在
+一个目录中。让我们使用Powershell为可执行文件创建一个目录。
+代码清单6-6　在Windows上创建目录
+现在将来自GitHub的alertmanager.exe可执行文件下载到C:\alertmanager目录中：
+代码清单6-7　下载Windows版Alertmanager
+使用7-Zip等工具将可执行文件解压缩到C:\alertmanager目录中。最后，将C:\alertmanager目录添加
+到path环境变量中，这将允许Windows找到该可执行文件。为此，需要在Powershell中运行以下命令。
+代码清单6-8　设置path环境变量
+现在应该能够运行alertmanager.exe可执行文件。
+代码清单6-9　检查Windows上的Alertmanager版本
+
+6.3.3　通过监控套件安装Alertmanager
+我们在第3章介绍的通过监控套件安装的方式包含了Alertmanager安装。
+·使用Docker Compose安装Prometheus、Node Exporter和Grafana[1]。
+·使用Docker Compose单节点安装Prometheus、Alertmanager、Node Exporter和Grafana[2]。
+·使用Docker Swarm安装Prometheus[3]。
+[1] https://github.com/vegasbrianc/prometheus。
+[2] https://github.com/danguita/prometheus-monitoring-stack。
+[3] https://github.com/chmod666org/docker-swarm-prometheus。
+
+6.3.4　通过配置管理工具安装Alertmanager
+我们在第3章看到的一些配置管理模块也可以安装Alertmanager，你可以查看它们的功能，以确定
+它们是否支持Alertmanager的安装和配置。
+推荐使用配置管理工具来安装和管理Prometheus及其组件！
+
+6.4　配置Alertmanager
+与Prometheus一样，Alertmanager配置也是基于YAML的配置文件[1]。让我们创建一个新文件并进
+行填充。
+代码清单6-10　创建alertmanager.yml文件
+现在让我们为文件添加一些配置。我们的基本配置将通过电子邮件发送任何收到的警报。随着本
+章的内容逐渐展开，我们将以此配置作为基础不断扩展。
+代码清单6-11　一个简单的alertmanager.yml配置文件
+此配置文件包含一个基本设置，用于处理警报并通过电子邮件将其发送到一个地址。让我们依次
+看一下每个块的具体内容。
+第一个块global包含Alertmanager的全局配置。这些选项为所有其他块设置默认值，并在这些块中
+作为覆盖生效。在示例中，我们只是配置一些电子邮件和SMTP设置：发送电子邮件的邮件服务器、
+发送电子邮件的地址，并且我们禁用自动使用TLS的要求。
+上述配置假设SMTP服务器在localhost端口25上运行。
+template块包含保存警报模板[2]的目录列表。由于Alertmanager可以发送到各种目的地，因此你通
+常需要能够自定义警报的外观及其包含的数据。现在让我们创建这个目录。
+代码清单6-12　创建模板目录
+
+稍后我们会看到更多关于模板的内容。
+接下来，我们看看route块，它会告诉Alertmanager如何处理特定的传入警报。警报根据规则进行匹
+配然后采取相应的操作。你可以把路由想象成有树枝的树，每个警报都从树的根（基本路由或基本节
+点）进入（如图6-2所示）。除了基本节点之外，每个路由都有匹配的标准，这些标准应该匹配所有警
+报。然后，你可以定义子路由或子节点，它们是树的分支，对某些特定的警报感兴趣，或者会采取某
+些特定的操作。例如，来自特定集群的所有警报可能由特定的子路由处理。
+图6-2　Alertmanager路由
+
+在当前的配置中，我们只定义了基本路由，即树的根节点。在本章后面，我们将利用路由来确保
+警报具有正确的容量、频率和目的地。
+我们只定义了一个参数receiver。这是我们警报的默认目的地，在示例中是email电子邮件。接下来
+我们将定义该接收器。
+最后一个块receivers指定警报目的地。你可以通过电子邮件发送警报，或者发送到PagerDuty和
+VictorOps等服务，以及Slack和HipChat等聊天工具。这里我们只定义了一个目的地：一个电子邮件地
+址。
+每个接收器都有一个名称和相关配置。这里我们已经命名了接收器email。然后，我们为特定类型
+的接收器提供配置。
+对于电子邮件警报，我们使用email_configs块[3]来指定电子邮件选项，例如接收警报的地址。我
+们还可以指定SMTP设置（这将覆盖全局设置），并添加其他条目（例如邮件标头）。
+有一个称为Webhook接收器的内置接收器[4]，你可以使用它将警报发送到Alertmanager中没
+有特定接收器的其他目的地。
+现在Alertmanager已经配置完成，接下来让我们启动它。
+[1] https://prometheus.io/docs/alerting/configuration/。
+[2] https://prometheus.io/docs/alerting/notifications/。
+[3] https://prometheus.io/docs/alerting/configuration/#email_config。
+[4] https://prometheus.io/docs/alerting/configuration/#webhook_config。
+
+6.5　运行Alertmanager
+Alertmanager作为一个Web服务运行，默认端口为9093。其可通过在Linux和OS X上运行
+alertmanager二进制文件，或在Windows上运行alertmanager.exe可执行文件来启动，以指定我们刚刚创建
+的配置文件。现在让我们启动Alertmanager。
+代码清单6-13　启动Alertmanager
+我们使用--config.file参数指定了alertmanager.yml配置文件。Alertmanager提供了一个Web界面（如图
+6-3所示）：http://localhost:9093/。
+图6-3　Alertmanager Web界面
+你可以使用此界面来查看当前警报并管理维护窗口，以及警报抑制（在Prometheus术语中称为
+silence）。
+随Alertmanager一起附带的还有一个命令行工具amtool，允许你查询警报、管理silence和使用
+Alertmanager服务器等。
+现在让我们配置Prometheus以找到Alertmanager。
+
+6.6　为Prometheus配置Alertmanager
+让我们回到Prometheus配置，告诉Prometheus关于Alertmanager的信息。在第3章，我们在
+prometheus.yml配置文件中使用了默认的Alertmanager配置，它包含在alerting块中。让我们先来看看默
+认配置。
+代码清单6-14　alerting块
+alerting块包含允许Prometheus识别一个或多个Alertmanager的配置。为此，Prometheus使用与查找
+抓取目标时相同的发现机制，在默认配置中是static_configs。与监控作业一样，它指定目标列表，此处
+是主机名alertmanager加端口9093（Alertmanager默认端口）的形式。该列表假定你的Prometheus服务器
+可以解析alertmanager主机名为IP地址，并且Alertmanager在该主机的端口9093上运行。
+你还可以在Prometheus Web界面上的状态页面http://localhost:9090/status中查看任何已配置的
+Alertmanager。
+
+6.6.1　Alertmanager服务发现
+由于我们可以使用服务发现机制，因此也可以使用这些机制来识别一个或多个Alertmanager。让我
+们添加一条DNS SRV记录，让Prometheus发现Alertmanager。
+现在我们来创建该记录。
+代码清单6-15　Alertmanager SRV记录
+在这里，我们以SRV记录的形式指定了一个名为_alertmanager的TCP服务。我们的记录返回主机名
+alertmanager1.example.com和端口号9093，Prometheus将在此处找到正在运行的Alertmanager。让我们配
+置Prometheus服务器，以便在此进行搜索。
+代码清单6-16　发现Alertmanager
+在这里，Prometheus将查询_alertmanager._tcp.example.com SRV记录以获得Alertmanager的主机名。
+此外，我们也可以使用其他服务发现机制，让Prometheus识别Alertmanager。
+你需要重新加载或重新启动Prometheus，以启用Alertmanager配置。
+
+6.6.2　监控Alertmanager
+与Prometheus一样，Alertmanager暴露了自身的相关指标。让我们创建一个Prometheus作业来监控
+Alertmanager。
+代码清单6-17　监控Alertmanager的Prometheus作业
+这将从http://localhost:9093/metrics收集指标并抓取一系列以alertmanager_为前缀的时间序列数据。
+这些数据包括按状态分类的警报计数、按接收器分类的成功和失败通知的计数（例如，所有向email接
+收器发送失败的通知）。它还包含Alertmanager集群状态指标，我们将在第7章看到更多关于集群的内
+容。
+
+6.7　添加警报规则
+现在Alertmanager已经配置完成，让我们添加第一条警报规则。我们会根据第4章使用的节点查询
+来创建警报，并使用up指标来创建一些基本的可用性警报。
+与记录规则一样，警报规则在Prometheus服务器配置中加载的规则文件内也使用YAML语句定
+义。让我们在rules目录中创建一个新文件node_alerts.yml，以保存节点警报规则。
+你可以在同一文件中同时保存记录规则和警报规则，但为了功能清晰明确，建议将它们放在
+单独的文件中。
+代码清单6-18　创建警报规则文件
+不需要单独将此文件添加到prometheus.yml配置文件中的rule_files块，可以使用globbing通配符加
+载该目录中以_rules.yml或_alerts.yml结尾的所有文件。
+代码清单6-19　在rule_files块中添加globbing通配符
+可以看到，我们已经添加了一些配置，这些配置将使用正确的命名约定来加载所有文件。我们需
+要重新启动Prometheus服务器，以加载这个新的警报规则文件。
+
+6.7.1　添加第一条警报规则
+让我们添加第一条规则[1]：一个CPU警报规则。我们将创建一个警报，如果我们创建的CPU查询
+（5分钟内的节点平均CPU使用率）在至少60分钟内超过80％，则会触发警报。
+现在让我们看看这条规则。
+代码清单6-20　第一条警报规则
+与记录规则一样，警报规则也可以组合在一起。我们已经指定了一个组名node_alerts，该组中的
+规则包含在rules块中。每个规则都有一个名称，在alert子句中指定，这里是HighNodeCPU。在每个警
+报组中，警报名称都必须是唯一的。
+我们还有触发警报的测试或表达式，这在expr子句中指定。测试表达式使用我们在第4章用记录规
+则创建的instance:node_cpu:avg_rate5m指标。
+我们附加一个简单的检查：该指标是否大于80（或者说是80％使用率）。
+下一个子句for，控制在触发警报之前测试表达式必须为true的时间长度。在示例中，指标
+instance:node_cpu:avg_rate5m需要在触发警报之前的60分钟内大于80％。这限制了警报误报或是暂时状
+态的可能性。
+最后，我们可以使用标签（label）和注解（annotation）来装饰警报。警报规则中时间序列上的所
+有标签都会转移到警报。labels子句允许我们指定要附加到警报的其他标签，这里我们添加了一个值为
+warning的severity标签，很快我们就会看到如何使用这个标签。
+警报上的标签与警报的名称相结合，构成警报的标识。这与时间序列相同，其中指标名称和标签
+构成时间序列的标识。
+annotations子句允许我们指定展示更多信息的标签，如描述、运行手册的链接或处理警报的说
+
+明。我们添加了一个名为summary的标签来描述警报，还添加了一个名为console的注解，它指向了展
+示节点指标的Grafana仪表板。这是一个用注解提供上下文的很好的例子。
+现在我们需要重新加载Prometheus以启用新的警报规则。
+重新启动Prometheus后，你将能够在Prometheus Web界面http://localhost:9090/alerts中看到新的警报
+（如图6-4所示）。
+图6-4　Prometheus警报列表
+这既是警报规则的摘要，也是查看每个警报状态的方法，稍后我们会看到。
+[1] https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/。
+
+6.7.2　警报触发
+那么警报是如何发出的呢？Prometheus以一个固定时间间隔来评估所有规则，这个时间由
+evaluate_interval定义，我们将其设置为15秒。在每个评估周期，Prometheus运行每个警报规则中定义的
+表达式并更新警报状态。
+警报可能有以下三种状态：
+·Inactive：警报未激活。
+·Pending：警报已满足测试表达式条件，但仍在等待for子句中指定的持续时间。
+·Firing：警报已满足测试表达式条件，并且Pending的时间已超过for子句的持续时间。
+Pending到Firing的转换可以确保警报更有效，且不会来回浮动。没有for子句的警报会自动从
+Inactive转换为Firing，只需要一个评估周期即可触发。带有for子句的警报将首先转换为Pending，然后
+转换为Firing，因此至少需要两个评估周期才能触发。
+到目前为止，警报的生命周期如下：
+·节点的CPU不断变化，每隔一段由scrape_interval定义的时间被Prometheus抓取一次，对我们来说
+是15秒。
+·根据每个evaluation_interval的指标来评估警报规则，对我们来说还是15秒。
+·当警报表达式为true时（对于我们来说是CPU超过80％），会创建一个警报并转换到Pending状
+态，执行for子句。
+·在下一个评估周期中，如果警报测试表达式仍然为true，则检查for的持续时间。如果超过了持续
+时间，则警报将转换为Firing，生成通知并将其推送到Alertmanager。
+·如果警报测试表达式不再为true，则Prometheus会将警报规则的状态从Pending更改为Inactive。
+
+6.7.3　Alertmanager的警报
+我们的警报现在处于Firing状态，并且已将通知推送到Alertmanager。可以在Prometheus Web界
+面http://localhost:9090/alerts中看到这个警报及其状态。
+Alertmanager API在/api/v1/alerts路径接收警报。
+Prometheus将为Pending和Firing状态中的每个警报创建指标，这个指标被称为ALERT，并且会像
+HighNodeCPU警报示例那样构建。
+代码清单6-21　ALERT时间序列
+每个alert指标都具有固定值1，并且在警报处于Pending或Firing状态期间存在。在此之后，它将不
+接收任何更新，并且最终会过期。
+通知将被发送到Prometheus配置中定义的Alertmanager，在示例中是alertmanager主机和端口9093，
+通知被推送到如下HTTP端点：
+假设一个HighNodeCPU警报被触发了，我们将能在Alertmanager Web控制台
+http://alertmanager:9093/#/alerts上看到该警报（如图6-5所示）。
+
+图6-5　Alertmanager中触发的警报
+根据当前警报的标签，可以使用这个界面来进行搜索、查询和分组。
+在当前Alertmanager配置中，警报将立即发送到email接收器，并生成如图6-6所示的电子邮件。
+图6-6　HighNodeCPU警报邮件
+我们将在本章后面看到如何更新此模板。
+如果我们有很多团队，或者不同严重程度的警报，那么上面的内容似乎不太实用。这就是
+Alertmanager路由可以提供帮助的地方。
+
+6.7.4　添加新警报和模板
+为了有更多的警报可以路由，让我们快速添加一些其他警报规则到node_alerts.yml警报规则文件
+中。
+代码清单6-22　添加更多警报规则
+
+第一个警报复制了我们在第4章看到的predict_linear磁盘预测。这里，如果线性回归预测/根文件系
+统的磁盘空间将在4小时内耗尽，则会触发警报。你可能还会注意到，我们已在summary注解中添加了
+一些模板值。
+模板
+模板（template）是一种在警报中使用时间序列数据的标签和值的方法，可用于注解和标签。模板
+使用标准的Go模板语法，并暴露一些包含时间序列的标签和值的变量。标签以变量$labels形式表示，
+指标的值则是变量$value。
+变量$labels和$value分别是底层Go变量.Labels和.Value的名称。
+要在summary注解中引用instance标签，我们使用{{$labels.instance}}。如果想要引用时间序列的
+值，那么我们会使用{{$value}}。Prometheus还提供了一些其他功能，你可以在模板参考[1]中看到。其
+中一个例子是humanize函数[2]，它使用指标前缀将数字转换为更易于阅读的形式。例如：
+代码清单6-23　humanize示例
+这会将指标值显示为两位小数的百分比，例如88.23%。
+Prometheus警报
+
+我们应始终牢记：Prometheus服务器也可能出问题。让我们添加一些规则来识别问题并对它们发
+出警告。我们将在rules目录中创建一个新文件prometheus_alerts.yml以保存它们。因为这符合我们的
+glob规则，它也会被Prometheus加载。
+代码清单6-24　创建prometheus_alerts.yml文件
+让我们填充这个文件。
+代码清单6-25　prometheus_alerts.yml文件
+在这里，我们添加了两个新规则。第一个是PrometheusConfigReloadFailed，它让我们知道
+Prometheus配置重新加载是否失败。如果上次重新加载失败，则使用指标
+prometheus_config_last_reload_successful，且指标的值为0。
+第二条规则确保Prometheus服务器可以发现Alertmanager。这使用
+prometheus_notifications_alertmanagers_discovered指标，该指标是服务器找到的Alertmanager计数。如果
+小于1，则表面Prometheus没有发现任何Alertmanager，并且这个警报将会触发。由于没有任何
+Alertmanager，因此它只会显示在Prometheus控制台的/alerts页面上。
+可用性警报
+最后的警报可以帮助我们确定主机和服务的能力。第一个警报利用了我们使用Node Exporter收集
+的systemd指标。如果我们在节点上监控的服务不再活动，则会生成一个警报。
+代码清单6-26　节点服务警报
+
+如果带有active标签的node_systemd_unit_state指标值为0，则会触发此警报，表示服务故障至少60
+秒。
+下一个警报使用我们在第4章看到的up指标，该指标对于监控主机的可用性非常有用。但是它并
+不完美，因为我们真正监控的是作业对目标的抓取是否成功。然而，知道实例是否已停止响应抓取也
+是很有用的，这可能表明存在更严重的问题。为此，警报会检测up指标的值是否为0，如果是0则表示
+抓取失败。
+我们在severity标签中添加了一个新值critical，并添加了一个模板注解，以帮助指示哪个实例和作
+业失败。
+在许多情况下，知道单个实例宕机实际上并不是非常重要。相反，我们也可以测试多个失败的实
+例，例如，失败实例的百分比：
+这个测试表达式计算出up指标的平均值然后按job聚合，并在该值低于50％时触发。如果作业中
+50％的实例无法完成抓取，则会触发警报。
+另一种方法可能是：
+这里，我们根据job对up指标求和，然后将其除以计数，如果结果大于或等于0.8，或者特定作业
+中20％的实例未启动，则触发警报。
+通过确定目标何时消失，我们可以使up警报稍微健壮一些。例如，如果从服务发现中删除我们的
+目标，那么它的指标将不再更新。如果所有目标都从服务发现中消失，则不会记录任何指标，因此up
+警报不会被触发。Prometheus有一个功能叫absent，可检测是否存在缺失的指标。
+代码清单6-27　up指标缺失警报
+
+在这里，我们的表达式使用absent函数来检测节点作业中的up指标是否消失，如果消失，那么它
+将触发警报。
+另一种可用性监控方法是通过HTTP、HTTPS、DNS、TCP和ICMP来探测端点，我们将在
+第10章看到更多内容。
+最后，我们需要重新启动Prometheus服务器以加载这些新警报。
+[1] https://prometheus.io/docs/prometheus/latest/configuration/template_reference/。
+[2] https://prometheus.io/docs/prometheus/latest/configuration/template_reference/#numbers。
+
+6.8　路由
+现在我们已经选择了一些具有不同属性的警报，需要将它们路由到不同的目的地。我们之前发现
+路由是一棵树。顶部的默认路由总会被配置，并匹配任何子路由不匹配的内容。
+回到Alertmanager配置，让我们在alertmanager.yml文件中添加一些路由配置。
+代码清单6-28　添加路由配置
+可以看到，我们为默认路由添加了一些新选项。第一个选项group_by控制的是Alertmanager分组警
+报的方式。默认情况下，所有警报都组合在一起，但如果我们指定了group_by和任何标签，则
+Alertmanager将按这些标签对警报进行分组。例如，我们已经指定了instance标签，这意味着来自特定
+实例的所有警报将被分在一起。如果列出多个标签，则会在每个指定的标签值匹配时对警报进行分
+组，例如：
+代码清单6-29　分组
+这里，service和cluster标签的值需要与要分组的警报匹配。
+
+这仅适用于标签，不适用于注解。
+分组还会更改Alertmanager的行为。如果引发了新警报，那么Alertmanager将等待下一个选项
+group_wait中指定的时间段，以便在触发警报之前查看是否收到该组中的其他警报。你可以将其视为
+警报缓冲。在我们的例子中，这个等待时间是30秒。
+在发出警报后，如果收到来自该分组的下一次评估的新警报，那么Alertmanager将等待
+group_interval选项中指定的时间段（即5分钟），然后再发送新警报。这可以防止警报分组的警报泛
+滥。
+我们还指定了repeat_interval。这个暂停并不适用于我们的警报组，而是适用于单个警报，并且是
+等待重新发送相同警报的时间段，我们指定为3个小时。
+路由表
+然后我们列出了分支路由。第一条路由使用了我们定义的新接收器pager，这会将此路由上的警报
+发送到新的电子邮件地址。它使用match选项查找要发送的特定警报。这里有两种匹配方法：标签匹配
+和正则表达式匹配。match选项执行简单的标签匹配。
+代码清单6-30　标签匹配
+在这里，我们将所有severity标签与critical值匹配，并将它们发送到pager接收器。
+由于路由都是分支，因此，如果需要我们也可以再次分支路由。例如：
+代码清单6-31　路由分支
+可以看到我们的新routes块嵌套在已有的route块中。要触发此路由，我们的警报首先需要severity
+标签为critical，并且service标签是application1。如果这两个条件都匹配，那么我们的警报将被路由到接
+收器support_team。
+我们也可以根据需要尽可能地嵌套路由。默认情况下，与该路由匹配的任何警报都由该路由处
+理。但是，我们可以使用continue选项来覆盖此行为，该选项控制警报是否先遍历路由，然后再返回以
+遍历路由树。
+
+Alertmanager路由是后序遍历的。
+代码清单6-32　路由分支
+continue选项默认为false，但如果设置为true，则警报将在此路由中触发（如果匹配），并继续执
+行下一个相邻路由。有时这对于向两个地方发送警报很有用，但更好的解决方法是在接收器中指定多
+个端点，例如：
+代码清单6-33　接收器中的多个端点
+这会添加第二个pagerduty_configs块，该块既可以将警报发送到PagerDuty，也可以发送电子邮
+件。我们可以指定任何可用的接收器，例如，可以向Slack等聊天服务发送电子邮件和消息。
+你是否习惯查看已解决的警报？这些是警报条件解决后生成的警报。通过在接收器配置中将
+send_resolved选项设置为true，可以使用Alertmanager发送它们。通常不建议发送这些已解决的警报，
+因为其可能导致“错误警报”的循环，进而导致警报疲劳，所以在启用之前要仔细考虑。
+我们的第二个路由使用match_re选项将正则表达式与标签匹配，正则表达式使用severity标签。
+代码清单6-34　正则表达式匹配
+Prometheus和Alertmanager正则表达式都是完全锚定的。
+它匹配severity标签中的informational或warning值。
+在重新加载或重新启动Alertmanager以加载新路由后，你可以尝试触发警报并查看路由的情况。
+
+6.9　接收器和通知模板
+现在已经有了一些基本规则，让我们添加一个非电子邮件的接收器[1]。我们将添加Slack接收器，
+它会消息发送到Slack实例。让我们在alertmanager.yml配置文件中查看新接收器配置。
+首先，我们将为pager接收器添加一个Slack配置。
+代码清单6-35　添加Slack接收器
+现在，任何向pager接收器发送警报的路由都将被发送到Slack的#monitoring频道，并通过电子邮件
+发送到alert-pager@example.com。
+Alertmanager发送给Slack的一般警报消息非常简单。你可以在其源代码[2]中看到Alertmanager使用
+的默认模板，该模板包含电子邮件和其他接收器的默认值，但是我们可以为许多接收器覆盖这些值。
+例如，可以在Slack警报中添加文本行。
+代码清单6-36　添加Slack接收器
+Alertmanager自定义通知使用Go模板语法。警报中包含的数据也通过变量暴露。我们使用
+CommonAnnotations变量，该变量包含一组警报通用的注解集。我们使用summary注解作为Slack通知的
+文本。
+你可以在Alertmanager文档[3]中找到通知模板变量的完整参考。
+我们还可以使用Go template函数来引用外部模板，从而避免在配置文件中嵌入较长且复杂的字符
+串。我们在本章前面引用了模板目录，目录位于/etc/alertmanager/templates/。让我们在这个目录中创建
+一个模板。
+代码清单6-37　创建模板文件
+
+接下来让我们填充这个文件。
+代码清单6-38　slack.tmpl文件
+这里我们使用define函数定义了一个新模板，以end结尾，并取名为slack.example.text，然后在模板
+内的text中复制内容。我们现在可以在Alertmanager配置中引用该模板。
+代码清单6-39　添加Slack接收器
+我们使用了template选项来指定模板的名称。现在将使用模板通知来填充text字段，这对于使用上
+下文装饰通知很有用。
+Alertmanager文档中还有一些其他的通知模板示例[4]。
+[1] https://prometheus.io/docs/alerting/configuration/#note_116Cslack_confignote_116E。
+[2] https://github.com/prometheus/alertmanager/blob/master/template/default.tmpl。
+[3] https://prometheus.io/docs/alerting/notifications/。
+[4] https://prometheus.io/docs/alerting/notification_examples/。
+
+6.10　silence和维护
+通常我们需要让警报系统知道我们已经停止服务以进行维护，并且不希望触发警报。或者，当上
+游出现问题时，我们需要将下游服务和应用程序“静音”。Prometheus称这种警报静音为silence。silence
+可以设定为特定时期，例如一小时，或者是一个时间窗口（如直到今天午夜）。这是silence的到期时
+间或到期日期。如果需要，我们也可以提前手动让silence过期（如果我们的维护比计划提前完成）。
+可以使用以下两种方法来设置silence：
+·通过Alertmanager Web控制台；
+·通过amtool命令行工具。
+
+6.10.1　通过Alertmanager控制silence
+第一种方法是使用Web界面，单击New Silence按钮（如图6-7所示）。
+图6-7　安排silence
+silence指定开始时间、结束时间或持续时间。通过使用标签匹配警报来识别要静音的警报，就像
+警报路由一样。你可以使用直接匹配，例如匹配具有特定值的标签的每个警报，或者可以使用正则表
+达式匹配。你还需要指定silence的创建者和注释，以说明警报被静音的原因（如图6-8所示）。
+
+图6-8　新建silence
+我们单击Create按钮以创建新silence，也可以使用Preview Alerts来查看是否有警报会被静音。一旦
+创建完成，我们就可以编辑silence或者使其过期以消除静音（如图6-9所示）。
+通过单击Alertmanager顶部菜单中的Silences菜单项，你就可以在Web界面中看到当前定义的silence
+列表。
+你也可以参考使用一个名为Unsee[1]的Alertmanager控制台。
+
+图6-9　编辑silence或者使其过期
+[1] https://github.comm/clouldflare/unsee
+
+6.10.2　通过amtool控制silence
+第二种方法是使用amtool命令行。amtool二进制文件随Alertmanager安装tar包附带，我们在本章前
+面安装Alertmanager时安装了它。
+代码清单6-40　使用amtool设置silence
+这将在Alertmanager的http://localhost:9093上添加一个新silence，它将警报与两个标签匹配：自动填
+充包含警报名称的alertname标签；以及我们设置的service标签。
+使用amtool创建的silence被设置为一小时后自动过期，可以使用--expires和--expire-on参数来
+指定更长的时间或窗口。
+这将返回一个silence ID，你可以使用该ID，以在稍后处理silence。示例中ID为：
+我们可以使用query子命令来查询当前silence列表。
+代码清单6-41　查询silence
+这将返回silence列表及其配置，你可以通过ID来使特定的silence过期。
+代码清单6-42　使silence过期
+这将使Alertmanager上的silence失效。
+你可以为某些选项创建一个YAML配置文件，而不必每次都指定--alertmanager.url参数。amtool查找
+的默认配置文件路径是$HOME/.config/amtool/config.yml或/etc/amtool/config.yml。我们来看一个示例文
+件。
+代码清单6-43　amtool配置文件示例
+
+可以看到我们已经添加了一个Alertmanager，同时还指定了author属性，这是silence的创建者，它
+的默认值为本地用户名，你可以使用这样的方式来编辑author，或者在命令行上使用-a或--author参
+数。comment_required参数控制silence是否需要注释来说明它的作用。
+你可以在配置文件中指定所有amtool参数，但有些参数可能没有太大意义。
+回到silence的创建，在创建silence时，你还可以使用正则表达式作为标签值。
+代码清单6-44　使用amtool来安排silence
+这里我们使用=~来表示标签匹配是一个正则表达式，并在所有警报上匹配一个以Instance开头的
+alertname。我们还使用了--comment参数来添加有关警报的信息。
+我们还可以控制silence的更多细节，如下所示：
+代码清单6-45　忽略alertname
+这里，我们用--author参数覆盖了silence的创建者，并将持续时间指定为两小时，而不是默认的一
+小时。
+amtool还允许我们使用Alertmanager并验证其配置文件，以及其他有用的任务。你可以通过使
+用--help参数查看命令行参数的完整列表，还可以通过amtool silence --help获得特定子命令的帮助。此
+外，你可以使用Github上的说明[1]完成命令行自动补全和帮助页生成。
+[1] https://github.com/prometheus/alertmanager/blob/master/cmd/amtool/README.md。
+
+6.11　小结
+在本章中，我们快速介绍了与Prometheus和Alertmanager警报相关的内容。
+我们谈到了一个好的警报的设计规则。接着，我们在各种平台上安装Alertmanager并对其进行配
+置。
+然后，我们了解了如何使用时间序列作为警报源，以及如何使用警报规则生成这些警报。同时也
+了解到如何直接使用时间序列，或者如何构建表达式来分析时间序列数据，以识别警报条件。我们还
+了解了如何添加新标签，以及如何利用附加信息和上下文来装饰警报。
+最后，我们还学习了如何使用silence控制警报，以便在维护窗口或中断期间对警报静音。
+在下一章中，我们将了解如何使Prometheus和Alertmanager更具弹性和可扩展性，还将了解如何通
+过将指标发送到远端目的地来延长指标的保留期。

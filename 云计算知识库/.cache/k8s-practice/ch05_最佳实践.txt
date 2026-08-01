@@ -1,0 +1,2059 @@
+服务高可用
+本地 DNS 缓存
+泛域名动态转发 Service
+集群权限控制
+实用工具和技巧
+证书管理
+集群配置管理
+大规模集群优化
+最佳实践
+- 98 -
+本文档使用 书栈(BookStack.CN) 构建
+
+为了提高服务容错能力，我们通常会设置  replicas  给服务创建多个副本，但这并不意味着服务就
+实现高可用了，下面来介绍服务高可用部署最佳实践。
+k8s 的设计就是假设节点是不可靠的，节点越多，发生软硬件故障导致节点不可用的几率就越高，所以
+我们通常需要给服务部署多个副本，根据实际情况调整  replicas  的值，如果值为 1 就必然存在
+单点故障，如果大于 1 但所有副本都调度到同一个节点，那还是有单点故障，所以我们不仅要有合理
+的副本数量，还需要让这些不同副本调度到不同的节点，打散开来避免单点故障，这个可以利用反亲和
+性来实现，示例:
+1. affinity:
+2.  podAntiAffinity:
+3.    requiredDuringSchedulingIgnoredDuringExecution:
+4.    - weight: 100
+5.      labelSelector:
+6.        matchExpressions:
+7.        - key: k8s-app
+8.          operator: In
+9.          values:
+10.          - kube-dns
+11.      topologyKey: kubernetes.io/hostname
+ requiredDuringSchedulingIgnoredDuringExecution  调度时必须满足该反亲和性条件，如果
+没有节点满足条件就不调度到任何节点 (Pending)。如果不用这种硬性条件可以使用
+ preferredDuringSchedulingIgnoredDuringExecution  来指示调度器尽量满足反亲和性条
+件，如果没有满足条件的也可以调度到某个节点。
+ labelSelector.matchExpressions  写该服务对应 pod 中 labels 的 key 与 value。
+ topologyKey  这里用  kubernetes.io/hostname  表示避免 pod 调度到同一节点，如果你
+有更高的要求，比如避免调度到同一个可用区，实现异地多活，可以用  failure-
+domain.beta.kubernetes.io/zone 。通常不会去避免调度到同一个地域，因为一般同一个集群
+的节点都在一个地域，如果跨地域，即使用专线时延也会很大，所以  topologyKey  一般不至
+于用  failure-domain.beta.kubernetes.io/region 。
+服务高可用
+" class="reference-link">使用反亲和性避免单点
+故障
+" class="reference-link">使用
+服务高可用
+- 99 -
+本文档使用 书栈(BookStack.CN) 构建
+
+驱逐节点是一种有损操作，驱逐的原理:
+1. 封锁节点 (设为不可调度，避免新的 Pod 调度上来)。
+2. 将该节点上的 Pod 删除。
+3. ReplicaSet 控制器检测到 Pod 减少，会重新创建一个 Pod，调度到新的节点上。
+这个过程是先删除，再创建，并非是滚动更新，因此更新过程中，如果一个服务的所有副本都在被驱逐
+的节点上，则可能导致该服务不可用。
+我们再来下什么情况下驱逐会导致服务不可用:
+1. 服务存在单点故障，所有副本都在同一个节点，驱逐该节点时，就可能造成服务不可用。
+2. 服务在多个节点，但这些节点都被同时驱逐，所以这个服务的所有服务同时被删，也可能造成服
+务不可用。
+针对第一点，我们可以 使用反亲和性避免单点故障。
+针对第二点，我们可以通过配置 PDB (PodDisruptionBudget) 来避免所有副本同时被删除，下面
+给出示例。
+示例一 (保证驱逐时 zookeeper 至少有两个副本可用):
+1. apiVersion: policy/v1beta1
+2. kind: PodDisruptionBudget
+3. metadata:
+4.   name: zk-pdb
+5. spec:
+6.   minAvailable: 2
+7.   selector:
+8.     matchLabels:
+9.       app: zookeeper
+示例二 (保证驱逐时 zookeeper 最多有一个副本不可用，相当于逐个删除并在其它节点重建):
+1. apiVersion: policy/v1beta1
+2. kind: PodDisruptionBudget
+3. metadata:
+4.   name: zk-pdb
+5. spec:
+6.   maxUnavailable: 1
+7.   selector:
+PodDisruptionBudget 避免驱逐导致服务不可用
+服务高可用
+- 100 -
+本文档使用 书栈(BookStack.CN) 构建
+
+8.     matchLabels:
+9.       app: zookeeper
+更多请参考官方文档: https://kubernetes.io/docs/tasks/run-
+application/configure-pdb/
+如果服务不做配置优化，默认情况下更新服务期间可能会导致部分流量异常，下面我们来分析并给出最
+佳实践。
+我们先看下服务更新有哪些场景:
+手动调整服务的副本数量
+手动删除 Pod 触发重新调度
+驱逐节点 (主动或被动驱逐，Pod会先删除再在其它节点重建)
+触发滚动更新 (比如修改镜像 tag 升级程序版本)
+HPA (HorizontalPodAutoscaler) 自动对服务进行水平伸缩
+VPA (VerticalPodAutoscaler) 自动对服务进行垂直伸缩
+滚动更新时，Service 对应的 Pod 会被创建或销毁，Service 对应的 Endpoint 也会新增或移
+除相应的 Pod IP:Port，然后 kube-proxy 会根据 Service 的 Endpoint 里的 Pod
+IP:Port 列表更新节点上的转发规则，而这里 kube-proxy 更新节点转发规则的动作并不是那么及
+时，主要是由于 K8S 的设计理念，各个组件的逻辑是解耦的，各自使用 Controller 模式
+listAndWatch 感兴趣的资源并做出相应的行为，所以从 Pod 创建或销毁到 Endpoint 更新再到
+节点上的转发规则更新，这个过程是异步的，所以会造成转发规则更新不及时，从而导致服务更新期间
+部分连接异常。
+我们分别分析下 Pod 创建和销毁到规则更新期间的过程:
+1. Pod 被创建，但启动速度没那么快，还没等到 Pod 完全启动就被 Endpoint Controller
+加入到 Service 对应 Endpoint 的 Pod IP:Port 列表，然后 kube-proxy watch 到
+更新也同步更新了节点上的 Service 转发规则 (iptables/ipvs)，如果这个时候有请求过
+来就可能被转发到还没完全启动完全的 Pod，这时 Pod 还不能正常处理请求，就会导致连接被
+拒绝。
+2. Pod 被销毁，但是从 Endpoint Controller watch 到变化并更新 Service 对应
+" class="reference-link">使用 preStopHook 和
+readinessProbe 保证服务平滑更新不中断
+服务更新场景
+更新过程连接异常的原因
+服务高可用
+- 101 -
+本文档使用 书栈(BookStack.CN) 构建
+
+Endpoint 再到 kube-proxy 更新节点转发规则这期间是异步的，有个时间差，Pod 可能已
+经完全被销毁了，但是转发规则还没来得及更新，就会造成新来的请求依旧还能被转发到已经被
+销毁的 Pod，导致连接被拒绝。
+针对第一种情况，可以给 Pod 里的 container 加 readinessProbe (就绪检查)，通常是
+容器完全启动后监听一个 HTTP 端口，kubelet 发就绪检查探测包，正常响应说明容器已经就
+绪，然后修改容器状态为 Ready，当 Pod 中所有容器都 Ready 了这个 Pod 才会被
+Endpoint Controller 加进 Service 对应 Endpoint IP:Port 列表，然后 kube-
+proxy 再更新节点转发规则，更新完了即便立即有请求被转发到的新的 Pod 也能保证能够正常
+处理连接，避免了连接异常。
+针对第二种情况，可以给 Pod 里的 container 加 preStop hook，让 Pod 真正销毁前先
+sleep 等待一段时间，留点时间给 Endpoint controller 和 kube-proxy 更新
+Endpoint 和转发规则，这段时间 Pod 处于 Terminating 状态，即便在转发规则更新完全
+之前有请求被转发到这个 Terminating 的 Pod，依然可以被正常处理，因为它还在 sleep，
+没有被真正销毁。
+最佳实践 yaml 示例:
+1. apiVersion: extensions/v1beta1
+2. kind: Deployment
+3. metadata:
+4.   name: nginx
+5. spec:
+6.   replicas: 1
+7.   selector:
+8.     matchLabels:
+9.       component: nginx
+10.   template:
+11.     metadata:
+12.       labels:
+13.         component: nginx
+14.     spec:
+15.       containers:
+16.       - name: nginx
+17.         image: "nginx"
+18.         ports:
+19.         - name: http
+20.           hostPort: 80
+21.           containerPort: 80
+22.           protocol: TCP
+" class="reference-link">平滑更新最佳实践
+服务高可用
+- 102 -
+本文档使用 书栈(BookStack.CN) 构建
+
+23.         readinessProbe:
+24.           httpGet:
+25.             path: /healthz
+26.             port: 80
+27.             httpHeaders:
+28.             - name: X-Custom-Header
+29.               value: Awesome
+30.           initialDelaySeconds: 15
+31.           timeoutSeconds: 1
+32.         lifecycle:
+33.           preStop:
+34.             exec:
+35.               command: ["/bin/bash", "-c", "sleep 30"]
+Container probes:
+https://kubernetes.io/docs/concepts/workloads/pods/pod-
+lifecycle/#container-probes
+Container Lifecycle Hooks:
+https://kubernetes.io/docs/concepts/containers/container-lifecycle-
+hooks/
+在现网运营中，有很多场景为了提高效率，一般都采用建立长连接的方式来请求。我们发现在客户端以
+长连接请求服务端的场景下，K8S的自动扩容会失效。原因是客户端长连接一直保留在老的Pod容器
+中，新扩容的Pod没有新的连接过来，导致K8S按照步长扩容第一批Pod之后就停止了扩容操作，而且新
+扩容的Pod没能承载请求，进而出现服务过载的情况，自动扩容失去了意义。
+对长连接扩容失效的问题，我们的解决方法是将长连接转换为短连接。我们参考了 nginx
+keepalive 的设计，nginx 中 keepalive_requests 这个配置项设定了一个TCP连接能处理的最
+大请求数，达到设定值(比如1000)之后服务端会在 http 的 Header 头标记
+“ Connection:close ”，通知客户端处理完当前的请求后关闭连接，新的请求需要重新建立TCP连
+接，所以这个过程中不会出现请求失败，同时又达到了将长连接按需转换为短连接的目的。通过这个办
+法客户端和云K8S服务端处理完一批请求后不断的更新TCP连接，自动扩容的新Pod能接收到新的连接请
+求，从而解决了自动扩容失效的问题。
+由于Golang并没有提供方法可以获取到每个连接处理过的请求数，我们重写了  net.Listener  和
+参考资料
+" class="reference-link">解决长连接服务扩容失
+效
+服务高可用
+- 103 -
+本文档使用 书栈(BookStack.CN) 构建
+
+ net.Conn ，注入请求计数器，对每个连接处理的请求做计数，并通过  net.Conn.LocalAddr() 
+获得计数值，判断达到阈值 1000 后在返回的 Header 中插入 “ Connection:close ” 通知客户
+端关闭连接，重新建立连接来发起请求。以上处理逻辑用 Golang 实现示例代码如下：
+1. package main
+2. 
+3. import (
+4.     "net"
+5.     "github.com/gin-gonic/gin"
+6.     "net/http"
+7. )
+8. 
+9. // 重新定义net.Listener
+10. type counterListener struct {
+11.     net.Listener
+12. }
+13. 
+14. // 重写net.Listener.Accept(),对接收到的连接注入请求计数器
+15. func (c *counterListener) Accept() (net.Conn, error) {
+16.     conn, err := c.Listener.Accept()
+17.     if err != nil {
+18.         return nil, err
+19.     }
+20.     return &counterConn{Conn: conn}, nil
+21. }
+22. 
+23. // 定义计数器counter和计数方法Increment()
+24. type counter int
+25. 
+26. func (c *counter) Increment() int {
+27.     *c++
+28.     return int(*c)
+29. }
+30. 
+31. // 重新定义net.Conn,注入计数器ct
+32. type counterConn struct {
+33.     net.Conn
+34.     ct counter
+35. }
+36. 
+37. // 重写net.Conn.LocalAddr()，返回本地网络地址的同时返回该连接累计处理过的请求数
+38. func (c *counterConn) LocalAddr() net.Addr {
+服务高可用
+- 104 -
+本文档使用 书栈(BookStack.CN) 构建
+
+39.     return &counterAddr{c.Conn.LocalAddr(), &c.ct}
+40. }
+41. 
+42. // 定义TCP连接计数器,指向连接累计请求的计数器
+43. type counterAddr struct {
+44.     net.Addr
+45.     *counter
+46. }
+47. 
+48. func main() {
+49.     r := gin.New()
+50.     r.Use(func(c *gin.Context) {
+51.         localAddr := c.Request.Context().Value(http.LocalAddrContextKey)
+52.         if ct, ok := localAddr.(interface{ Increment() int }); ok {
+53.             if ct.Increment() >= 1000 {
+54.                 c.Header("Connection", "close")
+55.             }
+56.         }
+57.         c.Next()
+58.     })
+59.     r.GET("/", func(c *gin.Context) {
+60.         c.String(200, "plain/text", "hello")
+61.     })
+62.     l, err := net.Listen("tcp", ":8080")
+63.     if err != nil {
+64.         panic(err)
+65.     }
+66.     err = http.Serve(&counterListener{l}, r)
+67.     if err != nil {
+68.         panic(err)
+69.     }
+70. }
+服务高可用
+- 105 -
+本文档使用 书栈(BookStack.CN) 构建
+
+减轻集群 DNS 解析压力，提高 DNS 性能
+避免 netfilter 做 DNAT 导致 conntrack 冲突引发 DNS 5 秒延时
+镜像底层库 DNS 解析行为默认使用 UDP 在同一个 socket 并发 A 和 AAAA 记录请求，由于 UDP
+无状态，两个请求可能会并发创建 conntrack 表项，如果最终 DNAT 成同一个集群 DNS 的 Pod IP
+就会导致 conntrack 冲突，由于 conntrack 的创建和插入是不加锁的，最终后面插入的
+conntrack 表项就会被丢弃，从而请求超时，默认 5s 后重试，造成现象就是 DNS 5 秒延时; 底层
+库是 glibc 的容器镜像可以通过配 resolv.conf 参数来控制 DNS 解析行为，不用 TCP 或者避免
+相同五元组并发(使用串行解析 A 和 AAAA 避免并发或者使用不同 socket 发请求避免相同源端口)，
+但像基于 alpine 镜像的容器由于底层库是 musl libc，不支持这些 resolv.conf 参数，也就无
+法规避，所以最佳方案还是使用本地 DNS 缓存。
+本地 DNS 缓存以 DaemonSet 方式在每个节点部署一个使用 hostNetwork 的 Pod，创建一个网
+卡绑上本地 DNS 的 IP，本机的 Pod 的 DNS 请求路由到本地 DNS，然后取缓存或者继续使用
+TCP 请求上游集群 DNS 解析 (由于使用 TCP，同一个 socket 只会做一遍三次握手，不存在并发
+创建 conntrack 表项，也就不会有 conntrack 冲突)
+有两点需要注意下:
+1. ipvs 模式下需要改 kubelet  --cluster-dns  参数，指向一个非 kube-dns service 的
+IP，通常用  169.254.20.10 ，Daemonset 会在每个节点创建一个网卡绑这个 IP，Pod 向
+本节点这个 IP 发 DNS 请求，本机 DNS 再代理到上游集群 DNS
+2. iptables 模式下不需要改 kubelet  --cluster-dns  参数，Pod 还是向原来的集群 DNS
+请求，节点上有这个 IP 监听，被本机拦截，再请求集群上游 DNS (使用集群 DNS 的另一个
+CLUSTER IP，来自事先创建好的 Service，跟原集群 DNS 的 Service 有相同的
+selector 和 endpoint)
+ipvs 模式下必须修改 kubelet 参数的原因是：如果不修改，DaemonSet Pod 在本机创建了网
+卡，会绑跟集群 DNS 的 CLUSTER IP， 但 kube-ipvs0 这个 dummy interface 上也会绑这
+个 IP (这是 ipvs 的机制，为了能让报文到达 INPUT 链被 ipvs 处理)，所以 Pod 请求集群
+本地 DNS 缓存
+为什么需要本地 DNS 缓存
+原理
+IVPS 模式下需要修改 kubelet 参数
+本地 DNS 缓存
+- 106 -
+本文档使用 书栈(BookStack.CN) 构建
+
+DNS 的报文最终还是会被 ipvs 处理, DNAT 成集群 DNS 的 Pod IP，最终路由到集群 DNS，相
+当于本机 DNS 就没有作用了。
+这里我们假设是 ipvs 模式，下面给出本地 DNS 缓存部署方法。
+创建 ServiceAccount 与集群上游 DNS 的 Service:
+1. cat <<EOF | kubectl apply -f -
+2. apiVersion: v1
+3. kind: ServiceAccount
+4. metadata:
+5.   name: node-local-dns
+6.   namespace: kube-system
+7.   labels:
+8.     kubernetes.io/cluster-service: "true"
+9.     addonmanager.kubernetes.io/mode: Reconcile
+10. ---
+11. apiVersion: v1
+12. kind: Service
+13. metadata:
+14.   name: kube-dns-upstream
+15.   namespace: kube-system
+16.   labels:
+17.     k8s-app: kube-dns
+18.     kubernetes.io/cluster-service: "true"
+19.     addonmanager.kubernetes.io/mode: Reconcile
+20.     kubernetes.io/name: "KubeDNSUpstream"
+21. spec:
+22.   ports:
+23.   - name: dns
+24.     port: 53
+25.     protocol: UDP
+26.     targetPort: 53
+27.   - name: dns-tcp
+28.     port: 53
+29.     protocol: TCP
+30.     targetPort: 53
+31.   selector:
+32.     k8s-app: kube-dns
+33. EOF
+IPVS 模式下部署方法
+本地 DNS 缓存
+- 107 -
+本文档使用 书栈(BookStack.CN) 构建
+
+获取  kube-dns-upstream  的 CLUSTER IP:
+1. 
+UPSTREAM_CLUSTER_IP=$(kubectl -n kube-system get services kube-dns-upstream -o 
+jsonpath="{.spec.clusterIP}")
+部署 DaemonSet:
+1. cat <<EOF | kubectl apply -f -
+2. apiVersion: v1
+3. kind: ConfigMap
+4. metadata:
+5.   name: node-local-dns
+6.   namespace: kube-system
+7.   labels:
+8.     addonmanager.kubernetes.io/mode: Reconcile
+9. data:
+10.   Corefile: |
+11.     cluster.local:53 {
+12.         errors
+13.         cache {
+14.                 success 9984 30
+15.                 denial 9984 5
+16.         }
+17.         reload
+18.         loop
+19.         bind 169.254.20.10
+20.         forward . ${UPSTREAM_CLUSTER_IP} {
+21.                 force_tcp
+22.         }
+23.         prometheus :9253
+24.         health 169.254.20.10:8080
+25.         }
+26.     in-addr.arpa:53 {
+27.         errors
+28.         cache 30
+29.         reload
+30.         loop
+31.         bind 169.254.20.10
+32.         forward . ${UPSTREAM_CLUSTER_IP} {
+33.                 force_tcp
+34.         }
+本地 DNS 缓存
+- 108 -
+本文档使用 书栈(BookStack.CN) 构建
+
+35.         prometheus :9253
+36.         }
+37.     ip6.arpa:53 {
+38.         errors
+39.         cache 30
+40.         reload
+41.         loop
+42.         bind 169.254.20.10
+43.         forward . ${UPSTREAM_CLUSTER_IP} {
+44.                 force_tcp
+45.         }
+46.         prometheus :9253
+47.         }
+48.     .:53 {
+49.         errors
+50.         cache 30
+51.         reload
+52.         loop
+53.         bind 169.254.20.10
+54.         forward . /etc/resolv.conf {
+55.                 force_tcp
+56.         }
+57.         prometheus :9253
+58.         }
+59. ---
+60. apiVersion: apps/v1
+61. kind: DaemonSet
+62. metadata:
+63.   name: node-local-dns
+64.   namespace: kube-system
+65.   labels:
+66.     k8s-app: node-local-dns
+67.     kubernetes.io/cluster-service: "true"
+68.     addonmanager.kubernetes.io/mode: Reconcile
+69. spec:
+70.   updateStrategy:
+71.     rollingUpdate:
+72.       maxUnavailable: 10%
+73.   selector:
+74.     matchLabels:
+75.       k8s-app: node-local-dns
+76.   template:
+本地 DNS 缓存
+- 109 -
+本文档使用 书栈(BookStack.CN) 构建
+
+77.     metadata:
+78.        labels:
+79.           k8s-app: node-local-dns
+80.     spec:
+81.       priorityClassName: system-node-critical
+82.       serviceAccountName: node-local-dns
+83.       hostNetwork: true
+84.       dnsPolicy: Default  # Don't use cluster DNS.
+85.       tolerations:
+86.       - key: "CriticalAddonsOnly"
+87.         operator: "Exists"
+88.       containers:
+89.       - name: node-cache
+90.         image: k8s.gcr.io/k8s-dns-node-cache:1.15.7
+91.         resources:
+92.           requests:
+93.             cpu: 25m
+94.             memory: 5Mi
+95. 
+        args: [ "-localip", "169.254.20.10", "-conf", "/etc/Corefile", "-
+upstreamsvc", "kube-dns-upstream" ]
+96.         securityContext:
+97.           privileged: true
+98.         ports:
+99.         - containerPort: 53
+100.           name: dns
+101.           protocol: UDP
+102.         - containerPort: 53
+103.           name: dns-tcp
+104.           protocol: TCP
+105.         - containerPort: 9253
+106.           name: metrics
+107.           protocol: TCP
+108.         livenessProbe:
+109.           httpGet:
+110.             host: 169.254.20.10
+111.             path: /health
+112.             port: 8080
+113.           initialDelaySeconds: 60
+114.           timeoutSeconds: 5
+115.         volumeMounts:
+116.         - mountPath: /run/xtables.lock
+117.           name: xtables-lock
+本地 DNS 缓存
+- 110 -
+本文档使用 书栈(BookStack.CN) 构建
+
+118.           readOnly: false
+119.         - name: config-volume
+120.           mountPath: /etc/coredns
+121.         - name: kube-dns-config
+122.           mountPath: /etc/kube-dns
+123.       volumes:
+124.       - name: xtables-lock
+125.         hostPath:
+126.           path: /run/xtables.lock
+127.           type: FileOrCreate
+128.       - name: kube-dns-config
+129.         configMap:
+130.           name: kube-dns
+131.           optional: true
+132.       - name: config-volume
+133.         configMap:
+134.           name: node-local-dns
+135.           items:
+136.             - key: Corefile
+137.               path: Corefile.base
+138. EOF
+验证是否启动:
+1. $ kubectl -n kube-system get pod -o wide | grep node-local-dns
+2. 
+node-local-dns-2m9b6               1/1       Running   0          15m       
+10.0.0.28    10.0.0.28
+3. 
+node-local-dns-qgrwl               1/1       Running   0          15m       
+10.0.0.186   10.0.0.186
+4. 
+node-local-dns-s5mhw               1/1       Running   0          51s       
+10.0.0.76    10.0.0.76
+我们需要替换 kubelet 的  --cluster-dns  参数，指向  169.254.20.10  这个 IP。
+在TKE上，对于存量节点，登录节点执行以下命令:
+1. 
+sed -i '/CLUSTER_DNS/c\CLUSTER_DNS="--cluster-dns=169.254.20.10"' 
+/etc/kubernetes/kubelet
+2. systemctl restart kubelet
+对于增量节点，可以将上述命令放入新增节点的 user-data，以便加入节点后自动执行。
+后续新增才会用到本地 DNS 缓存，对于存量 Pod 可以销毁重建，比如改下 Deployment 中
+本地 DNS 缓存
+- 111 -
+本文档使用 书栈(BookStack.CN) 构建
+
+template 里的 annotation，触发 Deployment 所有 Pod 滚动更新，如果怕滚动更新造成部分
+流量异常，可以参考 服务更新最佳实践
+https://kubernetes.io/docs/tasks/administer-cluster/nodelocaldns
+https://github.com/kubernetes/enhancements/blob/master/keps/sig-
+network/20190424-NodeLocalDNS-beta-proposal.md
+参考资料
+本地 DNS 缓存
+- 112 -
+本文档使用 书栈(BookStack.CN) 构建
+
+集群对外暴露了一个公网IP作为流量入口(可以是 Ingress 或 Service)，DNS 解析配置了一个泛
+域名指向该IP（比如  *.test.imroc.io ），现希望根据请求中不同 Host 转发到不同的后端
+Service。比如  a.test.imroc.io  的请求被转发到  my-svc-a ， b.test.imroc.io  的请
+求转发到  my-svc-b 。当前 K8S 的 Ingress 并不原生支持这种泛域名转发规则，本文将给出一
+个解决方案来实现泛域名转发。
+先说一种简单的方法，这也是大多数人的第一反应：配置 Ingress 规则
+假如泛域名有两个不同 Host 分别转发到不同 Service，Ingress 类似这样写:
+1. apiVersion: extensions/v1beta1
+2. kind: Ingress
+3. metadata:
+4.   name: my-ingress
+5. spec:
+6.   rules:
+7.   - host: a.test.imroc.io
+8.     http:
+9.       paths:
+10.       - backend:
+11.           serviceName: my-svc-a
+12.           servicePort: 80
+13.         path: /
+14.   - host: b.test.imroc.io
+15.     http:
+16.       paths:
+17.       - backend:
+18.           serviceName: my-svc-b
+19.           servicePort: 80
+20.         path: /
+但是！如果 Host 非常多会怎样？（比如200+）
+泛域名转发
+需求
+简单做法
+泛域名动态转发 Service
+- 113 -
+本文档使用 书栈(BookStack.CN) 构建
+
+每次新增 Host 都要改 Ingress 规则，太麻烦
+单个 Ingress 上面的规则越来越多，更改规则对 LB 的压力变大，可能会导致偶尔访问不了
+我们可以约定请求中泛域名 Host 通配符的  *  号匹配到的字符跟 Service 的名字相关联（可
+以是相等，或者 Service 统一在前面加个前缀，比如  a.test.imroc.io  转发到  my-svc-a 
+这个 Service)，集群内起一个反向代理服务，匹配泛域名的请求全部转发到这个代理服务上，这个代
+理服务只做一件简单的事，解析 Host，正则匹配抓取泛域名中  *  号这部分，把它转换为
+Service 名字，然后在集群里转发（集群 DNS 解析)
+这个反向代理服务可以是 Nginx+Lua脚本 来实现，或者自己写个简单程序来做反向代理，这里我用
+OpenResty 来实现，它可以看成是 Nginx 的发行版，自带 lua 支持。
+有几点需要说明下：
+我们使用 nginx 的  proxy_pass  来反向代理到后端服务， proxy_pass  后面跟的变量，我
+们需要用 lua 来判断 Host 修改变量
+nginx 的  proxy_pass  后面跟的如果是可变的域名（非IP，需要 dns 解析)，它需要一个
+域名解析器，不会走默认的 dns 解析，需要在  nginx.conf  里添加  resolver  配置项来
+设置一个外部的 dns 解析器
+这个解析器我们是用 go-dnsmasq 来实现，它可以将集群的 dns 解析代理给 nginx，以
+sidecar 的形式注入到 pod 中，监听 53 端口
+ nginx.conf  里关键的配置如下图所示：
+正确姿势
+泛域名动态转发 Service
+- 114 -
+本文档使用 书栈(BookStack.CN) 构建
+
+下面给出完整的 yaml 示例
+ proxy.yaml :
+1. apiVersion: apps/v1beta1
+2. kind: Deployment
+3. metadata:
+4.   labels:
+5.     component: nginx
+6.   name: proxy
+7. spec:
+8.   replicas: 1
+9.   selector:
+10.     matchLabels:
+11.       component: nginx
+12.   template:
+13.     metadata:
+14.       labels:
+15.         component: nginx
+16.     spec:
+17.       containers:
+18.       - name: nginx
+19.         image: "openresty/openresty:centos"
+20.         ports:
+泛域名动态转发 Service
+- 115 -
+本文档使用 书栈(BookStack.CN) 构建
+
+21.         - name: http
+22.           containerPort: 80
+23.           protocol: TCP
+24.         volumeMounts:
+25.         - mountPath: /usr/local/openresty/nginx/conf/nginx.conf
+26.           name: config
+27.           subPath: nginx.conf
+28.       - name: dnsmasq
+29.         image: "janeczku/go-dnsmasq:release-1.0.7"
+30.         args:
+31.           - --listen
+32.           - "127.0.0.1:53"
+33.           - --default-resolver
+34.           - --append-search-domains
+35.           - --hostsfile=/etc/hosts
+36.           - --verbose
+37.       volumes:
+38.       - name: config
+39.         configMap:
+40.           name: configmap-nginx
+41. 
+42. ---
+43. 
+44. apiVersion: v1
+45. kind: ConfigMap
+46. metadata:
+47.   labels:
+48.     component: nginx
+49.   name: configmap-nginx
+50. data:
+51.   nginx.conf: |-
+52.     worker_processes  1;
+53. 
+54.     error_log  /error.log;
+55. 
+56.     events {
+57.         accept_mutex on;
+58.         multi_accept on;
+59.         use epoll;
+60.         worker_connections  1024;
+61.     }
+62. 
+泛域名动态转发 Service
+- 116 -
+本文档使用 书栈(BookStack.CN) 构建
+
+63. 
+64.     http {
+65.         include       mime.types;
+66.         default_type  application/octet-stream;
+67. 
+        log_format  main  '$time_local $remote_user $remote_addr $host 
+$request_uri $request_method $http_cookie '
+68.                           '$status $body_bytes_sent "$http_referer" '
+69.                           '"$http_user_agent" "$http_x_forwarded_for" '
+70. 
+                          '$request_time $upstream_response_time 
+"$upstream_cache_status"';
+71. 
+72. 
+        log_format  browser '$time_iso8601 $cookie_km_uid $remote_addr $host 
+$request_uri $request_method '
+73.                           '$status $body_bytes_sent "$http_referer" '
+74.                           '"$http_user_agent" "$http_x_forwarded_for" '
+75. 
+                          '$request_time $upstream_response_time 
+"$upstream_cache_status" $http_x_requested_with $http_x_real_ip $upstream_addr 
+$request_body';
+76. 
+77.         log_format client '{"@timestamp":"$time_iso8601",'
+78.                           '"time_local":"$time_local",'
+79.                           '"remote_user":"$remote_user",'
+80.                           '"http_x_forwarded_for":"$http_x_forwarded_for",'
+81.                           '"host":"$server_addr",'
+82.                           '"remote_addr":"$remote_addr",'
+83.                           '"http_x_real_ip":"$http_x_real_ip",'
+84.                           '"body_bytes_sent":$body_bytes_sent,'
+85.                           '"request_time":$request_time,'
+86.                           '"status":$status,'
+87.                           '"upstream_response_time":"$upstream_response_time",'
+88.                           '"upstream_response_status":"$upstream_status",'
+89.                           '"request":"$request",'
+90.                           '"http_referer":"$http_referer",'
+91.                           '"http_user_agent":"$http_user_agent"}';
+92. 
+93.         access_log  /access.log  main;
+94. 
+95.         sendfile        on;
+96. 
+97.         keepalive_timeout 120s 100s;
+98.         keepalive_requests 500;
+99.         send_timeout 60000s;
+100.         client_header_buffer_size 4k;
+泛域名动态转发 Service
+- 117 -
+本文档使用 书栈(BookStack.CN) 构建
+
+101.         proxy_ignore_client_abort on;
+102.         proxy_buffers 16 32k;
+103.         proxy_buffer_size 64k;
+104. 
+105.         proxy_busy_buffers_size 64k;
+106. 
+107.         proxy_send_timeout 60000;
+108.         proxy_read_timeout 60000;
+109.         proxy_connect_timeout 60000;
+110.         proxy_cache_valid 200 304 2h;
+111.         proxy_cache_valid 500 404 2s;
+112.         proxy_cache_key $host$request_uri$cookie_user;
+113.         proxy_cache_methods GET HEAD POST;
+114. 
+115.         proxy_redirect off;
+116.         proxy_http_version 1.1;
+117.         proxy_set_header Host                $http_host;
+118.         proxy_set_header X-Real-IP           $remote_addr;
+119.         proxy_set_header X-Forwarded-For     $proxy_add_x_forwarded_for;
+120.         proxy_set_header X-Forwarded-Proto   $scheme;
+121.         proxy_set_header X-Frame-Options     SAMEORIGIN;
+122. 
+123.         server_tokens off;
+124.         client_max_body_size 50G;
+125.         add_header X-Cache $upstream_cache_status;
+126.         autoindex off;
+127. 
+128.         resolver      127.0.0.1:53 ipv6=off;
+129. 
+130.         server {
+131.             listen 80;
+132. 
+133.             location / {
+134.                 set $service  '';
+135.                 rewrite_by_lua '
+136.                     local host = ngx.var.host
+137.                     local m = ngx.re.match(host, "(.+).test.imroc.io")
+138.                     if m then
+139.                         ngx.var.service = "my-svc-" .. m[1]
+140.                     end
+141.                 ';
+142.                 proxy_pass http://$service;
+泛域名动态转发 Service
+- 118 -
+本文档使用 书栈(BookStack.CN) 构建
+
+143.             }
+144.         }
+145.     }
+让该代理服务暴露公网访问可以用 Service 或 Ingress
+用 Service 的示例 ( service.yaml ):
+1. apiVersion: v1
+2. kind: Service
+3. metadata:
+4.   labels:
+5.     component: nginx
+6.   name: service-nginx
+7. spec:
+8.   type: LoadBalancer
+9.   ports:
+10.   - name: http
+11.     port: 80
+12.     targetPort: http
+13.   selector:
+14.     component: nginx
+用 Ingress 的示例 ( ingress.yaml ):
+1. apiVersion: extensions/v1beta1
+2. kind: Ingress
+3. metadata:
+4.   name: ingress-nginx
+5. spec:
+6.   rules:
+7.   - host: "*.test.imroc.io"
+8.     http:
+9.       paths:
+10.       - backend:
+11.           serviceName: service-nginx
+12.           servicePort: 80
+13.         path: /
+泛域名动态转发 Service
+- 119 -
+本文档使用 书栈(BookStack.CN) 构建
+
+K8S 主要有以下两种账户类型概念:
+用户账户 ( User ): 控制人的权限。
+服务账户 ( ServiceAccount ): 控制应用程序的权限
+如果开启集群审计，就可以区分某个操作是哪个用户或哪个应程序执行的。
+集群权限控制
+账户类型
+集群权限控制
+- 120 -
+本文档使用 书栈(BookStack.CN) 构建
+
+k8s 支持 CSR API，通过创建  CertificateSigningRequest  资源就可以发起 CSR 请求，管理
+员审批通过之后  kube-controller-manager  就会为我们签发证书，确保  kube-controller-
+manager  配了根证书密钥对:
+1. --cluster-signing-cert-file=/var/lib/kubernetes/ca.pem
+2. --cluster-signing-key-file=/var/lib/kubernetes/ca-key.pem
+我们用 cfssl 来创建 key 和 csr 文件，所以需要先安装 cfssl:
+1. curl -L https://pkg.cfssl.org/R1.2/cfssl_linux-amd64 -o cfssl
+2. curl -L https://pkg.cfssl.org/R1.2/cfssljson_linux-amd64 -o cfssljson
+3. curl -L https://pkg.cfssl.org/R1.2/cfssl-certinfo_linux-amd64 -o cfssl-certinfo
+4. 
+5. chmod +x cfssl cfssljson cfssl-certinfo
+6. sudo mv cfssl cfssljson cfssl-certinfo /usr/local/bin/
+指定要创建的用户名:
+1. USERNAME="roc"
+再创建 key 和 csr 文件:
+1. cat <<EOF | cfssl genkey - | cfssljson -bare ${USERNAME}
+2. {
+3.   "CN": "${USERNAME}",
+4.   "key": {
+5.     "algo": "rsa",
+6.     "size": 2048
+7.   }
+8. }
+9. EOF
+生成以下文件:
+1. roc.csr
+利用 CSR API 创建用户
+创建步骤
+利用 CSR API 创建用户
+- 121 -
+本文档使用 书栈(BookStack.CN) 构建
+
+2. roc-key.pem
+创建  CertificateSigningRequest (发起 CSR 请求):
+1. cat <<EOF | kubectl apply -f -
+2. apiVersion: certificates.k8s.io/v1beta1
+3. kind: CertificateSigningRequest
+4. metadata:
+5.   name: ${USERNAME}
+6. spec:
+7.   request: $(cat ${USERNAME}.csr | base64 | tr -d '\n')
+8.   usages:
+9.   - digital signature
+10.   - key encipherment
+11.   - client auth
+12. EOF
+管理员审批 CSR 请求:
+1. # 查看 csr
+2. # kubectl get csr
+3. 
+4. # 审批 csr
+5. kubectl certificate approve ${USERNAME}
+获取证书:
+1. 
+kubectl get csr ${USERNAME} -o jsonpath={.status.certificate} | base64 --decode 
+> ${USERNAME}.pem
+得到证书文件:
+1. roc.pem
+至此，我们已经创建好了用户，用户的证书密钥对文件:
+1. roc.pem
+2. roc-key.pem
+配置 kubeconfig
+利用 CSR API 创建用户
+- 122 -
+本文档使用 书栈(BookStack.CN) 构建
+
+1. # 增加 user
+2. 
+kubectl config set-credentials ${USERNAME} --embed-certs=true --client-
+certificate=${USERNAME}.pem --client-key=${USERNAME}-key.pem
+3. 
+4. # 如果还没配 cluster，可以通过下面命令配一下
+5. 
+kubectl config set-cluster <cluster> --server=<apiserver-url> --certificate-
+authority=<ca-cert-file>
+6. 
+7. # 增加 context，绑定 cluster 和 user
+8. kubectl config set-context <context> --cluster=<cluster> --user=${USERNAME}
+9. 
+10. # 使用刚增加的 context
+11. kubectl config use-context <context>
+我们可以用 RBAC 控制用户权限，参考 使用 RBAC 控制用户权限
+Manage TLS Certificates in a Cluster:
+https://kubernetes.io/docs/tasks/tls/managing-tls-in-a-cluster/
+配置用户权限
+参考资料
+利用 CSR API 创建用户
+- 123 -
+本文档使用 书栈(BookStack.CN) 构建
+
+为了简单方便，小集群或测试环境集群我们通常使用最高权限的 admin 账号，可以做任何操作，但是
+如果是重要的生产环境集群，可以操作集群的人比较多，如果这时还用这个账号可能就会比较危险，一
+旦有人误操作或故意搞事就可能酿成大错，即使 apiserver 开启审计也无法知道是谁做的操作，所
+以最好控制下权限，根据人的级别或角色创建拥有对应权限的账号，这个可以通过 RBAC 来实现(确保
+ kube-apiserver  启动参数  --authorization-mode=RBAC )，基本思想是创建 User 或
+ServiceAccount 绑定 Role 或 ClusterRole 来控制权限。
+User 的来源有多种:
+token 文件: 给  kube-apiserver  启动参数  --token-auth-file  传一个 token 认证
+文件，比如:  --token-auth-file=/etc/kubernetes/known_tokens.csv 
+token 文件每一行表示一个用户，示例:  wJmq****PPWj,admin,admin,system:masters 
+第一个字段是 token 的值，最后一个字段是用户组，token 认证用户名不重要，不会识
+别
+证书: 通过使用 CA 证书给用户签发证书，签发的证书中  CN  字段是用户名， O  是用户组
+下面给出几个 RBAC 定义示例。
+给 roc 授权 test 命名空间所有权限，istio-system 命名空间的只读权限:
+1. kind: Role
+2. apiVersion: rbac.authorization.k8s.io/v1
+3. metadata:
+4.   name: admin
+5.   namespace: test
+6. rules:
+7.   - apiGroups: ["*"]
+8.     resources: ["*"]
+9.     verbs: ["*"]
+10. 
+11. ---
+12. 
+控制用户权限
+User 来源
+" class="reference-link">使用 RBAC 控制用户权
+限
+控制用户权限
+- 124 -
+本文档使用 书栈(BookStack.CN) 构建
+
+13. kind: RoleBinding
+14. apiVersion: rbac.authorization.k8s.io/v1
+15. metadata:
+16.   name: admin-to-roc
+17.   namespace: test
+18. subjects:
+19.   - kind: User
+20.     name: roc
+21.     apiGroup: rbac.authorization.k8s.io
+22. roleRef:
+23.   kind: Role
+24.   name: admin
+25.   apiGroup: rbac.authorization.k8s.io
+26. 
+27. ---
+28. 
+29. kind: Role
+30. apiVersion: rbac.authorization.k8s.io/v1
+31. metadata:
+32.   name: readonly
+33.   namespace: istio-system
+34. rules:
+35.   - apiGroups: ["*"]
+36.     resources: ["*"]
+37.     verbs: ["get", "watch", "list"]
+38. 
+39. ---
+40. kind: RoleBinding
+41. apiVersion: rbac.authorization.k8s.io/v1
+42. metadata:
+43.   name: readonly-to-roc
+44.   namespace: istio-system
+45. subjects:
+46.   - kind: User
+47.     name: roc
+48.     apiGroup: rbac.authorization.k8s.io
+49. roleRef:
+50.   kind: Role
+51.   name: readonly
+52.   apiGroup: rbac.authorization.k8s.io
+给 roc 授权整个集群的只读权限:
+控制用户权限
+- 125 -
+本文档使用 书栈(BookStack.CN) 构建
+
+1. kind: ClusterRole
+2. apiVersion: rbac.authorization.k8s.io/v1
+3. metadata:
+4.   name: readonly
+5. rules:
+6.   - apiGroups: ["*"]
+7.     resources: ["*"]
+8.     verbs: ["get", "watch", "list"]
+9. 
+10. ---
+11. kind: ClusterRoleBinding
+12. apiVersion: rbac.authorization.k8s.io/v1
+13. metadata:
+14.   name: readonly-to-roc
+15. subjects:
+16.   - kind: User
+17.     name: roc
+18.     apiGroup: rbac.authorization.k8s.io
+19. roleRef:
+20.   kind: ClusterRole
+21.   name: readonly
+22.   apiGroup: rbac.authorization.k8s.io
+给 manager 用户组里所有用户授权 secret 读权限:
+1. apiVersion: rbac.authorization.k8s.io/v1
+2. kind: ClusterRole
+3. metadata:
+4.   name: secret-reader
+5. rules:
+6. - apiGroups: [""]
+7.   resources: ["secrets"]
+8.   verbs: ["get", "watch", "list"]
+9. 
+10. ---
+11. 
+12. apiVersion: rbac.authorization.k8s.io/v1
+13. kind: ClusterRoleBinding
+14. metadata:
+15.   name: read-secrets-global
+16. subjects:
+17. - kind: Group
+控制用户权限
+- 126 -
+本文档使用 书栈(BookStack.CN) 构建
+
+18.   name: manager
+19.   apiGroup: rbac.authorization.k8s.io
+20. roleRef:
+21.   kind: ClusterRole
+22.   name: secret-reader
+23.   apiGroup: rbac.authorization.k8s.io
+1. # 如果使用证书认证，使用下面命令配置用户认证信息
+2. 
+kubectl config set-credentials <user> --embed-certs=true --client-certificate=
+<client-cert-file> --client-key=<client-key-file>
+3. 
+4. # 如果使用 token 认证，使用下面命令配置用户认证信息
+5. # kubectl config set-credentials <user> --token='<token>'
+6. 
+7. # 配置cluster entry
+8. 
+kubectl config set-cluster <cluster> --server=<apiserver-url> --certificate-
+authority=<ca-cert-file>
+9. # 配置context entry
+10. kubectl config set-context <context> --cluster=<cluster> --user=<user>
+11. # 配置当前使用的context
+12. kubectl config use-context <context>
+13. # 查看
+14. kubectl config view
+https://kubernetes.io/zh/docs/reference/access-authn-authz/service-
+accounts-admin/
+https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+配置 kubeconfig
+参考资料
+控制用户权限
+- 127 -
+本文档使用 书栈(BookStack.CN) 构建
+
+不仅用户 (人) 可以操作集群，应用 (程序) 也可以操作集群，通过给 Pod 设置 Serivce
+Account 来对应用进行授权，如果不设置会默认配置一个 “default” 的 Service Account，几
+乎没有权限。
+创建 Pod 时，在 apiserver 中的 service account admission controller 检测 Pod 是
+否指定了 ServiceAccount，如果没有就自动设置一个 “default”，如果指定了会检测指定的
+ServiceAccount 是否存在，不存在的话会拒绝该 Pod，存在话就将此 ServiceAccount 对应的
+Secret 挂载到 Pod 中每个容器的  /var/run/secrets/kubernetes.io/serviceaccount  这个
+路径，这个 Secret 是 controller manager 中 token controller 去 watch
+ServiceAccount，为每个 ServiceAccount 生成对应的 token 类型的 Secret 得来的。
+Pod 内的程序如果要调用 apiserver 接口操作集群，会使用 SDK，通常是 client-go ， SDK
+使用 in-cluster 的方式调用 apiserver，从固定路径
+ /var/run/secrets/kubernetes.io/serviceaccount  读取认证配置信息去连 apiserver，从而
+实现认证，再结合 RBAC 配置可以实现权限控制。
+ServiceAccount 仅针对某个命名空间，所以 Pod 指定的 ServiceAccount 只能引用当前命名
+空间的 ServiceAccount 的，即便是 “default” 每个命名空间也都是相互独立的，下面给出几个
+RBAC 定义示例。
+ build-robot  这个 ServiceAccount 可以读取 build 命名空间中 Pod 的信息和 log:
+1. apiVersion: v1
+2. kind: ServiceAccount
+3. metadata:
+4.   name: build-robot
+5.   namespace: build
+6. 
+7. ---
+8. 
+9. apiVersion: rbac.authorization.k8s.io/v1
+10. kind: Role
+11. metadata:
+控制应用权限
+原理
+使用 RBAC 细化应用权限
+控制应用权限
+- 128 -
+本文档使用 书栈(BookStack.CN) 构建
+
+12.   namespace: build
+13.   name: pod-reader
+14. rules:
+15. - apiGroups: [""]
+16.   resources: ["pods", "pods/log"]
+17.   verbs: ["get", "list"]
+18. 
+19. ---
+20. 
+21. apiVersion: rbac.authorization.k8s.io/v1
+22. kind: RoleBinding
+23. metadata:
+24.   name: read-pods
+25.   namespace: build
+26. subjects:
+27. - kind: ServiceAccount
+28.   name: build-robot
+29.   apiGroup: rbac.authorization.k8s.io
+30. roleRef:
+31.   kind: Role
+32.   name: pod-reader
+33.   apiGroup: rbac.authorization.k8s.io
+示例:
+1. apiVersion: v1
+2. kind: Pod
+3. metadata:
+4.   name: build
+5.   namespace: build
+6. spec:
+7.   containers:
+8.   - image: imroc/build-robot:v1
+9.     name: builder
+10.   serviceAccountName: build-robot
+为 Pod 指定 ServiceAccount
+" class="reference-link">为应用默认指定
+imagePullSecrets
+控制应用权限
+- 129 -
+本文档使用 书栈(BookStack.CN) 构建
+
+ServiceAccount 中也可以指定 imagePullSecrets，也就是只要给 Pod 指定了这个
+ServiceAccount，就有对应的 imagePullSecrets，而如果不指定 ServiceAccount 会默认指
+定 “default”，我们可以给 “default” 这个 ServiceAccount 指定 imagePullSecrets 来
+实现给某个命名空间指定默认的 imagePullSecrets
+创建 imagePullSecrets:
+1. 
+kubectl create secret docker-registry <secret-name> --docker-server=<your-
+registry-server> --docker-username=<your-name> --docker-password=<your-
+password> --docker-email=<your-email> -n <namespace>
+ <secret-name> : 是要创建的 imagePullSecrets 的名称
+ <namespace> : 是要创建的 imagePullSecrets 所在命名空间
+ <your-registry-server> : 是你的私有仓库的地址
+ <your-name> : 是你的 Docker 用户名
+ <your-password>  是你的 Docker 密码
+ <your-email>  是你的 Docker 邮箱
+指定默认 imagePullSecrets:
+1. 
+kubectl patch serviceaccount default -p '{"imagePullSecrets": [{"name": "
+<secret-name>"}]}' -n <namespace>
+ <secret-name> : 是 ServiceAccount 要关联的 imagePullSecrets 的名称
+ <namespace> : 是 ServiceAccount 所在的命名空间，跟 imagePullSecrets 在同一个
+命名空间
+Configure Service Accounts for Pods:
+https://kubernetes.io/docs/tasks/configure-pod-container/configure-
+service-account/
+参考资料
+控制应用权限
+- 130 -
+本文档使用 书栈(BookStack.CN) 构建
+
+kubectl 高效技巧
+实用 yaml 片段
+实用命令与脚本
+实用工具和技巧
+实用工具和技巧
+- 131 -
+本文档使用 书栈(BookStack.CN) 构建
+
+是否有过因为使用 kubectl 经常需要重复输入命名空间而苦恼？是否觉得应该要有个记住命名空间的
+功能，自动记住上次使用的命名空间，不需要每次都输入？可惜没有这种功能，但是，本文会教你一个
+非常巧妙的方法完美帮你解决这个痛点。
+将如下脚本粘贴到当前shell(注册k命令到当前终端session):
+1. function k() {
+2. 
+    cmdline=`HISTTIMEFORMAT="" history | awk '$2 == "kubectl" && (/-n/ || /--
+namespace/) {for(i=2;i<=NF;i++)printf("%s ",$i);print ""}' | tail -n 1`
+3. 
+    regs=('\-n [\w\-\d]+' '\-n=[\w\-\d]+' '\-\-namespace [\w\-\d]+' '\-\-
+namespace=[\w\-\d]+')
+4.     for i in "${!regs[@]}"; do
+5.         reg=${regs[i]}
+6.         nsarg=`echo $cmdline | grep -o -P "$reg"`
+7.         if [[ "$nsarg" == "" ]]; then
+8.             continue
+9.         fi
+10.         cmd="kubectl $nsarg $@"
+11.         echo "$cmd"
+12.         $cmd
+13.         return
+14.     done
+15.     cmd="kubectl $@"
+16.     echo "$cmd"
+17.     $cmd
+18. }
+mac 用户可以使用 dash 的 snippets 功能快速将上面的函数粘贴，使用  kk.  作为触发键
+(dash snippets可以全局监听键盘输入，使用指定的输入作为触发而展开配置的内容，相当于是全局
+代码片段)，以后在某个终端想使用  k  的时候按下  kk.  就可以将  k  命令注册到当前终
+端，dash snippets 配置如图所示：
+kubectl 高效技巧
+k 命令
+kubectl 高效技巧
+- 132 -
+本文档使用 书栈(BookStack.CN) 构建
+
+将  k  当作  kubectl  来用，只是不需要输入命名空间，它会调用 kubectl 并自动加上上次
+使用的非默认的命名空间，如果想切换命名空间，再常规的使用一次 kubectl 就行，下面是示范：
+哈哈，是否感觉可以少输入很多字符，提高 kubectl 使用效率了？这是目前我探索解决 kubectl
+重复输入命名空间的最好方案，一开始是受 fuck命令 的启发，想用 go 语言开发个 k 命令，但是
+发现两个缺点：
+kubectl 高效技巧
+- 133 -
+本文档使用 书栈(BookStack.CN) 构建
+
+需要安装二进制才可以使用（对于需要在多个地方用kubectl管理多个集群的人来说实在太麻
+烦）
+如果当前 shell 默认没有将历史输入记录到 history 文件( bash 的 history 文件默认
+是  ~/.bash_history )，那么将无法准确知道上一次 kubectl 使用的哪个命名空间
+这里解释下第二个缺点的原因：ssh 连上服务器会启动一个 shell 进程，通常是 bash，大多
+bash 默认配置会实时将历史输入追加到  ~/.bash_history 里，所以开多个ssh使用history命令
+看到的历史输入是一样的，但有些默认不会实时记录历史到 ~/.bash_history ，而是记在当前
+shell 进程的内存中，在 shell 退出时才会写入到文件。这种情况新起的进程是无法知道当前
+shell 的最近历史输入的，fuck命令 也不例外。
+所以最完美的解决方案就是注册函数到当前shell来调用，配合 dash 的 snippets 功能可以实现
+快速注册，解决复制粘贴的麻烦
+kubectl 高效技巧
+- 134 -
+本文档使用 书栈(BookStack.CN) 构建
+
+1. apiVersion: apps/v1
+2. kind: Deployment
+3. metadata:
+4.   name: nginx
+5. spec:
+6.   replicas: 1
+7.   selector:
+8.     matchLabels:
+9.       app: nginx
+10.   template:
+11.     metadata:
+12.       labels:
+13.         app: nginx
+14.     spec:
+15.       containers:
+16.       - name: nginx
+17.         image: nginx
+18. 
+19. ---
+20. 
+21. apiVersion: v1
+22. kind: Service
+23. metadata:
+24.   name: nginx
+25.   labels:
+26.     app: nginx
+27. spec:
+28.   type: ClusterIP
+29.   ports:
+30.   - port: 80
+31.     protocol: TCP
+32.     name: http
+33.   selector:
+34.     app: nginx
+实用 yaml 片段
+最简单的 nginx 测试服务
+实用 yaml 片段
+- 135 -
+本文档使用 书栈(BookStack.CN) 构建
+
+获取集群所有节点占用的 podCIDR:
+1. $ kubectl get node -o jsonpath='{range .items[*]}{@.spec.podCIDR}{"\n"}{end}'
+2. 172.16.4.0/24
+3. 172.16.0.0/24
+4. 172.16.6.0/24
+实用命令与脚本
+实用命令与脚本
+- 136 -
+本文档使用 书栈(BookStack.CN) 构建
+
+安装 cert-manager
+使用 cert-manager 自动生成证书
+集群证书管理
+证书管理
+- 137 -
+本文档使用 书栈(BookStack.CN) 构建
+
+参考官方文档: https://docs.cert-manager.io/en/latest/getting-
+started/install/kubernetes.html
+介绍几种安装方式，不管是用哪种我们都先规划一下使用哪个命名空间，推荐使用  cert-manger 
+命名空间，如果使用其它的命名空间需要做些更改，会稍微有点麻烦，先创建好命名空间:
+1. kubectl create namespace cert-manager
+cert-manager 部署时会生成 ValidatingWebhookConfiguration 来注册
+[ValidatingAdmissionWebhook])(ValidatingAdmissionWebhook) 来实现 CRD 校验，
+而 ValidatingWebhookConfiguration  里需要写入  cert-manager  自身校验服务端的证书信
+息，就需要在自己命名空间创建  ClusterIssuer  和  Certificate  来自动创建证书，创建这
+些 CRD 资源又会被校验服务端校验，但校验服务端证书还没有创建所以校验请求无法发送到校验服务
+端，这就是一个鸡生蛋还是蛋生鸡的问题了，所以我们需要关闭  cert-manager  所在命名空间的
+CRD 校验，通过打 label 来实现:
+1. kubectl label namespace cert-manager certmanager.k8s.io/disable-validation=true
+直接执行  kubectl apply  来安装:
+1. 
+kubectl apply --validate=false -f https://github.com/jetstack/cert-
+manager/releases/download/v0.11.0/cert-manager.yaml
+使用  kubectl v1.15  及其以下的版本需要加上  --validate=false ，否则会报错。
+安装 CRD:
+1. 
+kubectl apply -f https://raw.githubusercontent.com/jetstack/cert-manager/release-
+0.11/deploy/manifests/00-crds.yaml
+添加 repo:
+安装 cert-manager
+使用原生 yaml 资源安装
+使用 Helm 安装
+安装 cert-manager
+- 138 -
+本文档使用 书栈(BookStack.CN) 构建
+
+1. helm repo add jetstack https://charts.jetstack.io
+2. helm repo update
+执行安装:
+1. helm install \
+2.   --name cert-manager \
+3.   --namespace cert-manager \
+4.   --version v0.11.0 \
+5.   jetstack/cert-manager
+检查 cert-manager 相关的 pod 是否启动成功:
+1. $ kubectl get pods --namespace cert-manager
+2. 
+3. NAME                                       READY   STATUS    RESTARTS   AGE
+4. cert-manager-cainjector-74bb68d67c-4vplr   1/1     Running   0          101s
+5. cert-manager-f7f8bf74d-j4hcz               1/1     Running   0          101s
+6. cert-manager-webhook-665df569b5-5p6x8      1/1     Running   0          101s
+校验是否安装成功
+安装 cert-manager
+- 139 -
+本文档使用 书栈(BookStack.CN) 构建
+
+确保  cert-manager  已安装，参考 安装 cert-manager
+Let’s Encrypt 利用 ACME 协议来校验域名是否真的属于你，校验成功后就可以自动颁发免费证
+书，证书有效期只有 90 天，在到期前需要再校验一次来实现续期，幸运的是 cert-manager 可以
+自动续期，这样就可以使用永久免费的证书了。如何校验你对这个域名属于你呢？主流的两种校验方式
+是 HTTP-01 和 DNS-01，下面简单介绍下校验原理:
+HTTP-01 的校验原理是给你域名指向的 HTTP 服务增加一个临时 location ， Let’s Encrypt 
+会发送 http 请求到  http://<YOUR_DOMAIN>/.well-known/acme-
+challenge/<TOKEN> ， YOUR_DOMAIN  就是被校验的域名， TOKEN  是 ACME 协议的客户端负
+责放置的文件，在这里 ACME 客户端就是 cert-manager，它通过修改 Ingress 规则来增加这个
+临时校验路径并指向提供  TOKEN  的服务。 Let’s Encrypt  会对比  TOKEN  是否符合预期，
+校验成功后就会颁发证书。此方法仅适用于给使用 Ingress 暴露流量的服务颁发证书，并且不支持泛
+域名证书。
+DNS-01 的校验原理是利用 DNS 提供商的 API Key 拿到你的 DNS 控制权限， 在 Let’s
+Encrypt 为 ACME 客户端提供令牌后，ACME 客户端 (cert-manager) 将创建从该令牌和您的帐
+户密钥派生的 TXT 记录，并将该记录放在  _acme-challenge.<YOUR_DOMAIN> 。 然后 Let’s
+Encrypt 将向 DNS 系统查询该记录，如果找到匹配项，就可以颁发证书。此方法不需要你的服务使
+用 Ingress，并且支持泛域名证书。
+我们需要先创建一个用于签发证书的 Issuer 或 ClusterIssuer，它们唯一区别就是 Issuer 只
+能用来签发自己所在 namespace 下的证书，ClusterIssuer 可以签发任意 namespace 下的证
+书，除了名称不同之外，两者所有字段完全一致，下面给出一些示例，简单起见，我们仅以
+ClusterIssuer 为例。
+使用 cert-manager 自动生成证书
+利用 Let’s Encrypt 生成免费证书
+免费证书颁发原理
+HTTP-01 校验原理
+DNS-01 校验原理
+创建 Issuer/ClusterIssuer
+创建使用 DNS-01 校验的 ClusterIssuer
+使用 cert-manager 自动生成证书
+- 140 -
+本文档使用 书栈(BookStack.CN) 构建
+
+假设域名是用  cloudflare  管理的，先登录  cloudflare  拿到 API Key，然后创建一个
+Secret:
+1. 
+kubectl -n cert-manager create secret generic cloudflare-apikey --from-
+literal=apikey=213807bd0fb1ca59bba24a58eac90492e6287
+由于  ClusterIssuer  是 NonNamespaced 类型的资源，不在任何命名空间，它需要引用 Secret，而
+Secret 必须存在某个命名空间下，所以就规定  ClusterIssuer  引用的 Secret 要与 cert-
+manager 在同一个命名空间下。
+创建 DNS-01 方式校验的  ClusterIssuer :
+1. cat <<EOF | kubectl apply -f -
+2. apiVersion: cert-manager.io/v1alpha2
+3. kind: ClusterIssuer
+4. metadata:
+5.   name: letsencrypt-dns01
+6. spec:
+7.   acme:
+8.     # The ACME server URL
+9.     server: https://acme-v02.api.letsencrypt.org/directory
+10.     # Email address used for ACME registration
+11.     email: roc@imroc.io
+12.     # Name of a secret used to store the ACME account private key
+13.     privateKeySecretRef:
+14.       name: letsencrypt-dns01
+15.     solvers:
+16. 
+    - selector: {} # An empty 'selector' means that this solver matches all 
+domains
+17.       dns01: # ACME DNS-01 solver configurations
+18.         cloudflare:
+19.           email: roc@imroc.io
+20.           # A secretKeyRef to a cloudflare api key
+21.           apiKeySecretRef:
+22.             name: cloudflare-apikey
+23.             key: apikey
+24. EOF
+ metadata.name : 是我们创建的签发机构的名称，后面我们创建证书的时候会引用它
+ acme.email : 是你自己的邮箱，证书快过期的时候会有邮件提醒，不过 cert-manager 会
+利用 acme 协议自动给我们重新颁发证书来续期
+ acme.server : 是 acme 协议的服务端，我们这里用 Let’s Encrypt，这个地址就写死成
+使用 cert-manager 自动生成证书
+- 141 -
+本文档使用 书栈(BookStack.CN) 构建
+
+这样就行
+ acme.privateKeySecretRef  指示此签发机构的私钥将要存储到哪个 Secret 中，在 cert-
+manager 所在命名空间
+ solvers.dns01 : 配置 DNS-01 校验方式所需的参数，最重要的是 API Key (引用提前创
+建好的 Secret)，不同 DNS 提供商配置不一样，具体参考官方API文档
+更多字段参考 API 文档: https://docs.cert-
+manager.io/en/latest/reference/api-docs/index.html\#clusterissuer-
+v1alpha2
+使用 HTTP-01 方式校验，ACME 服务端 (Let’s Encrypt) 会向客户端 (cert-manager) 提供
+令牌，客户端会在 web server 上特定路径上放置一个文件，该文件包含令牌以及帐户密钥的指纹。
+ACME 服务端会请求该路径并校验文件内容，校验成功后就会签发免费证书，更多细节参考:
+https://letsencrypt.org/zh-cn/docs/challenge-types/
+有个问题，ACME 服务端通过什么地址去访问 ACME 客户端的 web server 校验域名？答案是通过
+将被签发的证书中的域名来访问。这个机制带来的问题是:
+1. 不能签发泛域名证书，因为如果是泛域名，没有具体域名，ACME 服务端就不能知道该用什么地
+址访问 web server 去校验文件。
+2. 域名需要提前在 DNS 提供商配置好，这样 ACME 服务端通过域名请求时解析到正确 IP 才能
+访问成功，也就是需要提前知道你的 web server 的 IP 是什么。
+cert-manager 作为 ACME 客户端，它将这个要被 ACME 服务端校验的文件通过 Ingress 来暴
+露，我们需要提前知道 Ingress 对外的 IP 地址是多少，这样才好配置域名。
+一些云厂商自带的 ingress controller 会给每个 Ingress 都创建一个外部地址 (通常对应一
+个负载均衡器)，这个时候我们需要提前创建好一个 Ingress，拿到外部 IP 并配置域名到此 IP，
+ACME 客户端 (cert-manager) 修改此 Ingress 的 rules，临时增加一个路径指向 cert-
+manager 提供的文件，ACME 服务端请求这个域名+指定路径，根据 Ingress 规则转发会返回
+cert-manger 提供的这个文件，最终 ACME 服务端 (Let’s Encrypt) 校验该文件，通过后签发
+免费证书。
+指定 Ingress 的创建  ClusterIssuer  的示例:
+1. cat <<EOF | kubectl apply -f -
+2. apiVersion: cert-manager.io/v1alpha2
+3. kind: ClusterIssuer
+4. metadata:
+5.   name: letsencrypt-http01
+6. spec:
+创建使用 HTTP-01 校验的  ClusterIssuer 
+使用 cert-manager 自动生成证书
+- 142 -
+本文档使用 书栈(BookStack.CN) 构建
+
+7.   acme:
+8.     # The ACME server URL
+9.     server: https://acme-v02.api.letsencrypt.org/directory
+10.     # Email address used for ACME registration
+11.     email: roc@imroc.io
+12.     # Name of a secret used to store the ACME account private key
+13.     privateKeySecretRef:
+14.       name: letsencrypt-http01
+15.     solvers:
+16. 
+    - selector: {} # An empty 'selector' means that this solver matches all 
+domains
+17.       http01: # ACME HTTP-01 solver configurations
+18.         ingress:
+19.           name: challenge
+20. EOF
+ solvers.http01 : 配置 HTTP-01 校验方式所需的参数， ingress.name  指定提前创建好
+的 ingress 名称
+有些自己安装的 ingress controller，所有具有相同 ingress class 的 ingress 都共用一
+个流量入口，通常是用 LoadBalancer 类型的 Service 暴露 ingress controller，这些具有
+相同 ingress class 的 ingress 的外部 IP 都是这个 Service 的外部 IP。这种情况我们创
+建  ClusterIssuer  时可以指定 ingress class，校验证书时，cert-manager 会直接创建新
+的 Ingress 资源并指定  kubernetes.io/ingress.class  这个 annotation。
+指定 ingress class 的创建  ClusterIssuer  的示例:
+1. cat <<EOF | kubectl apply -f -
+2. apiVersion: cert-manager.io/v1alpha2
+3. kind: ClusterIssuer
+4. metadata:
+5.   name: letsencrypt-http01
+6. spec:
+7.   acme:
+8.     # The ACME server URL
+9.     server: https://acme-v02.api.letsencrypt.org/directory
+10.     # Email address used for ACME registration
+11.     email: roc@imroc.io
+12.     # Name of a secret used to store the ACME account private key
+13.     privateKeySecretRef:
+14.       name: letsencrypt-http01
+15.     solvers:
+使用 cert-manager 自动生成证书
+- 143 -
+本文档使用 书栈(BookStack.CN) 构建
+
+16. 
+    - selector: {} # An empty 'selector' means that this solver matches all 
+domains
+17.       http01: # ACME HTTP-01 solver configurations
+18.         ingress:
+19.           class: nginx
+20. EOF
+ solvers.http01 : 配置 HTTP-01 校验方式所需的参数， ingress.class  指定 ingress
+class 名称
+有了 Issuer/ClusterIssuer，接下来我们就可以生成免费证书了，cert-manager 给我们提供了
+Certificate 这个用于生成证书的自定义资源对象，它必须局限在某一个 namespace 下，证书最
+终会在这个 namespace 下以 Secret 的资源对象存储，假如我想在 dashboard 这个
+namespace 下生成免费证书（这个 namespace 已存在)，创建一个 Certificate 资源来为我们
+自动生成证书，示例:
+1. cat <<EOF | kubectl apply -f -
+2. apiVersion: cert-manager.io/v1alpha2
+3. kind: Certificate
+4. metadata:
+5.   name: dashboard-imroc-io
+6.   namespace: kubernetes-dashboard
+7. spec:
+8.   secretName: dashboard-imroc-io-tls
+9.   issuerRef:
+10.     name: letsencrypt-dns01
+11.     kind: ClusterIssuer
+12.   dnsNames:
+13.   - dashboard.imroc.io
+14. EOF
+ secretName : 指示证书最终存到哪个 Secret 中
+ issuerRef.kind : ClusterIssuer 或 Issuer，ClusterIssuer 可以被任意
+namespace 的 Certificate 引用，Issuer 只能被当前 namespace 的 Certificate
+引用。
+ issuerRef.name : 引用我们创建的 Issuer/ClusterIssuer 的名称
+ commonName : 对应证书的 common name 字段
+ dnsNames : 对应证书的 Subject Alternative Names (SANs) 字段
+创建证书 (Certificate)
+使用 cert-manager 自动生成证书
+- 144 -
+本文档使用 书栈(BookStack.CN) 构建
+
+创建完成等待一段时间，校验成功颁发证书后会将证书信息写入 Certificate 所在命名空间的
+ secretName  指定的 Secret 中，其它应用需要证书就可以直接挂载该 Secret 了。
+1. Events:
+2.   Type    Reason              Age   From          Message
+3.   ----    ------              ----  ----          -------
+4.   Normal  Generated           15s   cert-manager  Generated new private key
+5. 
+  Normal  GenerateSelfSigned  15s   cert-manager  Generated temporary self 
+signed certificate
+6. 
+  Normal  OrderCreated        15s   cert-manager  Created Order resource 
+"dashboard-imroc-io-780134401"
+7. 
+  Normal  OrderComplete       9s    cert-manager  Order "dashboard-imroc-io-
+780134401" completed successfully
+8. 
+  Normal  CertIssued          9s    cert-manager  Certificate issued 
+successfully
+看下我们的证书是否成功生成:
+1. kubectl -n dashboard get secret kubernetes-dashboard-certs -o yaml
+2. apiVersion: v1
+3. data:
+4.   ca.crt: null
+5.   tls.crt: LS0***0tLQo=
+6.   tls.key: LS0***0tCg==
+7. kind: Secret
+8. metadata:
+9.   annotations:
+10.     certmanager.k8s.io/alt-names: dashboard.imroc.io
+11.     certmanager.k8s.io/certificate-name: dashboard-imroc-io
+12.     certmanager.k8s.io/common-name: dashboard.imroc.io
+13.     certmanager.k8s.io/ip-sans: ""
+14.     certmanager.k8s.io/issuer-kind: ClusterIssuer
+15.     certmanager.k8s.io/issuer-name: letsencrypt-prod
+16.   creationTimestamp: 2019-09-19T13:53:55Z
+17.   labels:
+18.     certmanager.k8s.io/certificate-name: dashboard-imroc-io
+19.   name: kubernetes-dashboard-certs
+20.   namespace: dashboard
+21.   resourceVersion: "5689447213"
+22.   selfLink: /api/v1/namespaces/dashboard/secrets/kubernetes-dashboard-certs
+23.   uid: ebfc4aec-dae4-11e9-89f7-be8690a7fdcf
+检查结果
+使用 cert-manager 自动生成证书
+- 145 -
+本文档使用 书栈(BookStack.CN) 构建
+
+24. type: kubernetes.io/tls
+ tls.crt  就是颁发的证书
+ tls.key  是证书密钥
+将 secret 挂载到需要证书的应用，通常应用也要配置下证书路径。
+使用 cert-manager 自动生成证书
+- 146 -
+本文档使用 书栈(BookStack.CN) 构建
+
+Helm
+集群配置管理
+集群配置管理
+- 147 -
+本文档使用 书栈(BookStack.CN) 构建
+
+安装 Helm
+Helm V2 迁移到 V3
+Helm
+Helm
+- 148 -
+本文档使用 书栈(BookStack.CN) 构建
+
+Helm 是 Kubernetes 的包管理器，可以帮我们简化 kubernetes 的操作，一键部署应用。假如你
+的机器上已经安装了 kubectl 并且能够操作集群，那么你就可以安装 Helm 了。当前最新稳定版是
+V2，Helm V3 还未正式发布，下面分别说下安装方法。
+执行脚本安装 helm 客户端:
+1. 
+$ curl https://raw.githubusercontent.com/kubernetes/helm/master/scripts/get | 
+bash
+2.   % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+3.                                  Dload  Upload   Total   Spent    Left  Speed
+4. 100  6737  100  6737    0     0  12491      0 --:--:-- --:--:-- --:--:-- 12475
+5. 
+Downloading https://kubernetes-helm.storage.googleapis.com/helm-v2.9.1-linux-
+amd64.tar.gz
+6. Preparing to install into /usr/local/bin
+7. helm installed into /usr/local/bin/helm
+8. Run 'helm init' to configure helm.
+查看客户端版本：
+1. $ helm version
+2. 
+Client: &version.Version{SemVer:"v2.9.1", 
+GitCommit:"20adb27c7c5868466912eebdf6664e7390ebe710", GitTreeState:"clean"}
+安装 tiller 服务端到 kubernetes 集群：
+1. $ helm init
+2. Creating /root/.helm
+3. Creating /root/.helm/repository
+4. Creating /root/.helm/repository/cache
+5. Creating /root/.helm/repository/local
+6. Creating /root/.helm/plugins
+7. Creating /root/.helm/starters
+8. Creating /root/.helm/cache/archive
+9. Creating /root/.helm/repository/repositories.yaml
+10. Adding stable repo with URL: https://kubernetes-charts.storage.googleapis.com
+11. Adding local repo with URL: http://127.0.0.1:8879/charts
+安装 Helm
+安装 Helm V2
+安装 Helm
+- 149 -
+本文档使用 书栈(BookStack.CN) 构建
+
+12. $HELM_HOME has been configured at /root/.helm.
+13. 
+14. 
+Tiller (the Helm server-side component) has been installed into your Kubernetes 
+Cluster.
+15. 
+16. 
+Please note: by default, Tiller is deployed with an insecure 'allow 
+unauthenticated users' policy.
+17. 
+For more information on securing your installation see: 
+https://docs.helm.sh/using_helm/#securing-your-helm-installation
+18. Happy Helming!
+查看 tiller 是否启动成功:
+1. $ kubectl get pods --namespace=kube-system | grep tiller
+2. 
+tiller-deploy-dccdb6fd9-2df4r          0/1       ImagePullBackOff   0          
+14h
+如果状态是 ImagePullBackOff ，说明是镜像问题，一般是未拉取到镜像（国内机器拉取不到
+gcr.io 下的镜像) 可以查看下是什么镜像:
+1. $ kubectl describe pod tiller-deploy-dccdb6fd9-2df4r --namespace=kube-system
+2. Events:
+3.   Type     Reason   Age                   From                Message
+4.   ----     ------   ----                  ----                -------
+5. 
+  Warning  Failed   36m (x5 over 12h)     kubelet, k8s-node1  Failed to pull 
+image "gcr.io/kubernetes-helm/tiller:v2.9.1": rpc error: code = Unknown desc = 
+Get https://gcr.io/v1/_ping: dial tcp 64.233.189.82:443: i/o timeout
+6. 
+  Normal   BackOff  11m (x3221 over 14h)  kubelet, k8s-node1  Back-off pulling 
+image "gcr.io/kubernetes-helm/tiller:v2.9.1"
+7. 
+  Warning  Failed   6m (x3237 over 14h)   kubelet, k8s-node1  Error: 
+ImagePullBackOff
+8. 
+  Warning  Failed   1m (x15 over 14h)     kubelet, k8s-node1  Failed to pull 
+image "gcr.io/kubernetes-helm/tiller:v2.9.1": rpc error: code = Unknown desc = 
+Get https://gcr.io/v1/_ping: dial tcp 64.233.188.82:443: i/o timeout
+把这个没拉取到镜像想办法下载到这台机器上。当我们看到状态为  Running  说明 tiller 已经成
+功运行了:
+1. $ kubectl get pods -n kube-system | grep tiller
+2. 
+tiller-deploy-dccdb6fd9-2df4r                   1/1       Running   1          
+41d
+默认安装的 tiller 权限很小，我们执行下面的脚本给它加最大权限，这样方便我们可以用 helm 部
+安装 Helm
+- 150 -
+本文档使用 书栈(BookStack.CN) 构建
+
+署应用到任意 namespace 下:
+1. kubectl create serviceaccount --namespace=kube-system tiller
+2. 
+3. 
+kubectl create clusterrolebinding tiller-cluster-rule --clusterrole=cluster-
+admin --serviceaccount=kube-system:tiller
+4. 
+5. 
+kubectl patch deploy --namespace=kube-system tiller-deploy -p '{"spec":
+{"template":{"spec":{"serviceAccount":"tiller"}}}}'
+更多参考官方文档: https://helm.sh/docs/using_helm/#quickstart-guide
+在 https://github.com/helm/helm/releases 找到对应系统的二进制包下载，比如下载
+ v3.0.0-beta.3  的  linux amd64  版:
+1. $ wget https://get.helm.sh/helm-v3.0.0-beta.3-linux-amd64.tar.gz
+解压并移动到  PATH  下面:
+1. $ tar -zxvf helm-v3.0.0-beta.3-linux-amd64.tar.gz
+2. linux-amd64/
+3. linux-amd64/LICENSE
+4. linux-amd64/helm
+5. linux-amd64/README.md
+6. $ cd linux-amd64/
+7. $ ls
+8. LICENSE  README.md  helm
+9. $ mv helm /usr/local/bin/helm3
+安装 Helm V3
+安装 Helm
+- 151 -
+本文档使用 书栈(BookStack.CN) 构建
+
+Helm V3 与 V2 版本架构变化较大，数据迁移比较麻烦，官方提供了一个名为  helm-2to3  的插
+件来简化迁移工作，本文将介绍如何利用此插件迁移 Helm V2 到 V3 版本。这里前提是 Helm V3
+已安装，安装方法请参考 这里。
+一键安装:
+1. $ helm3 plugin install https://github.com/helm/helm-2to3
+2. Downloading and installing helm-2to3 v0.1.1 ...
+3. https://github.com/helm/helm-2to3/releases/download/v0.1.1/helm-2to3_0.1.1_linux_
+4. Installed plugin: 2to3
+检查插件是否安装成功:
+1. $ helm3 plugin list
+2. NAME    VERSION    DESCRIPTION
+3. 
+2to3    0.1.1      migrate Helm v2 configuration and releases in-place to Helm 
+v3
+1. $ helm3 2to3 move config
+2. [Helm 2] Home directory: /root/.helm
+3. [Helm 3] Config directory: /root/.config/helm
+4. [Helm 3] Data directory: /root/.local/share/helm
+5. [Helm 3] Create config folder "/root/.config/helm" .
+6. [Helm 3] Config folder "/root/.config/helm" created.
+7. 
+[Helm 2] repositories file "/root/.helm/repository/repositories.yaml" will copy 
+to [Helm 3] config folder "/root/.config/helm/repositories.yaml" .
+8. 
+[Helm 2] repositories file "/root/.helm/repository/repositories.yaml" copied 
+successfully to [Helm 3] config folder "/root/.config/helm/repositories.yaml" .
+9. [Helm 3] Create data folder "/root/.local/share/helm" .
+10. [Helm 3] data folder "/root/.local/share/helm" created.
+11. 
+[Helm 2] plugins "/root/.helm/plugins" will copy to [Helm 3] data folder 
+"/root/.local/share/helm/plugins" .
+Helm V2 迁移到 V3
+安装 2to3 插件
+迁移 Helm V2 配置
+Helm V2 迁移到 V3
+- 152 -
+本文档使用 书栈(BookStack.CN) 构建
+
+12. 
+[Helm 2] plugins "/root/.helm/plugins" copied successfully to [Helm 3] data 
+folder "/root/.local/share/helm/plugins" .
+13. 
+[Helm 2] starters "/root/.helm/starters" will copy to [Helm 3] data folder 
+"/root/.local/share/helm/starters" .
+14. 
+[Helm 2] starters "/root/.helm/starters" copied successfully to [Helm 3] data 
+folder "/root/.local/share/helm/starters" .
+上面的操作主要是迁移:
+Chart 仓库
+Helm 插件
+Chart starters
+检查下 repo 和 plugin:
+1. $ helm3 repo list
+2. NAME      URL
+3. stable    https://kubernetes-charts.storage.googleapis.com
+4. local     http://127.0.0.1:8879/charts
+5. $
+6. $
+7. $ helm3 plugin list
+8. NAME    VERSION    DESCRIPTION
+9. 
+2to3    0.1.1      migrate Helm v2 configuration and releases in-place to Helm 
+v3
+10. push    0.1.1      Push chart package to TencentHub
+已经用 Helm V2 部署的应用也可以使用  2to3  的  convert  子命令迁移到 V3，先看下有哪
+些选项:
+1. $ helm3 2to3 convert --help
+2. migrate Helm v2 release in-place to Helm v3
+3. 
+4. Usage:
+5.   2to3 convert [flags] RELEASE
+6. 
+7. Flags:
+8. 
+      --delete-v2-releases       v2 releases are deleted after migration. By 
+default, the v2 releases are retained
+9.       --dry-run                  simulate a convert
+迁移 Heml V2 Release
+Helm V2 迁移到 V3
+- 153 -
+本文档使用 书栈(BookStack.CN) 构建
+
+10.   -h, --help                     help for convert
+11. 
+  -l, --label string             label to select tiller resources by (default 
+"OWNER=TILLER")
+12. 
+  -s, --release-storage string   v2 release storage type/object. It can be 
+'secrets' or 'configmaps'. This is only used with the 'tiller-out-cluster' flag 
+(default "secrets")
+13.   -t, --tiller-ns string         namespace of Tiller (default "kube-system")
+14. 
+      --tiller-out-cluster       when  Tiller is not running in the cluster 
+e.g. Tillerless
+ --tiller-out-cluster : 如果你的 Helm V2 是 tiller 在集群外面 (tillerless) 的
+安装方式，请带上这个参数
+ --dry-run : 模拟迁移但不做真实迁移操作，建议每次迁移都先带上这个参数测试下效果，没
+问题的话再去掉这个参数做真实迁移
+ --tiller-ns : 通常 tiller 如果部署在集群中，并且不在  kube-system  命名空间才指
+定
+看下目前有哪些 helm v2 的 release:
+1. $ helm ls
+2. 
+NAME     REVISION    UPDATED                     STATUS      CHART          APP 
+VERSION    NAMESPACE
+3. 
+redis    1           Mon Sep 16 14:46:58 2019    DEPLOYED    redis-9.1.3    
+5.0.5          default
+选一个用  --dry-run  试下效果:
+1. $ helm3 2to3 convert redis --dry-run
+2. NOTE: This is in dry-run mode, the following actions will not be executed.
+3. Run without --dry-run to take the actions described below:
+4. 
+5. Release "redis" will be converted from Helm 2 to Helm 3.
+6. [Helm 3] Release "redis" will be created.
+7. [Helm 3] ReleaseVersion "redis.v1" will be created.
+没有报错，去掉  --dry-run  执行迁移:
+1. $ helm3 2to3 convert redis
+2. Release "redis" will be converted from Helm 2 to Helm 3.
+3. [Helm 3] Release "redis" will be created.
+4. [Helm 3] ReleaseVersion "redis.v1" will be created.
+5. [Helm 3] ReleaseVersion "redis.v1" created.
+Helm V2 迁移到 V3
+- 154 -
+本文档使用 书栈(BookStack.CN) 构建
+
+6. [Helm 3] Release "redis" created.
+7. 
+Release "redis" was converted successfully from Helm 2 to Helm 3. Note: the v2 
+releases still remain and should be removed to avoid conflicts with the 
+migrated v3 releases.
+检查迁移结果:
+1. $ helm ls
+2. 
+NAME     REVISION    UPDATED                     STATUS      CHART          APP 
+VERSION    NAMESPACE
+3. 
+redis    1           Mon Sep 16 14:46:58 2019    DEPLOYED    redis-9.1.3    
+5.0.5          default
+4. $
+5. $
+6. $ helm3 ls -a
+7. 
+NAME     NAMESPACE    REVISION    UPDATED                                    
+STATUS      CHART
+8. 
+redis    default      1           2019-09-16 06:46:58.541391356 +0000 UTC    
+deployed    redis-9.1.3
+helm 3 的 release 区分了命名空间，带上  -a  参数展示所有命名空间的 release
+How to migrate from Helm v2 to Helm v3: https://helm.sh/blog/migrate-
+from-helm-v2-to-helm-v3/
+参考资料
+Helm V2 迁移到 V3
+- 155 -
+本文档使用 书栈(BookStack.CN) 构建
+
+Kubernetes 自 v1.6 以来，官方就宣称单集群最大支持 5000 个节点。不过这只是理论上，在具
+体实践中从 0 到 5000，还是有很长的路要走，需要见招拆招。
+官方标准如下：
+不超过 5000 个节点
+不超过 150000 个 pod
+不超过 300000 个容器
+每个节点不超过 100 个 pod
+1. # max-file 表示系统级别的能够打开的文件句柄的数量， 一般如果遇到文件句柄达到上限时，会碰到
+2. # "Too many open files" 或者 Socket/File: Can’t open so many files 等错误
+3. fs.file-max=1000000
+4. 
+5. # 配置 arp cache 大小
+6. # 存在于 ARP 高速缓存中的最少层数，如果少于这个数，垃圾收集器将不会运行。缺省值是 128
+7. net.ipv4.neigh.default.gc_thresh1=1024
+8. 
+# 保存在 ARP 高速缓存中的最多的记录软限制。垃圾收集器在开始收集前，允许记录数超过这个数字 5 
+秒。缺省值是 512
+9. net.ipv4.neigh.default.gc_thresh2=4096
+10. 
+# 保存在 ARP 高速缓存中的最多记录的硬限制，一旦高速缓存中的数目高于此，垃圾收集器将马上运行。
+缺省值是 1024
+11. net.ipv4.neigh.default.gc_thresh3=8192
+12. # 以上三个参数，当内核维护的 arp 表过于庞大时候，可以考虑优化
+13. 
+14. # 允许的最大跟踪连接条目，是在内核内存中 netfilter 可以同时处理的“任务”（连接跟踪条目）
+15. net.netfilter.nf_conntrack_max=10485760
+16. net.netfilter.nf_conntrack_tcp_timeout_established=300
+17. # 哈希表大小（只读）（64位系统、8G内存默认 65536，16G翻倍，如此类推）
+18. net.netfilter.nf_conntrack_buckets=655360
+19. 
+20. # 每个网络接口接收数据包的速率比内核处理这些包的速率快时，允许送到队列的数据包的最大数目
+21. net.core.netdev_max_backlog=10000
+22. 
+23. # 默认值: 128 指定了每一个 real user ID 可创建的 inotify instatnces 的数量上限
+24. fs.inotify.max_user_instances=524288
+大规模集群优化
+内核参数调优
+大规模集群优化
+- 156 -
+本文档使用 书栈(BookStack.CN) 构建
+
+25. # 默认值: 8192 指定了每个inotify instance相关联的watches的上限
+26. fs.inotify.max_user_watches=524288
+部署一个高可用ETCD集群可以参考官方文档: https://github.com/etcd-
+io/etcd/blob/master/Documentation/op-guide/clustering.md
+如果是 self-host 方式部署的集群，可以用 etcd-operator 部署 etcd 集群；也可以使用另一个小集群
+专门部署 etcd (使用 etcd-operator)
+ETCD 对磁盘写入延迟非常敏感，对于负载较重的集群建议磁盘使用 SSD 固态硬盘。可以使用
+diskbench 或 fio 测量磁盘实际顺序 IOPS。
+由于 ETCD 必须将数据持久保存到磁盘日志文件中，因此来自其他进程的磁盘活动可能会导致增加写
+入时间，结果导致 ETCD 请求超时和临时 leader 丢失。当给定高磁盘优先级时，ETCD 服务可以稳
+定地与这些进程一起运行:
+1. sudo ionice -c2 -n0 -p $(pgrep etcd)
+默认 ETCD 空间配额大小为 2G，超过 2G 将不再写入数据。通过给 ETCD 配置  --quota-
+backend-bytes  参数增大空间配额，最大支持 8G。
+集群规模大的情况下，集群中包含大量节点和服务，会产生大量的 event，这些 event 将会对
+etcd 造成巨大压力并占用大量 etcd 存储空间，为了在大规模集群下提高性能，可以将 events 存
+储在单独的 ETCD 集群中。
+配置 kube-apiserver：
+1. 
+--etcd-servers="http://etcd1:2379,http://etcd2:2379,http://etcd3:2379" --etcd-ser
+overrides="/events#http://etcd4:2379,http://etcd5:2379,http://etcd6:2379"
+ETCD 优化
+高可用部署
+提高磁盘 IO 性能
+提高 ETCD 的磁盘 IO 优先级
+提高存储配额
+分离 events 存储
+大规模集群优化
+- 157 -
+本文档使用 书栈(BookStack.CN) 构建
+
+如果有大量并发客户端请求 ETCD leader 服务，则可能由于网络拥塞而延迟处理 follower 对等
+请求。在 follower 节点上的发送缓冲区错误消息：
+1. dropped MsgProp to 247ae21ff9436b2d since streamMsg's sending buffer is full
+2. dropped MsgAppResp to 247ae21ff9436b2d since streamMsg's sending buffer is full
+可以通过在客户端提高 ETCD 对等网络流量优先级来解决这些错误。在 Linux 上，可以使用 tc 对
+对等流量进行优先级排序：
+1. $ tc qdisc add dev eth0 root handle 1: prio bands 3
+2. 
+$ tc filter add dev eth0 parent 1: protocol ip prio 1 u32 match ip sport 2380 
+0xffff flowid 1:1
+3. 
+$ tc filter add dev eth0 parent 1: protocol ip prio 1 u32 match ip dport 2380 
+0xffff flowid 1:1
+4. 
+$ tc filter add dev eth0 parent 1: protocol ip prio 2 u32 match ip sport 2379 
+0xffff flowid 1:1
+5. 
+$ tc filter add dev eth0 parent 1: protocol ip prio 2 u32 match ip dport 2379 
+0xffff flowid 1:1
+GCE 推荐配置：
+1-5 节点: n1-standard-1
+6-10 节点: n1-standard-2
+11-100 节点: n1-standard-4
+101-250 节点: n1-standard-8
+251-500 节点: n1-standard-16
+超过 500 节点: n1-standard-32
+AWS 推荐配置：
+1-5 节点: m3.medium
+6-10 节点: m3.large
+11-100 节点: m3.xlarge
+101-250 节点: m3.2xlarge
+251-500 节点: c4.4xlarge
+减小网络延迟
+Master 节点配置优化
+大规模集群优化
+- 158 -
+本文档使用 书栈(BookStack.CN) 构建
+
+超过 500 节点: c4.8xlarge
+对应 CPU 和内存为：
+1-5 节点: 1vCPU 3.75G内存
+6-10 节点: 2vCPU 7.5G内存
+11-100 节点: 4vCPU 15G内存
+101-250 节点: 8vCPU 30G内存
+251-500 节点: 16vCPU 60G内存
+超过 500 节点: 32vCPU 120G内存
+方式一: 启动多个 kube-apiserver 实例通过外部 LB 做负载均衡。
+方式二: 设置  --apiserver-count  和  --endpoint-reconciler-type ，可使得多个
+kube-apiserver 实例加入到 Kubernetes Service 的 endpoints 中，从而实现高可
+用。
+不过由于 TLS 会复用连接，所以上述两种方式都无法做到真正的负载均衡。为了解决这个问题，可以
+在服务端实现限流器，在请求达到阀值时告知客户端退避或拒绝连接，客户端则配合实现相应负载切换
+机制。
+kube-apiserver 以下两个参数可以控制连接数:
+1. 
+--max-mutating-requests-inflight int           The maximum number of mutating 
+requests in flight at a given time. When the server exceeds this, it rejects 
+requests. Zero for no limit. (default 200)
+2. 
+--max-requests-inflight int                    The maximum number of non-
+mutating requests in flight at a given time. When the server exceeds this, it 
+rejects requests. Zero for no limit. (default 400)
+节点数量在 1000 - 3000 之间时，推荐：
+1. --max-requests-inflight=1500
+2. --max-mutating-requests-inflight=500
+节点数量大于 3000 时，推荐：
+kube-apiserver 优化
+高可用
+控制连接数
+大规模集群优化
+- 159 -
+本文档使用 书栈(BookStack.CN) 构建
+
+1. --max-requests-inflight=3000
+2. --max-mutating-requests-inflight=1000
+kube-controller-manager 和 kube-scheduler 是通过 leader election 实现高可用，启
+用时需要添加以下参数:
+1. --leader-elect=true
+2. --leader-elect-lease-duration=15s
+3. --leader-elect-renew-deadline=10s
+4. --leader-elect-resource-lock=endpoints
+5. --leader-elect-retry-period=2s
+与 kube-apiserver 通信的 qps 限制，推荐为：
+1. --kube-api-qps=100
+设置反亲和，让集群 DNS (kube-dns 或 coredns) 分散在不同节点，避免单点故障:
+1. affinity:
+2.  podAntiAffinity:
+3.    requiredDuringSchedulingIgnoredDuringExecution:
+4.    - weight: 100
+5.      labelSelector:
+6.        matchExpressions:
+7.        - key: k8s-app
+8.          operator: In
+9.          values:
+10.          - kube-dns
+11.      topologyKey: kubernetes.io/hostname
+kube-scheduler 与 kube-controller-manager
+优化
+高可用
+控制 QPS
+集群 DNS 高可用
+大规模集群优化
+- 160 -
+本文档使用 书栈(BookStack.CN) 构建

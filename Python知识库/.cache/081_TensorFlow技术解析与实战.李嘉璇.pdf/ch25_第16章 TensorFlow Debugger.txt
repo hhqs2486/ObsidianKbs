@@ -1,0 +1,115 @@
+第16 章 
+TensorFlow Debugger
+① 
+TensorFlow Debugger（tfdbg）是TensorFlow 的专用调试器。它使用断点和计算机图形化来
+展现实时数据流，提供了运行TensorFlow 图形的内部结构和状态的可视化。这种可视化非常有
+助于在训练和推理期间调试各种类型的模型错误。
+本章会通过讲解如何调试TensorFlow 模型开发中一种常见的错误类型—非数字（nan）
+和无限值（inf）导致的训练失败，来展示tfdbg 命令行界面（command line interface，CLI）的
+功能。而这对一般调试器（如C++的gdb 或者Python 的pdb）来说，是很难调试的。 
+此外，TensorFlow 这种使用符号式编程的语言本身就以难调试而闻名，没有经验的开发者常常
+很难直观地感受数据流图在做什么，因此，出现了问题就难以定位，更谈不上说高级的优化任务。 
+16.1  Debugger 的使用示例 
+本节我们以一个错误运行的MNIST 训练为例，看看如何通过TensorFlow Debugger 来找到
+出错的地方，并改正。源代码位于tensorflow-1.1.0/tensorflow/python/debug/examples/debug_ 
+mnist.py。我们先不加调试器，直接执行，如下： 
+python -m tensorflow.python.debug.examples.debug_mnist 
+也可以进入tensorflow-1.1.0/tensorflow/python/debug/examples 执行： 
+python debug_mnist.py 
+经过10 次训练，结果如下： 
+Accuracy at step 0: 0.1113 
+Accuracy at step 1: 0.3712 
+Accuracy at step 2: 0.098 
+Accuracy at step 3: 0.098 
+①
+本章内本本本本本https://www.tensorflow.org/programmers_guide/debugger。 
+
+242 ff 第三篇 提高篇 
+Accuracy at step 4: 0.098 
+Accuracy at step 5: 0.098 
+Accuracy at step 6: 0.098 
+Accuracy at step 7: 0.098 
+Accuracy at step 8: 0.098 
+Accuracy at step 9: 0.098 
+可以看出，准确率在第一次训练时有所上升，后面一直保持在较低的水平。
+下面我们就用TensorFlow Debugger 来尝试调试。仅需本在原有的文件中加上下面3 行代码，就
+可以在每次调用run()之前和之后调用基于终端的用户界面（UI），来控制执行和检查图的内部状态： 
+from tensorflow.python import debug as tf_debug 
+sess = tf_debug.LocalCLIDebugWrapperSession(sess) 
+sess.add_tensor_filter("has_inf_or_nan", tf_debug.has_inf_or_nan) 
+在这个例子中，我们为张量值注册了一个过滤器has_inf_or_nan，它能够判断出图的任何中
+间张量中是否有nan 或inf 值。 
+现在我们就开启调试模式（debug），找出准确率无法提高的原因。首先执行： 
+python -m tensorflow.python.debug.examples.debug_mnist –debug 
+也可以通过如下方式执行：
+python debug_mnist.py --debug=True 
+这时就进入了Debugger 的界面，如图16-1 所示。 
+图16-1 
+这就是我们说的运行开始的UI（run-start UI）。在tfdbg>后面可以输入交互式的命令，如
+
+第16 章 TensorFlow Debugger ee 243 
+run()（或者缩写r），就可以进入运行结束后UI（run-end UI），如图16-2 所示。 
+图16-2 
+在图16-2 中，可以看到，数值并没有异常。然后，可以通过如下命令连续运行10 次： 
+tfdbg> run -t 10 
+可以使用下面的命令直到找出在图形中的第一个nan 或者inf 值（这类似于调试中的打断点）： 
+tfdbg> run -f has_inf_or_nan 
+结果如图16-3 所示。 
+图16-3 
+
+244 ff 第三篇 提高篇 
+第一行的灰底字（电脑屏幕中显示为红字），表示tfdbg 在调用run()后立即停止，生成了通
+过指定过滤器has_inf_or_nan 的中间张量。如图16-3 所示，在第4 次调用run()期间，有36 个
+中间张量包含inf 或者nan 值，首次出现在cross_entropy/Log:0。 
+单击图中的cross_entropy/Log:0，并且单击下划线的node_info 菜单项，仔细看一下这个节
+点的输入张量，并且看看里面是否有0 值。方法如下： 
+tfdbg> pt softmax/Softmax:0 
+tfdbg> /0\.000 
+果然是有0 值，如图16-4 所示。 
+图16-4 
+用ni 命令的-t 标志进行追溯，方法如下： 
+ni -t cross_entropy/Log 
+追溯结果如图16-5 所示，可以看到debug_mnist.py 文件的第102 行是罪魁祸首。 
+图16-5 
+于是，我们对tf.log 的输入值进行裁剪，将这个问题解决： 
+diff = y_ * tf.log(tf.clip_by_value(y, 1e-8, 1.0)) 
+再次运行后，准确率不再低值徘徊，恢复正常。
+TensorFlow Debugger 是一个非常好用的调试工具，还有很多交互式命令，感兴趣的读者可
+以进一步本本tfdbg 的命令行接口教程
+①。 
+①
+https://www.tensorflow.org/programmers_guide/debugger
+
+第16 章 TensorFlow Debugger ee 245 
+16.2  远程调试方法 
+上面的使用示例是在本地的调试方法。但通常情况下，数据是在远程机器上训练，更一般
+的情况是，深度学习越来越倾向于在云端训练，本地不能访问训练过程中的数据。那么，这种
+情况下如何进行模型的调试呢？
+这时采用tfdbg 的offline_analyzer。设置一个本地和远程机器都能访问的共享目录，如
+/home/somebody/tfdbg_dumps_1。然后，通过debug_utils.watch_graph 函数设置运行时的本数选
+项。在运行session.run()时就会将中间张量和运行时的图像转储到共享目录中。方法如下： 
+from tensorflow.python.debug import debug_utils
+# 此处代码如：构建图，生成session 对象等。已省略
+run_options = tf.RunOptions()
+debug_utils.watch_graph(
+  run_options,
+  session.graph,
+  debug_urls=["file:///home/somebody/tfdbg_dumps_1"])  # 共享目录的位置
+# 这里如果用多个客户端执行run，应该使用多个不同的共享目录
+session.run(fetches, feed_dict=feeds, options=run_options) 
+ 这样，在本地终端上就可以使用tfdbg 的offline_analyzer 来加载和检查共享目录中的数据。
+方法如下：
+python -m tensorflow.python.debug.cli.offline_analyzer \
+--dump_dir=/home/somebody/tfdbg_dumps_1 
+另一种更简单和灵活的方法是使用会话的包装器函数DumpingDebugWrapperSession 来在
+共享目录中产生训练中的累积文件。直接这样使用：
+from tensorflow.python.debug import debug_utils
+sess = tf_debug.DumpingDebugWrapperSession(
+  sess, "/home/somebody/tfdbg_dumps_1/", watch_fn=my_watch_fn)
+ 16.3  小结 
+本章本本介绍了TensorFlow Debugger，这是一个非常有用的调试工具。在训练神经网络的
+过程中，开发者常常会因为各种原因，写错某个本数或者变量的值，虽然这时候训练过程不会
+报错，但是会导致损失值很长时间都不下降，模型收敛很慢。本章还介绍了远程调试的方法。
+以往面对这种情况，开发人员需本费很大力气去查找原因。使用TensorFlow Debugger 可以在早
+期的一两次迭代中，观察张量的正确与否，给调试带来极大帮助。Debugger 是TensorFlow 1.0
+新加入的特性，目前还在不断完善，并且有望和TensorBoard 结合，更大限度地简化调试过程。 

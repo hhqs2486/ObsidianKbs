@@ -1,0 +1,338 @@
+46. Helm 模板之控制流程
+ 模板函数和管道 是通过转换信息并将其插⼊到 YAML ⽂件中的强⼤⽅法。但有时候需要添加⼀些⽐插⼊
+字符串更复杂⼀些的模板逻辑。这就需要使⽤到模板语⾔中提供的控制结构了。
+控制流程为我们提供了控制模板⽣成流程的⼀种能⼒，Helm 的模板语⾔提供了以下⼏种流程控制：
+ if/else  条件块
+ with  指定范围
+ range  循环块
+除此之外，它还提供了⼀些声明和使⽤命名模板段的操作：
+ define 在模板中声明⼀个新的命名模板
+ template 导⼊⼀个命名模板
+ block 声明了⼀种特殊的可填写的模板区域
+关于 命名模板 的相关知识点，我们会在后⾯的课程中和⼤家接触到，这⾥我们暂时和⼤家介
+绍 if/else 、 with 、 range 这3中控制流程的⽤法。
+if/else 条件
+ if/else 块是⽤于在模板中有条件地包含⽂本块的⽅法，条件块的基本结构如下：
+{{ if PIPELINE }}
+  # Do something
+{{ else if OTHER PIPELINE }}
+  # Do something else
+{{ else }}
+  # Default case
+{{ end }}
+当然要使⽤条件块就得判断条件是否为真，如果值为下⾯的⼏种情况，则管道的结果为 false：
+⼀个布尔类型的 假 
+⼀个数字 零 
+⼀个 空 的字符串
+⼀个 nil （空或 null ）
+⼀个空的集合（ map 、 slice 、 tuple 、 dict 、 array ）
+除了上⾯的这些情况外，其他所有条件都为 真 。
+同样还是以上⾯的 ConfigMap 模板⽂件为例，添加⼀个简单的条件判断，如果 python 被设置为
+django，则添加⼀个 web: true ：（tempaltes/configmap.yaml）
+apiVersion: v1
+kind: ConfigMap
+metadata:
+Helm 模板之控制流程
+290
+
+  name: {{ .Release.Name }}-configmap
+data:
+  myvalue: {{ .Values.hello | default  "Hello World" | quote }}
+  k8s: {{ .Values.course.k8s | upper | quote }}
+  python: {{ .Values.course.python | repeat 3 | quote }}
+  {{ if eq .Values.course.python "django" }}web: true{{ end }}
+在上⾯的模板⽂件中我们增加了⼀个条件语句判断 {{ if eq .Values.course.python "django" }}web:
+true{{ end }} ，其中运算符 eq 是判断是否相等的操作，除此之外，还
+有 ne 、 lt 、 gt 、 and 、 or 等运算符都是 Helm 模板已经实现了的，直接使⽤即可。这⾥我
+们 {{ .Values.course.python }} 的值在 values.yaml ⽂件中默认被设置为了django，所以正常来说下
+⾯的条件语句判断为真，所以模板⽂件最终被渲染后会有 web: true 这样的的⼀个条⽬：
+$ helm install --dry-run --debug .
+[debug] Created tunnel using local port: '40143'
+......
+---
+# Source: mychart/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fallacious-prawn-configmap
+data:
+  myvalue: "Hello World"
+  k8s: "DEVOPS"
+  python: "djangodjangodjangodjangodjango"
+  web: true
+可以看到上⾯模板被渲染后出现了 web: true 的条⽬，如果我们在安装的时候覆盖下 python 的值呢，
+⽐如我们改成 ai:
+helm install --dry-run --debug --set course.python=ai .
+[debug] Created tunnel using local port: '42802'
+......
+---
+# Source: mychart/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dull-mite-configmap
+data:
+  myvalue: "Hello World"
+  k8s: "DEVOPS"
+  python: "aiaiai"
+根据我们模板⽂件中的定义，如果 {{ .Values.course.python }} 的值为 django 的话就会新增 web:
+true 这样的⼀个条⽬，但是现在我们是不是通过参数 --set 将值设置为了 ai，所以这⾥条件判断为
+假，正常来说就不应该出现这个条⽬了，上⾯我们通过 debug 模式查看最终被渲染的值也没有出现这
+个条⽬，证明条件判断是正确的。
+Helm 模板之控制流程
+291
+
+空格控制
+上⾯我们的条件判断语句是在⼀整⾏中的，如果平时经常写代码的同学可能⾮常不习惯了，我们⼀般
+会将其格式化为更容易阅读的形式，⽐如：
+{{ if eq .Values.course.python "django" }}
+web: true
+{{ end }}
+这样的话看上去⽐之前要清晰很多了，但是我们通过模板引擎来渲染⼀下，会得到如下结果：
+$ helm install --dry-run --debug .
+[debug] Created tunnel using local port: '44537'
+......
+---
+# Source: mychart/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bald-narwhal-configmap
+data:
+  myvalue: "Hello World"
+  k8s: "DEVOPS"
+  python: "djangodjangodjango"
+  web: true
+我们可以看到渲染出来会有多余的空⾏，这是因为当模板引擎运⾏时，它将⼀些值渲染过后，之前的
+指令被删除，但它之前所占的位置完全按原样保留剩余的空⽩了，所以就出现了多余的空
+⾏。 YAML ⽂件中的空格是⾮常严格的，所以对于空格的管理⾮常重要，⼀不⼩⼼就会导致你
+的 YAML ⽂件格式错误。
+我们可以通过使⽤在模板标识 {{ 后⾯添加破折号和空格 {{- 来表示将空⽩左移，⽽在 }} 前⾯添加
+⼀个空格和破折号 -}} 表示应该删除右边的空格，另外需要注意的是换⾏符也是空格！
+使⽤这个语法，我们来修改我们上⾯的模板⽂件去掉多余的空格：（templates/configmap.yaml）
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-configmap
+data:
+  myvalue: {{ .Values.hello | default  "Hello World" | quote }}
+  k8s: {{ .Values.course.k8s | upper | quote }}
+  python: {{ .Values.course.python | repeat 3 | quote }}
+  {{- if eq .Values.course.python "django" }}
+  web: true
+  {{- end }}
+现在我们来查看上⾯模板渲染过后的样⼦：
+Helm 模板之控制流程
+292
+
+$ helm install --dry-run --debug .
+[debug] Created tunnel using local port: '34702'
+......
+---
+# Source: mychart/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mangy-olm-configmap
+data:
+  myvalue: "Hello World"
+  k8s: "DEVOPS"
+  python: "djangodjangodjango"
+  web: true
+现在是不是没有多余的空格了，另外我们需要谨慎使⽤ -}} ，⽐如上⾯模板⽂件中：
+python: {{ .Values.course.python | repeat 3 | quote }}
+{{- if eq .Values.course.python "django" -}}
+web: true
+{{- end }}
+如果我们在 if 条件后⾯增加 -}} ，这会渲染成：
+python: "djangodjangodjango"web: true
+因为 -}} 它删除了双⽅的换⾏符，显然这是不正确的。
+有关模板中空格控制的详细信息，请参阅官⽅ Go 模板⽂档Official Go template documentation
+使⽤ with 修改范围
+接下来我们来看下 with 关键词的使⽤，它⽤来控制变量作⽤域。还记得之前我们的 {{ .Release.xxx
+}} 或者 {{ .Values.xxx }} 吗？其中的 . 就是表示对当前范围的引⽤， .Values 就是告诉模板在当
+前范围中查找 Values 对象的值。⽽ with 语句就可以来控制变量的作⽤域范围，其语法和⼀个简单
+的 if 语句⽐较类似：
+{{ with PIPELINE }}
+  #  restricted scope
+{{ end }}
+ with 语句可以允许将当前范围 . 设置为特定的对象，⽐如我们前⾯⼀直使⽤的 .Values.course ，我
+们可以使⽤ with 来将 . 范围指向 .Values.course ：(templates/configmap.yaml)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-configmap
+Helm 模板之控制流程
+293
+
+data:
+  myvalue: {{ .Values.hello | default  "Hello World" | quote }}
+  {{- with .Values.course }}
+  k8s: {{ .k8s | upper | quote }}
+  python: {{ .python | repeat 3 | quote }}
+  {{- if eq .python "django" }}
+  web: true
+  {{- end }}
+  {{- end }}
+可以看到上⾯我们增加了⼀个 {{- with .Values.course }}xxx{{- end }} 的⼀个块，这样的话我们就
+可以在当前的块⾥⾯直接引⽤ .python 和 .k8s 了，⽽不需要进⾏限定了，这是因为该 with 声明
+将 . 指向了 .Values.course ，在 {{- end }} 后 . 就会复原其之前的作⽤范围了，我们可以使⽤模
+板引擎来渲染上⾯的模板查看是否符合预期结果。
+不过需要注意的是在 with 声明的范围内，此时将⽆法从⽗范围访问到其他对象了，⽐如下⾯的模板
+渲染的时候将会报错，因为显然 .Release 根本就不在当前的 . 范围内，当然如果我们最后两⾏交换
+下位置就正常了，因为 {{- end }} 之后范围就被重置了：
+{{- with .Values.course }}
+k8s: {{ .k8s | upper | quote }}
+python: {{ .python | repeat 3 | quote }}
+release: {{ .Release.Name }}
+{{- end }}
+range 循环
+如果⼤家对编程语⾔熟悉的话，⼏乎所有的编程语⾔都⽀持类似于 for 、 foreach 或者类似功能的循
+环机制，在 Helm 模板语⾔中，是使⽤ range 关键字来进⾏循环操作。
+我们在 values.yaml ⽂件中添加上⼀个课程列表：
+course:
+  k8s: devops
+  python: django
+courselist:
+- k8s
+- python
+- search
+- golang
+现在我们有⼀个课程列表，修改 ConfigMap 模板⽂件来循环打印出该列表：
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-configmap
+data:
+  myvalue: {{ .Values.hello | default  "Hello World" | quote }}
+  {{- with .Values.course }}
+  k8s: {{ .k8s | upper | quote }}
+Helm 模板之控制流程
+294
+
+  python: {{ .python | repeat 3 | quote }}
+  {{- if eq .python "django" }}
+  web: true
+  {{- end }}
+  {{- end }}
+  courselist:
+  {{- range .Values.courselist }}
+  - {{ . | title | quote }}
+  {{- end }}
+可以看到最下⾯我们使⽤了⼀个 range 函数，该函数将会遍历 {{ .Values.courselist }} 列表，循环
+内部我们使⽤的是⼀个 . ，这是因为当前的作⽤域就在当前循环内，这个 . 从列表的第⼀个元素⼀
+直遍历到最后⼀个元素，然后在遍历过程中使⽤了 title 和 quote 这两个函数，前⾯这个函数是将字
+符串⾸字⺟变成⼤写，后⾯就是加上双引号变成字符串，所以按照上⾯这个模板被渲染过后的结果
+为：
+$ helm install --dry-run --debug .
+[debug] Created tunnel using local port: '34626'
+......
+---
+# Source: mychart/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dining-terrier-configmap
+data:
+  myvalue: "Hello World"
+  k8s: "DEVOPS"
+  python: "djangodjangodjango"
+  web: true
+  courselist:
+  - "K8s"
+  - "Python"
+  - "Search"
+  - "Golang"
+我们可以看到 courselist 按照我们的要求循环出来了。除了 list 或者 tuple，range 还可以⽤于遍历具
+有键和值的集合（如map 或 dict），这个就需要⽤到变量的概念了。
+变量
+前⾯我们已经学习了函数、管理以及控制流程的使⽤⽅法，我们知道编程语⾔中还有⼀个很重要的概
+念叫：变量，在 Helm 模板中，使⽤变量的场合不是特别多，但是在合适的时候使⽤变量可以很好的
+解决我们的问题。如下⾯的模板：
+{{- with .Values.course }}
+k8s: {{ .k8s | upper | quote }}
+python: {{ .python | repeat 3 | quote }}
+release: {{ .Release.Name }}
+{{- end }}
+Helm 模板之控制流程
+295
+
+我们在 with 语句块内添加了⼀个 .Release.Name 对象，但这个模板是错误的，编译的时候会失败，
+这是因为 .Release.Name 不在该 with 语句块限制的作⽤范围之内，我们可以将该对象赋值给⼀个变
+量可以来解决这个问题：
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-configmap
+data:
+  {{- $releaseName := .Release.Name -}}
+  {{- with .Values.course }}
+  k8s: {{ .k8s | upper | quote }}
+  python: {{ .python | repeat 3 | quote }}
+  release: {{ $releaseName }}
+  {{- end }}
+我们可以看到我们在 with 语句上⾯增加了⼀句 {{- $releaseName := .Release.Name -}} ，其
+中 $releaseName 就是后⾯的对象的⼀个引⽤变量，它的形式就是 $name ，赋值操作使⽤ := ，这
+样 with 语句块内部的 $releaseName 变量仍然指向的是 .Release.Name ，同样，我们 DEBUG 下查看
+结果：
+$ helm install --dry-run --debug .
+[debug] Created tunnel using local port: '45474'
+......
+---
+# Source: mychart/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nosy-seagull-configmap
+data:
+  k8s: "DEVOPS"
+  python: "djangodjangodjango"
+  release: nosy-seagull
+可以看到已经正常了，另外变量在 range 循环中也⾮常有⽤，我们可以在循环中⽤变量来同时捕获索
+引的值：
+courselist:
+{{- range $index, $course := .Values.courselist }}
+- {{ $index }}: {{ $course | title | quote }}
+{{- end }}
+例如上⾯的这个列表，我们在 range 循环中使⽤ $index 和 $course 两个变量来接收后⾯列表循环的
+索引和对应的值，最终可以得到如下结果：
+$ helm install --dry-run --debug .
+[debug] Created tunnel using local port: '38876'
+......
+Helm 模板之控制流程
+296
+
+---
+# Source: mychart/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vetoed-anaconda-configmap
+data:
+  courselist:
+  - 0: "K8s"
+  - 1: "Python"
+  - 2: "Search"
+  - 3: "Golang"
+我们可以看到 courselist 下⾯将索引和对应的值都打印出来了，实际上具有键和值的数据结构我们都可
+以使⽤ range 来循环获得⼆者的值，⽐如我们可以对 .Values.course 这个字典来进⾏循环：
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-configmap
+data:
+  {{- range $key, $value := .Values.course }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+直接使⽤ range 循环，⽤变量 $key 、 $value 来接收字段 .Values.course 的键和值。这就是变量在
+Helm 模板中的使⽤⽅法。
+点击查看本⽂视频
+扫描下⾯的⼆维码(或微信搜索 k8s技术圈 )关注我们的微信公众帐号，在微信公众帐号中回复 加群 即
+可加⼊到我们的 kubernetes 讨论群⾥⾯共同学习。
+Helm 模板之控制流程
+297
+
+k8s技术圈⼆维码
+Copyright © qikqiak.com 2018 all right reserved，powered by GitbookUpdated: 2019-03-12 13:04:53
+Helm 模板之控制流程
+298

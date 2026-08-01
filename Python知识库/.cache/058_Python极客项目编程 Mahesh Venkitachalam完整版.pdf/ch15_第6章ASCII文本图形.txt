@@ -1,0 +1,368 @@
+第   章 
+ASCII 文本图形 
+在20 世纪90 年代，电子邮件占据着统治地位，图形处理能
+力很有限，常见的做法是在电子邮件中包含一个签名，它是由文
+本制作的图形，一般称为ASCII 文本图形（ASCII 是一个简单的
+字符编码方案）。图6-1 展示了两个例子。尽管因特网已经让共
+享图像容易很多，但出身卑微的文本图形还没有消失。
+ASCII 文本图形的源头是19 世纪后期出现的打字机文本图
+形。在20 世纪60 年代，计算机有了较弱的图形处理硬件，ASCII 被用于表示图形。
+今天，ASCII 文本图形继续作为因特网上的一种表现形式，你可以在网上找到各种
+创意的例子。
+这个项目用Python 创建一个程序，从图像生成ASCII 文本图形。该程序让你
+指定输出（文本列数）的宽度，并设置垂直比例因子。它也支持两种灰度值到ASCII
+字符的映射：稀疏的10 级映射和更精细校正的70 级映射。 
+要从图像生成ASCII 文本图形，需要学习如何做到以下几点： 
+•
+用Pillow 将彩色图像转换成灰度图像，它是Python 的图像库（PIL）的一个
+分支；
+•
+使用numpy 计算灰度图像的平均亮度；
+•
+用一个字符串作为灰度值的快速查找表。
+6
+
+80 Python 极客项目编程 
+图6-1  ASCII 文本图形的例子 
+6.1  工作原理 
+该项目利用了这样一个事实：从远处看，我们将灰度图像看成是它们亮度的
+平均值。例如，在图6-2 中，可以看到一个建筑物的灰度图像，在它旁边，是填
+充了该建筑物图像的平均亮度值的图像。如果穿过一间屋子来看这两幅图像，它
+们看起来相似。
+ASCII 文本图形的生成方法是，将图像分割成小块，并用ASCII 字符替换一小
+块的平均RGB 值。从远处看，因为眼睛的分辨率有限，我们大致会丢失细节，看
+到ASCII 文本图形中的“平均”值，否则文本图形看起来就不那么真实。 
+图6-2  灰度图像的平均值 
+
+第6 章  ASCII 文本图形 81 
+该程序将给定的图像先转换为8 位的灰度，让每个像素有一个灰度值，范围在
+[0,255]（8 位整数的范围）。将这个8 位值看成是亮度，0 表示黑色，255 表示白色，
+中间值是不同程度的灰色。
+接着，将该图像分割成M×N 个小块构成的网格（其中，M 和N 是ASCII 文
+本图形中的行和列编号）。然后程序计算网格中每个小块的平均亮度值，通过预定
+义的一些有梯度的ASCII 字符（一组不断增加的值）来表示[0,255]范围的灰度值，
+与适当的ASCII 字符匹配。它将用这些值作为亮度值的查找表。 
+完成的ASCII 文本图形只是一些文本行。要显示文本，就要用到Courier 这样
+的等宽字体，因为如果每个文本字符宽度不相同，图像中字符将无法正确地按网格
+排列，会得到间隔不均和失真的输出。
+所用字体的“横纵比”（宽度与高度之比）也会影响最终图像。如果一个字符
+所占空间的横纵比与该字符取代的图像小块的横纵比不同，则最终的ASCII 字符图
+形会出现失真。实际上，你试图用一个ASCII 字符来替换图像小块，所以它们的形
+状要匹配。例如，如果将图像分割成正方形小块，然后用一种高度拉伸的字体替换
+每个小块，最终的结果将出现垂直拉伸。
+为了解决这个问题，需要缩放网格中的行数，以匹配Courier 的长宽比。（可以
+向程序发送命令行参数，修改缩放，以匹配其他字体。）
+总之，下面是程序生成ASCII 文本图形的步骤： 
+1．将输入图像转成灰度； 
+2．将图像分成M×N 个小块； 
+3．修正M（行数），以匹配图像和字体的横纵比； 
+4．计算每个小块图像的平均亮度，然后为每个小块查找合适的ASCII 字符； 
+5．汇集各行ASCII 字符串，将它们打印到文件，形成最终图像。 
+6.2  所需模块 
+这个项目将使用Pillow（Python 图像库的友好分支）来读取图像，访问它们的
+底层数据，创建并修改它们。还将使用numpy 库来计算平均值。 
+6.3  代码 
+开始先定义灰度等级，用于生成ASCII 文本图形。然后，考虑如何将图像分割
+成小块，以及如何计算这些小块的平均亮度。接下来，用ASCII 字符替换小块，生
+成最终的输出。最后，为程序设置命令行解析，允许用户指定输出尺寸、输出文件
+名，等等。
+整个项目的代码，请参阅6.4 节。 
+
+82 Python 极客项目编程 
+6.3.1  定义灰度等级和网格 
+创建程序的第一步是，先定义两种灰度等级作为全局值，用于将亮度值转换为
+ASCII 字符。 
+# 70 levels of gray 
+ gscale1 = "$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\|()1{}[]?-_+~<>i!lI;:,\"^ `". " 
+# 10 levels of gray 
+ gscale2 = "@%#*+=-:. " 
+ 
+行的值gscale1 是70 级的灰度梯度，行的gscale2 是简单的10 级灰度梯度。
+这两个值保存为字符串，包含一组字符串，从最黑暗变到最亮（要了解如何用字符
+表示灰度值的更多内容，参见Paul Bourke 的《Character Representation of Grey Scale 
+Images》，网址在http://paulbourke.net/dataformats/asciiart/）。 
+既然有了灰度梯度，就可以准备图像。下面的代码打开图像，并分割成网格： 
+ # open the image and convert to grayscale 
+ 
+ image = Image.open(fileName).convert("L") 
+ # store the image dimensions 
+ 
+ W, H = image.size[0], image.size[1] 
+ # compute the tile width 
+ 
+ w = W/cols 
+ # compute the tile height based on the aspect ratio and scale of the font 
+ 
+ h = w/scale 
+ # compute the number of rows to use in the final grid 
+ 
+ rows = int(H/h) 
+在行，Image.open()打开输入图像文件，Image.convert()将该图像转换为灰度
+图像。“L”代表luminance，是图像亮度的单位。 
+在行，保存输入图像的宽度和高度。在行，根据用户指定的列数（cols），
+计算小块的宽度（如果用户没有在命令行中设置其他值，程序默认使用80 列）。对
+于行的除法，使用浮点而不是整数除法，避免在计算小块尺寸时的截断误差。 
+知道小块的宽度后，在行利用垂直比例系数（作为scale 传入），计算它的高
+度。在行，用这个网格高度来计算行数。 
+比例系数确定每个小块的大小，以匹配用于显示文本的字体的横纵比，这样最
+终图像不会失真。scale 的值可以作为参数传入，或者设置为默认值0.43，在用Courier
+显示结果时，效果很好。
+6.3.2  计算平均亮度 
+接下来，计算灰度图像中每一小块的平均亮度。函数getAverageL()完成这项
+工作。
+
+第6 章  ASCII 文本图形 83 
+ def getAverageL(image): 
+   # get the image as a numpy array 
+     im = np.array(image) 
+   # get the dimensions 
+     w,h = im.shape 
+   # get the average 
+     return np.average(im.reshape(w*h)) 
+ 
+在行，图像小块作为PIL Image 对象传入。在行，将image 转换成一个numpy
+数组，此时im 成为一个二维数组，包含每个像素的亮度。在行，保存该图像的
+尺寸（宽度和高度）。在行，numpy.average()计算该图像中的亮度平均值，做法是
+用numpy.reshape()先将维度为宽和高(w，h)的二维数组转换成扁平的一维，其长度
+是宽度乘以高度(w*h)。然后numpy.average()调用对这些数组值求和并计算平均值。 
+6.3.3  从图像生成ASCII 内容 
+程序的主要部分负责从图像生成ASCII 内容。 
+ # an ASCII image is a list of character strings 
+ 
+ aimg = [] 
+ # generate the list of tile dimensions 
+ for j in range(rows): 
+ 
+ y1 = int(j*h) 
+ y2 = int((j+1)*h) 
+ # correct the last tile 
+ if j == rows-1: 
+   y2 = H 
+ # append an empty string 
+ 
+ aimg.append("") 
+ for i in range(cols): 
+ # crop the image to fit the tile 
+ 
+ x1 = int(i*w) 
+ x2 = int((i+1)*w) 
+ # correct the last tile 
+ 
+ if i == cols-1: 
+   x2 = W 
+ # crop the image to extract the tile into another Image object 
+ 
+ img = image.crop((x1, y1, x2, y2)) 
+ # get the average luminance 
+ 
+ avg = int(getAverageL(img)) 
+ # look up the ASCII character for grayscale value (avg) 
+ if moreLevels: 
+ 
+   gsval = gscale1[int((avg*69)/255)] 
+ else: 
+ 
+   gsval = gscale2[int((avg*9)/255)] 
+ # append the ASCII character to the string 
+ 
+ aimg[j] += gsval 
+在程序的这一部分，ASCII 图像先作为一个字符串列表保存，该列表在行初
+始化。接下来，按计算好的图像小块行数迭代遍历，在行和随后一行中，计算每
+个图像小块的起始和结束y 坐标。虽然这些是浮点运算，但在传给图像裁剪方法之
+前，将它们截断为整数。
+
+84 Python 极客项目编程 
+接着，因为只有当图像的宽度是列数的整数倍时，图像分割成小块时，边缘的
+小块才有相同的大小，所以在最后一行校正小块的y 坐标，将y 坐标设置为图像的
+实际高度。这样做确保了图像顶部的边缘不被截断。
+在行，为ASCII 图像添加一个空字符串，作为一种紧凑的方式来表示图像的
+当前行。接下来会填充这个字符串（将字符串作为字符的列表）。
+在行和下一行，计算每个小块的左、右x 坐标，在行，为最后一小块校
+正x 坐标，原因和校正y 坐标时一样。在行，用image.crop()提取图像小块，
+然后将该小块传入getAverageL()函数，该函数在6.3.2 节中定义，取得小块的
+平均亮度。在行，将平均亮度值从[0，255]缩小至[0，9]（默认10 级灰度梯度
+值的范围）。然后，用gscale2（保存的梯度字符串）作为查找表，找到对应的
+ASCII 值。行类似，不同之处在于，只有命令行标志设置为使用70 级梯度时，
+才会用它。最后，在行，在文本行中添加找到的ASCII 值gsval，代码循环，
+直到处理完所有行。
+6.3.4  命令行选项 
+接下来，为程序定义一些命令行选项。这段代码使用内置的argparse 类： 
+ parser = argparse.ArgumentParser(description="descStr") 
+ # add expected arguments 
+ 
+ parser.add_argument('--file', dest='imgFile', required=True) 
+ 
+ parser.add_argument('--scale', dest='scale', required=False) 
+ 
+ parser.add_argument('--out', dest='outFile', required=False) 
+ 
+ parser.add_argument('--cols', dest='cols', required=False) 
+ 
+ parser.add_argument('--morelevels', dest='moreLevels', action='store_true') 
+在行，包含指定图像文件输入的选项（唯一必须的参数），行设置垂直比例
+因子，行设置输出文件名，行设置ASCII 输出中的文本列数。在行，添加
+--morelevels 选项，让用户选择更多层次的灰度梯度。 
+6.3.5  将ASCII 文本图形字符串写入文本文件 
+最后，将生成的ASCII 字符串列表，写入一个文本文件： 
+ # open a new text file 
+ 
+ f = open(outFile, 'w') 
+ # write each string in the list to the new file 
+ 
+ for row in aimg: 
+f.write(row + '\n')
+ # clean up 
+ 
+f.close()
+在行，使用内置的open()方法，打开一个新的文本文件用于写入。然后在
+行，迭代遍历列表中的每个字符串，将它写入文件，在行，关闭文件对象，释放
+系统资源。
+
+第6 章  ASCII 文本图形 85 
+6.4  完整代码 
+下面是完整的ASCII 文本图形程序。也可以从https://github.com/electronut/pp/ 
+blob/master/ascii/ascii.py 下载该项目的代码。 
+import sys, random, argparse 
+import numpy as np 
+import math 
+from PIL import Image 
+# grayscale level values from: 
+# http://paulbourke.net/dataformats/asciiart/ 
+# 70 levels of gray 
+gscale1 = "$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\|()1{}[]?-_+~<>i!lI;:,\"^ 
+   `'. " 
+# 10 levels of gray 
+gscale2 = '@%#*+=-:. ' 
+def getAverageL(image): 
+ """ 
+ Given PIL Image, return average value of grayscale value 
+ """ 
+ # get image as numpy array 
+ im = np.array(image) 
+ # get the dimensions 
+ w,h = im.shape 
+ # get the average 
+ return np.average(im.reshape(w*h)) 
+def covertImageToAscii(fileName, cols, scale, moreLevels): 
+ """ 
+ Given Image and dimensions (rows, cols), returns an m*n list of Images 
+ """ 
+ # declare globals 
+ global gscale1, gscale2 
+ # open image and convert to grayscale 
+ image = Image.open(fileName).convert('L') 
+ # store the image dimensions 
+ W, H = image.size[0], image.size[1] 
+ print("input image dims: %d x %d" % (W, H)) 
+ # compute tile width 
+ w = W/cols 
+ # compute tile height based on the aspect ratio and scale of the font 
+ h = w/scale 
+ # compute number of rows to use in the final grid 
+ rows = int(H/h) 
+ print("cols: %d, rows: %d" % (cols, rows)) 
+ print("tile dims: %d x %d" % (w, h)) 
+ # check if image size is too small 
+ if cols > W or rows > H: 
+ print("Image too small for specified cols!") 
+ exit(0) 
+
+86 Python 极客项目编程 
+ # an ASCII image is a list of character strings 
+ aimg = [] 
+ # generate the list of tile dimensions 
+ for j in range(rows): 
+ y1 = int(j*h) 
+ y2 = int((j+1)*h) 
+ # correct the last tile 
+ if j == rows-1: 
+   y2 = H 
+ # append an empty string 
+ aimg.append("") 
+ for i in range(cols): 
+ # crop the image to fit the tile 
+ x1 = int(i*w) 
+ x2 = int((i+1)*w) 
+ # correct the last tile 
+ if i == cols-1: 
+   x2 = W 
+ # crop the image to extract the tile into another Image object 
+ img = image.crop((x1, y1, x2, y2)) 
+ # get the average luminance 
+ avg = int(getAverageL(img)) 
+ # look up the ASCII character for grayscale value (avg) 
+ if moreLevels: 
+   gsval = gscale1[int((avg*69)/255)] 
+ else: 
+   gsval = gscale2[int((avg*9)/255)] 
+ # append the ASCII character to the string 
+ aimg[j] += gsval 
+ # return text image 
+ return aimg 
+# main() function 
+def main(): 
+ # create parser 
+ descStr = "This program converts an image into ASCII art." 
+ parser = argparse.ArgumentParser(description=descStr) 
+ # add expected arguments 
+ parser.add_argument('--file', dest='imgFile', required=True) 
+ parser.add_argument('--scale', dest='scale', required=False) 
+ parser.add_argument('--out', dest='outFile', required=False) 
+ parser.add_argument('--cols', dest='cols', required=False) 
+ parser.add_argument('--morelevels', dest='moreLevels', action='store_true') 
+ # parse arguments 
+ args = parser.parse_args() 
+ imgFile = args.imgFile 
+ # set output file 
+ outFile = 'out.txt' 
+ if args.outFile: 
+   outFile = args.outFile 
+ # set scale default as 0.43, which suits a Courier font 
+ scale = 0.43 
+ if args.scale: 
+   scale = float(args.scale) 
+ # set cols 
+ cols = 80 
+ if args.cols: 
+
+第6 章  ASCII 文本图形 87 
+   cols = int(args.cols) 
+ print('generating ASCII art...') 
+ # convert image to ASCII text 
+ aimg = covertImageToAscii(imgFile, cols, scale, args.moreLevels) 
+ # open a new text file 
+ f = open(outFile, 'w') 
+ # write each string in the list to the new file 
+ for row in aimg: 
+f.write(row + '\n')
+ # clean up 
+f.close()
+ print("ASCII art written to %s" % outFile) 
+# call main 
+if __name__ == '__main__': 
+ main() 
+6.5  运行ASCII 文本图形生成程序 
+要运行编写好的程序，输入类似下面这样的命令，将data/robot.jpg 替换为你想
+使用的图像文件的相对路径。
+$ python ascii.py --file data/robot.jpg --cols 100 
+图6-3 展示了ASCII 文本图形，它是左侧的robot.jpg 的结果。 
+图6-3  ascii.py 的运行示例 
+现在，你可以创建自己的ASCII 文本图形了！ 
+6.6  小结 
+在这个项目中，我们学习了如何从任意的输入图像生成ASCII 文本图形。我们
+还学习了如何计算平均亮度值，将图像转换成灰度，以及如何基于灰度值用字符替
+换一小块图像。创建自己的ASCII 文本图形，祝你玩得开心！ 
+
+88 Python 极客项目编程 
+6.7  实验 
+这里有一些想法，可以进一步探索ASCII 文本图形。 
+1．用命令行选项--scale1.0 运行该程序。生成的图像看起来如何？实验不同的
+scale 值。将输出复制到一个文本编辑器，尝试设置不同的（固定宽度）字体，看看
+这样做如何影响最终图形的外观。
+2．为程序添加命令行选项--invert，反转ASCII 文本图形的输入值，使黑色变
+成白色，反之亦然（提示：在查找时用255 减去小块的亮度值）。 
+3．在这个项目中，基于两个字符硬编码的梯度创建灰度值查找表。实现一个
+命令行选项，用不同的字符梯度来创建ASCII 文本图形，就像这样： 
+python3 ascii.py --map "@$%^`." 
+前面这样的梯度用给定的6 个字符梯度，创建了一个ASCII 输出，其中“@”
+映射到亮度值0，“.”映射到亮度值255。 

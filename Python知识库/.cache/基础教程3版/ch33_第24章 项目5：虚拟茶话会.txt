@@ -1,0 +1,692 @@
+364  第24 章 项目5：虚拟茶话会 
+项目5：虚拟茶话会 
+在这个项目中，我们将做些正式的网络编程工作：编写一个聊天服务器，让人们能够通过
+网络实时地聊天。使用Python创建这种程序的方式有很多，一种简单而自然的方法是使用第14
+章讨论的框架Twisted，其核心是LineReceiver类。在本章中，我将只使用标准库中的异步网络
+编程模块。 
+需要指出的是，在编写本书期间，Python在这方面好像处于过渡期。一方面，有关模块asyncore
+和asynchat的文档指出，在标准库中包含它们旨在向后兼容，开发新程序时应使用模块asyncio；
+另一方面，有关asyncio的文档又指出，在标准库中包含这个模块是权宜之计，未来可能将其删
+除。我将采取保守的做法，选择使用asyncore和asynchat。如果你愿意，可尝试使用第14章讨论
+的其他方法（如分叉或线程化），甚至可以使用模块asyncio重写这个项目。 
+24.1 问题描述 
+我们将编写一个相对低级的在线聊天服务器。虽然很多社交媒体和消息服务都提供了这样的
+功能，但自己动手编写在线聊天服务器对深入学习网络编程大有裨益。假设这个项目的需求如下。 
+服务器必须能够接受不同用户的多个连接。
+它必须允许用户并行地操作。
+它必须能够解读命令，如say或logout。
+它必须易于扩展。
+其中网络连接和程序的异步特征需要使用特殊工具来实现。 
+24.2 有用的工具 
+在这个项目中，需要的新工具只有标准库模块asyncore及其相关的模块asynchat。我将简单
+地介绍这些模块，有关它们的详细信息，请参阅“Python库参考手册”。第14章讨论过，网络程
+序的基本组件是套接字。可通过导入模块socket并使用其中的函数来直接创建套接字。既然如此，
+需要使用asyncore来做什么呢？ 
+框架asyncore让你能够处理多个同时连接的用户。想象一下没有处理并发的特殊工具的情
+形。你启动服务器，它等待用户连接。用户连接后，它开始读取来自用户的数据，并通过套接字
+第24 章
+                          
+
+24.3 准备工作  365 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+24 
+10 
+11 
+12 
+13 
+14 
+将结果提供给用户。然而，如果已经有用户连接到服务器，结果将如何呢？要连接的用户必须等
+待，直到第一个用户断开连接为止。这在有些情况下可行，但编写聊天服务器时，关键就是允许
+多个用户同时连接，不然用户之间如何聊天呢？ 
+框架asyncore基于的底层机制（第14章所讨论模块select中的函数select）让服务器能够依
+次为连接的所有用户提供服务：不是读取来自一个用户的所有数据后，再读取下一个用户的数据，
+而只读取其中的部分数据。另外，服务器只读取有数据可读取的套接字。这种操作是在循环中反
+复进行的。对写入的处理与此类似。你可使用模块socket和select来实现这种功能，但asyncore
+和asynchat提供了一个很有用的框架，可替你处理这些细节。（有关实现并行用户连接的其他方
+式，请参阅14.3节。） 
+24.3 准备工作 
+首先，你必须有一台连接到网络（如互联网）的计算机，否则别人将无法连接到你的聊天服
+务器。（可在你自己的计算机上连接到聊天服务器，但这样做没多大意思。）要连接到聊天服务器，
+用户必须知道你的计算机的地址（可以是机器名，如foo.bar.baz.com，也可以是IP地址）。另外，
+用户必须知道聊天服务器使用的端口号。这种端口号可在程序中设置；在本章的代码中，使用的
+端口号为5005（这是随便选择的）。 
+注意 第14章说过，有些端口号受到限制，必须有管理员权限才能使用。一般而言，使用大于
+1023的端口号就不会有什么问题。 
+为对聊天服务器进行测试，需要有一个客户端——位于用户端的程序。一个这样的简单程序
+是telnet（它基本上能够让你连接到任何套接字服务器）。在UNIX中，可从命令行执行这个程序。 
+$ telnet some.host.name 5005 
+这个命令连接到机器some.host.name的5005端口。要连接到运行命令telnet的机器，只需使
+用机器名localhost。（你可能想使用开关-e提供一个转义字符，以确保可轻松地退出telnet。有
+关这方面的细节，请参阅telnet文档。） 
+在Windows中，可使用提供了telnet功能的终端模拟器，如PuTTY（要下载这个软件并获取
+有关它的详细信息，请参阅http://www.chiark.greenend.org.uk/~sgtatham/putty）。然而，既然要安
+装新软件，不如安装为聊天量身定制的客户端程序。MUD（MUSH、MOO或其他相关缩略语）
+客户端
+①非常适合用于聊天，一个这样的客户端是TinyFugue（要下载这个软件并获取有关它的详
+细信息，请参阅http://tinyfugue.sf.net）。它主要用于UNIX中，而且有点老，但这也有其魅力所在。
+也有一些用于Windows中的客户端，只需在网上搜索“MUD客户端”之类的关键字就能找到。 
+—————————— 
+① MUD指的是多用户空间（Multi-User Dungeon/Domain/Dimension）；MUSH指的是多用户共享幻觉（Multi-User
+Shared Hallucination）；MOO指的是面向对象的MUD。
+                          
+
+366  第24 章 项目5：虚拟茶话会 
+24.4 初次实现 
+我们来将程序稍做分解。需要创建两个主要的类：一个表示聊天服务器，另一个表示聊天会
+话（连接的用户）。 
+24.4.1 ChatServer 类 
+为创建简单的ChatServer类，可继承模块asyncore中的dispatcher类。dispatcher类基本上是
+一个套接字对象，但还提供了一些事件处理功能，稍后你将用到它们。代码清单24-1是一个基本
+的聊天服务器程序（真的很小）。 
+代码清单24-1 一个极简的服务器程序 
+from asyncore import dispatcher 
+import asyncore 
+class ChatServer(dispatcher): pass 
+s = ChatServer() 
+asyncore.loop() 
+如果运行这个程序，什么都不会发生。要让服务器做点有趣的事情，必须调用其方法
+create_socket来创建一个套接字，还需调用其方法bind和listen将套接字关联到特定的端口并让
+套接字监听到来的连接（毕竟这是服务器要做的事情）。另外，还需重写事件处理方法
+handle_accept，让它在服务器接受客户端连接时做些事情。最终的程序如代码清单24-2所示。 
+代码清单24-2 一个能够接受连接的服务器 
+from asyncore import dispatcher 
+import socket, asyncore 
+class ChatServer(dispatcher): 
+   def handle_accept(self):  
+ conn, addr = self.accept() 
+ print('Connection attempt from', addr[0]) 
+s = ChatServer() 
+s.create_socket(socket.AF_INET, socket.SOCK_STREAM)
+s.bind(('', 5005))
+s.listen(5)
+asyncore.loop() 
+方法handle_accept调用self.accept，以允许客户端连接。self.accept返回一个连接（客户
+端对应的套接字）和一个地址（有关发起连接的机器的信息）。方法handle_accept没有使用返回
+的连接来做有用的事情，而只是打印一条消息，指出有客户端试图建立连接。addr[0]是客户端
+的IP地址。 
+                          
+
+24.4 初次实现  367 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+24 
+10 
+11 
+12 
+13 
+14 
+在初始化服务器时，调用了create_socket，并通过传入两个参数指定了要创建的套接字类
+型。虽然也可使用其他的类型，但通常都使用这里使用的类型。对方法bind的调用将服务器关联
+到特定的地址（主机名和端口）。这里指定的主机名为空（一个空字符串，意味着localhost，用
+更专业一点的话说就是“当前机器的所有接口”），而端口号为5005。对方法listen的调用让服务
+器监听连接；它还将在队列中等待的最大连接数指定为5。最后，像前面一样调用asyncore.loop
+来启动服务器的监听循环。 
+这个服务器实际上是管用的。请尝试运行它，再使用你选择的客户端连接到它。客户端连接
+将立即断开，而服务器将打印如下内容： 
+Connection attempt from 127.0.0.1 
+如果不是从服务器所在的机器连接到它，IP地址将不同。要停止服务器，只需按下相应的键
+盘快捷键：在UNIX中为Ctrl+C，而在Windows中为Ctrl+Break。 
+使用键盘快捷键关闭服务器将显示栈跟踪。为避免出现这种情况，可将循环放在try/except
+语句中。添加一些清理代码后，这个基本服务器如代码清单24-3所示。 
+代码清单24-3 包含一些清理代码的基本服务器 
+from asyncore import dispatcher 
+import socket, asyncore 
+PORT = 5005 
+class ChatServer(dispatcher): 
+   def __init__(self, port):  
+ dispatcher.__init__(self) 
+ self.create_socket(socket.AF_INET, socket.SOCK_STREAM) 
+ self.set_reuse_addr() 
+ self.bind(('', port)) 
+ self.listen(5) 
+   def handle_accept(self): 
+ conn, addr = self.accept() 
+ print('Connection attempt from', addr[0]) 
+if __name__ == '__main__': 
+   s = ChatServer(PORT) 
+   try: asyncore.loop() 
+   except KeyboardInterrupt: pass 
+这里调用了set_reuse_addr，让你能够重用原来的地址（具体地说是端口号），即便未妥善关
+闭服务器亦如此。如果不调用set_reuse_addr，可能需要等待一段时间才能重启服务器，或者在
+服务器崩溃后使用不同的端口号。这是因为程序可能通知操作系统它不再使用这个端口。 
+24.4.2 ChatSession 类 
+基本的ChatServer不是很有用。不应对连接企图置若罔闻，而应为每个连接创建一个新的
+                          
+
+368  第24 章 项目5：虚拟茶话会 
+dispatcher对象。然而，这些对象的行为与用作主服务器的对象不同，它们不在端口上监听到来
+的连接，而是已经连接到特定的客户端。它们的主要任务是收集来自客户端的数据（文本）并做
+出响应。你可自己实现这种功能，方法是从dispatcher派生出一个类，并重写各种方法，但所幸
+有一个模块替你完成了其中很大一部分工作，它就是asynchat。 
+asynchat有点名不副实，它并非为我们要编写的流（连续）式聊天应用程序而专门设计的。
+［asynchat中的chat指的是聊天式（命令响应）协议。］模块asynchat中有一个async_chat类，其
+优点是隐藏了大部分基本的读写操作，因为这些操作实现起来可能有点难。要让async_chat发挥
+作用，只需重写两个方法——collect_incoming_data和found_terminator。每当从套接字读取一
+些文本后，都将调用collect_incoming_data；而读取到结束符时将调用found_terminator。在这
+里，结束符为换行符。（你需要在初始化时调用set_terminator来将结束符告知async_chat对象。） 
+更新后的程序（包含ChatSession类）如代码清单24-4所示。 
+代码清单24-4 包含ChatSession类的服务器程序 
+from asyncore import dispatcher 
+from asynchat import async_chat 
+import socket, asyncore 
+PORT = 5005 
+class ChatSession(async_chat): 
+   def __init__(self, sock):  
+ async_chat. init (self, sock) 
+ self.set_terminator("\r\n") 
+ self.data = [] 
+   def collect_incoming_data(self, data): 
+ self.data.append(data) 
+   def found_terminator(self): 
+ line = ''.join(self.data) 
+ self.data = [] 
+ # 使用line做些事情…… 
+ print(line) 
+class ChatServer(dispatcher): 
+   def __init__(self, port): dispatcher. init (self) 
+ self.create_socket(socket.AF_INET, socket.SOCK_STREAM) 
+ self.set_reuse_addr() 
+ self.bind(('', port)) 
+ self.listen(5) 
+ self.sessions = [] 
+   def handle_accept(self): 
+ conn, addr = self.accept() 
+ self.sessions.append(ChatSession(conn)) 
+                          
+
+24.4 初次实现  369 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+24 
+10 
+11 
+12 
+13 
+14 
+if __name__ == '__main__': 
+   s = ChatServer(PORT) 
+   try: asyncore.loop() 
+   except KeyboardInterrupt: print() 
+对于这个新版本，有几点需要说明。 
+调用方法set_terminator将行结束符设置成了"\r\n"，这是网络协议中常用的行结束符。 
+ChatSession对象将已读取的数据存储在字符串列表data中。读取更多数据后，将自动调
+用collect_incoming_data，而这个方法只是将这些数据附加到列表data末尾。使用字符串
+列表来存储数据、然后使用字符串方法join来合并这些字符串是一个常用的成例（在较旧
+的Python版本中，这种做法的效率比不断将字符串相加更高）。在较新的Python版本中，
+完全可以将+=用于字符串。
+遇到结束符时将调用方法found_terminator。当前，这个方法的实现通过合并数据项来创
+建一行，然后将self.data重置为空列表。然而，只是将这行打印出来，而没有使用它来
+做任何有用的事情。
+ChatServer存储了一个会话列表。
+ChatServer的方法handle_accept现在创建一个新的ChatSession对象，并将其附加到会话
+列表末尾。
+请尝试运行这个服务器，并通过使用多个客户端连接到它。每当你在客户端中输入一行内容
+时，这些内容都将在服务器所在的终端打印出来。这意味着这个服务器能够同时处理多个连接。
+至此，唯一缺失的功能是让客户端能够看到其他人的发言！ 
+24.4.3 整合起来 
+要让原型成为简单而功能完整的聊天服务器，还需添加一项主要功能：将用户所说的内容（他
+们输入的每一行）广播给其他用户。要实现这种功能，可在服务器中使用一个简单的for循环来
+遍历会话列表，并将内容行写入每个会话。要将数据写入async_chat对象，可使用方法push。 
+这种广播行为也带来了一个问题：客户端断开连接后，你必须确保将其从会话列表中删除。
+为此，可重写事件处理方法handle_close。第一个原型的最终版本如代码清单24-5所示。 
+代码清单24-5 一个简单的聊天服务器（simple_chat.py） 
+from asyncore import dispatcher 
+from asynchat import async_chat 
+import socket, asyncore 
+PORT = 5005 
+NAME = 'TestChat' 
+class ChatSession(async_chat):  
+   """ 
+   一个负责处理服务器和单个用户间连接的类 
+   """ 
+                          
+
+370  第24 章 项目5：虚拟茶话会 
+   def __init__(self, server, sock): 
+ # 标准的设置任务： 
+ async_chat. init (self, sock) 
+ self.server = server 
+ self.set_terminator("\r\n") 
+ self.data = [] 
+ # 问候用户： 
+ self.push('Welcome to s
+% \r\n'  self.server.name)
+%
+ 
+   def collect_incoming_data(self, data): 
+ self.data.append(data) 
+   def found_terminator(self): 
+ """ 
+ 如果遇到结束符，就意味着读取了一整行， 
+ 因此将这行内容广播给每个人 
+ """ 
+ line = ''.join(self.data) 
+ self.data = [] 
+ self.server.broadcast(line) 
+   def handle_close(self): 
+ async_chat.handle_close(self) 
+ self.server.disconnect(self) 
+class ChatServer(dispatcher): 
+   """ 
+   一个接受连接并创建会话的类。它还负责向这些会话广播 
+   """ 
+   def __init__(self, port, name): 
+ # 标准的设置任务： 
+ self.create_socket(socket.AF_INET, socket.SOCK_STREAM) 
+ self.set_reuse_addr() 
+ self.bind(('', port)) 
+ self.listen(5) 
+ self.name = name 
+ self.sessions = [] 
+   def disconnect(self, session): 
+ self.sessions.remove(session) 
+   def broadcast(self, line): 
+ for session in self.sessions: 
+  session.push(line + '\r\n') 
+   def handle_accept(self): 
+ conn, addr = self.accept() 
+ self.sessions.append(ChatSession(self, conn)) 
+if __name__ == '__main__': 
+   s = ChatServer(PORT, NAME) 
+   try: asyncore.loop() 
+   except KeyboardInterrupt: print() 
+                          
+
+24.5 再次实现  371 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+24 
+10 
+11 
+12 
+13 
+14 
+24.5 再次实现 
+第一个原型虽然是个管用的聊天服务器，但其功能很有限，最明显的缺陷是没法知道每句话
+都是谁说的。另外，它也不能解释命令（如say或logout），而最初的规范要求提供这样的功能。
+有鉴于此，需要添加对身份（每个用户都有唯一的名字）和命令解释的支持，同时必须让每个会
+话的行为都依赖于其所处的状态（刚连接、已登录等）。添加这些功能时，必须确保程序是易于
+扩展的。 
+24.5.1 基本的命令解释功能 
+我将演示如何模仿标准库模块cmd中Cmd类的命令解释功能。（遗憾的是，你不能直接使用这
+个类，因为它只能用于处理sys.stdin和sys.stdout，而你处理的是多个流。）你需要一个函数或
+方法，用于处理用户输入的单行文本。这个方法应提取第一个单词（命令），并根据这个单词调
+用相应的方法。例如，如果文本行像下面这样： 
+say Hello, world! 
+将导致这个函数调用下面的方法： 
+do_say('Hello, world!') 
+do_say还可能将会话本身作为参数，以便知道是谁在说话。 
+下面是一种简单的实现，其中还包含一个处理未知命令的方法。 
+class CommandHandler:  
+   """ 
+   类似于标准库中cmd.Cmd的简单命令处理程序 
+   """ 
+ def unknown(self, session, cmd): 
+ session.push('Unknown command: {}s\r\n'.format(cmd)) 
+   def handle(self, session, line): 
+ if not line.strip(): return 
+ parts = line.split(' ', 1) 
+ cmd = parts[0] 
+ try: line = parts[1].strip() 
+ except IndexError: line = '' 
+ meth = getattr(self, 'do_' + cmd, None) 
+ try: 
+  meth(session, line) 
+ except TypeError: 
+  self.unknown(session, cmd) 
+在这个类中，像第20章的标记项目那样使用了getattr。实现基本的命令处理功能后，需要
+定义一些命令，并根据会话的当前状态决定哪些命令可用（以及它们将做什么）。如何表示会话
+的状态呢？ 
+                          
+
+372  第24 章 项目5：虚拟茶话会 
+24.5.2 聊天室 
+每种状态都可用一个自定义的命令处理程序表示，很容易将此与标准的聊天室表示法（MUD
+中的地点）结合起来使用。每个聊天室都是一个包含特定命令的CommandHandler。另外，它还应
+记录聊天室内当前有哪些用户（会话）。下面是一个通用的超类，所有的聊天室都将继承它。 
+class EndSession(Exception): pass 
+class Room(CommandHandler):  
+   """ 
+   可包含一个或多个用户（会话）的通用环境。 
+   它负责基本的命令处理和广播 
+   """ 
+   def __init__(self, server): 
+ self.server = server 
+ self.sessions = [] 
+   def add(self, session): 
+ self.sessions.append(session) 
+   def remove(self, session): 
+ self.sessions.remove(session) 
+   def broadcast(self, line): 
+ for session in self.sessions: 
+  session.push(line) 
+   def do_logout(self, session, line): 
+ raise EndSession 
+除基本方法add和remove外，它还包含方法broadcast，这个方法对聊天室内的所有用户（会
+话）调用push。这个类还以方法do_logout的方式定义了一个命令——logout。这个方法引发异常
+EndSession，而这种异常将在较高的层级（found_terminator中）处理。 
+24.5.3 登录和退出聊天室 
+除表示常规聊天室（这个项目中只有一个这样的聊天室）之外，Room的子类还可表示其他状
+态，这正是你创建Room类的意图所在。例如，用户刚连接到服务器时，将进入专用的LoginRoom
+（其中没有其他用户）。LoginRoom在用户进入时打印一条欢迎消息（这是在方法add中实现的）。
+它还重写了方法unknown，使其让用户登录。这个类只支持一个命令，即命令login，这个命令检
+查用户名是否是可接受的（不是空字符串，且未被其他用户使用）。 
+LogoutRoom要简单得多，它唯一的职责是将用户的名字从服务器中删除（服务器包含存储会
+话的字典users）。如果用户名不存在（因为用户从未登录），将忽略因此而引发的KeyError异常。 
+有关这两个类的源代码，请参阅本章后面的代码清单24-6。 
+                          
+
+24.5 再次实现  373 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+24 
+10 
+11 
+12 
+13 
+14 
+注意 虽然服务器中的字典users存储了指向所有会话的引用，但根本没有从中获取会话。字典
+users只用于记录哪些用户名被占用。然而，我没有将用户名关联到随便选择的值（如
+True），而是将其关联到相应的会话。虽然现在这样做没什么用处，但在以后的程序版本
+中可能发挥作用（例如，让用户能够发私信时）。也可采用另一种做法，将会话存储在一
+个集合或列表中。 
+24.5.4 主聊天室 
+主聊天室也重写了方法add和remove。在方法add中，它广播一条消息，指出有用户进入，同
+时将用户的名字添加到服务器中的字典users中。方法remove广播一条消息，指出有用户离开。 
+除这些方法外，ChatRoom类（主聊天室）还实现了三个命令。 
+命令say（由方法do_say实现）广播一行内容，并在开头指出这行内容是哪位用户说的。
+命令look（由方法do_look实现）告诉用户聊天室内当前有哪些用户。
+命令who（由方法do_who实现）告诉用户当前有哪些用户登录了。在这个简单的服务器中，
+命令look和who的作用相同，但如果你对其进行扩展，使其包含多个聊天室，这两个命令
+的作用将有所区别。
+有关这个类的源代码，请参阅本章后面的代码清单24-6。 
+24.5.5 新的服务器 
+至此已介绍了大部分功能。对于ChatSession和ChatServer类，所做的主要改进如下。 
+ChatSession新增了方法enter，用于进入新的聊天室。
+ChatSession的构造函数使用了LoginRoom。
+方法handle_close使用了LogoutRoom。
+ChatServer的构造函数新增了字典属性users和ChatRoom属性main_room。
+另外请注意，handle_accept不再将新的ChatSession添加到会话列表中，因为现在会话由聊
+天室管理。 
+注意 一般而言，如果你实例化一个对象（就像handle_accept中的ChatSession），而不将其赋
+给变量或添加到容器中，它将丢失并可能被当作垃圾收集（这意味着它将完全消失）。由
+于所有的dispatcher都由asyncore处理（引用），而async_chat是一个dispatcher子类，因
+此在这里不是问题。 
+聊天服务器的最终版本如代码清单24-6所示。为方便你参考，表24-1列出了可用的命令。 
+                          
+
+374  第24 章 项目5：虚拟茶话会 
+代码清单24-6 一个更复杂些的聊天服务器（chatserver.py） 
+from asyncore import dispatcher 
+from asynchat import async_chat 
+import socket, asyncore 
+PORT = 5005 
+NAME = 'TestChat' 
+class EndSession(Exception): pass 
+class CommandHandler:  
+   """ 
+   类似于标准库中cmd.Cmd的简单命令处理程序 
+   """ 
+ def unknown(self, session, cmd): 
+ '响应未知命令' 
+ session.push('Unknown command: {}s\r\n'.format(cmd)) 
+   def handle(self, session, line): 
+ '处理从指定会话收到的行' 
+ if not line.strip(): return 
+ # 提取命令： 
+ parts = line.split(' ', 1) 
+ cmd = parts[0] 
+ try: line = parts[1].strip() 
+ except IndexError: line = '' 
+ # 尝试查找处理程序： 
+ meth = getattr(self, 'do_' + cmd, None) 
+ try: 
+  # 假定它是可调用的： 
+  meth(session, line) 
+ except TypeError: 
+  # 如果是不可调用的，就响应未知命令： 
+  self.unknown(session, cmd) 
+class Room(CommandHandler): 
+   """ 
+   可能包含一个或多个用户（会话）的通用环境。它负责基本的命令处理和广播 
+   """ 
+   def __init__(self, server): 
+ self.server = server 
+ self.sessions = [] 
+   def add(self, session): 
+ '有会话（用户）进入聊天室' 
+ self.sessions.append(session) 
+   def remove(self, session): 
+ '有会话（用户）离开聊天室' 
+ self.sessions.remove(session) 
+                          
+
+24.5 再次实现  375 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+24 
+10 
+11 
+12 
+13 
+14 
+   def broadcast(self, line): 
+ '将一行内容发送给聊天室内的所有会话' 
+ for session in self.sessions: 
+  session.push(line) 
+   def do_logout(self, session, line): 
+ '响应命令logout' 
+ raise EndSession 
+class LoginRoom(Room): 
+   """ 
+   为刚连接的用户准备的聊天室 
+   """ 
+   def add(self, session): 
+ Room.add(self, session) 
+ # 用户进入时，向他/她发出问候： 
+ self.broadcast('Welcome to {}\r\n'.format(self.server.name)) 
+ def unknown(self, session, cmd): 
+ # 除login和logout外的所有命令都会 
+ # 导致系统显示提示消息： 
+ session.push('Please log in\nUse "login <nick>"\r\n') 
+   def do_login(self, session, line): 
+ name = line.strip() 
+ # 确保用户输入了用户名： 
+ if not name: 
+  session.push('Please enter a name\r\n') 
+ # 确保用户名未被占用： 
+ elif name in self.server.users: 
+  session.push('The name "{}" is taken.\r\n'.format(name)) 
+  session.push('Please try again.\r\n') 
+ else: 
+  # 用户名没问题，因此将其存储到会话中并将用户移到主聊天室 
+  session.name = name 
+  session.enter(self.server.main_room) 
+class ChatRoom(Room): 
+   """ 
+   为多个用户相互聊天准备的聊天室 
+   """ 
+   def add(self, session): 
+ # 告诉所有人有新用户进入： 
+ self.broadcast(session.name + ' has entered the room.\r\n') 
+ self.server.users[session.name] = session 
+ super().add(session) 
+   def remove(self, session): 
+ Room.remove(self, session) 
+ # 告诉所有人有用户离开： 
+ self.broadcast(session.name + ' has left the room.\r\n') 
+                          
+
+376  第24 章 项目5：虚拟茶话会 
+   def do_say(self, session, line): 
+ self.broadcast(session.name + ': ' + line + '\r\n') 
+ def do_look(self, session, line): 
+ '处理命令look，这个命令用于查看聊天室里都有谁' 
+  session.push(other.name + '\r\n') 
+   def do_who(self, session, line): 
+ '处理命令who，这个命令用于查看谁已登录' 
+ session.push('The following are logged in:\r\n') 
+ for name in self.server.users: 
+  session.push(name + '\r\n') 
+class LogoutRoom(Room): 
+   """ 
+   为单个用户准备的聊天室，仅用于将用户名从服务器中删除 
+   """ 
+   def add(self, session): 
+ # 将进入LogoutRoom的用户删除 
+ try: del self.server.users[session.name] 
+ except KeyError: pass 
+class ChatSession(async_chat): 
+   """ 
+   单个会话，负责与单个用户通信 
+   """ 
+   def __init__(self, server, sock): 
+ super().__init__(sock) 
+ self.server = server 
+ self.set_terminator("\r\n") 
+ self.data = [] 
+ self.name = None 
+ # 所有会话最初都位于LoginRoom中： 
+ self.enter(LoginRoom(server)) 
+   def enter(self, room): 
+ # 自己从当前聊天室离开，并进入下一个聊天室 
+ try: cur = self.room 
+ except AttributeError: pass 
+ else: cur.remove(self) 
+ self.room = room 
+ room.add(self) 
+   def collect_incoming_data(self, data): 
+ self.data.append(data) 
+   def found_terminator(self): 
+ line = ''.join(self.data) 
+ self.data = [] 
+ try: self.room.handle(self, line) 
+ except EndSession: self.handle_close() 
+                          
+
+24.5 再次实现  377 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+24 
+10 
+11 
+12 
+13 
+14 
+   def handle_close(self): 
+ async_chat.handle_close(self) 
+ self.enter(LogoutRoom(self.server)) 
+class ChatServer(dispatcher): 
+   """ 
+   只有一个聊天室的聊天服务器 
+   """ 
+   def __init__(self, port, name): 
+ super().__init__() 
+ self.create_socket(socket.AF_INET, socket.SOCK_STREAM) 
+ self.set_reuse_addr() 
+ self.bind(('', port)) 
+ self.listen(5) 
+ self.name = name 
+ self.users = {} 
+ self.main_room = ChatRoom(self) 
+   def handle_accept(self): 
+ conn, addr = self.accept() 
+    ChatSession(self, conn) 
+if __name__ == '__main__': 
+   s = ChatServer(PORT, NAME) 
+   try: asyncore.loop() 
+   except KeyboardInterrupt: print() 
+表24-1 聊天服务器支持的命令 
+命  令
+可在什么地方使用
+描  述
+login name 
+LoginRoom 
+用于登录服务器 
+logout 
+所有聊天室 
+用于退出服务器 
+say statement 
+主聊天室 
+用于说话 
+look 
+主聊天室 
+用户确定聊天室内还有谁 
+who 
+主聊天室 
+用户确定谁登录了服务器 
+图24-1是一个聊天过程示例。在这个示例中，服务器是使用如下命令启动的： 
+python chatserver.py 
+而用户dilbert是使用如下命令连接到服务器的： 
+telnet localhost 5005 
+                          
+
+378  第24 章 项目5：虚拟茶话会 
+图24-1 一个聊天过程示例 
+24.6 进一步探索 
+对于本章介绍的基本服务器，可在很多方面进行扩展和改进。 
+你可创建包含多个聊天室的版本，还可按自己的想法扩展命令集。
+你可能想让这个程序只能识别某些命令（如login或logout），并将其他文本都视为聊天内
+容，这样就不需要命令say了。
+你可在所有命令前加上特殊字符（如斜杠，让命令类似于/login或/logout），并将不以特
+殊字符打头的内容都视为聊天内容。
+你可能想创建自己的GUI客户端，但这比想象的要难些。GUI工具包提供了一个事件循环，
+而要与服务器通信，可能还需要一个事件循环。为让这些事件循环相互协作，你可能需
+要使用线程化。有关如何实现线程化的简单示例（各个线程不能直接访问其他线程的数
+据），请参阅第28章。
+预告
+至此，你创建了自己的聊天服务器。在下一个项目中，将介绍另一种类型的网络编程——
+CGI。它是很多Web应用使用的底层机制（这在第15章讨论过）。具体地说，下一个项目将使用这
+种技术来实现远程编辑，让多个用户能够合作编写同一个文档。你甚至可以使用它来远程编辑自
+己的网页。 
+                          

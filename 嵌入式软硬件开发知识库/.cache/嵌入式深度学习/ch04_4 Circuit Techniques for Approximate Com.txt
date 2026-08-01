@@ -1,0 +1,1349 @@
+Chapter 4
+Circuit Techniques for Approximate
+Computing
+4.1
+Introducing the Approximate Computing Paradigm
+Despite signiﬁcant advances in semiconductor technologies, processor architec-
+tures, and low-power design techniques, the total energy consumption of the global
+compute infrastructure is still rapidly increasing (Andrae 2017). Rising demands
+for applications in social media, augmented and virtual reality, IoT, and recognition
+and data-mining also lead to large increase in computational and storage demands.
+This trend is visible both in mobile embedded devices, used to process sensor data
+and perform data-mining and signal processing and recognition and in large-scale
+data centers that are used for storage, interconnectivity, scientiﬁc computing, social
+media, and ﬁnancial analysis. Many of these applications are driven by the types of
+neural networks discussed in Chap. 1.
+This increase in computational demands can come at a high economic cost.
+In mobile devices, there is an opportunity cost as inefﬁcient electronics makes
+novel applications in AI and VR impossible. Resource constraints currently make
+the deployment of several IoT and recognition applications impossible, as their
+required computational resources do not ﬁt in the power budget of the battery-
+constrained device they would run on. In data centers, energy-inefﬁciency leads
+to a real economic cost, as electricity consumption signiﬁcantly increases with
+rising computational demands. In US data centers alone, electricity consumption
+alone is expected to increase from 91 billion kWh in 2013 to 140 billion kWh
+in 2020 (Whitney and Delforge 2014). The answer industry has offered to this
+challenge in the past—a mix of advances in semiconductor technologies and
+specialized parallel compute architectures (strategy A in the context of neural
+networks, see Chap. 3)—is no sufﬁcient solution in the near future. Fortunately,
+many of the applications listed above are based on neural networks which show a
+high degree of fault-tolerance, as shown in Chap. 3. In image or speech recognition,
+analog signals are translated into the most likely sentences and images. As this
+translation is based on a series of estimates, small deviations rarely affect a user’s
+© Springer Nature Switzerland AG 2019
+B. Moons et al., Embedded Deep Learning,
+https://doi.org/10.1007/978-3-319-99223-5_4
+89
+
+90
+4
+Circuit Techniques for Approximate Computing
+satisfaction. In general a network’s accuracy does not necessarily degrade under
+noisy computations. Other examples are in multi-media, where slight deviations in
+processing are likely missed by the limited perceptual capabilities of humans. Other
+examples are search queries, where it is more important to have a good result quickly
+than the best result after a long delay.
+The approximate computing paradigm leverages this fault-tolerance by delib-
+erately introducing acceptable errors into the computing process in exchange for
+signiﬁcant gains in energy-efﬁciency. It can be applied on top of most existing
+techniques for energy minimization on multiple levels of an applications design
+hierarchy, from the software down to the hardware level.
+An example of fault-tolerant operation was given for a series of CNNs in Chap. 3.
+Figure 3.10 shows the optimal number of bits in test-time FPNNs varies signiﬁcantly
+depending on the application, the used network, and even the layer within a single
+CNN. Figure 3.18 shows the same for train-time QNNs. Based on this information,
+an optimal neural network accelerator should be able to dynamically change the
+number of bits it uses, depending on the requirements of the current network or
+application. Approximate computing techniques allow to minimize the system’s
+energy accordingly.
+Another more general example, used to illustrate the wider applicability of
+approximate computing methods, is given in Fig. 4.1. This ﬁgure shows the effect
+on image quality of low-precision JPEG compressed images. Down to 4b operators,
+the results of low-precision JPEG compression are barely visible to the human
+eye, but the operations are already 3× cheaper than an 8b ideal baseline. This
+shows the application’s fault-tolerance and the potential to save energy by allowing
+(quantization) errors in the computational units. At 2b, image quality is severely
+degraded at an energy cost that is 5× lower than a default 8b baseline. In some
+applications, this can still be acceptable, if it prolongs battery life sufﬁciently. This
+example shows that in approximate computing, reconﬁgurability and adaptivity is of
+The Bigger Picture
+•
+Chapter 1 discusses deep neural networks. They are prime examples of fault-tolerant
+algorithms to which approximate computing techniques can be applied.
+•
+Chapter 2 discusses cascaded processing hierarchies. Here, the ﬁrst levels of a
+hierarchy typically perform simple tasks: face detection in a visual context or voice-
+activity detection in speech. Those are typically more tolerant to computational
+deviations and can be performed at low precision. More complex tasks are less tolerant
+to deviations in computational precision and require highly accurate computations.
+This “dynamic range,” in necessary precision, should be supported in any modern
+approximate computing technique.
+•
+Chapter 3 shows how neural network topologies can be designed to operate using
+approximate computing techniques, such as precision scaling. The chapter shows the
+system-level effect of ﬁxed-point operations on accuracy and energy consumption.
+
+4.2
+Approximate Computing Techniques
+91
+Fig. 4.1 Ideally decompressed output of a compressed JPEG baboon, where the DCT in compres-
+sion is done using precision-scaled multipliers. Relative energy consumption of the MAC-units
+varies over 5× over approximate modes at 2b to more accurate modes at 8b. Depending on a user’s
+requirements the inaccurate modes can be used to prolong battery life. (a) 2-bit −Erelative = 17%,
+(b) 4-bit −Erelative = 31%, (c) 6-bit −Erelative = 81%, (d) 8-bit −Erelative = 120%
+crucial importance. The output quality of any technique in approximate computing
+should be dynamic and tunable, in order to be able to degrade accuracy only when
+the application allows it.
+This chapter ﬁrst gives a non-exhaustive overview of different AC-techniques on
+all levels, based on Mittal (2016), Xu et al. (2016), Han and Orshansky (2013) in
+Sect. 4.2. Sections 4.3, 4.4, and 4.5 focus on my contribution to the ﬁeld: dynamic-
+voltage-accuracy-frequency-scaling (Moons and Verhelst 2015, 2016; Moons et al.
+2017b,a), a circuit-level technique with architectural implications which shows the
+widest energy-accuracy trade-off reported in the ﬁeld.
+4.2
+Approximate Computing Techniques
+Approximate computing techniques can be implemented on all levels of the design
+hierarchy of an embedded system, even though most techniques are on the circuit-
+level rather than on the architecture- or software-level. An overview of popular and
+efﬁcient techniques in approximate computing on all levels of the design hierarchy
+is given in Fig. 4.2 and Sects. 4.2.4, 4.2.3, and 4.2.2.
+
+92
+4
+Circuit Techniques for Approximate Computing
+Fig. 4.2 Overview of different approximate computing methods
+4.2.1
+Resilience Identiﬁcation and Quality Management
+Even in error-tolerant applications, such as neural network acceleration, error-
+sensitive kernels can still exist. If inexact computations are used here, this might
+lead to catastrophic failure of an application. It is therefore very important to be able
+to formally identify and annotate parts of an application where an approximation is
+feasible. This resilience identiﬁcation can either be determined once ofﬂine at design
+time, or it can be monitored continuously through dynamic quality management.
+•
+Resilience identiﬁcation is typically an application-dependent ofﬂine testing
+phase, where the impact of various computational approximations is veriﬁed
+for a speciﬁc application. A typical approach is to inject errors in various
+segments of an application and evaluate the output in a series of representative
+workloads (Chippa et al. 2013). Some segments, such as control-ﬂow, are easily
+identiﬁed as sensitive, while others, such as iterative methods or neural networks,
+are easily identiﬁed as insensitive. In essence, this approach is static in the time-
+domain, but varies in the “spatial” algorithm domain. An example of such an
+analysis, in this case a ﬁxed-point precision analysis on convolutional neural
+networks, is given in Moons et al. (2016) and Chap.3. A uniﬁed, automated
+approach to this problem does not exist yet.
+•
+Quality management is a method in which the intermediate computation
+quality is regularly evaluated. Based on this, it is decided if certain kernels can
+use approximate kernels. SAGE (Samadi et al. 2013) and GREEN (Baek and
+
+4.2
+Approximate Computing Techniques
+93
+Chilimbi 2010) compare output quality every couple of runs with a baseline
+golden result. Based on this they choose the approximate modes for the following
+computations. ANT (Hegde and Shanbhag 1999) is another example of quality
+management, as it uses a separate error-free unit to track and correct deviations.
+4.2.2
+Approximate Circuits
+Several techniques for approximate computing exist on the circuit-level. These can
+be summarized in the following classes:
+•
+Inexact arithmetic circuits are arguably the most active ﬁeld of research in
+approximate computing. Here, arithmetic building blocks such as adders and
+multipliers are simpliﬁed at the circuit-level, making them inexact in some
+cases, but also smaller, faster, and hence more energy-efﬁcient. This is often
+accomplished by simplifying a full adder design at the circuit-level, equivalent to
+a process altering entries in the truth table of the full adder at the functional
+level. Just recently, these circuits have been implemented in larger silicon
+prototypes (Camus et al. 2016; Moons et al. 2017b). A good overview of
+existing techniques for adders is given in Han and Orshansky (2013), Jiang et al.
+(2015). Apart from custom, hand-designed techniques, others have implemented
+synthesis tools that generate approximate circuitry given an accuracy constraint.
+SALSA (Venkataramani et al. 2012) and ASLAN (Ranjan et al. 2014) are exam-
+ples that can be used to respectively synthesize combinational and sequential
+approximate circuitry. There are two major downsides to these techniques. First,
+the energy-accuracy trade-off they offer is static and can only be changed at
+design time. After an approximate arithmetic block is synthesized, its function is
+ﬁxed, as is its computational accuracy and error rates. As many approximate
+applications and architectures require a dynamic trade-off, inexact arithmetic
+circuits do not offer a general solution. Second, the dynamic range of the energy-
+accuracy trade-off these circuits offer is limited and typically outperformed by
+the precision scaling techniques that are discussed below. At a 1% RMS error
+rate in a digital multiplier, for example, the precision scaling technique in Moons
+et al. (2017a) outperforms (Kyaw et al. 2011) by 5×.
+•
+Voltage over-scaling (VOS) techniques let circuits operate at a frequency that
+is too high for the operating voltage. This removes all guard-bands and margins
+that are typically present in digital designs, but also induce timing errors in the
+computations. As digital power consumption scales quadratically with supply
+voltage, this technique has the potential to offer large energy gains. Moreover,
+the voltage or frequency in a system can be easily modulated dynamically,
+allowing for a dynamic energy-accuracy trade-off. As errors generated by
+voltage-over-scaling techniques can be catastrophically large and as they are
+
+94
+4
+Circuit Techniques for Approximate Computing
+hard to predict, they are typically combined with architecture-level techniques
+such as algorithmic noise tolerance (ANT) (Hegde and Shanbhag 1999). More
+recent and established methods are RAZOR-setups as in Ernst et al. (2003), de la
+Guia Solaz and Conway (2014) that can be applied in a more general context, in
+microcontrollers, for example. However, these techniques can only be considered
+approximate computing if they end up deliberately introducing errors into the
+circuitry. In razor, all errors are typically corrected.
+•
+Precision scaling techniques are arguably the most powerful, general, and easily
+available means of approximate computing. In precision scaling, the bit width of
+the computational operators is adapted at run-time depending on the needs of
+an application. Several implementations have been made for speciﬁc cases (Park
+et al. 2010), DSP vector processors (Venkataramani et al. 2013; de la Guia Solaz
+et al. 2012) with RAZOR (de la Guia Solaz and Conway 2014). This concept
+is taken further in this book, by combining it with voltage (Moons and Verhelst
+2015) and frequency scaling (Moons et al. 2017a). These techniques are the focus
+of the rest of this chapter and are applied in several silicon prototypes in Chaps. 5
+and 6.
+4.2.3
+Approximate Architectures
+Designing approximate computing systems also requires adapting the used compute
+architectures, both to the software level on top and to the circuit-level the architec-
+ture is built on. Changes are required both on the processor-architecture level and
+on the SOC-architecture level.
+•
+Processor architectures can be optimized for ﬁne-grained and coarse-grained
+approximate computing. In ﬁne-grained approximate computing, a speciﬁc
+instruction set architecture (ISA) allows a compiler to convey what can and
+cannot be approximated. For speciﬁc tasks, the compiler can then decide whether
+to map them on exact or approximate hardware. In coarse-grained approximate
+computing, speciﬁc code segments are ofﬂoaded to dedicated approximate
+accelerators or full cores outside of the processor pipeline. The potential of the
+ﬁrst approach (Sampson et al. 2011) is very limited in a von-Neumann processor
+architecture, where most of the energy consumption is consumed in control, data
+transfers and clock distribution. None of these dominant blocks can gain from
+approximation, as should follow from the resilience identiﬁcation process.
+•
+Several circuit techniques for approximate computing require changes on the
+SOC architecture level. Speciﬁcally when local voltage-scaling techniques are
+used, such as in Venkataramani et al. (2013) and DVAFS (Moons et al. 2017a)
+(Sect. 4.3), the SOC has to be organized in speciﬁc voltage domains, which
+can heavily inﬂuence the lay-out of the full SOC and puts extra constraints on
+frequency generators and voltage regulators.
+
+4.2
+Approximate Computing Techniques
+95
+•
+In algorithmic noise tolerance (ANT) (Hegde and Shanbhag 1999, 2001) an
+error-free replica is put next to a main computing block as an error correcting
+block.
+•
+The chip discussed in Chap. 6 is an architectural implementation of the DVAFS
+precision scaling concept discussed in Sect. 4.3. In this chip, rather than per-
+forming voltage and frequency scaling on individual arithmetic building blocks
+at lower precision, it supports sub-net parallel operation of convolutional neural
+networks for image recognition together with voltage and frequency scaling. It is
+hence an example of a system architecture tailored to the approximate computing
+philosophy.
+4.2.4
+Approximate Software
+Several efforts have been made on the software level towards approximate comput-
+ing.
+•
+Approximations can be either on the application level through techniques such
+as iterative loop perforation (Sidiroglou-Douskos et al. 2011).
+•
+Other efforts have been on programming languages and compilers. Pro-
+gramming languages such as Eon (Sorber et al. 2007), EnerJ (Sampson et al.
+2011), and Rely (Carbin et al. 2013) expose approximation to the program-
+mer through language syntax. In Sampson et al. (2011), Sorber et al. (2007)
+the designer should know which kernels are tolerant to approximation, while
+in Carbin et al. (2013) the compiler automatically derives how errors can affect
+algorithm performance. Such a compiler could then automatically decide which
+operations can be performed on approximate hardware or which operands can be
+approximated (Misailovic et al. 2014). The techniques are generally in support of
+approximate computing circuits, which is the abstraction level where most gains
+are expected.
+4.2.5
+Discussion
+The different techniques discussed above in this section are all used in some form
+throughout this work. An example of resilience identiﬁcation is given in the form of
+an advanced ﬁxed-point analysis in Sect. 3.3 and to some extent below in Sect. 4.3.2.
+Chapter 5 focuses on the design and implementation of approximate hardware
+architectures using the approximate circuit techniques discussed in Sect. 4.3. These
+techniques are the main focus of the rest of this chapter.
+
+96
+4
+Circuit Techniques for Approximate Computing
+4.3
+DVAFS: Dynamic-Voltage-Accuracy-Frequency-Scaling
+as a Means for Circuit-Level Approximate Computing
+An effective approach to dynamically scale the power consumption of, e.g.,
+a digital multiplier at constant throughput is through at run-time truncation or
+rounding of a variable number of its input bits (Venkataramani et al. 2013). This
+introduces deviations in output quality caused by higher quantization errors on the
+inputs and thus decreases computational accuracy, but also reduces the circuit’s
+internal switching activity and hence energy consumption. This effect makes it an
+approximate computing technique by deﬁnition.
+4.3.1
+DVAFS Basics
+4.3.1.1
+Introducing the DVAFS Energy-Accuracy Trade-Off
+Figure 4.3 shows how precision scaling inﬂuences the performance of a 16b
+multiplier. Figure 4.3a shows the maximum- and RMS-error as a function of the
+used number of bits. A 5-bit rounded multiplier achieves 1.8% relative RMS error
+compared to an ideal solution. The introduced errors are hence small on average,
+while the maximum error is deterministic and limited by the used number of bits.
+Figure 4.3b shows the associated energy consumption of the same multiplier in
+different operating modes. At the same 1.8% relative RMSE point, it can consume
+up to 20× less than the default 16b mode. This is in sharp contrast to other work (Liu
+et al. 2014; Kulkarni et al. 2011), where the error probability is much lower than in
+the DVAFS case, but the error amplitude can be large and unpredictable.
+4
+8
+12
+16
+Accuracy [bits]
+10-4
+10-3
+10-2
+10-1
+100
+Magnitude [-]
+Maximum Error
+Root-Mean-Square Error
+(a)
+4
+8
+12
+16
+Accuracy [bits]
+0.01
+0.1
+   1
+Energy / word [-]
+DAS
+DVAS
+DVAFS
+(b)
+Fig. 4.3 A precision-scaled 16b multiplier in the energy-accuracy space. (a) RMSE as a function
+of number of bits, (b) Relative energy
+
+4.3
+DVAFS: Dynamic-Voltage-Accuracy-Frequency-Scaling
+97
+Fig. 4.4 A 4b adder example under different forms of precision scaling. (a) DAS. When 2 MSBs
+are used, the other inputs are gated. In this case only the green blocks will switch and the switching
+activity drops. (b) DVAS. When 2 MSBs are used, the switching activity drops and the critical path
+is shortened. (c) DVAFS. When 2 MSBs or less are used, redundant logic is reused to make the
+multiplier subword-parallel. Here, both the critical path and the switching activity are reduced. If
+throughput is kept constant, the operating frequency can be reduced as well
+Fig. 4.5 A 4b naive carry save multiplier example. (a) DAS. When 2 MSBs are used, the other
+inputs are gated. In this case only the green blocks will switch and the switching activity drops. (b)
+DVAS. When 2 MSBs are used, the switching activity drops and the critical path is shortened. (c)
+DVAFS. When 2 MSBs or less are used, redundant logic is reused to make the multiplier subword-
+parallel. Here, both the critical path and the switching activity are reduced. If throughput is kept
+constant, the operating frequency can be reduced as well
+This section further discusses dynamic-voltage-accuracy-frequency-scaling
+(DVAFS) (Moons et al. 2017a), a concept generalized from dynamic-voltage-
+accuracy-scaling (DVAS) (Moons and Verhelst 2015) and dynamic-accuracy-
+scaling (DAS). These techniques are the most efﬁcient means of trading
+computational accuracy for system-level energy gains and a major contribution
+of this author.
+4.3.1.2
+Precision Scaling in DVAFS
+The concept behind the three different operating modes from Fig. 4.3—DAS, DVAS,
+and DVAFS—is further illustrated for a digital adder in Fig. 4.4 and for a digital
+multiplier in Fig. 4.5.
+•
+In DAS (Figs. 4.4a and 4.5a) only n MSBs are used when precision is scaled,
+while the LSBs are put to zero. No other parameters except for the input
+precision, hence the switching activity, can be modulated.
+
+98
+4
+Circuit Techniques for Approximate Computing
+Rin
+Rout
+a + b @ V0
+(a) Full critical path is used at V0
+Rin
+Rout
+b @ 
+V0
+(b) A small part of the critical path is used at V0:
+there is positive slack.
+Rin
+Rout
+b @ V1 < V0
+(c) The positive slack is minimized by reducing the
+supply voltage V1 < V0.
+Fig. 4.6 The dynamic-voltage-accuracy-scaling concept. (a) A combinational logic path existing
+out of part a and b has zero slack at supply voltage V0. (b) The activity is reduced by using smaller
+word lengths, leading to a shorter critical path at supply voltage V0. (c) The increased positive
+slack of the circuit allows for a lower supply voltage V1 < V0
+•
+In DVAS, again only n MSBs are used. However, as the critical path has become
+shorter under precision scaling, the generated positive slack can be compensated
+for through a lower supply voltage at the same frequency. Hence, in DVAS,
+both the input precision related switching activity and the supply voltage can
+be modulated. This is further illustrated in Fig. 4.6 for a simpliﬁed general
+accuracy-scalable building block. Compared to the “Full critical path” mode at
+high precision in Fig. 4.6a, only some building blocks are switching in the low-
+precision mode of Fig. 4.6b. In this case, the critical path of the multiplier is also
+shortened from a + b to b at the same voltage. This hence generates positive
+slack that can be compensated for through a lower supply voltage V1, as shown
+in Fig. 4.6c.
+•
+In DVAFS, building blocks are made subword-parallel when the required n
+precision drops below nmax. In that case, this subword-parallelism can either
+be converted into throughput increases, or major energy savings at constant
+throughput at a lower frequency. Here, the energy consumed per word is reduced
+considerably due to reduced switching activity and combined voltage and
+frequency scaling.
+This short discussion of the three techniques is hence a ﬁrst intuitive illustration
+of how precision scaling can be translated into energy savings on the block level.
+These energy gains are modeled in depth in Sect. 4.3.3 and quantiﬁed in Sect. 4.4
+and Chap. 5.
+4.3.2
+Resilience Identiﬁcation for DVAFS
+Any digital system can be split into several blocks with different levels of resiliency
+to reduced precision operation. Not only are there different levels of resiliency, but
+some blocks also allow for different types of precision scaling.
+
+4.3
+DVAFS: Dynamic-Voltage-Accuracy-Frequency-Scaling
+99
+Fig. 4.7 Different categories of digital building blocks in DVAFS
+Sub-blocks can be either accuracy-scalable (as) or non-accuracy-scalable
+(nas). A block is as if (1) the precision of its inputs can be modulated without
+breaking the functionality of the system and (2) the energy consumption of the
+block reduces if its input precision is scaled. If a block does not comply with
+requirements (1) and (2), it is considered to be nas. Further in this text, all as
+blocks are further subdivided into voltage accuracy scalable (vas) and non-voltage
+accuracy-scalable (nvas) blocks. An overview of this classiﬁcation with examples
+is given in Fig. 4.7.
+Several examples of such accuracy-scalable building blocks are given in Fig. 4.7.
+They are all omnipresent in today’s digital designs:
+1. Arithmetic blocks such as multipliers or adders are vas.
+2. Logic blocks such as multiplexers, buffers, and drivers are nvas.
+3. Sequential blocks such as registers and memory macros are nvas.
+All these blocks either scale their switching activity linearly (sequential and logic
+blocks, adders), super-linearly, or quadratically (some multipliers) depending on
+their implementation.
+Several other building blocks are non-accuracy-scalable nas in today’s digital
+systems:
+1. Control logic such as instruction decoders.
+2. Control memory such as instruction SRAM.
+In general, all control logic that is not operating on a system’s data cannot modulate
+its switching activity with scaled precision.
+This distinction between as and nas building blocks is crucial, as not every
+digital system stands to gain from the DVAFS technique. Only if a signiﬁcant
+portion of the global power consumption is in the as building blocks, DVAFS will
+lead to large system-level gains. Hence, only signal processing systems with large,
+costly datapaths such as DSP processors or highly parallelized compute units with
+little control overhead should be targeted for the technique. General purpose CPUs
+or microcontrollers cannot be optimized using DAS, or approximate computing
+techniques in general, as typically less than 1% of their power consumption is in
+their arithmetic as parts (Horowitz 2014).
+
+100
+4
+Circuit Techniques for Approximate Computing
+Fig. 4.8 (a) Adders are linear vas. (b) Multipliers are super-linear or quadratic vas. (c) Multi-
+plexers are linear nvas
+4.3.3
+Energy Gains in DVAFS
+4.3.3.1
+DAS: Dynamic-Accuracy-Scaling
+An example of a single multiplier operating under DAS is given in Figs. 4.8b and
+4.5a. If leakage power is neglected, the power of a full DAS system, PDAS, is split
+into an accuracy-scalable part (as), of which the activity is modulated with scaled
+precision and a non-accuracy-scalable (nas) part which does not modulate with
+scaled precision:
+PDAS = αas
+k0
+Casf V 2 + αnasCnasf V 2
+(4.1)
+where α is the circuit’s switching activity, f is the operating frequency, C is the
+technology dependent switching capacitance, and V is the supply voltage. k0 is a
+precision-, circuit-, and architecture-dependent scaling parameter.
+4.3.3.2
+DVAS: Dynamic-Voltage-Accuracy-Scaling
+DVAS is a ﬁrst expansion enhancing the energy-accuracy trade-off of the DAS
+concept. An example of a single multiplier operating under DVAS is given in
+Figs. 4.5b and 4.8b. As the critical paths of a DVAS building block scales under
+reduced precision, the generated positive slack can be compensated for through
+lower supply voltages, see Sect. 4.3.1.
+In DVAS, these combined effects—(1) reduction of switching activity and (2)
+shorter critical paths allowing lower supply voltages—have a major impact on the
+system’s dynamic power consumption. The dynamic power PDVAS of a DVAS-
+system is split into a voltage-accuracy-scalable vas, an non-voltage-accuracy-
+scalable nvas part, and a non-accuracy-scalable nas part, given in Eq. (4.4).
+PDVAS = αnvas
+k1
+Cnvasf (Vnvas)2+ αvas
+k2
+Cvasf
+Vvas
+k3
+2
++αnasCnasf V 2
+nas
+(4.2)
+
+4.3
+DVAFS: Dynamic-Voltage-Accuracy-Frequency-Scaling
+101
+This technique is analogous to widespread technologies such as clustered voltage
+scaling (CVS) (Usami and Horowitz 1995). In CVS, certain parts of a digital system
+with a slack surplus will operate at a lower supply voltage than paths without slack
+surplus.
+4.3.3.3
+DVAFS: Dynamic-Voltage-Accuracy-Frequency-Scaling
+Subword-parallel DVAFS (Moons et al. 2017a,b) improves further upon the energy
+savings of DVAS by reusing inactive arithmetic cells at reduced precision. The
+example in Fig. 4.5c shows a 1–4b subword-parallel multiplier that can process two
+subword operations per cycle if precision is scaled to 2b or lower. In general, higher
+precision baselines such as 16b blocks are made reconﬁgurable to support parallel
+operation on 2 × 8b or 4 × 4b subwords.
+If computational throughput is kept constant, this allows to drop the full system’s
+frequency and hence its voltage signiﬁcantly below DVAS values. As a result,
+DVAFS is the ﬁrst dynamic approximate computing technique which simultane-
+ously lowers all run-time adaptable parameters inﬂuencing power consumption:
+activity α, frequency f , and voltage V . In contrast to DVAS, which can only save
+energy in precision-scaled arithmetic blocks, DVAFS allows lowering f and V of
+the full system, including control units and memory, hereby shrinking even nas
+energy overheads drastically at low precision, see Sect. 4.4.2.
+These combined effects—(1) reduction of switching activity, (2) shorter critical
+paths allowing lower supply voltages, (3) subword-parallel operation allowing
+lower operating frequencies at constant computational throughput—have a major
+impact on the system’s power consumption. The dynamic power PDVAFS at constant
+throughput of a DVAFS-system is given in Eq.(4.3),
+PDVAFS = αnvas
+k5
+Cnvas
+f
+N (Vnvas)2+ αvas
+k6
+Cvas
+f
+N
+Vvas
+k7
+2
++αnasCnas
+f
+N
+Vnas
+k8
+2
+(4.3)
+where N is the degree of subword-parallelism.
+The advantage of DVAFS over DVAS is both in the extra voltage scaling
+capabilities it offers and in the gains in all nas blocks, such as control and memory.
+This can be seen from the following ﬁrst order adapted formula:
+PDVAFS = Nα′
+nvas
+k11
+Cnvas
+f
+N (Vnvas)2 + Nα′
+vas
+k10 Cvas
+f
+N
+Vvas
+k7
+2
++ αnasCnas
+f
+N
+Vnas
+k8
+2
+(4.4)
+where αnvas′ and αvas′ are the per word switching activities. As a ﬁrst order analysis,
+the vas and as blocks see no gains from DVAFS compared to DVAS, except for
+the possibility of increased voltage scaling. The main gains of DVAFS are in the
+
+102
+4
+Circuit Techniques for Approximate Computing
+nas blocks. All control energy is scaled by N and by the factor k5 on the voltage
+supply. This is important especially in systems with large nas building blocks, such
+as CPUs or DSP processors with relatively small datapaths. In DVAS, the major
+part of the energy consumption will have to be pushed into the vas and as building
+blocks, which is not always possible. If most of the energy is in nas blocks, only
+limited gains are possible through DVAS. This effect is discussed more elaborately
+in Sect. 4.4.2.
+DVAFS is tributary to the concepts of subword-parallel processing and dynamic-
+voltage-frequency-scaling (DVFS) (Usami and Horowitz 1995). DVFS technique
+exploits the quadratic dependency of digital power dissipation to V in low-power
+designs. It is a system-level technique, where supply voltage is dynamically
+decreased or increased with the system’s clock speed requirements. General purpose
+processors, for example, can lower their f at small workloads, when the required
+throughput is reduced. By doing this, slack is increased on all critical paths without
+inducing timing errors, allowing the supply voltage to scale accordingly. This can
+result in major energy savings due to the combined effect of frequency- (linear)
+and voltage-scaling (quadratic) on power consumption. In DVAFS however, voltage
+and frequency are modulated with varying accuracy rather than varying throughput
+requirements, making it ﬁt within the approximate computing framework.
+4.4
+Performance Analysis of DVAFS
+4.4.1
+Block Level DVAFS
+To illustrate the performance of D(V)A(F)S, the performance and energy-accuracy
+trade-off of a DVAFS-equipped Booth-encoded Wallace-tree multiplier is assessed.
+Details on the implementation of this multiplier are in Sect. 4.5.1.2. Its performance
+is evaluated through detailed simulations in a 40 nm LP LV T technology with a
+nominal supply voltage of 1.1 V. The multiplier is synthesized with commercially
+available cells in a standard digital ﬂow, using a multi-mode optimization, ensuring
+the critical path indeed decreases when less bits are used. Conservative wire models
+are used for synthesis and power estimations. In these simulations, multiplier
+throughput is kept constant at T
+= 1 words/cycle×500MHz = 2 words/cycle
+×250 MHz = 4 words/cycle×125MHz = 500 MOPS, as shown in Fig. 4.9a.
+Figure 4.9b shows the effect of D(V)A(F)S on the positive circuit delay slack.
+Without voltage scaling positive slack increases up to 1ns if 4b words are processed
+in the D(V)AS case and up to 7 ns due to the 125 MHz clock in the 4×4b D(V)AFS
+case. Figure 4.9c shows this slack can be compensated for through lowering the
+supply voltage at constant throughput. For DVAS, a reduction down to 0.9 V is
+achievable, resulting in a 36% energy reduction. In DVAFS, supply can go down
+to 0.75 V, or an additional decrease in energy of 55%, as shown in Fig. 4.10.
+
+4.4
+Performance Analysis of DVAFS
+103
+4
+8
+12
+16
+0
+250
+500
+Accuracy [bits]
+Frequency [MHz]
+(a)
+4
+8
+12
+16
+0
+1
+2
+3
+4
+5
+6
+7
+Accuracy [bits]
+Positive slack [ns]
+DAS
+DVAS
+DVAFS
+(b)
+5
+10
+15
+0.7
+0.8
+0.9
+1
+1.1
+Accuracy [bits]
+Supply Voltage [V]
+(c)
+4
+8
+12
+16
+0
+0.2
+0.4
+0.6
+0.8
+1
+Accuracy [bits]
+Relative Activity [−]
+(d)
+Fig. 4.9 Operating frequency, slack, supply voltage, and switching activity in a custom Booth-
+encoded Wallace-tree subword-parallel DVAFS multiplier in DAS-, DVAS-, and DVAFS-modes.
+In DVAFS, all run-time adaptable parameters in the digital power equation are modulated: α, f ,
+and V . (a) Operating frequency f @ constant throughput, (b) Positive slack/scaling of the critical
+path @ 1.1 V, (c) Supply voltages V @ 0 positive slack, (d) Activity α modulation
+Table 4.1 D(V)A(F)S
+parameters for a 16b
+multiplier example
+Parameter
+4b
+8b
+12b
+16b
+k0
+12.5
+3.5
+1.4
+1
+k2
+12.5
+3.5
+1.4
+1
+k3
+1.2
+1.1
+1.02
+1
+k6
+3.2
+1.82
+1.45
+1
+k7
+1.53
+1.27
+1.02
+1
+N
+4
+2
+1
+1
+Figure 4.9a, d shows the respective operating frequencies and activity reduction
+of the multiplier computing at different levels of accuracy. Switching activity drops
+12.5× in the DVAS-case and 3.2× in the DVAFS-case at 4b. However, in DVAFS
+the frequency is lowered to 125 MHz while it remains constant at 500 MHz for all
+accuracies in DVAS. This analysis allows extracting parameters ki and N for this
+multiplier, as given in Table 4.1. Only the factors ki for the DVAFS-compatible vas
+multiplier designed in Sect. 4.5.1.2 are given.
+
+104
+4
+Circuit Techniques for Approximate Computing
+4
+8
+12
+16
+Accuracy (bits)
+0.01
+ 0.1
+   1
+Energy / word [-]
+DAS
+DVAS
+DVAFS
+(a)
+10-6
+10-4
+10-2
+RMSE [-]
+10-2
+10-1
+100
+Relative Energy [-]
+[Liu14]
+[Liu14]+VS
+[Kul11]
+[Kya11]
+[GS12]
+DVAFS
+(b)
+Fig. 4.10 Comparison of energy gains in a custom Booth-encoded Wallace-tree multiplier under
+DAS, DVAS, and DVAFS to previous examples in approximate computing (Liu et al. 2014;
+Kulkarni et al. 2011; Kyaw et al. 2011; de la Guia Solaz et al. 2012) as a function of the used
+precision. (a) D(V)A(F)S, (b) DVAFS vs (Liu et al. 2014; Kulkarni et al. 2011; Kyaw et al. 2011;
+de la Guia Solaz et al. 2012)
+The combination of these reductions in energy consumption leads to global
+energy-accuracy curves shown in Fig. 4.10a. This ﬁgure compares the total
+energy consumption per computed word of the multiplier (normalized to a non-
+reconﬁgurable 16b multiplier) in different modes, at constant throughput, and as
+a function of computational accuracy. Note that processing at 16b in the DVAFS
+multiplier comes at a slight energy penalty, as this reconﬁgurability leads to a
+21% overhead at full precision. At full 16b resolution the reconﬁgurable multiplier
+consumes 2.63 pJ/word compared to the 2.16 pJ/word baseline in this technology
+due to extra multiplexers, as discussed in Sect. 4.5.1.2. 666 The DAS case illustrates
+the sole effect of the decrease in α due to accuracy scaling. Energy drops more
+signiﬁcantly in DVAS due to the added voltage scaling. DVAFS achieves energy
+savings of more than 95% of the baseline at 4 × 4 DVAFS processing.
+The energy-accuracy trade-off in DVAFS is superior to other approximate
+computing techniques, both in terms of energy-reduction and in terms of energy-
+accuracy dynamic range. Figure 4.10b compares the DVAFS multiplier with the
+performance of Liu et al. (2014), Kulkarni et al. (2011), Kyaw et al. (2011),
+de la Guia Solaz et al. (2012), with energy relative to the respective fully accurate
+implementation in each reference and accuracy expressed in terms of root-mean-
+square-error (RMSE). The DVAFS-curve varies from 4b rounded operation up to
+16b full precision. Although the work in de la Guia Solaz et al. (2012) consumes
+less energy at high accuracy, the energy consumption is higher at accuracies lower
+than 1e−4 RMSE. References Liu et al. (2014), Kulkarni et al. (2011), Kyaw et al.
+(2011) do not allow a run-time adaptable trade-off and consume more energy per
+word at the same level of accuracy.
+
+4.4
+Performance Analysis of DVAFS
+105
+SIMD DATAPATH
+SW x 16 bit Parallel PU’s
+RISC CONTROL
+SW x 2kB
+SRAM
+Data Memory
+SW x 16 bit
+parallel
+access
+16 kB
+SRAM
+Program
+Memory
+PUi
+PUi+2
+PUi+1
+Registers
+Registers
+...
+...
+PU:
+DVAFS
+COMP.
+MAC
++
+ALU
+• Program control
+• Precision control
+1 x 16 bit
+instruction
+words
+control
+precision
+VDDMEM
+VDDnas
+VDDas
+Fig. 4.11 Architecture of the parametrizable SIMD processor
+4.4.2
+System-Level DVAFS
+To show the advantages of DVAFS at the system level, a DVAFS-compatible SIMD
+RISC vector processor is implemented and simulated in an application-speciﬁc
+instruction set processor (ASIP) design tool (Wu and Willems 2015), using the same
+40 nm LP LV T technology as in Sect. 4.4.1. The processor, shown in Fig. 4.11,
+has a parametrized SIMD width SW, denoting the number of datapath units and
+memory banks. In order to be DVAFS compatible, it is subword-parallel and
+contains multiple power domains. Every SIMD-unit can scale its precision across
+1×1-16b, 2×1-8b, 4×1-4b DVAFS modes.
+All memories are in a separate power domain (VMEM), at a ﬁxed 1.1 V to
+maintain reliable operation. All other parts of the processor are in two power
+domains with variable supply voltage (Vvas and Vnas). As a benchmark, a large
+convolution kernel is run on the SIMD processor.
+The performance of the SIMD processor is illustrated in Fig. 4.12a, where the
+energy of the complete processor per processed word is plotted against the used
+computational accuracy at constant throughputfor processor instances with different
+SIMD widths SW. The SWprocessor in the 1 × 16b mode at 500 MHZ is used as
+a baseline. The maximal decrease in energy consumption is achieved at the 4 × 4b
+DVAFS mode, with a reduction of 85% compared to the baseline. Gains are more
+modest in the DAS and DVAS (60%) case as the contribution of the as datapath to
+the full processor’s energy consumption is smaller.
+
+106
+4
+Circuit Techniques for Approximate Computing
+4
+8
+12
+16
+Accuracy (bits)
+ 0.1
+   1
+Energy/word @
+const throughput
+DAS SW=8
+DVAS SW=8
+DVAFS SW=8
+DAS SW=64
+DVAS SW=64
+DVAFS SW=64
+(a)
+4
+8
+12
+16
+Accuracy (bits)
+ 0.1
+   1
+Energy/word @
+const throughput
+DVAFS SW=64
+[Liu14] SW=64
+[Kul11] SW=64
+[Kya11] SW=64
+[GS12] SW=64
+(b)
+Fig. 4.12 Comparison of energy gains in a SIMD processors under DAS, DVAS, and DVAFS to
+previous examples in approximate computing (Liu et al. 2014; Kulkarni et al. 2011; Kyaw et al.
+2011) as a function of the used precision. (a) DVAFS, (b) DVAFS vs Liu et al. (2014), Kulkarni
+et al. (2011), Kyaw et al. (2011), de la Guia Solaz et al. (2012)
+Table 4.2 Power distribution and consumption for different DVA(F)S setups at T = SW ×
+Nwords/cycle×500/N MHz. Rows in bold are DVAFS modes, plain rows are DVAS
+SW
+Mode
+Vnas
+Vas
+mem
+nas
+as
+P [mW]
+P [%]
+8
+1 × 16b
+1.1 V
+1.1 V
+31%
+46%
+23%
+36
+100
+8
+1 × 8b
+1.1 V
+1.0 V
+24%
+64%
+12%
+24
+67
+8
+1 × 4b
+1.1 V
+0.9 V
+17%
+77%
+6%
+20
+56
+8
+2 × 8b
+0.9 V
+0.9 V
+39%
+48%
+13%
+15
+42
+8
+4 × 4b
+0.8 V
+0.7 V
+47%
+44%
+9%
+7
+20
+64
+1 × 16b
+1.1 V
+1.1 V
+31%
+32%
+37%
+289
+100
+64
+1 × 8b
+1.1 V
+1.0 V
+29%
+49%
+22%
+160
+55
+64
+1 × 4b
+1.1 V
+0.9 V
+23%
+64%
+13%
+111
+38
+64
+2 × 8b
+0.9 V
+0.9 V
+41%
+39%
+20%
+103
+35
+64
+4 × 4b
+0.8 V
+0.7 V
+53%
+33%
+14%
+45
+16
+Voltages rounded to closest decimal point
+Table 4.2 gives a more detailed overview of the energy distribution of this
+processor. The energy consumption is distributed over memory (mem), instruction
+decode and fetch and other overhead (nas), and the vector arithmetic (vas).
+The highly parallel SW = 64 processor has a larger percentage of its energy
+consumption in the arithmetic circuits and thus has a larger potential for energy
+reduction than its SW = 8 counterpart. This is the case for DAS, DVAS, and
+DVAFS. However, DVAFS shows a much larger energy-accuracy trade-off than the
+other mentioned techniques, due to its frequency modulation and improved voltage
+
+4.5
+Implementation Challenges of DVAFS
+107
+Table 4.3 Projected energy consumption of related static approximate computing references in a
+SW = 64 SIMD processor
+Ref
+Eq. precision
+mem
+nas
+as
+P [mW]
+P [%]
+Liu et al. (2014)
+7b
+43%
+45%
+11%
+207
+71
+Kulkarni et al. (2011)
+5b
+35%
+36%
+29%
+257
+89
+Kyaw et al. (2011)
+4b
+44%
+46%
+10%
+202
+70
+de la Guia Solaz et al. (2012)
+16b
+36%
+38%
+26%
+247
+85
+de la Guia Solaz et al. (2012)
+11b
+38%
+40%
+23%
+236
+81
+de la Guia Solaz et al. (2012)
+7b
+40%
+41%
+19%
+226
+78
+The Bigger Picture
+Silicon proven DVAFS implementations for energy-efﬁcient neural network acceleration
+are discussed in Chaps. 5 and 6.
+scaling. Thus, in a sole DVAS-system, the parallelism should be large for signiﬁcant
+energy gains. In DVAFS, energy scales down signiﬁcantly also at low levels of
+parallelism (low SW), as the supply voltage is also lowered in the non-accuracy-
+scalable (nas) parts.
+Table 4.3 and Fig. 4.12b show projected gains for other recent approximate
+computing, as in Fig. 4.10b. This table clearly illustrates that none of the other
+techniques lead to signiﬁcant gains on the system level, even for a highly parallel
+SIMD processor with SW = 64. On top of that, most of the other techniques are
+static. In de la Guia Solaz et al. (2012), the energy per processed word is brought
+down to 78% of the 16b baseline at an equivalent computational precision of 7b.
+In DVAS and DVAFS, energy is reduced down to 55% and 35% respectively in the
+same architecture, which is a 1.5 and 2.2 improvement over de la Guia Solaz et al.
+(2012).
+4.5
+Implementation Challenges of DVAFS
+Despite the simplicity of the method, there are several challenges in implementing
+a well-performing DVA(F)S system, both on the functional level and in its physical
+implementation.
+In terms of functional implementation, this section ﬁrst discusses how to design
+basic D(V)A(F)S building blocks. Second, this section discusses the modiﬁcations
+necessary in order to create a working physical implementation. The reader is
+referred to Appendix A for details on how to design for pipe-lined circuits.
+
+108
+4
+Circuit Techniques for Approximate Computing
+Fig. 4.13 Truncating (a) and rounding (b) a DVAS input
+4.5.1
+Functional Implementation of Basic DVA(F)S
+Building Blocks
+4.5.1.1
+DAS and DVAS Compatible Building Blocks
+DAS and DVAS compatible building blocks can be easily implemented in any digital
+circuit by rounding or truncating the inputs of all as blocks to their N MSBs, as
+illustrated in Fig. 4.13. Rounding leads to zero-mean errors (μ = 0, RMSE = σ =
+LSB
+√
+12 ) but implies a signiﬁcant overhead, as it requires an extra adder to compute the
+rounding operation. Truncating only requires programmable signal-gating circuitry
+but leads to higher errors with a non-zero mean (μ = LSB
+2 , RMSE = LSB
+√
+3 ).
+The rounding overhead is limited only in highly parallelized architectures such
+as Moons and Verhelst (2016), Moons et al. (2017b). In the precision scaling used
+in this work, rounding units are always used. No other adaptations are needed on
+the RTL level to support this. The exact used precision can easily be programmed
+through setting the number of LSBs to be set to zero in Fig. 4.13, which can
+theoretically be done on a cycle by cycle basis. None of the building blocks require
+any changes on the RTL-level compared to a standard implementation. Hence, they
+can be inferred in any verilog-HDL language using the standard ﬂows.
+4.5.1.2
+DVAFS-Compatible Building Blocks
+In DVAFS more advanced RTL changes are required, as DVAFS makes use of
+subword-parallel building blocks. In any data transfer, control, or storage block,
+these changes are minimal or non-existent. Arithmetic blocks such as adders and
+
+4.5
+Implementation Challenges of DVAFS
+109
+Tips and Tricks
+Rounding (cfr. MATLAB round) requires an extra adder, but has the best numerical
+performance. Due to its symmetry, quantization errors are zero mean with low RMSE:
+μ = 0, RMSE = σ = LSB
+√
+12 .
+Truncating (cfr. MATLAB ﬂoor) requires no extra circuitry, but has terrible numerical
+performance. Due to its asymmetry, quantization errors are large with high RMSE: μ =
+LSB
+2 , RMSE = LSB
+√
+3 . In any sequential algorithm, these errors will accumulate.
+mainly multipliers do need advanced changes to make this possible. Making sure a
+DVAFS building block can also be used in a DVAS mode is especially challenging.
+Adders can be made DVAFS compatible in a traditional way, by cutting
+the propagation of the carry at the desired subword-length. This can simply be
+implemented by gating the carry signal at the correct places, as is partly illustrated in
+Fig. 4.4. When processing multiple subwords at the same time all the logic released
+by lowering the accuracy is reused. There is hence no decrease in overall circuit
+activity (the switching activity per word is still lowered), but the critical path of
+subword adders is shorter.
+Multipliers are harder to make DVAFS compatible and require a custom
+design. This paragraph discusses an example design of a DVAFS-compatible Booth-
+multiplier (Booth 1951) with a hybrid Wallace tree for partial product accumulation.
+Both the partial product generation and summation phases of the Booth-multiplier
+will have to be adapted in order to make it DVAFS compatible. A fast Brent-
+Kung adder (Brent and Kung 1982) is used for the ﬁnal addition. A full account
+on how to design this multiplier can be found in Vercruysse and Uytterhoeven
+(2015). I acknowledge Loic Vercruysse and Roel Uytterhoeven for their hard work
+in building this multiplier during their master’s thesis. A high-level overview of
+the multiplier is given in Fig. 4.14. Several changes are necessary in order to make
+this baseline subword-parallel while maintaining performance. More details are
+provided in Appendix A.
+4.5.2
+Physical Implementation of DVA(F)S Building Blocks
+As in DVA(F)S, nvas, nas, and vas building blocks can operate at different voltage
+supplies due to the scaling of critical paths. Several architectural changes are
+necessary in order to implement this physically.
+This poses two challenges on the physical implementation level:
+•
+How to support multiple supply voltages for nvas, vas, and nas building
+blocks?
+•
+How to guarantee scaling of the critical path in a real silicon physical
+implementation?
+
+110
+4
+Circuit Techniques for Approximate Computing
+Fig. 4.14 All building blocks
+in a DVAFS-compatible
+Booth-encoded
+Wallace-hybrid CSA
+multiplier with a fast
+Brent-Kung adder as a ﬁnal
+adder
+Booth encoder
+Partial product generator
+Hybrid adder structure
+Fast Brent-Kung adder
+MR
+MP
+4.5.2.1
+Granular Supply Scaling in DVAFS
+In order to support granular DVAFS, multiple power domains are needed, all at
+different supply voltages. This implies adding expensive level-shifter buffers and
+leads to area overheads, as new power domains have to be physically split through
+rings in a physical implementation. Examples of how a real digital design can be
+split into those power domains are given in Sect. 5.3.2 of Chap. 5.
+4.5.2.2
+Enforcing Critical Path Scaling in DVAFS
+The scaling of critical paths (with a factor ki, as in Sect. 4.3) at reduced precision
+is not natively supported in digital physical implementation tools. They are not
+adapted to the DVAFS philosophy and only guarantee that all critical paths comply
+with the timing constraints. A path that has the potential to be short because
+of the limited number of gates in its path is not guaranteed to be short in the
+physical implementation: timing might be dominated by wiring. The electronic
+design automation (EDA) tools only guarantee it to be shorter than the timing
+constraints. In reality, a high percentage of paths will have a delay close to the
+critical path, even though logic path might be short. This phenomenon is called the
+wall of slack (Kahng et al. 2010; Pagliari et al. 2017). The DVAS idea of critical
+path scaling at reduced precision can still be implemented if extra (tighter) timing
+constraints are added for its different operating modes (Moons and Verhelst 2017).
+These extra constraints have several implications. First, extra and tighter con-
+straints lead to buffering overheads that increase the circuit’s energy consumption.
+Second, it increases the optimization time of the back-end tool ﬂows signiﬁcantly,
+from 5 to 10 h for a single-constraint to 24–36h for a multi-mode 1.5Mgate design
+running at 200MHz in 40nm CMOS. This could lead to a signiﬁcant increase in
+design time that should be accounted for at the early stages in a system design.
+
+References
+111
+4.6
+Overview and Discussion
+In this chapter, dynamic-voltage-accuracy-frequency (DVAFS) is proposed as an
+effective means for dynamic approximate computing on the circuit-level. This
+dynamic technique is compatible with deep neural networks, particularly the test-
+time FPNNs and train-time QNNs discussed in Chap. 3. The chapter gives an
+overview of the current state of the ﬁeld of approximate computing and situates
+DVAFS in the sub-ﬁeld of precision scaling. More speciﬁcally this chapter investi-
+gates the performance and implementation challenges of this technique. It is shown
+that, despite its simplicity, DVAFS outperforms the existing SotA in approximate
+computing:
+1. The DVAFS concept, as well as two of its special cases: DAS and DVAS,
+is introduced as a means of dynamic approximate computing. Most other
+techniques in the ﬁeld are static, meaning that their energy-accuracy trade-off
+cannot be modulated at run-time. This is a useful feature in neural network
+applications.
+2. It is made clear that precision scaling techniques, among which DAS and DVAS
+and previous SotA techniques, only impact accuracy-scalable as blocks such
+as arithmetic and no non-accuracy-scalable nas blocks such as control units.
+This limits the techniques’ applicability to very data-intensive tasks. Not so in
+DVAFS, a technique that also allows minimizing nas overheads.
+3. The performance of DVAFS on the block and system level is discussed. It
+outperforms the static and dynamic approximate computing state of the art
+up to 3.5× on the block level and up to 4.5× in a parallel SIMD-processor.
+DVAFS offers the opportunity to lower power and energy consumption per
+execution for the whole system as it modulates frequency for the full system
+at low precision while keeping throughput constant. This allows reducing all
+non-compute overheads in a real approximate computing system. None of the
+previous works have taken this into account, making DVAFS a major contribution
+to the ﬁeld.
+4. Both the functional (subword-parallel building blocks) and physical (enforcing
+critical path scaling) implementation challenges of DVAFS are covered.
+The processor designs covered in Chap. 5 are silicon prototypes using the
+DVA(F)S technique for CNNs.
+References
+Andrae A (2017) Consumer power consumption forecast T. In: Nordic Digital Business Summit,
+Helsinki
+Baek W, Chilimbi TM (2010) Green: a framework for supporting energy-conscious program-
+ming using controlled approximation. In: ACM Sigplan notices, vol 45. ACM, New York,
+pp 198–209
+
+112
+4
+Circuit Techniques for Approximate Computing
+Booth AD (1951) A signed binary multiplication technique. Q J Mech Appl Math 4(2):236–240
+Brent RP, Kung HT (1982) A regular layout for parallel adders. IEEE Trans Comput C-31(3):
+260–264
+Camus V, Schlachter J, Enz C, Gautschi M, Gurkaynak FK (2016) Approximate 32-bit ﬂoating-
+point unit design with 53% power-area product reduction. In: 42nd European solid-state circuits
+conference, ESSCIRC conference 2016. IEEE, pp 465–468
+Carbin M, Misailovic S, Rinard MC (2013) Verifying quantitative reliability for programs that
+execute on unreliable hardware. In: ACM SIGPLAN notices, vol 48. ACM, New York,
+pp 33–52
+Chippa VK, Chakradhar ST, Roy K, Raghunathan A (2013) Analysis and characterization of
+inherent application resilience for approximate computing. In: Proceedings of the 50th ACM
+annual design automation conference, p 113
+Ernst D, Kim NS, Das S, Pant S, Rao R, Pham T, Ziesler C, Blaauw D, Austin T, Flautner K, et al
+(2003) Razor: a low-power pipeline based on circuit-level timing speculation. In: Proceedings
+of the 36th annual IEEE/ACM international symposium on microarchitecture. IEEE Computer
+Society, Washington, DC, p 7
+de la Guia Solaz M, Conway R (2014) Razor based programmable truncated multiply and
+accumulate, energy reduction for efﬁcient digital signal processing. Trans VLSI syst 23:
+189–193
+de la Guia Solaz M, Han W, Conway R (2012) A ﬂexible low power DSP with a programmable
+truncated multiplier. In: TCAS-I
+Han J, Orshansky M (2013) Approximate computing: an emerging paradigm for energy-efﬁcient
+design. In: 2013 18th IEEE European test symposium (ETS). IEEE, pp 1–6
+Hegde R, Shanbhag NR (1999) Energy-efﬁcient signal processing via algorithmic noise-tolerance.
+In: Proceedings of the 1999 international symposium on low power electronics and design.
+IEEE, pp 30–35
+Hegde R, Shanbhag N (2001) Soft digital signal processing. IEEE Trans Very Large Scale Integr
+VLSI Syst 9(6):813–823
+Horowitz M (2014) 1.1 computing’s energy problem (and what we can do about it). In: IEEE
+international solid-state circuits conference (ISSCC). IEEE, pp 10–14
+Jiang H, Han J, Lombardi F (2015) A comparative review and evaluation of approximate adders.
+In: Proceedings of the 25th edition on great lakes symposium on VLSI. ACM, New York, pp
+343–348
+Kahng AB, Kang S, Kumar R, Sartori J (2010) Slack redistribution for graceful degradation under
+voltage overscaling. In: Proceedings of the 2010 Asia and South Paciﬁc design automation
+conference. IEEE Press, pp 825–831
+Kulkarni P, Gupta P, Ercegovac M (2011) Trading accuracy for power with an underdesigned
+multiplier architecture. In: International conference on VLSI design
+Kyaw KY, et al (2011) Low-power high-speed multiplier for error-tolerant application. In: Electron
+devices and solid-state circuits (EDSSC)
+Liu C, Han J, Lombardi F (2014) A low-power, high performance approximate multiplier with
+conﬁgurable partial error recovery. In: Design, automation and test in Europe (DATE)
+Misailovic S, Carbin M, Achour S, Qi Z, Rinard MC (2014) Chisel: reliability-and accuracy-aware
+optimization of approximate computational kernels. In: ACM SIGPLAN notices, vol 49. ACM,
+New York, pp 309–328
+Mittal S (2016) A survey of techniques for approximate computing. ACM Comput Surv (CSUR)
+48(4):62
+Moons B, Verhelst M (2015) DVAS: dynamic voltage accuracy scaling for increased energy-
+efﬁciency in approximate computing. In: International symposium on low power electronics
+and design (ISLPED). https://doi.org/10.1109/ISLPED.2015.7273520
+Moons B, Verhelst M (2016) A 0.3-2.6 tops/w precision-scalable processor for real-time large-
+scale convnets. In: Proceedings of the IEEE symposium on VLSI circuits, pp 178–179
+Moons B, Verhelst M (2017) An energy-efﬁcient precision-scalable convnet processor in 40-nm
+CMOS. IEEE J Solid State Circuits 52(4):903–914
+
+References
+113
+Moons B, De Brabandere B, Van Gool L, Verhelst M (2016) Energy-efﬁcient convnets through
+approximate computing. In: Proceedings of the IEEE winter conference on applications of
+computer vision (WACV), pp 1–8
+Moons B, Uytterhoeven R, Dehaene W, Verhelst M (2017a) DVAFS: trading computational
+accuracy for energy through dynamic-voltage-accuracy-frequency-scaling. In: 2017 Design,
+automation & test in Europe conference & exhibition (DATE). IEEE, pp 488–493
+Moons B, Uytterhoeven R, Dehaene W, Verhelst M (2017b) Envision: a 0.26-to-10 tops/w
+subword-parallel dynamic-voltage-accuracy-frequency-scalable convolutional neural network
+processor in 28nm FDSOI. In: International solid-state circuits conference (ISSCC)
+Pagliari DJ, Durand Y, Coriat D, Molnos A, Beigne E, Macii E, Poncino M (2017) A methodology
+for the design of dynamic accuracy operators by runtime back bias. In: 2017 design, automation
+& test in Europe conference & exhibition (DATE). IEEE, pp 1165–1170
+Park J, Choi JH, Roy K (2010) Dynamic bit-width adaptation in DCT: an approach to trade
+off image quality and computation energy. IEEE Trans Very Large Scale Integr VLSI Syst
+18(5):787–793
+Ranjan A, Raha A, Venkataramani S, Roy K, Raghunathan A (2014) ASLAN: synthesis of
+approximate sequential circuits. In: Proceedings of the conference on design, automation &
+test in Europe, European design and automation association, p 364
+Samadi M, Lee J, Jamshidi DA, Hormati A, Mahlke S (2013) Sage: self-tuning approximation for
+graphics engines. In: 2013 46th annual IEEE/ACM international symposium on microarchitec-
+ture (MICRO). IEEE, pp 13–24
+Sampson A, Dietl W, Fortuna E, Gnanapragasam D, Ceze L, Grossman D (2011) Enerj:
+approximate data types for safe and general low-power computation. In: ACM SIGPLAN
+notices, vol 46. ACM, New York, pp 164–174
+Sidiroglou-Douskos S, Misailovic S, Hoffmann H, Rinard M (2011) Managing performance
+vs. accuracy trade-offs with loop perforation. In: Proceedings of the 19th ACM SIGSOFT
+symposium and the 13th European conference on foundations of software engineering. ACM,
+New York, pp 124–134
+Sorber J, Kostadinov A, Garber M, Brennan M, Corner MD, Berger ED (2007) Eon: a language
+and runtime system for perpetual systems. In: Proceedings of the 5th international conference
+on embedded networked sensor systems. ACM, New York, pp 161–174
+Usami K, Horowitz M (1995) Clustered voltage scaling technique for low-power design. In:
+International symposium on low power design (ISLPED)
+Venkataramani S, Sabne A, Kozhikkottu V, Roy K, Raghunathan A (2012) Salsa: systematic
+logic synthesis of approximate circuits. In: Proceedings of the 49th annual design automation
+conference. ACM, New York, pp 796–801
+Venkataramani S, et al (2013) Quality programmable vector processors for approximate comput-
+ing. In: MICRO
+Vercruysse L, Uytterhoeven R (2015) Energiewinst door good-enough computing: introductie
+van at run-time aanpasbare precisie in digitale circuits. PhD thesis, KU Leuven, Departement
+Elektrotechniek, moons, Bert and Verhelst, Marian (supervisor)
+Whitney J, Delforge P (2014) Data center efﬁciency assessment. Issue paper on NRDC (The
+Natural Resource Defense Council)
+Wu B, Willems M (2015) Rapid architectural exploration in designing application-speciﬁc
+processors. In: ASIP designer whitepaper
+Xu Q, Mytkowicz T, Kim NS (2016) Approximate computing: a survey. IEEE Des Test 33(1):8–22

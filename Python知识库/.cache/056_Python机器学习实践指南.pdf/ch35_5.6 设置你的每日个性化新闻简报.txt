@@ -1,0 +1,93 @@
+5.6 设置你的每日个性化新闻简报 133 
+我们通过所有可用的数据重新训练了模型。随着时间的推移你将获得更多的结果，因
+此可以进行多次这样的操作。你添加的训练数据越多，预测的结果会越好。
+我们假设此时你已经有一个训练有素的模型了，并准备开始使用它。下面看看如何部
+署它来建立个性化的新闻源。
+5.6 设置你的每日个性化新闻简报 
+为了使用新闻故事来创建个人电子邮件，我们将再次使用IFTTT。如我们在第3 章——
+构建应用程序，发现低价的机票——所做，我们将使用Maker 频道发送POST 请求。不过，
+这一次的有效载荷将是我们的新闻故事。如果你尚未设置Maker 频道，请先完成这一步。
+具体的操作指令可以在第3 章中找到。你还应设置Gmail 频道。一旦完成后，我们将添加
+一个Recipe 来组合这两个。 
+首先，在IFTTT 主页单击Create Recipe。然后，搜索Maker Channel，如图5-35 所示。 
+图5-35 
+选择this，然后选择Receive a web request，如图5-36 所示。 
+图5-36 
+
+134 第5 章创建自定义的新闻源 
+然后，为该请求提供一个名称。我在这里使用news_event，如图5-37 所示。
+图5-37 
+最后，单击Create Trigger 来完成所有步骤。接下来，单击that 来设置电子邮件。搜索
+Gmail 并单击图5-38 所示的图标。 
+图5-38 
+选择Gmail 后，单击Send an e-mail，如图5-39 所示。在这里，你可以定制化自己的电
+子邮件消息。
+图5-39 
+
+5.6 设置你的每日个性化新闻简报 135 
+输入你的电子邮件地址，主题，最后在电子邮件的正文中包括Value1。我们将通过POST
+请求传递故事标题和链接。单击Create Recipe 最终完成这项操作。 
+现在，我们已经准备就绪，可以生成一个按计划运行的脚本，自动发送我们感兴趣的
+文章。我们将为此创建一个单独的脚本，不过对于现有的代码，还需要序列化向量转化器
+和模型。
+import pickle  
+pickle.dump(model, open  
+(r'/Users/alexcombs/Downloads/news_model_pickle.p', 'wb')) 
+pickle.dump(vect, open  
+(r'/Users/alexcombs/Downloads/news_vect_pickle.p', 'wb')) 
+通过这些代码，我们已经保存了所需的模型。在新的脚本中，我们将读取这些模型来
+生成新的预测。我们将使用相同的计划库运行第3 章的代码。整合所有这些，我们将获得
+如下的脚本。
+# 进行包的导入 
+import pandas as pd 
+fromsklearn.feature_extraction.text import TfidfVectorizer 
+fromsklearn.svm import LinearSVC 
+import schedule 
+import time  
+import pickle 
+importjson 
+importgspread 
+import requests  
+from bs4 import BeautifulSoup 
+from oauth2client.client import SignedJwtAssertionCredentials 
+# 创建我们的抓取函数 
+deffetch_news():  
+ try: 
+ vect = pickle.load(open(r'/Users/alexcombs/Downloads/ 
+ news_vect_pickle.p', 'rb'))  
+
+136 第5 章创建自定义的新闻源 
+ model = pickle.load(open(r'/Users/alexcombs/Downloads/ 
+ news_model_pickle.p', 'rb'))  
+ json_key = json.load(open(r'/Users/alexcombs/Downloads/ 
+ APIKEY.json'))  
+ scope = ['https://spreadsheets.google.com/feeds']  
+ credentials = SignedJwtAssertionCredentials(json_key 
+ ['client_email'], json_key['private_key'].encode(), scope) 
+ gc = gspread.authorize(credentials)  
+ ws = gc.open("NewStories")  
+ sh = ws.sheet1  
+ zd = list(zip(sh.col_values(2), sh.col_values(3),  
+ sh.col_values(4)))  
+ zf = pd.DataFrame(zd, columns=['title', 'urls', 'html']) 
+ zf.replace('', pd.np.nan, inplace=True)  
+ zf.dropna(inplace=True)  
+ defget_text(x): 
+ soup = BeautifulSoup(x, 'lxml') 
+ text = soup.get_text()  
+ return text  
+ zf.loc[:, 'text'] = zf['html'].map(get_text) 
+ tv = vect.transform(zf['text']) 
+ res = model.predict(tv)  
+ rf = pd.DataFrame(res, columns=['wanted'])  
+ rez = pd.merge(rf, zf, left_index=True, right_index=True) 
+ news_str = ''  
+ for t, u in zip(rez[rez['wanted'] == 'y']['title'], 
+ rez[rez['wanted'] == 'y']['urls']):  
+ news_str = news_str + t + '\n' + u + '\n' 
+ payload = {"value1": news_str}  
+ r = requests.post('https://maker.ifttt.com/trigger/ 
+ news_event/with/key/IFTTT_KEY', data=payload)  
+ # 清理工作表 
+ lenv = len(sh.col_values(1))  
+ cell_list = sh.range('A1:F' + str(lenv)) 

@@ -1,0 +1,951 @@
+网络方案
+运行时方案
+Ingress 方案
+Metrics 方案
+集群方案
+- 66 -
+本文档使用 书栈(BookStack.CN) 构建
+
+Flannel
+网络方案
+网络方案
+- 67 -
+本文档使用 书栈(BookStack.CN) 构建
+
+部署 Flannel
+Flannel
+Flannel
+- 68 -
+本文档使用 书栈(BookStack.CN) 构建
+
+记集群网段为 CLUSTER_CIDR:
+1. CLUSTER_CIDR=10.10.0.0/16
+创建 flannel 资源文件:
+1. cat <<EOF | sudo tee kube-flannel.yml
+2. apiVersion: policy/v1beta1
+3. kind: PodSecurityPolicy
+4. metadata:
+5.   name: psp.flannel.unprivileged
+6.   annotations:
+7.     seccomp.security.alpha.kubernetes.io/allowedProfileNames: docker/default
+8.     seccomp.security.alpha.kubernetes.io/defaultProfileName: docker/default
+9.     apparmor.security.beta.kubernetes.io/allowedProfileNames: runtime/default
+10.     apparmor.security.beta.kubernetes.io/defaultProfileName: runtime/default
+11. spec:
+12.   privileged: false
+13.   volumes:
+14.     - configMap
+15.     - secret
+16.     - emptyDir
+17.     - hostPath
+18.   allowedHostPaths:
+19.     - pathPrefix: "/etc/cni/net.d"
+20.     - pathPrefix: "/etc/kube-flannel"
+21.     - pathPrefix: "/run/flannel"
+22.   readOnlyRootFilesystem: false
+23.   # Users and groups
+24.   runAsUser:
+25.     rule: RunAsAny
+26.   supplementalGroups:
+27.     rule: RunAsAny
+28.   fsGroup:
+29.     rule: RunAsAny
+30.   # Privilege Escalation
+31.   allowPrivilegeEscalation: false
+32.   defaultAllowPrivilegeEscalation: false
+部署 Flannel
+部署 Flannel
+- 69 -
+本文档使用 书栈(BookStack.CN) 构建
+
+33.   # Capabilities
+34.   allowedCapabilities: ['NET_ADMIN']
+35.   defaultAddCapabilities: []
+36.   requiredDropCapabilities: []
+37.   # Host namespaces
+38.   hostPID: false
+39.   hostIPC: false
+40.   hostNetwork: true
+41.   hostPorts:
+42.   - min: 0
+43.     max: 65535
+44.   # SELinux
+45.   seLinux:
+46.     # SELinux is unsed in CaaSP
+47.     rule: 'RunAsAny'
+48. ---
+49. kind: ClusterRole
+50. apiVersion: rbac.authorization.k8s.io/v1beta1
+51. metadata:
+52.   name: flannel
+53. rules:
+54.   - apiGroups: ['extensions']
+55.     resources: ['podsecuritypolicies']
+56.     verbs: ['use']
+57.     resourceNames: ['psp.flannel.unprivileged']
+58.   - apiGroups:
+59.       - ""
+60.     resources:
+61.       - pods
+62.     verbs:
+63.       - get
+64.   - apiGroups:
+65.       - ""
+66.     resources:
+67.       - nodes
+68.     verbs:
+69.       - list
+70.       - watch
+71.   - apiGroups:
+72.       - ""
+73.     resources:
+74.       - nodes/status
+部署 Flannel
+- 70 -
+本文档使用 书栈(BookStack.CN) 构建
+
+75.     verbs:
+76.       - patch
+77. ---
+78. kind: ClusterRoleBinding
+79. apiVersion: rbac.authorization.k8s.io/v1beta1
+80. metadata:
+81.   name: flannel
+82. roleRef:
+83.   apiGroup: rbac.authorization.k8s.io
+84.   kind: ClusterRole
+85.   name: flannel
+86. subjects:
+87. - kind: ServiceAccount
+88.   name: flannel
+89.   namespace: kube-system
+90. ---
+91. apiVersion: v1
+92. kind: ServiceAccount
+93. metadata:
+94.   name: flannel
+95.   namespace: kube-system
+96. ---
+97. kind: ConfigMap
+98. apiVersion: v1
+99. metadata:
+100.   name: kube-flannel-cfg
+101.   namespace: kube-system
+102.   labels:
+103.     tier: node
+104.     app: flannel
+105. data:
+106.   cni-conf.json: |
+107.     {
+108.       "cniVersion": "0.2.0",
+109.       "name": "cbr0",
+110.       "plugins": [
+111.         {
+112.           "type": "flannel",
+113.           "delegate": {
+114.             "hairpinMode": true,
+115.             "isDefaultGateway": true
+116.           }
+部署 Flannel
+- 71 -
+本文档使用 书栈(BookStack.CN) 构建
+
+117.         },
+118.         {
+119.           "type": "portmap",
+120.           "capabilities": {
+121.             "portMappings": true
+122.           }
+123.         }
+124.       ]
+125.     }
+126.   net-conf.json: |
+127.     {
+128.       "Network": "${CLUSTER_CIDR}",
+129.       "Backend": {
+130.         "Type": "vxlan"
+131.       }
+132.     }
+133. ---
+134. apiVersion: apps/v1
+135. kind: DaemonSet
+136. metadata:
+137.   name: kube-flannel-ds-amd64
+138.   namespace: kube-system
+139.   labels:
+140.     tier: node
+141.     app: flannel
+142. spec:
+143.   selector:
+144.     matchLabels:
+145.       app: flannel
+146.   template:
+147.     metadata:
+148.       labels:
+149.         tier: node
+150.         app: flannel
+151.     spec:
+152.       affinity:
+153.         nodeAffinity:
+154.           requiredDuringSchedulingIgnoredDuringExecution:
+155.             nodeSelectorTerms:
+156.               - matchExpressions:
+157.                   - key: beta.kubernetes.io/os
+158.                     operator: In
+部署 Flannel
+- 72 -
+本文档使用 书栈(BookStack.CN) 构建
+
+159.                     values:
+160.                       - linux
+161.                   - key: beta.kubernetes.io/arch
+162.                     operator: In
+163.                     values:
+164.                       - amd64
+165.       hostNetwork: true
+166.       tolerations:
+167.       - operator: Exists
+168.         effect: NoSchedule
+169.       serviceAccountName: flannel
+170.       initContainers:
+171.       - name: install-cni
+172.         image: quay.io/coreos/flannel:v0.11.0-amd64
+173.         command:
+174.         - cp
+175.         args:
+176.         - -f
+177.         - /etc/kube-flannel/cni-conf.json
+178.         - /etc/cni/net.d/10-flannel.conflist
+179.         volumeMounts:
+180.         - name: cni
+181.           mountPath: /etc/cni/net.d
+182.         - name: flannel-cfg
+183.           mountPath: /etc/kube-flannel/
+184.       containers:
+185.       - name: kube-flannel
+186.         image: quay.io/coreos/flannel:v0.11.0-amd64
+187.         command:
+188.         - /opt/bin/flanneld
+189.         args:
+190.         - --ip-masq
+191.         - --kube-subnet-mgr
+192.         resources:
+193.           requests:
+194.             cpu: "100m"
+195.             memory: "50Mi"
+196.           limits:
+197.             cpu: "100m"
+198.             memory: "50Mi"
+199.         securityContext:
+200.           privileged: false
+部署 Flannel
+- 73 -
+本文档使用 书栈(BookStack.CN) 构建
+
+201.           capabilities:
+202.              add: ["NET_ADMIN"]
+203.         env:
+204.         - name: POD_NAME
+205.           valueFrom:
+206.             fieldRef:
+207.               fieldPath: metadata.name
+208.         - name: POD_NAMESPACE
+209.           valueFrom:
+210.             fieldRef:
+211.               fieldPath: metadata.namespace
+212.         volumeMounts:
+213.         - name: run
+214.           mountPath: /run/flannel
+215.         - name: flannel-cfg
+216.           mountPath: /etc/kube-flannel/
+217.       volumes:
+218.         - name: run
+219.           hostPath:
+220.             path: /run/flannel
+221.         - name: cni
+222.           hostPath:
+223.             path: /etc/cni/net.d
+224.         - name: flannel-cfg
+225.           configMap:
+226.             name: kube-flannel-cfg
+227. ---
+228. apiVersion: apps/v1
+229. kind: DaemonSet
+230. metadata:
+231.   name: kube-flannel-ds-arm64
+232.   namespace: kube-system
+233.   labels:
+234.     tier: node
+235.     app: flannel
+236. spec:
+237.   selector:
+238.     matchLabels:
+239.       app: flannel
+240.   template:
+241.     metadata:
+242.       labels:
+部署 Flannel
+- 74 -
+本文档使用 书栈(BookStack.CN) 构建
+
+243.         tier: node
+244.         app: flannel
+245.     spec:
+246.       affinity:
+247.         nodeAffinity:
+248.           requiredDuringSchedulingIgnoredDuringExecution:
+249.             nodeSelectorTerms:
+250.               - matchExpressions:
+251.                   - key: beta.kubernetes.io/os
+252.                     operator: In
+253.                     values:
+254.                       - linux
+255.                   - key: beta.kubernetes.io/arch
+256.                     operator: In
+257.                     values:
+258.                       - arm64
+259.       hostNetwork: true
+260.       tolerations:
+261.       - operator: Exists
+262.         effect: NoSchedule
+263.       serviceAccountName: flannel
+264.       initContainers:
+265.       - name: install-cni
+266.         image: quay.io/coreos/flannel:v0.11.0-arm64
+267.         command:
+268.         - cp
+269.         args:
+270.         - -f
+271.         - /etc/kube-flannel/cni-conf.json
+272.         - /etc/cni/net.d/10-flannel.conflist
+273.         volumeMounts:
+274.         - name: cni
+275.           mountPath: /etc/cni/net.d
+276.         - name: flannel-cfg
+277.           mountPath: /etc/kube-flannel/
+278.       containers:
+279.       - name: kube-flannel
+280.         image: quay.io/coreos/flannel:v0.11.0-arm64
+281.         command:
+282.         - /opt/bin/flanneld
+283.         args:
+284.         - --ip-masq
+部署 Flannel
+- 75 -
+本文档使用 书栈(BookStack.CN) 构建
+
+285.         - --kube-subnet-mgr
+286.         resources:
+287.           requests:
+288.             cpu: "100m"
+289.             memory: "50Mi"
+290.           limits:
+291.             cpu: "100m"
+292.             memory: "50Mi"
+293.         securityContext:
+294.           privileged: false
+295.           capabilities:
+296.              add: ["NET_ADMIN"]
+297.         env:
+298.         - name: POD_NAME
+299.           valueFrom:
+300.             fieldRef:
+301.               fieldPath: metadata.name
+302.         - name: POD_NAMESPACE
+303.           valueFrom:
+304.             fieldRef:
+305.               fieldPath: metadata.namespace
+306.         volumeMounts:
+307.         - name: run
+308.           mountPath: /run/flannel
+309.         - name: flannel-cfg
+310.           mountPath: /etc/kube-flannel/
+311.       volumes:
+312.         - name: run
+313.           hostPath:
+314.             path: /run/flannel
+315.         - name: cni
+316.           hostPath:
+317.             path: /etc/cni/net.d
+318.         - name: flannel-cfg
+319.           configMap:
+320.             name: kube-flannel-cfg
+321. ---
+322. apiVersion: apps/v1
+323. kind: DaemonSet
+324. metadata:
+325.   name: kube-flannel-ds-arm
+326.   namespace: kube-system
+部署 Flannel
+- 76 -
+本文档使用 书栈(BookStack.CN) 构建
+
+327.   labels:
+328.     tier: node
+329.     app: flannel
+330. spec:
+331.   selector:
+332.     matchLabels:
+333.       app: flannel
+334.   template:
+335.     metadata:
+336.       labels:
+337.         tier: node
+338.         app: flannel
+339.     spec:
+340.       affinity:
+341.         nodeAffinity:
+342.           requiredDuringSchedulingIgnoredDuringExecution:
+343.             nodeSelectorTerms:
+344.               - matchExpressions:
+345.                   - key: beta.kubernetes.io/os
+346.                     operator: In
+347.                     values:
+348.                       - linux
+349.                   - key: beta.kubernetes.io/arch
+350.                     operator: In
+351.                     values:
+352.                       - arm
+353.       hostNetwork: true
+354.       tolerations:
+355.       - operator: Exists
+356.         effect: NoSchedule
+357.       serviceAccountName: flannel
+358.       initContainers:
+359.       - name: install-cni
+360.         image: quay.io/coreos/flannel:v0.11.0-arm
+361.         command:
+362.         - cp
+363.         args:
+364.         - -f
+365.         - /etc/kube-flannel/cni-conf.json
+366.         - /etc/cni/net.d/10-flannel.conflist
+367.         volumeMounts:
+368.         - name: cni
+部署 Flannel
+- 77 -
+本文档使用 书栈(BookStack.CN) 构建
+
+369.           mountPath: /etc/cni/net.d
+370.         - name: flannel-cfg
+371.           mountPath: /etc/kube-flannel/
+372.       containers:
+373.       - name: kube-flannel
+374.         image: quay.io/coreos/flannel:v0.11.0-arm
+375.         command:
+376.         - /opt/bin/flanneld
+377.         args:
+378.         - --ip-masq
+379.         - --kube-subnet-mgr
+380.         resources:
+381.           requests:
+382.             cpu: "100m"
+383.             memory: "50Mi"
+384.           limits:
+385.             cpu: "100m"
+386.             memory: "50Mi"
+387.         securityContext:
+388.           privileged: false
+389.           capabilities:
+390.              add: ["NET_ADMIN"]
+391.         env:
+392.         - name: POD_NAME
+393.           valueFrom:
+394.             fieldRef:
+395.               fieldPath: metadata.name
+396.         - name: POD_NAMESPACE
+397.           valueFrom:
+398.             fieldRef:
+399.               fieldPath: metadata.namespace
+400.         volumeMounts:
+401.         - name: run
+402.           mountPath: /run/flannel
+403.         - name: flannel-cfg
+404.           mountPath: /etc/kube-flannel/
+405.       volumes:
+406.         - name: run
+407.           hostPath:
+408.             path: /run/flannel
+409.         - name: cni
+410.           hostPath:
+部署 Flannel
+- 78 -
+本文档使用 书栈(BookStack.CN) 构建
+
+411.             path: /etc/cni/net.d
+412.         - name: flannel-cfg
+413.           configMap:
+414.             name: kube-flannel-cfg
+415. ---
+416. apiVersion: apps/v1
+417. kind: DaemonSet
+418. metadata:
+419.   name: kube-flannel-ds-ppc64le
+420.   namespace: kube-system
+421.   labels:
+422.     tier: node
+423.     app: flannel
+424. spec:
+425.   selector:
+426.     matchLabels:
+427.       app: flannel
+428.   template:
+429.     metadata:
+430.       labels:
+431.         tier: node
+432.         app: flannel
+433.     spec:
+434.       affinity:
+435.         nodeAffinity:
+436.           requiredDuringSchedulingIgnoredDuringExecution:
+437.             nodeSelectorTerms:
+438.               - matchExpressions:
+439.                   - key: beta.kubernetes.io/os
+440.                     operator: In
+441.                     values:
+442.                       - linux
+443.                   - key: beta.kubernetes.io/arch
+444.                     operator: In
+445.                     values:
+446.                       - ppc64le
+447.       hostNetwork: true
+448.       tolerations:
+449.       - operator: Exists
+450.         effect: NoSchedule
+451.       serviceAccountName: flannel
+452.       initContainers:
+部署 Flannel
+- 79 -
+本文档使用 书栈(BookStack.CN) 构建
+
+453.       - name: install-cni
+454.         image: quay.io/coreos/flannel:v0.11.0-ppc64le
+455.         command:
+456.         - cp
+457.         args:
+458.         - -f
+459.         - /etc/kube-flannel/cni-conf.json
+460.         - /etc/cni/net.d/10-flannel.conflist
+461.         volumeMounts:
+462.         - name: cni
+463.           mountPath: /etc/cni/net.d
+464.         - name: flannel-cfg
+465.           mountPath: /etc/kube-flannel/
+466.       containers:
+467.       - name: kube-flannel
+468.         image: quay.io/coreos/flannel:v0.11.0-ppc64le
+469.         command:
+470.         - /opt/bin/flanneld
+471.         args:
+472.         - --ip-masq
+473.         - --kube-subnet-mgr
+474.         resources:
+475.           requests:
+476.             cpu: "100m"
+477.             memory: "50Mi"
+478.           limits:
+479.             cpu: "100m"
+480.             memory: "50Mi"
+481.         securityContext:
+482.           privileged: false
+483.           capabilities:
+484.              add: ["NET_ADMIN"]
+485.         env:
+486.         - name: POD_NAME
+487.           valueFrom:
+488.             fieldRef:
+489.               fieldPath: metadata.name
+490.         - name: POD_NAMESPACE
+491.           valueFrom:
+492.             fieldRef:
+493.               fieldPath: metadata.namespace
+494.         volumeMounts:
+部署 Flannel
+- 80 -
+本文档使用 书栈(BookStack.CN) 构建
+
+495.         - name: run
+496.           mountPath: /run/flannel
+497.         - name: flannel-cfg
+498.           mountPath: /etc/kube-flannel/
+499.       volumes:
+500.         - name: run
+501.           hostPath:
+502.             path: /run/flannel
+503.         - name: cni
+504.           hostPath:
+505.             path: /etc/cni/net.d
+506.         - name: flannel-cfg
+507.           configMap:
+508.             name: kube-flannel-cfg
+509. ---
+510. apiVersion: apps/v1
+511. kind: DaemonSet
+512. metadata:
+513.   name: kube-flannel-ds-s390x
+514.   namespace: kube-system
+515.   labels:
+516.     tier: node
+517.     app: flannel
+518. spec:
+519.   selector:
+520.     matchLabels:
+521.       app: flannel
+522.   template:
+523.     metadata:
+524.       labels:
+525.         tier: node
+526.         app: flannel
+527.     spec:
+528.       affinity:
+529.         nodeAffinity:
+530.           requiredDuringSchedulingIgnoredDuringExecution:
+531.             nodeSelectorTerms:
+532.               - matchExpressions:
+533.                   - key: beta.kubernetes.io/os
+534.                     operator: In
+535.                     values:
+536.                       - linux
+部署 Flannel
+- 81 -
+本文档使用 书栈(BookStack.CN) 构建
+
+537.                   - key: beta.kubernetes.io/arch
+538.                     operator: In
+539.                     values:
+540.                       - s390x
+541.       hostNetwork: true
+542.       tolerations:
+543.       - operator: Exists
+544.         effect: NoSchedule
+545.       serviceAccountName: flannel
+546.       initContainers:
+547.       - name: install-cni
+548.         image: quay.io/coreos/flannel:v0.11.0-s390x
+549.         command:
+550.         - cp
+551.         args:
+552.         - -f
+553.         - /etc/kube-flannel/cni-conf.json
+554.         - /etc/cni/net.d/10-flannel.conflist
+555.         volumeMounts:
+556.         - name: cni
+557.           mountPath: /etc/cni/net.d
+558.         - name: flannel-cfg
+559.           mountPath: /etc/kube-flannel/
+560.       containers:
+561.       - name: kube-flannel
+562.         image: quay.io/coreos/flannel:v0.11.0-s390x
+563.         command:
+564.         - /opt/bin/flanneld
+565.         args:
+566.         - --ip-masq
+567.         - --kube-subnet-mgr
+568.         resources:
+569.           requests:
+570.             cpu: "100m"
+571.             memory: "50Mi"
+572.           limits:
+573.             cpu: "100m"
+574.             memory: "50Mi"
+575.         securityContext:
+576.           privileged: false
+577.           capabilities:
+578.              add: ["NET_ADMIN"]
+部署 Flannel
+- 82 -
+本文档使用 书栈(BookStack.CN) 构建
+
+579.         env:
+580.         - name: POD_NAME
+581.           valueFrom:
+582.             fieldRef:
+583.               fieldPath: metadata.name
+584.         - name: POD_NAMESPACE
+585.           valueFrom:
+586.             fieldRef:
+587.               fieldPath: metadata.namespace
+588.         volumeMounts:
+589.         - name: run
+590.           mountPath: /run/flannel
+591.         - name: flannel-cfg
+592.           mountPath: /etc/kube-flannel/
+593.       volumes:
+594.         - name: run
+595.           hostPath:
+596.             path: /run/flannel
+597.         - name: cni
+598.           hostPath:
+599.             path: /etc/cni/net.d
+600.         - name: flannel-cfg
+601.           configMap:
+602.             name: kube-flannel-cfg
+603. EOF
+部署:
+1. kubectl apply -f kube-flannel.yml
+以上资源文件参考 flannel 官方:
+https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-
+flannel.yml (仅提取了 CLUSTER_CIDR 变量)
+部署 Flannel
+- 83 -
+本文档使用 书栈(BookStack.CN) 构建
+
+Containerd
+运行时方案
+运行时方案
+- 84 -
+本文档使用 书栈(BookStack.CN) 构建
+
+安装 containerd
+Containerd
+Containerd
+- 85 -
+本文档使用 书栈(BookStack.CN) 构建
+
+下载二进制:
+1. wget -q --show-progress --https-only --timestamping \
+2. 
+  https://github.com/opencontainers/runc/releases/download/v1.0.0-
+rc8/runc.amd64 \
+3. 
+  https://github.com/containerd/containerd/releases/download/v1.3.0/containerd-1.
+amd64.tar.gz \
+4. 
+  https://github.com/kubernetes-sigs/cri-tools/releases/download/v1.16.1/crictl-v
+amd64.tar.gz
+5. 
+6. sudo mv runc.amd64 runc
+安装二进制:
+1. tar -xvf crictl-v1.16.1-linux-amd64.tar.gz
+2. chmod +x crictl runc
+3. sudo cp crictl runc /usr/local/bin/
+4. 
+5. mkdir containerd
+6. tar -xvf containerd-1.3.0.linux-amd64.tar.gz -C containerd
+7. sudo cp containerd/bin/* /bin/
+创建 containerd 启动配置  config.toml :
+1. sudo mkdir -p /etc/containerd/
+2. cat << EOF | sudo tee /etc/containerd/config.toml
+3. [plugins]
+4.   [plugins.cri.containerd]
+5.     snapshotter = "overlayfs"
+6.     [plugins.cri.containerd.default_runtime]
+7.       runtime_type = "io.containerd.runtime.v1.linux"
+8.       runtime_engine = "/usr/local/bin/runc"
+9.       runtime_root = ""
+10. EOF
+安装 containerd
+" class="reference-link">二进制部署
+安装 containerd
+- 86 -
+本文档使用 书栈(BookStack.CN) 构建
+
+创建 systemd 配置  containerd.service :
+1. cat <<EOF | sudo tee /etc/systemd/system/containerd.service
+2. [Unit]
+3. Description=containerd container runtime
+4. Documentation=https://containerd.io
+5. After=network.target
+6. 
+7. [Service]
+8. ExecStartPre=/sbin/modprobe overlay
+9. ExecStart=/bin/containerd
+10. Restart=always
+11. RestartSec=5
+12. Delegate=yes
+13. KillMode=process
+14. OOMScoreAdjust=-999
+15. LimitNOFILE=1048576
+16. LimitNPROC=infinity
+17. LimitCORE=infinity
+18. 
+19. [Install]
+20. WantedBy=multi-user.target
+21. EOF
+启动:
+1. sudo systemctl daemon-reload
+2. sudo systemctl enable containerd
+3. sudo systemctl start containerd
+配置 crictl (方便后面使用 crictl 管理与调试 containerd 的容器与镜像):
+1. crictl config runtime-endpoint unix:///var/run/containerd/containerd.sock
+安装 containerd
+- 87 -
+本文档使用 书栈(BookStack.CN) 构建
+
+Nginx Ingress
+Traefik Ingress
+Ingress 方案
+Ingress 方案
+- 88 -
+本文档使用 书栈(BookStack.CN) 构建
+
+安装 nginx ingress controller
+Nginx Ingress
+Nginx Ingress
+- 89 -
+本文档使用 书栈(BookStack.CN) 构建
+
+如何暴露 ingress 访问入口? 最佳方案是使用 LoadBalancer 类型的 Service 来暴露，即创建
+外部负载均衡器来暴露流量，后续访问 ingress 的流量都走这个负载均衡器的地址，ingress 规则
+里面配的域名也要配置解析到这个负载均衡器的 IP 地址。
+这种方式需要集群支持 LoadBalancer 类型的 Service，如果是云厂商提供的 k8s 服务，或者在
+云上自建集群并使用了云厂商提供的 cloud provider，也都是支持的，创建 LoadBalancer 类型
+的 Service 的时候会自动调云厂商的接口创建云厂商提供的负载均衡器产品(通常公网类型的负载均
+衡器是付费的)；如果你的集群不是前面说的情况，是自建集群并且有自己的负载均衡器方案，并部署
+了相关插件来适配，比如 MetalLB 和 Porter，这样也是可以支持 LoadBalancer 类型的
+Service 的。
+1. 
+2. helm install stable/nginx-ingress \
+3.   --name nginx \
+4.   --namespace kube-system \
+5.   --set controller.ingressClass=nginx \
+6.   --set controller.publishService.enabled=true \
+ controller.ingressClass : 创建的 ingress 中包含  kubernetes.io/ingress.class 
+这个 annotation 并且值与这里配置的一致，这个 nginx ingress controller 才会处理
+(生成转发规则)
+ controller.publishService.enabled : 这个置为 true 主要是为了让 ingress 的外部地
+址正确显示 (显示为负载均衡器的地址)，因为如果不配置这个，默认情况下会将 ingress
+controller 所有实例的节点 ip 写到 ingress 的 address 里
+安装完成后如何获取负载均衡器的 IP 地址？查看 nginx ingress controller 的 service 的
+ EXTERNAL-IP  就可以:
+1. $ kubectl -n kube-system get service nginx-nginx-ingress-controller
+2. 
+NAME                             TYPE           CLUSTER-IP       EXTERNAL-IP     
+PORT(S)                      AGE
+3. 
+nginx-nginx-ingress-controller   LoadBalancer   172.16.255.194   119.28.123.174  
+80:32348/TCP,443:32704/TCP   10m
+安装 nginx ingress controller
+最佳安装方案
+使用 helm 安装
+安装 nginx ingress controller
+- 90 -
+本文档使用 书栈(BookStack.CN) 构建
+
+如果需要新的流量入口，可以按照同样的方法用 helm 安装新的 release，注意要设置不同的
+ controller.ingressClass ，将希望用新流量入口暴露的 ingress 的
+ kubernetes.io/ingress.class  annotation 设置成这里的值就可以。
+如果转发性能跟不上，可以增加 controller 的副本，设置  controller.replicaCount  的值，
+或者启用 HPA 自动伸缩，将  controller.autoscaling.enabled  置为 true，更多细节控制请
+参考官方文档。
+配置更改如果比较多推荐使用覆盖  values.yaml  的方式来安装 nginx ingress:
+1. 导出默认的  values.yaml :
+1. helm inspect values stable/nginx-ingress > values.yaml
+2. 修改  values.yaml  中的配置
+3. 执行 helm install 的时候去掉  --set  的方式设置的变量，替换为使用  -f
+values.yaml 
+有时可能更新 nginx ingress 的部署，滚动更新时可能造成部分连接异常，可以参考服务平滑更新
+最佳实践 使用 preStopHook 和 readinessProbe 保证服务平滑更新不中断，nginx ingress
+默认加了 readinessProbe，但 preStop 没有加，我们可以修改  values.yaml  中
+ controller.lifecycle ，加上 preStop，示例:
+1.   lifecycle:
+2.     preStop:
+3.       exec:
+4.         command: ["/bin/bash", "-c", "sleep 30"]
+还可以 使用反亲和性避免单点故障，修改  controller.affinity  字段示例:
+1.   affinity:
+2.    podAntiAffinity:
+3.      requiredDuringSchedulingIgnoredDuringExecution:
+4.      - weight: 100
+5.        labelSelector:
+6.          matchExpressions:
+7.          - key: app
+8.            operator: In
+9.            values:
+配置优化
+安装 nginx ingress controller
+- 91 -
+本文档使用 书栈(BookStack.CN) 构建
+
+10.            - nginx-ingress
+11.          - key: component
+12.            operator: In
+13.            values:
+14.            - controller
+15.          - key: release
+16.            operator: In
+17.            values:
+18.            - nginx
+19.        topologyKey: kubernetes.io/hostname
+Github 主页: https://github.com/kubernetes/ingress-nginx
+helm hub 主页: https://hub.helm.sh/charts/nginx/nginx-ingress
+官方文档: https://kubernetes.github.io/ingress-nginx/user-guide/nginx-
+configuration/
+参考资料
+安装 nginx ingress controller
+- 92 -
+本文档使用 书栈(BookStack.CN) 构建
+
+安装 traefik ingress controller
+Traefik Ingress
+Traefik Ingress
+- 93 -
+本文档使用 书栈(BookStack.CN) 构建
+
+如何暴露 ingress 访问入口? 最佳方案是使用 LoadBalancer 类型的 Service 来暴露，即创建
+外部负载均衡器来暴露流量，后续访问 ingress 的流量都走这个负载均衡器的地址，ingress 规则
+里面配的域名也要配置解析到这个负载均衡器的 IP 地址。
+这种方式需要集群支持 LoadBalancer 类型的 Service，如果是云厂商提供的 k8s 服务，或者在
+云上自建集群并使用了云厂商提供的 cloud provider，也都是支持的，创建 LoadBalancer 类型
+的 Service 的时候会自动调云厂商的接口创建云厂商提供的负载均衡器产品(通常公网类型的负载均
+衡器是付费的)；如果你的集群不是前面说的情况，是自建集群并且有自己的负载均衡器方案，并部署
+了相关插件来适配，比如 MetalLB 和 Porter，这样也是可以支持 LoadBalancer 类型的
+Service 的。
+1. helm install stable/traefik \
+2.   --name traefik \
+3.   --namespace kube-system \
+4.   --set kubernetes.ingressClass=traefik \
+5.   --set kubernetes.ingressEndpoint.useDefaultPublishedService=true \
+6.   --set rbac.enabled=true
+ kubernetes.ingressClass=traefik : 创建的 ingress 中包含
+ kubernetes.io/ingress.class  这个 annotation 并且值与这里配置的一致，这个
+traefik ingress controller 才会处理 (生成转发规则)
+ kubernetes.ingressEndpoint.useDefaultPublishedService=true : 这个置为 true 主要
+是为了让 ingress 的外部地址正确显示 (显示为负载均衡器的地址)，因为如果不配置这个，
+默认情况下会将 ingress controller 所有实例的节点 ip 写到 ingress 的 address
+里
+ rbac.enabled  默认为 false，如果没有事先给 default 的 service account 绑足够
+权限就会报错，通常置为 true，自动创建 rbac 规则
+Github 主页: https://github.com/containous/traefik
+安装 traefik ingress controller
+最佳安装方案
+使用 helm 安装
+参考资料
+安装 traefik ingress controller
+- 94 -
+本文档使用 书栈(BookStack.CN) 构建
+
+helm hub 主页: https://hub.helm.sh/charts/stable/traefik
+官方文档: https://docs.traefik.io
+安装 traefik ingress controller
+- 95 -
+本文档使用 书栈(BookStack.CN) 构建
+
+安装 metrics server
+Metrics 方案
+Metrics 方案
+- 96 -
+本文档使用 书栈(BookStack.CN) 构建
+
+下载:
+1. git clone --depth 1 https://github.com/kubernetes-sigs/metrics-server.git
+2. cd metrics-server
+修改  deploy/1.8+/metrics-server-deployment.yaml ，在  args  里增加  --kubelet-
+insecure-tls  (防止 metrics server 访问 kubelet 采集指标时报证书问题  x509:
+certificate signed by unknown authority ):
+1.       containers:
+2.       - name: metrics-server
+3.         image: k8s.gcr.io/metrics-server-amd64:v0.3.6
+4.         args:
+5.           - --cert-dir=/tmp
+6.           - --secure-port=4443
+7.           - --kubelet-insecure-tls # 这里是新增的一行
+安装:
+1. kubectl apply -f deploy/1.8+/
+Github 主页: https://github.com/kubernetes-sigs/metrics-server
+安装 metrics server
+官方 yaml 安装
+参考资料
+安装 metrics server
+- 97 -
+本文档使用 书栈(BookStack.CN) 构建

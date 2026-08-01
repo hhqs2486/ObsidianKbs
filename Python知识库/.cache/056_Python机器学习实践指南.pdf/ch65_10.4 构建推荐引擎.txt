@@ -1,0 +1,309 @@
+238 第10 章构建推荐引擎 
+基于内容的过滤的优点如下。
+•它不需要大量的用户。
+基于内容的过滤的缺点如下。
+•定义正确的特征可能是一个挑战。
+•缺乏“意外的惊喜”
+①
+10.4 构建推荐引擎 
+。
+当一家公司缺乏大量的用户群，基于内容的过滤是更好的选择，但是随着公司的增长，
+加入协同过滤可以帮助我们为用户提供更多的“惊喜”。
+现在你已经熟悉推荐引擎的类型和内部工作原理了，让我们开始构建自己的引擎吧。
+我喜欢的一件事是偶遇一个非常有用的GitHub 资源库。有非常多的资源库，包括人为
+管理的机器学习教程，几十行使用ElasticSearch 的代码包等等。麻烦的是，找到这些库远
+比想象的困难。幸运的是，我们现在懂得利用GitHub 的API，在一定程度上帮助我们发现
+这些代码的珍宝。
+我们将使用GitHub API，创建基于协同过滤的推荐引擎。这个计划是获得所有我已经
+加上了星号的资料库，然后得到这些库的全部创作者。然后再获取这些作者添加过星号的
+所有资料库。一旦完成，我们可以比较已加星标的资料库，找到和我最相似的用户（如果
+你自己也运行GitHub 的资料库，我建议查找和你最相似的用户）。一旦发现了最相似的
+GitHub 用户，我们可以使用他们所加星的（而我没有加过星号的）资料库来生成一组推荐。 
+让我们开始吧。首先，我们将导入需要的库。
+import pandas as pd 
+import numpy as np  
+import requests  
+import json 
+现在，你需要开立一个GitHub 账户，并为一些资料库打上星号，但你不需要注册开发
+人员项目。你可以从个人资料中获取授权令牌，它允许你使用API。你也可以在代码中使
+用它，但其限制相当严格，对于我们的示例用处不大。
+①译者注：推荐引擎有一个重要的评估指标是能否为用户带来意外的惊喜，为其推荐他们没有想到，但确实喜
+欢的物品。
+
+10.4 构建推荐引擎 239 
+为
+了
+创
+建
+用
+于
+API
+的
+令
+牌
+，
+请
+访
+问
+以
+下
+URL 
+https://github.com/settings/tokens。在这里，你将在右上角看到一个按钮，如
+图10-9 所示。 
+图10-9 
+你需要单击Generate new token 按钮。一旦完成，你需要将提供的令牌复制到以下代码
+中。请确保这两者都包含于引号中。
+myun = YOUR_GITHUB_HANDLE  
+mypw = YOUR_PERSONAL_TOKEN 
+现在，我们将创建一个函数，它将拉取你已加星标的每个资料库的名称。
+my_starred_repos = []  
+def get_starred_by_me(): 
+ resp_list = []  
+ last_resp = ''  
+ first_url_to_get = 'https://api.github.com/user/starred'  
+ first_url_resp = requests.get(first_url_to_get, auth= (myun,mypw)) 
+ last_resp = first_url_resp  
+ resp_list.append(json.loads(first_url_resp.text))  
+ while last_resp.links.get('next'): 
+ next_url_to_get = last_resp.links['next']['url']  
+ next_url_resp = requests.get(next_url_to_get, auth= (myun,mypw)) 
+ last_resp = next_url_resp  
+ resp_list.append(json.loads(next_url_resp.text))  
+ for i in resp_list: 
+ for j in i: 
+ msr = j['html_url']  
+ my_starred_repos.append(msr) 
+这里有很多操作，但实质上，我们就是查询API 以获取自己加过星标的资料库。GitHub
+使用分页，而不是在一次调用中返回所有结果。因此，我们需要检查从每个响应返回
+的.links。只要有下一个链接可以调用，我们就继续这样做。
+接下来，我们只需要调用创建的函数。
+get_starred_by_me() 
+
+240 第10 章构建推荐引擎 
+然后，我们可以看到已加星标资料库的完整列表。
+my_starred_repos 
+此代码将产生类似于图10-10 的输出。 
+图10-10 
+接下来，我们需要解析每个已加星标资料库的用户名，这样就可以检索他们曾经标记
+的库。
+my_starred_users = []  
+for ln in my_starred_repos: 
+ right_split = ln.split('.com/')[1]  
+ starred_usr = right_split.split('/')[0] 
+ my_starred_users.append(starred_usr)  
+my_starred_users 
+上述代码生成图10-11 的输出。 
+现在，我们已经获得了所有加星标资料库的作者，下面需要
+检索他们所加标的库，以下函数将会实现这一点。
+starred_repos = {k:[] for k in set(my_starred_users)} 
+def get_starred_by_user(user_name):  
+ starred_resp_list = []  
+ last_resp = ''  
+ first_url_to_get = 'https://api.github.com/users/'+ user_name +'/starred' 
+ first_url_resp = requests.get(first_url_to_get, auth= (myun,mypw))  
+ last_resp = first_url_resp  
+ starred_resp_list.append(json.loads(first_url_resp.text))  
+ while last_resp.links.get('next'): 
+ next_url_to_get = last_resp.links['next']['url']  
+ next_url_resp = requests.get(next_url_to_get, auth= (myun,mypw)) 
+ last_resp = next_url_resp  
+starred_resp_list.append(json.loads(next_url_resp.text)) 
+图10-11 
+
+10.4 构建推荐引擎 241 
+ for i in starred_resp_list: 
+ for j in i: 
+ sr = j['html_url']  
+ starred_repos.get(user_name).append(sr) 
+这个函数的工作方式与我们之前调用的函数几乎相同，但它调用了不同的端点。它会
+将之前作者们加星标的资料库添加到一个字典，我们稍后将使用该字典。
+让我们现在调用它。运行可能需要几分钟，具体取决于作者们加标的资料库数量。实
+际上，我自己的数据超过了4,000 个加标的资料库。 
+for usr in list(set(my_starred_users)): 
+ print(usr) 
+ try:  
+  get_starred_by_user(usr) 
+ except:  
+ print('failed for user', usr) 
+上述代码生成图10-12 的输出。 
+请注意，在调用它之前，我将已加星标的用户列表变为了一个集合。我发现了一些重复
+的用户，这是由于在一个用户句柄下对多个资料库加了星标，所以将列表转化为集合很有意
+义，它会去除重复的调用。
+我们现在需要为所有被加标的资料库，构建一个特征集。
+repo_vocab = [item for sl in list(starred_repos.values()) for item in sl] 
+接下来，由于多个用户会标注同一个资料库，我们将其转换为一个集合，以删除可能
+存在的多个重复。
+repo_set = list(set(repo_vocab)) 
+让我们看看这产生了多少库。
+len(repo_vocab) 
+上面的代码生成了图10-13 的输出。 
+我加标的资料库已经超过80 个了，而所有相关的用户对超过12,000 个唯一的资料
+库加过星标。你可以想象，如果我们按照同样的方法进一步获取相关的资料库
+①
+①译者注：作者介绍的数据获取方法类似网络爬虫，从作者自己开始，获取加标的库，查看其作者，再获取该
+作者加标的库，如此往复，可以获取海量数据。
+，那会
+有多少。
+
+242 第10 章构建推荐引擎 
+图10-12 图10-13 
+现在，我们有了完整的特征集，或着说资料库的词汇，我们对于每位用户和每个资料
+库的组合创建一个二进制向量，如果该用户对该库有加星标，那么为1，否则为0。 
+all_usr_vector = []  
+for k,v in starred_repos.items(): 
+ usr_vector = []  
+ for url in repo_set: 
+ if url in v: 
+ usr_vector.extend([1]) 
+ else: 
+   usr_vector.extend([0])  
+ all_usr_vector.append(usr_vector) 
+我们刚刚做的是检查每位用户，看看他们是否为词汇集中的资料库打过星标。如果打
+过，值就设置为1，如果没有就是0。 
+此时，我们有12,378 个项目（资料库），79 位用户，以及他们之间的二进制向量。让
+我们将这些放入一个DataFrame。行索引将是我们已加星标的用户句柄，而列将是资料
+库的词汇。
+df = pd.DataFrame(all_usr_vector, columns=repo_set, 
+index=starred_repos.keys())  
+df 
+上述代码生成图10-14 的输出。 
+接下来，为了将我们自己与其他用户进行比较，需要向数据框中添加自己的那行。
+my_repo_comp = []  
+for i in df.columns: 
+ if i in my_starred_repos: 
+ my_repo_comp.append(1) 
+
+10.4 构建推荐引擎 243 
+ else: 
+ my_repo_comp.append(0) 
+mrc = pd.Series(my_repo_comp).to_frame('acombs').T 
+mrc 
+图10-14 
+上述代码生成图10-15 的输出。 
+图10-15 
+我们现在需要添加适当的列名并将其连接到其他数据框。
+mrc.columns = df.columns 
+fdf = pd.concat([df, mrc]) 
+fdf 
+上述代码生成图10-16 的输出。 
+图10-16 
+你可以看到，在图10-16 的截图中，我也被添加到DataFrame。
+
+244 第10 章构建推荐引擎 
+现在，我们只需要计算自己和其他用户之间的相似性。这次我们将使用pearsonr 函
+数，它需要从scipy 导入。
+ 
+from scipy.stats import pearsonr 
+sim_score = {}  
+for i in range(len(fdf)): 
+ ss = pearsonr(fdf.iloc[-1,:], fdf.iloc[i,:]) 
+ sim_score.update({i: ss[0]})  
+sf = pd.Series(sim_score).to_frame('similarity') 
+sf 
+上述代码生成图10-17 的输出。 
+我们刚刚所做的是将DataFrame中最后一个向量和其他向量进行比较，并生成中心化
+余弦相似度（Pearson相关系数）
+①。一些值是NaN（不是数字），因为他们没有给任何项目
+标记星号，导致在计算中除以了零。
+现在让我们对这些值进行排序，以返回最相似用户的索引编号。
+sf.sort_values('similarity', ascending=False) 
+上述代码生成图10-18 的输出。 
+ 图10-17  图10-18 
+这些是最相似的用户，因此，我们可以使他们来推荐自己可能喜欢的资料库。来看看
+这些用户，以及他们都标记了哪些我们可能喜欢的资料库。
+①译者注：根据维基百科的定义，中心化之后，向量间的余弦相似度和Pearson 相关系数是等价的。
+
+10.4 构建推荐引擎 245 
+你可以忽略具有完美相似度分数的第一个用户，这是我们自己。按照列表找下去，三
+个最接近的匹配是用户31、用户5 和用户71。让我们看看每个人。 
+fdf.index[31] 
+上述代码生成图10-19 的输出。 
+让我们来看看这是谁，以及他们的资料库是什么。
+从https://github.com/lmcinnes，我们可以看到资料库属于谁。
+这是hdbscan的作者—— 一个优秀的库—— 他恰好也是scikit-learn和matplotlib
+的贡献者，如图10-20 所示。 
+ 图10-19 图10-20 
+让我们看看他对哪些库加了星标。有几种方法来做到这点：我们可以使用自己的代码，
+或者只是单击他们图片下方的星星。让我们两者都试一下，只是比较并确保一切都是对的。 
+首先通过代码：
+fdf.iloc[31,:][fdf.iloc[31,:]==1] 
+上面的代码生成图10-21 的输出。 
+图10-21 
+
+246 第10 章构建推荐引擎 
+我们看到13 个被标记的资料库。让我们将其和GitHub 网站提供的那些进行比较，如
+图10-22 所示。 
+图10-22 
+在这里，我们可以看到它们是完全相同的。还要注意，我们可以记录自己和这位用户
+都标记的库：他们是标记为Unstar
+①的那些。 
+不幸的是，只有13 个标星的资料库，没有足够的数据来生成推荐。 
+下一位相似的用户，实际上是一个朋友和前同事，Charles Chi。 
+ fdf.index[5]  
+上述代码生成图10-23 的输出。 
+他的GitHub 描述文件如图10-24 所示。 
+图10-23 图10-24 
+①由于自己标记为star，才会出现unstar 的操作选项。
+
+10.4 构建推荐引擎 247 
+在这里，我们看到了他加过星标的资料库，如图10-25 所示。 
+图10-25 
+Charles 已经标记了27 个库，所以肯定可以从中发现一些好的建议。 
+最后，让我们来看看第三个最相似的用户。
+fdf.index[71] 
+这将产生图10-26 的输出。 
+用户Artem Ruster 已经发布了近500 个资料库，如图10-27 所示。 
+ 图10-26 图10-27 
+
+248 第10 章构建推荐引擎 
+我们可以在图10-28 中看到他已加星标的资料库。 
+图10-28 
+这绝对是产生推荐内容的沃土。让我们现在开始，使用这三个链接产生一些推荐。
+首先，我们需要收集他们已经加星标，而我没有加星标的链接。我们将创建一个
+DataFrame，放入我和三位相似用户已加星标的资料库。
+ 
+all_recs =  
+fdf.iloc[[31,5,71,79],:][fdf.iloc[[31,5,71,79],:]==1].fillna(0).T 
+上述代码生成图10-29 的输出。 
+图10-29 
+如果看起来好像全是零，不用担心，这是一个稀疏矩阵，所以大多数都将是0。让我
+们看看是否存在我们几个都已加星标的资料库。
+all_recs[(all_recs==1).all(axis=1)] 
+
+10.4 构建推荐引擎 249 
+此代码将产生图10-30 的输出。 
+可以看到，不出意外的，我们都喜欢scikit-learn。让我们看看其他几位标记了哪
+些我没标记的。先创建一个排除我的数据框，然后，查询共同的加标资料库。
+str_recs_tmp = all_recs[all_recs['acombs']==0].copy() 
+str_recs = str_recs_tmp.iloc[:,:-1].copy()  
+str_recs 
+上述代码生成图10-31 的输出。 
+ 图10-30 图10-31 
+好吧，看起来我没有错失任何超级资料库。让我们看看是否存在两位共同加标的库。
+为了找到这些，我们只是将行的内容加和。
+str_recs[str_recs.sum(axis=1)>1] 
+上述代码生成图10-32 的输出。 
+图10-32 
+这看起来很有希望，因为有一些资料库，被cchi 和rushter 都加过星号。看看库的名称，
+似乎有许多“很棒”（awesome）的项目在其中。也许我应该跳过推荐引擎，直接使用关键
+字搜索“awesome”。 
+到目前为止，不得不说我对结果印象深刻。这些肯定是我感兴趣的库，我一定会仔细
+看看。
+
+250 第10 章构建推荐引擎 
+现在，我们使用协同过滤生成了推荐，然后通过聚集执行了一点额外的过滤。如果想
+更进一步，我们可以按照每个被推荐项目收到的星星数来排序。你可以通过GitHub API 进
+行另一次调用，来实现这一点。有一个端点会提供此类信息。
+为了改进结果，可以做的另一件事情是添加基于内容的过滤。这是我们前面所讨论的
+混合步骤。我们需要为自己的库创建一组特征，而这些特征可以表明我们的兴趣。一种方
+法是对加标资料库的名称以及描述进行分词，来创建一个特征集。
+这里是我打过星标的库，如图10-33 所示。 
+图10-33 
+你可以想象，这将生成一组单词特征，我们可以用其审查基于协同过滤的那些推荐。
+这将包括很多词汇，如Python、Machine Learning 和Data Science 等。这将确保
+与我们不太相似的用户仍然可以提供基于自身兴趣的推荐。它也会减少推荐的“意外之喜”，
+你需要考虑到这点。例如，有可能某些资料库不同于当前我所标星的库，然而我对它其实
+很感兴趣。这当然只是一种可能性。
+从数据框的角度看，基于内容过滤的步骤会是什么样子？列将是单词特征（n 元语法），
+行将是从协同过滤步骤产生而来的资料库。我们只需使用自己的库，再次运行相似性比较
+的过程。

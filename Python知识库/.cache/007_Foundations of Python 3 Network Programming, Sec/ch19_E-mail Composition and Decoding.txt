@@ -1,0 +1,965 @@
+C H A P T E R   12 
+ 
+■ ■ ■ 
+197
+E-mail Composition and Decoding 
+The early e-mail protocols were among the first network dialects developed for the Internet. The world 
+was a simple one in those days: everyone with access to the Internet reached it through a command-line 
+account on an Internet-connected machine. There, at the command line, they would type out e-mails to 
+their friends, and then they could check their in-boxes when new mail arrived. The entire task of an e-
+mail protocol was to transmit messages from one big Internet server to another, whenever someone sent 
+mail to a friend whose shell account happened to be on a different machine. 
+Today the situation is much more complicated: not only is the network involved in moving e-mail 
+between servers, but it is often also the tool with which people check and send e-mail. I am not talking 
+merely about webmail services, like Google Mail; those are really just the modern versions of the 
+command-line shell accounts of yesteryear, because the mail that Google’s web service displays in your 
+browser is still being stored on one of Google’s big servers. Instead, a more complicated situation arises 
+when someone uses an e-mail client like Mozilla Thunderbird or Microsoft Outlook that, unlike Gmail, is 
+running locally on their desktop or laptop. 
+In this case of a local e-mail client, the network is involved in three different ways as a message is 
+transmitted and received: 
+• 
+First, the e-mail client program submits the message to a server on the Internet on 
+which the sender has an e-mail account. This usually takes place over 
+Authenticated SMTP, which we will learn about in Chapter 13. 
+• 
+Next, that e-mail server finds and connects to the server named as the destination 
+of the e-mail message —the server in charge of the domain named after the @ sign. 
+This conversation takes place over normal, vanilla, un-authenticated SMTP. 
+Again, Chapter 13 is where you should go for details. 
+• 
+Finally, the recipient uses Thunderbird or Outlook to connect to his or her e-mail 
+server and discover that someone has sent a new message. This could take place 
+over any of several protocols—probably over an older protocol called POP, which 
+we cover in Chapter 14, but perhaps over the modern IMAP protocol to which we 
+dedicate Chapter 15. 
+You will note that all of these e-mail protocols are discussed in the subsequent chapters of this book. 
+What, then, is the purpose of this chapter? Here, we will learn about the actual payload that is carried by 
+all of the aforementioned protocols: the format of e-mail messages themselves. 
+
+CHAPTER 12 ■ E-MAIL COMPOSITION AND DECODING 
+198 
+E-mail Messages 
+We will start by looking at how old-fashioned, plain-text e-mail messages work, of the kind that were first 
+sent on the ancient Internet. Then, we will learn about the innovations and extensions to this format that 
+today let e-mail messages support sophisticated formats, like HTML, and that let them include 
+attachments that might contain images or other binary data. 
+■ Caution The email module described in this chapter has improved several times through its history, making 
+leaps forward in Python versions 2.2.2, 2.4, and 2.5. Like the rest of this book, this chapter focuses on Python 2.5 
+and later. If you need to use older versions of the email module, first read this chapter, and then consult the 
+Standard Library documentation for the older version of Python that you are using to see the ways in which its 
+email module differed from the modern one described here. 
+Each traditional e-mail message contains two distinct parts: headers and the body. Here is a very 
+simple e-mail message so that you can see what the two sections look like: 
+From: Jane Smith <jsmith@example.com> 
+To: Alan Jones <ajones@example.com> 
+Subject: Testing This E-Mail Thing 
+ 
+Hello Alan, 
+This is just a test message. Thanks. 
+The first section is called the headers, which contain all of the metadata about the message, like the 
+sender, the destination, and the subject of the message —everything except the text of the message itself. 
+The body then follows and contains the message text itself. 
+There are three basic rules of Internet e-mail formatting: 
+• 
+At least during actual transmission, every line of an e-mail message should be 
+terminated by the two-character sequence carriage return, newline, represented 
+in Python by '\r\n'. E-mail clients running on your laptop or desktop machine 
+tend to make different decisions about whether to store messages in this format, 
+or replace these two-character line endings with whatever ending is native to your 
+operating system. 
+• 
+The first few lines of an e-mail are headers, which consist of a header name, a 
+colon, a space, and a value. A header can be several lines long by indenting the 
+second and following lines from the left margin as a signal that they belong to the 
+header above them. 
+• 
+The headers end with a blank line (that is, by two line endings back-to-back 
+without intervening text) and then the message body is everything else that 
+follows. The body is also sometimes called the payload. 
+The preceding example shows only a very minimal set of headers, like a message might contain 
+when an e-mail client first sends it. However, as soon as it is sent, the mail server will likely add a Date 
+header, a Received header, and possibly many more. Most mail readers do not display all the headers of 
+
+CHAPTER 12 ■ E-MAIL COMPOSITION AND DECODING 
+199
+a message, but if you look in your mail reader’s menus for an option like as “show all headers” or “view 
+source,” you should be able to see them. 
+Take a look at Listing 12–1 to see a real e-mail message from a few years ago, with all of its headers intact. 
+Listing 12–1. A Real-Life E-mail Message 
+Delivered-To: brandon@europa.gtri.gatech.edu 
+Received: from pele.santafe.edu (pele.santafe.edu [192.12.12.119]) 
+        by europa.gtri.gatech.edu (Postfix) with ESMTP id 6C4774809 
+        for <brandon@rhodesmill.org>; Fri,  3 Dec 1999 04:00:58 -0500 (EST) 
+Received: from aztec.santafe.edu (aztec [192.12.12.49]) 
+        by pele.santafe.edu (8.9.1/8.9.1) with ESMTP id CAA27250 
+        for <brandon@rhodesmill.org>; Fri, 3 Dec 1999 02:00:57 -0700 (MST) 
+Received: (from rms@localhost) 
+        by aztec.santafe.edu (8.9.1b+Sun/8.9.1) id CAA29939; 
+Fri, 3 Dec 1999 02:00:56 -0700 (MST) 
+Date: Fri, 3 Dec 1999 02:00:56 -0700 (MST) 
+Message-Id: <199912030900.CAA29939@aztec.santafe.edu> 
+X-Authentication-Warning: aztec.santafe.edu: rms set sender to rms@gnu.org 
+        using -f 
+From: Richard Stallman <rms@gnu.org> 
+To: brandon@rhodesmill.org 
+In-reply-to: <m3k8my7x1k.fsf@europa.gtri.gatech.edu> (message from Brandon 
+        Craig Rhodes on 02 Dec 1999 00:04:55 -0500) 
+Subject: Re: Please proofread this license 
+Reply-To: rms@gnu.org 
+References: <199911280547.WAA21685@aztec.santafe.edu> 
+        <m3k8my7x1k.fsf@europa.gtri.gatech.edu> 
+Xref: 38-74.clients.speedfactory.net scrapbook:11 
+Lines: 1 
+ 
+Thanks. 
+Yes, those are a lot of headers for a mere one-line thank-you message! It is, in fact, common for the 
+headers of short e-mail messages to overwhelm the actual size of the message itself. 
+There are many more headers here than in the first example. Let’s take a look at them. 
+First, notice the Received headers. These are inserted by mail servers. Each mail server through 
+which the message passes adds a new Received header, above the others —so you should read them in 
+the final message from bottom to top. You can see that this message passed through four mail servers. 
+Some mail server along the way —or possibly the mail reader —added the Sender line, which is 
+similar to the From line. The Mime-Version and Content-Type headers will be discussed later on in this 
+chapter, in the “Understanding MIME” section. The Message-ID header is supposed to be a globally 
+unique way to identify any particular message, and is generated by either the mail reader or mail server 
+when the message is first sent. The Lines header indicates the length of the message. Finally, the mail 
+reader that I used at the time, Gnus, added an X-Mailer header to advertise its involvement in 
+composing the message. (This can help server administrators in debugging when an e-mail arrives with 
+a formatting problem, letting them trace the cause to a particular e-mail program.) 
+If you viewed this message in a normal mail reader, you would likely see only To, From, Subject, and 
+Date by default. The Internet e-mail standard is extremely stable; even though this message is several 
+years old, it would still be perfectly valid today. 
+As we will learn in the following chapters, the headers of an e-mail message are not actually part of 
+routing the message to its recipients; the SMTP protocol receives a list of destination addresses for each 
+message that is kept separate from the actual headers and text of the message itself. The headers are there 
+for the benefit of the person who reads the e-mail message, and the most important headers are these: 
+
+CHAPTER 12 ■ E-MAIL COMPOSITION AND DECODING 
+200 
+•
+From: This identifies the message sender. It can also, in the absence of a Reply-to
+header, be used as the destination when the reader clicks the e-mail client’s
+“Reply” button. 
+•
+Reply-To: This sets an alternative address for replies, in case they should go to
+someone besides the sender named in the From header. 
+•
+Subject: This is a short several-word description of the e-mail’s purpose, used by
+most clients when displaying whole mailboxes full of e-mail messages. 
+•
+Date: This is a header that can be used to sort a mailbox in the order in which e-
+mails arrived. 
+•
+Message-ID and In-Reply-To: Each ID uniquely identifies a message, and these IDs
+are then used in e-mail replies to specify exactly which message was being replied to.
+This can help sophisticated mail readers perform “threading,” arranging messages so
+that replies are grouped directly beneath the messages to which they reply. 
+There are also a whole set of MIME headers, which help the mail reader display the message in the
+proper language, with proper formatting, and which help e-mail clients process attachments correctly;
+we will learn more about them shortly. 
+Composing Traditional Messages 
+Now that you know what a traditional e-mail looks like, how can we generate one in Python without
+having to implement the formatting details ourselves? The answer is to use the modules within the
+powerful email package. 
+As our first example, Listing 12–2 shows a program that generates a simple message. Note that when
+you generate messages this way, manually setting the payload with the Message class, you should limit
+yourself to using plain 7-bit ASCII text. 
+Listing 12–2. Creating an E-mail Message 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 12 - trad_gen_simple.py
+# Traditional Message Generation, Simple 
+# This program requires Python 2.5 or above 
+from email.message import Message
+text = """Hello, 
+This is a test message from Chapter 12.  I hope you enjoy it! 
+-- Anonymous""" 
+msg = Message() 
+msg['To'] = 'recipient@example.com'
+msg['From'] = 'Test Sender <sender@example.com>'
+msg['Subject'] = 'Test Message, Chapter 12'
+msg.set_payload(text) 
+print msg.as_string() 
+Download from www.eBookTM.Com
+
+CHAPTER 12 ■ E-MAIL COMPOSITION AND DECODING 
+201
+The program is simple. It creates a Message object, sets the headers and body, and prints the result. 
+When you run this program, you will get a nice formatted message with proper headers. The output is 
+suitable for transmission right away! You can see the result in Listing 12–3. 
+Listing 12–3. Printing the E-mail to the Screen 
+$ ./trad_gen_simple.py 
+To: recipient@example.com 
+From: Test Sender <sender@example.com> 
+Subject: Test Message, Chapter 12 
+ 
+Hello, 
+ 
+This is a test message from Chapter 12.  I hope you enjoy it! 
+ 
+-- Anonymous 
+While technically correct, this message is actually a bit deficient when it comes to providing enough 
+headers to really function in the modern world. For one thing, most e-mails should have a Date header, 
+in a format specific to e-mail messages. Python provides an email.utils.formatdate() routine that will 
+generate dates in the right format. 
+You should add a Message-ID header to messages. This header should be generated in such a way 
+that no other e-mail, anywhere in history, will ever have the same Message-ID. This might sound 
+difficult, but Python provides a function to help do that as well: email.utils.make_msgid(). 
+So take a look at Listing 12–4, which fleshes out our first sample program into a more complete 
+example that sets these additional headers. 
+Listing 12–4. Generating a More Complete Set of Headers 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 12 - trad_gen_newhdrs.py 
+# Traditional Message Generation with Date and Message-ID 
+# This program requires Python 2.5 or above 
+ 
+import email.utils 
+from email.message import Message 
+ 
+message = """Hello, 
+ 
+This is a test message from Chapter 12.  I hope you enjoy it! 
+ 
+-- Anonymous""" 
+ 
+msg = Message() 
+msg['To'] = 'recipient@example.com' 
+msg['From'] = 'Test Sender <sender@example.com>' 
+msg['Subject'] = 'Test Message, Chapter 12' 
+msg['Date'] = email.utils.formatdate(localtime = 1) 
+msg['Message-ID'] = email.utils.make_msgid() 
+msg.set_payload(message) 
+ 
+print msg.as_string() 
+That’s better! If you run the program, you will notice two new headers in the output, as shown in 
+Listing 12–5. 
+
+CHAPTER 12 ■ E-MAIL COMPOSITION AND DECODING 
+202 
+Listing 12–5. A More Complete E-mail Is Printed Out 
+$ ./trad_gen_newhdrs.py 
+To: recipient@example.com 
+From: Test Sender <sender@example.com> 
+Subject: Test Message, Chapter 12 
+Date: Mon, 02 Aug 2010 10:05:55 -0400 
+Message-ID: <20100802140555.11734.89229@guinness.ten22> 
+ 
+Hello, 
+ 
+This is a test message from Chapter 12.  I hope you enjoy it! 
+-- Anonymous 
+The message is now ready to send! 
+You might be curious how the unique Message-ID is created. It is generated by adhering to a set of 
+loose guidelines. The part to the right of the @ is the full hostname of the machine that is generating the 
+e-mail message; this helps prevent the message ID from being the same as the IDs generated on entirely 
+different computers. The part on the left is typically generated using a combination of the date, time, the 
+process ID of the program generating the message, and some random data. This combination of data 
+tends to work well in practice in making sure every message can be uniquely identified. 
+Parsing Traditional Messages 
+So those are the basics of creating a plain e-mail message. But what happens when you receive an 
+incoming message as a raw block of text and want to look inside? Well, the email module also provides 
+support for parsing e-mail messages, re-constructing the same Message object that would have been 
+used to create the message in the first place. (Of course, it does not matter whether the e-mail you are 
+parsing was originally created in Python through the Message class, or whether some other e-mail 
+program created it; the format is standard, so Python’s parsing should work either way.) 
+After parsing the message, you can easily access individual headers and the body of the message 
+using the same conventions as you used to create messages: headers look like the dictionary key-values 
+of the Message, and the body can be fetched with a function. A simple example of a parser is shown in 
+Listing 12–6. All of the actual parsing takes place in the one-line function message_from_file(); 
+everything else in the program listing is simply an illustration of how a Message object can be mined for 
+headers and data. 
+Listing 12–6. Parsing and Displaying a Simple E-mail 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 12 - trad_parse.py 
+# Traditional Message Parsing 
+# This program requires Python 2.5 or above 
+ 
+import email 
+ 
+banner = '-' * 48 
+popular_headers = ('From', 'To', 'Subject', 'Date') 
+msg = email.message_from_file(open('message.txt')) 
+headers = sorted(msg.keys()) 
+ 
+print banner 
+
+CHAPTER 12 ■ E-MAIL COMPOSITION AND DECODING 
+203
+for header in headers: 
+»   if header not in popular_headers: 
+»   »   print header + ':', msg[header] 
+print banner 
+for header in headers: 
+»   if header in popular_headers: 
+»   »   print header + ':', msg[header] 
+print banner 
+if msg.is_multipart(): 
+»   print "This program cannot handle MIME multipart messages." 
+else: 
+»   print msg.get_payload() 
+Like many e-mail clients, this parser distinguishes between the few e-mail headers that users are 
+actually likely to want visible —like From and Subject—and the passel of additional headers that are less 
+likely to interest them. If you save the e-mail shown in Listing 12–5 as message.txt, for example, then 
+running trad_parse.py will result in the output shown in Listing 12–7. 
+Listing 12–7. The Output of Our E-mail Parser 
+$ ./trad_parse.py 
+------------------------------------------------ 
+Message-ID: <20100802140555.11734.89229@guinness.ten22> 
+------------------------------------------------ 
+Date: Mon, 02 Aug 2010 10:05:55 -0400 
+From: Test Sender <sender@example.com> 
+Subject: Test Message, Chapter 12 
+To: recipient@example.com 
+------------------------------------------------ 
+Hello, 
+ 
+This is a test message from Chapter 12.  I hope you enjoy it! 
+ 
+-- Anonymous 
+Here, the “unpopular” Message-ID header, which most users just want hidden, is shown first. Then, 
+the headers actually of interest to the user are printed. Finally, the body of the e-mail message is 
+displayed on the screen. 
+As you can see, the Python Standard Library makes it quite easy both to create and then to parse 
+standard Internet e-mail messages! Note that the email package also offers a message_from_string() 
+function that, instead of taking a file, can simply be handed the string containing an e-mail message. 
+Parsing Dates 
+The email package provides two functions that work together as a team to help you parse the Date field 
+of e-mail messages, whose format you can see in the preceding example: a date and time, followed by a 
+time zone expressed as hours and minutes (two digits each) relative to UTC. Countries in the eastern 
+hemisphere experience sunrise early, so their time zones are expressed as positive numbers, like the 
+following: 
+Date: Sun, 27 May 2007 11:34:43 +1000 
+Those of us in the western hemisphere have to wait longer for the sun to rise, so our time zones lag 
+behind; Eastern Daylight Time, for example, runs four hours behind UTC: 
+
+CHAPTER 12 ■ E-MAIL COMPOSITION AND DECODING 
+204 
+Date: Sun, 27 May 2007 08:36:37 -0400 
+Although the email.utils module provides a bare parsedate() function that will extract the 
+components of the date in the usual Python order (starting with the year and going down through 
+smaller increments of time), this is normally not what you want, because it omits the time zone, which 
+you need to consider if you want dates that you can really compare (because, for example, you want to 
+display e-mail messages in order they were written!). 
+To figure out what moment of time is really meant by a Date header, simply call two functions in a 
+row: 
+• 
+Call parsedate_tz() to extract the time and time zone. 
+• 
+Use mktime_tz() to add or subtract the time zone. 
+• 
+The result with be a standard Unix timestamp. 
+For example, consider the two Date headers shown previously. If you just compared their bare 
+times, the first date looks later: 11:34 a.m. is, after all, after 8:36 a.m. But the second time is in fact the 
+much later one, because it is expressed in a time zone that is so much farther west. We can test this by 
+using the functions previously named. First, turn the top date into a timestamp: 
+>>> from email.utils import parsedate_tz, mktime_tz 
+>>> timetuple1 = parsedate_tz('Sun, 27 May 2007 11:34:43 +1000') 
+>>> print timetuple1 
+(2007, 5, 27, 11, 34, 43, 0, 1, -1, 36000) 
+>>> timestamp1 = mktime_tz(timetuple1) 
+>>> print timestamp1 
+1180229683.0 
+Then turn the second date into a timestamp as well, and the dates can be compared directly: 
+>>> timetuple2 = parsedate_tz('Sun, 27 May 2007 08:36:37 -0400') 
+>>> timestamp2 = mktime_tz(timetuple2) 
+>>> print timestamp2 
+1180269397.0 
+>>> timestamp1 < timestamp2 
+True 
+If you have never seen a timestamp value before, they represent time very plainly: as the number of 
+seconds that have passed since the beginning of 1970. You will find functions in Python’s old time 
+module for doing calculations with timestamps, and you will also find that you can turn them into 
+normal Python datetime objects quite easily: 
+>>> from datetime import datetime 
+>>> datetime.fromtimestamp(timestamp2) 
+datetime.datetime(2007, 5, 27, 8, 36, 37) 
+In the real world, many poorly written e-mail clients generate their Date headers incorrectly. While 
+the routines previously shown do try to be flexible when confronted with a malformed Date, they 
+sometimes can simply make no sense of it and parsedate_tz() has to give up and return None. 
+So when checking a real-world e-mail message for a date, remember to do it in three steps: first 
+check whether a Date header is present at all; then be prepared for None to be returned when you parse it; 
+and finally apply the time zone conversion to get a real timestamp that you can work with. 
+If you are writing an e-mail client, it is always worthwhile storing the time at which you first 
+download or acquire each message, so that you can use that date as a substitute if it turns out that the 
+message has a missing or broken Date header. It is also possible that the Received: headers that servers 
+
+CHAPTER 12 ■ E-MAIL COMPOSITION AND DECODING 
+205
+have written to the top of the e-mail as it traveled would provide you with a usable date for presentation 
+to the user. 
+Understanding MIME 
+So far we have discussed e-mail messages that are plain text: the characters after the blank line that ends 
+the headers are to be presented literally to the user as the content of the e-mail message. Today, only a 
+fraction of the messages sent across the Internet are so simple! 
+The Multipurpose Internet Mail Extensions (MIME) standard is a set of rules for encoding data, 
+rather than simple plain text, inside e-mails. MIME provides a system for things like attachments, 
+alternative message formats, and text that is stored in alternate encodings. 
+Because MIME messages have to be transmitted and delivered through many of the same old e-mail 
+services that were originally designed to handle plain-text e-mails, MIME operates by adding headers to 
+an e-mail message and then giving it content that looks like plain text to the machine but that can 
+actually be decoded by an e-mail client into HTML, images, or attachments. 
+What are the most important features of MIME? 
+Well, first, MIME supports multipart messages. A normal e-mail message, as we have seen, contains 
+some headers and a body. But a MIME message can squeeze several different parts into the message 
+body. These parts might be things to be presented to the user in order, like a plain-text message, an 
+image file attachment, and then a PDF attachment. Or, they could be alternative multiparts, which 
+represent the same content in different ways —usually, by encoding a message in both plain text and 
+HTML. 
+Second, MIME supports different transfer encodings. Traditional e-mail messages are limited to 7-
+bit data, which renders them unusable for international alphabets. MIME has several ways of 
+transforming 8-bit data so it fits within the confines of e-mail systems: 
+• 
+The “plain” encoding is the same as you would see in traditional messages, and 
+passes 7-bit text unmodified. 
+• 
+“Base-64” is a way of encoding raw binary data that turns it into normal 
+alphanumeric data. Most of the attachments you send and receive —such as 
+images, PDFs, and ZIP files —are encoded with base-64. 
+• 
+“Quoted-printable” is a hybrid that tries to leave plain English text alone so that it 
+remains readable in old mail readers, while also letting unusual characters be 
+included as well. It is primarily used for languages such as German, which uses 
+mostly the same Latin alphabet as English but adds a few other characters as well. 
+MIME also provides content types, which tell the recipient what kind of content is present. For 
+instance, a content type of text/plain indicates a plain-text message, while image/jpeg is a JPEG image. 
+For text parts of a message, MIME can specify a character set. Although much of the computing 
+world has now moved toward Unicode —and the popular UTF-8 encoding —as a common mechanism 
+for transmitting international characters, many e-mail programs still prefer to choose a language-
+specific encoding. By specifying the encoding used, MIME makes sure that the binary codes in the e-
+mail get translated back into the correct characters on the user’s screen. 
+All of the foregoing mechanisms are very important and very powerful in the world of computer 
+communication. In fact, MIME content types have become so successful that they are actually used by 
+other protocols. For instance, HTTP uses MIME content types to state what kinds of documents it is 
+sending over the Web. 
+
+CHAPTER 12 ■ E-MAIL COMPOSITION AND DECODING 
+206 
+How MIME Works 
+You will recall that MIME messages must work within the limited plain-text framework of traditional e-
+mail messages. To do that, the MIME specification defines some headers and some rules about 
+formatting the body text. 
+For non-multipart messages that are a single block of data, MIME simply adds some headers to 
+specify what kind of content the e-mail contains, along with its character set. But the body of the 
+message is still a single piece, although it might be encoded with one of the schemes already described. 
+For multipart messages, things get trickier: MIME places a special marker in the e-mail body 
+everywhere that it needs to separate one part from the next. Each part can then have its own limited set 
+of headers —which occur at the start of the part —followed by data. By convention, the most basic 
+content in an e-mail comes first (like a plain-text message, if one has been included), so that people 
+without MIME-aware readers will see the plain text immediately without having to scroll down through 
+dozens or hundreds of pages of MIME data. 
+Fortunately, Python knows all of the rules for generating and parsing MIME, and can support it all 
+behind the scenes while letting you interact with an object-based representation of each message. Let us 
+see how it works. 
+Composing MIME Attachments 
+We will start by looking at how to create MIME messages. To compose a message with attachments, you 
+will generally follow these steps: 
+1. 
+Create a MIMEMultipart object and set its message headers. 
+2. 
+Create a MIMEText object with the message body text and attach it to the 
+MIMEMultipart object. 
+3. 
+Create appropriate MIME objects for each attachment and attach them to the 
+MIMEMultipart object. 
+4. 
+Finally, call as_string() on the MIMEMultipart object to write out the resulting message. 
+Take a look at Listing 12–8 for a program that implements this algorithm. You can see that parts of 
+the code look similar to logic that we used to generate a traditional e-mail. After creating the message 
+and its text body, the program loops over each file given on the command line and attaches it to the 
+growing message. (If you run the program with an empty command line, then the message is simply 
+printed without any attachments.) 
+Listing 12–8. Creating a Simple MIME Message 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 12 - mime_gen_basic.py 
+# This program requires Python 2.5 or above 
+ 
+from email.mime.base import MIMEBase 
+from email.mime.multipart import MIMEMultipart 
+from email.mime.text import MIMEText 
+from email import utils, encoders 
+import mimetypes, sys 
+ 
+def attachment(filename): 
+»   fd = open(filename, 'rb') 
+p
+
+CHAPTER 12 ■ E-MAIL COMPOSITION AND DECODING 
+207
+»   mimetype, mimeencoding = mimetypes.guess_type(filename) 
+»   if mimeencoding or (mimetype is None): 
+»   »   mimetype = 'application/octet-stream' 
+»   maintype, subtype = mimetype.split('/') 
+»   if maintype == 'text': 
+»   »   retval = MIMEText(fd.read(), _subtype=subtype) 
+»   else: 
+»   »   retval = MIMEBase(maintype, subtype) 
+»   »   retval.set_payload(fd.read()) 
+»   »   encoders.encode_base64(retval) 
+»   retval.add_header('Content-Disposition', 'attachment', 
+»   »   »   filename = filename) 
+»   fd.close() 
+»   return retval 
+ 
+message = """Hello, 
+ 
+This is a test message from Chapter 12.  I hope you enjoy it! 
+ 
+-- Anonymous""" 
+msg = MIMEMultipart() 
+msg['To'] = 'recipient@example.com' 
+msg['From'] = 'Test Sender <sender@example.com>' 
+msg['Subject'] = 'Test Message, Chapter 12' 
+msg['Date'] = utils.formatdate(localtime = 1) 
+msg['Message-ID'] = utils.make_msgid() 
+ 
+body = MIMEText(message, _subtype='plain') 
+msg.attach(body) 
+for filename in sys.argv[1:]: 
+»   msg.attach(attachment(filename)) 
+print msg.as_string() 
+The attachment() function does the work of creating a message attachment object. First, it determines 
+the MIME type of each file by using Python’s built-in mimetypes module. If the type can’t be determined, or 
+it will need a special kind of encoding, then a type is declared that promises only that the data is made of a 
+“stream of octets” (sequence of bytes) but without any further promise about what they mean. 
+If the file is a text document whose MIME type starts with text/, a MIMEText object is created to handle 
+it; otherwise, a MIMEBase generic object is created. In the latter case, the contents are assumed to be binary, 
+so they are encoded with base-64. Finally, an appropriate Content-Disposition header is added to that 
+section of the MIME file so that mail readers will know that they are dealing with an attachment. 
+The result of running this program is shown in Listing 12–9. 
+Listing 12–9. Running the Program in Listing 12–8 
+$ echo "This is a test" > test.txt 
+$ gzip < test.txt > test.txt.gz 
+$ ./mime_gen_basic.py test.txt test.txt.gz 
+Content-Type: multipart/mixed; boundary="===============1623374356==" 
+MIME-Version: 1.0 
+To: recipient@example.com 
+From: Test Sender <sender@example.com> 
+Subject: Test Message, Chapter 12 
+Date: Thu, 11 Dec 2003 16:00:55 -0600 
+
+CHAPTER 12 ■ E-MAIL COMPOSITION AND DECODING 
+208 
+Message-ID: <20031211220055.12211.26885@host.example.com> 
+ 
+--===============1623374356== 
+Content-Type: text/plain; charset="us-ascii" 
+MIME-Version: 1.0 
+Content-Transfer-Encoding: 7bit 
+ 
+Hello, 
+ This is a test message from Chapter 12.  I hope you enjoy it! 
+ 
+-- Anonymous 
+--===============1623374356== 
+Content-Type: text/plain; charset="us-ascii" 
+MIME-Version: 1.0 
+Content-Transfer-Encoding: 7bit 
+Content-Disposition: attachment; filename="test.txt" 
+ 
+This is a test 
+ 
+--===============1623374356== 
+Content-Type: application/octet-stream 
+MIME-Version: 1.0 
+Content-Transfer-Encoding: base64 
+Content-Disposition: attachment; filename="test.txt.gz" 
+ 
+H4sIAP3o2D8AAwvJyCxWAKJEhZLU4hIuAIwtwPoPAAAA 
+--===============1623374356==-- 
+The message starts off looking quite similar to the traditional ones we created earlier; you can see 
+familiar headers like To, From, and Subject just like before. Note the Content-Type line, however: it 
+indicates multipart/mixed. That tells the mail reader that the body of the message contains multiple 
+MIME parts, and that the string containing equals signs will be the separator between them. 
+Next comes the message’s first part. Notice that it has its own Content-Type header! The second part 
+looks similar to the first, but has an additional Content-Disposition header; this will signal most e-mail 
+readers that the part should be displayed as a file that the user can save rather than being immediately 
+displayed to the screen. Finally comes the part containing the binary file, encoded with base-64, which 
+makes it not directly readable. 
+MIME Alternative Parts 
+MIME “alternative” parts let you generate multiple versions of a single document. The user’s mail reader 
+will then automatically decide which one to display, depending on which content type it likes best; some 
+mail readers might even show the user radio buttons, or a menu, and let them choose. 
+The process of creating alternatives is similar to the process for attachments, and is illustrated in 
+Listing 12–10. 
+Listing 12–10. Writing a Message with Alternative Parts 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 12 - mime_gen_alt.py 
+# This program requires Python 2.2.2 or above 
+ 
+from email.mime.base import MIMEBase 
+
+CHAPTER 12 ■ E-MAIL COMPOSITION AND DECODING 
+209
+from email.mime.multipart import MIMEMultipart 
+from email.mime.text import MIMEText 
+from email import utils, encoders 
+ 
+def alternative(data, contenttype): 
+»   maintype, subtype = contenttype.split('/') 
+»   if maintype == 'text': 
+»   »   retval = MIMEText(data, _subtype=subtype) 
+»   else: 
+»   »   retval = MIMEBase(maintype, subtype) 
+»   »   retval.set_payload(data) 
+»   »   encoders.encode_base64(retval) 
+»   return retval 
+ 
+messagetext = """Hello, 
+ 
+This is a *great* test message from Chapter 12.  I hope you enjoy it! 
+ 
+-- Anonymous""" 
+messagehtml = """Hello,<P> 
+This is a <B>great</B> test message from Chapter 12.  I hope you enjoy 
+it!<P> 
+-- <I>Anonymous</I>""" 
+ 
+ 
+msg = MIMEMultipart('alternative') 
+msg['To'] = 'recipient@example.com' 
+msg['From'] = 'Test Sender <sender@example.com>' 
+msg['Subject'] = 'Test Message, Chapter 12' 
+msg['Date'] = utils.formatdate(localtime = 1) 
+msg['Message-ID'] = utils.make_msgid() 
+ 
+msg.attach(alternative(messagetext, 'text/plain')) 
+msg.attach(alternative(messagehtml, 'text/html')) 
+print msg.as_string() 
+Notice the differences between an alternative message and a message with attachments! With the 
+alternative message, no Content-Disposition header is inserted. Also, the MIMEMultipart object is passed 
+the alternative subtype to tell the mail reader that all objects in this multipart are alternative views of 
+the same thing. 
+Note again that it is always most polite to include the plain-text object first for people with ancient 
+or incapable mail readers, which simply show them the entire message as text! In fact, we ourselves will 
+now view the message that way, by running it on the command line in Listing 12–11. 
+Listing 12–11. What an Alternative-Part Message Looks Like 
+$ ./mime_gen_alt.py 
+Content-Type: multipart/alternative; boundary="===============1543078954==" 
+MIME-Version: 1.0 
+To: recipient@example.com 
+From: Test Sender <sender@example.com> 
+Subject: Test Message, Chapter 12 
+Date: Thu, 11 Dec 2003 19:36:56 -0600 
+Message-ID: <20031212013656.21447.34593@user.example.com> 
+
+CHAPTER 12 ■ E-MAIL COMPOSITION AND DECODING 
+210 
+--===============1543078954==
+Content-Type: text/plain; charset="us-ascii"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit 
+Hello, 
+This is a *great* test message from Chapter 12.  I hope you enjoy it!
+-- Anonymous 
+--===============1543078954== 
+Content-Type: text/html; charset="us-ascii" 
+MIME-Version: 1.0 
+Content-Transfer-Encoding: 7bit 
+Hello,<P> 
+This is a <B>great</B> test message from Chapter 12.  I hope you enjoy
+it!<P> 
+-- <I>Anonymous</I> 
+--===============1543078954==-- 
+An HTML-capable mail reader will choose the second view, and give the user a fancy representation
+of the message with the word “great” in bold and “Anonymous” in italics. A text-only reader will instead
+choose the first view, and the user will still at least see a readable message instead of one filled with angle
+brackets. 
+Composing Non-English Headers 
+Although you have seen how MIME can encode message body parts with base-64 to allow 8-bit data to
+pass through, that does not solve the problem of special characters in headers. For instance, if your
+name was Michael Müller (with an umlaut over the “u”), you would have trouble representing your
+name accurately in your own alphabet. The “u” would come out bare. 
+Therefore, MIME provides a way to encode data in headers. Take a look at Listing 12–12 for how to
+do it in Python. 
+Listing 12–12. Using a Character Encoding for a Header 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 12 - mime_headers.py
+# This program requires Python 2.5 or above 
+from email.mime.text import MIMEText
+from email.header import Header 
+message = """Hello, 
+This is a test message from Chapter 12.  I hope you enjoy it! 
+-- Anonymous""" 
+msg = MIMEText(message) 
+msg['To'] = 'recipient@example.com'
+fromhdr = Header() 
+Download from www.eBookTM.Com
+
+CHAPTER 12 ■ E-MAIL COMPOSITION AND DECODING 
+211
+fromhdr.append(u"Michael M\xfcller") 
+fromhdr.append('<mmueller@example.com>') 
+msg['From'] = fromhdr 
+msg['Subject'] = 'Test Message, Chapter 12' 
+ 
+print msg.as_string() 
+The code '\xfc' in the Unicode string (strings in Python source files that are prefixed with u can 
+contain arbitrary Unicode characters, rather than being restricted to characters whose value is between 
+0 and 255) represents the character 0xFC, which stands for “ü”. Notice that we build the address as two 
+separate pieces, the first of which (the name) needs encoding, but the second of which (the e-mail 
+address) can be included verbatim. Building the From header this way is important, so that the e-mail 
+address winds up legible regardless of whether the user’s client can decode the fancy international text; 
+take a look at Listing 12–13 for the result. 
+Listing 12–13. Using a Character Encoding for a Header 
+$ ./mime_headers.py 
+Content-Type: text/plain; charset="us-ascii" 
+MIME-Version: 1.0 
+Content-Transfer-Encoding: 7bit 
+To: recipient@example.com 
+From: =?iso-8859-1?q?Michael_M=FCller?= <mmueller@example.com> 
+Subject: Test Message, Chapter 12 
+Date: Thu, 11 Dec 2003 19:37:56 -0600 
+Message-ID: <20031212013756.21447.34593@user.example.com> 
+ 
+Hello, 
+ 
+This is a test message from Chapter 12.  I hope you enjoy it! 
+ 
+-- Anonymous 
+Here is what would have happened if you had failed to build the From header from two different 
+pieces, and instead tried to include the e-mail address along with the internationalized name: 
+>>> from email.header import Header 
+>>> h = u'Michael M\xfcller <mmueller@example.com>' 
+>>> print Header(h).encode() 
+=?utf-8?q?Michael_M=C3=BCller_=3Cmmueller=40example=2Ecom=3E?= 
+If you look very carefully, you can find the e-mail address in there somewhere, but certainly not in a 
+form that a person —or their e-mail client —would find recognizable! 
+Composing Nested Multiparts 
+Now that you know how to generate a message with alternatives and one with attachments, you may be 
+wondering how to do both. To do that, you create a standard multipart for the main message. Then you 
+create a multipart/alternative inside that for your body text, and attach your message formats to it. 
+Finally, you attach the various files. Take a look at Listing 12–14 for the complete solution. 
+
+CHAPTER 12 ■ E-MAIL COMPOSITION AND DECODING 
+212 
+Listing 12–14. Doing MIME with Both Alternatives and Attachments 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 12 - mime_gen_both.py 
+ 
+from email.mime.text import MIMEText 
+from email.mime.multipart import MIMEMultipart 
+from email.mime.base import MIMEBase 
+from email import utils, encoders 
+import mimetypes, sys 
+ 
+def genpart(data, contenttype): 
+»   maintype, subtype = contenttype.split('/') 
+»   if maintype == 'text': 
+»   »   retval = MIMEText(data, _subtype=subtype) 
+»   else: 
+»   »   retval = MIMEBase(maintype, subtype) 
+»   »   retval.set_payload(data) 
+»   »   encoders.encode_base64(retval) 
+»   return retval 
+ 
+ 
+def attachment(filename): 
+»   fd = open(filename, 'rb') 
+»   mimetype, mimeencoding = mimetypes.guess_type(filename) 
+»   if mimeencoding or (mimetype is None): 
+»   »   mimetype = 'application/octet-stream' 
+»   retval = genpart(fd.read(), mimetype) 
+»   retval.add_header('Content-Disposition', 'attachment', 
+»   »   »   filename = filename) 
+»   fd.close() 
+»   return retval 
+ 
+messagetext = """Hello, 
+ 
+This is a *great* test message from Chapter 12.  I hope you enjoy it! 
+ 
+-- Anonymous""" 
+ 
+messagehtml = """Hello,<P> 
+This is a <B>great</B> test message from Chapter 12.  I hope you enjoy 
+it!<P> 
+-- <I>Anonymous</I>""" 
+ 
+msg = MIMEMultipart() 
+msg['To'] = 'recipient@example.com' 
+msg['From'] = 'Test Sender <sender@example.com>' 
+msg['Subject'] = 'Test Message, Chapter 12' 
+msg['Date'] = utils.formatdate(localtime = 1) 
+msg['Message-ID'] = utils.make_msgid() 
+ 
+body = MIMEMultipart('alternative') 
+body.attach(genpart(messagetext, 'text/plain')) 
+
+CHAPTER 12 ■ E-MAIL COMPOSITION AND DECODING 
+213
+body.attach(genpart(messagehtml, 'text/html')) 
+msg.attach(body) 
+ 
+for filename in sys.argv[1:]: 
+»   msg.attach(attachment(filename)) 
+print msg.as_string() 
+The output from this program is large, so I won’t show it here. You should also know that there is no 
+fixed limit to how deep message components may be nested, though there is rarely any reason to go 
+deeper than is shown here. 
+Parsing MIME Messages 
+Python’s email module can read a message from a file or a string, and generate the same kind of in-
+memory object tree that we were generating ourselves in the aforementioned listings. To understand the 
+e-mail’s content, all you have to do is step through its structure. 
+You can even make adjustments to the message (for instance, you can remove an attachment), and 
+then generate a fresh version of the message based on the new tree. Listing 12–5 shows a program that 
+will read in a message and display its structure by walking the tree. 
+Listing 12–15. Walking a Complex Message 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 12 - mime_structure.py 
+# This program requires Python 2.2.2 or above 
+ 
+import sys, email 
+ 
+def printmsg(msg, level = 0): 
+»   prefix = "|  " * level 
+»   prefix2 = prefix + "|" 
+»   print prefix + "+ Message Headers:" 
+»   for header, value in msg.items(): 
+»   »   print prefix2, header + ":", value 
+»   if msg.is_multipart(): 
+»   »   for item in msg.get_payload(): 
+»   »   »   printmsg(item, level + 1) 
+ 
+msg = email.message_from_file(sys.stdin) 
+printmsg(msg) 
+This program is short and simple. For each object it encounters, it checks to see if it is multipart; if 
+so, the children of that object are displayed as well. The output of this program will look something like 
+this, given as input a message that contains a body in alternative form and a single attachment: 
+$ ./mime_gen_both.py /tmp/test.gz | ./mime_structure.py 
++ Message Headers: 
+| Content-Type: multipart/mixed; boundary="===============1899932228==" 
+| MIME-Version: 1.0 
+| To: recipient@example.com 
+| From: Test Sender <sender@example.com> 
+| Subject: Test Message, Chapter 12 
+| Date: Fri, 12 Dec 2003 16:23:05 -0600 
+
+CHAPTER 12 ■ E-MAIL COMPOSITION AND DECODING 
+214 
+| Message-ID: <20031212222305.13361.15560@user.example.com> 
+|  + Message Headers: 
+|  | Content-Type: multipart/alternative; boundary="===============1287885775==" 
+|  | MIME-Version: 1.0 
+|  |  + Message Headers: 
+|  |  | Content-Type: text/plain; charset="us-ascii" 
+|  |  | MIME-Version: 1.0 
+|  |  | Content-Transfer-Encoding: 7bit 
+|  |  + Message Headers: 
+|  |  | Content-Type: text/html; charset="us-ascii" 
+|  |  | MIME-Version: 1.0 
+|  |  | Content-Transfer-Encoding: 7bit 
+|  + Message Headers: 
+|  | Content-Type: application/octet-stream 
+|  | MIME-Version: 1.0 
+|  | Content-Transfer-Encoding: base64 
+|  | Content-Disposition: attachment; filename="/tmp/test.gz" 
+Individual parts of a message can easily be extracted. You will recall that there are several ways that 
+message data may be encoded; fortunately, the email module can decode them all! Listing 12–16 shows a 
+program that will let you decode and save any component of a MIME message: 
+Listing 12–16. Decoding Attachments in a MIME Message 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 12 - mime_decode.py 
+# This program requires Python 2.2.2 or above 
+ 
+import sys, email 
+counter = 0 
+parts = [] 
+ 
+def printmsg(msg, level = 0): 
+»   global counter 
+»   l = "|  " * level 
+»   if msg.is_multipart(): 
+»   »   print l + "Found multipart:" 
+»   »   for item in msg.get_payload(): 
+»   »   »   printmsg(item, level + 1) 
+»   else: 
+»   »   disp = ['%d. Decodable part' % (counter + 1)] 
+»   »   if 'content-type' in msg: 
+»   »   »   disp.append(msg['content-type']) 
+»   »   if 'content-disposition' in msg: 
+»   »   »   disp.append(msg['content-disposition']) 
+»   »   print l + ", ".join(disp) 
+»   »   counter += 1 
+»   »   parts.append(msg) 
+ 
+inputfd = open(sys.argv[1]) 
+msg = email.message_from_file(inputfd) 
+printmsg(msg) 
+ 
+while 1: 
+
+CHAPTER 12 ■ E-MAIL COMPOSITION AND DECODING 
+215
+»   print "Select part number to decode or q to quit: " 
+»   part = sys.stdin.readline().strip() 
+»   if part == 'q': 
+»   »   sys.exit(0) 
+»   try: 
+»   »   part = int(part) 
+»   »   msg = parts[part - 1] 
+»   except: 
+»   »   print "Invalid selection." 
+»   »   continue 
+ 
+»   print "Select file to write to:" 
+»   filename = sys.stdin.readline().strip() 
+»   try: 
+»   »   fd = open(filename, 'wb') 
+»   except: 
+»   »   print "Invalid filename." 
+»   »   continue 
+ 
+»   fd.write(msg.get_payload(decode = 1)) 
+This program steps through the message, like the last example. We skip asking the user about 
+message components that are multipart because those exist only to contain other message objects, like 
+text and attachments; multipart sections have no actual payload of their own. 
+When run, the program looks something like this: 
+$ ./mime_decode.py testmessage.txt 
+Found multipart: 
+|  Found multipart: 
+|  |  1. Decodable part, text/plain; charset="us-ascii" 
+|  |  2. Decodable part, text/html; charset="us-ascii" 
+|  3. Decodable part, application/octet-stream, attachment; filename="/tmp/test.gz" 
+Select part number to decode or q to quit: 
+3 
+Select file to write to: 
+/tmp/newfile.gz 
+Select part number to decode or q to quit: 
+q 
+Decoding Headers 
+The last trick that we should cover regarding MIME messages is decoding headers that may have been 
+encoded with foreign languages. The function decode_header() takes a single header and returns a list of 
+pieces of the header; each piece is a binary string together with its encoding (named as a string if it is 
+something besides 7-bit ASCII, else the value None): 
+>>> x = '=?iso-8859-1?q?Michael_M=FCller?= <mmueller@example.com>' 
+>>> import email.header 
+>>> pieces = email.header.decode_header(x) 
+>>> print pieces 
+[('Michael M\xfcller', 'iso-8859-1'), ('<mmueller@example.com>', None)] 
+
+CHAPTER 12 ■ E-MAIL COMPOSITION AND DECODING 
+216 
+Of course, this raw information is likely to be of little use to you. To instead see the actual text inside 
+the encoding, use the decode() function of each binary string in the list (falling back to an ‘ascii’ 
+encoding if None was returned) and paste the result together with spaces: 
+>>> print ' '.join( s.decode(enc or 'ascii') for s,enc in pieces ) 
+Michael Müller <mmueller@example.com> 
+It is always good practice to use decode_header() on any of the “big three” headers —From, To, and 
+Subject —before displaying them to the user. If no special encoding was used, then the result will simply 
+be a one-element list containing the header string with a None encoding. 
+Summary 
+Traditional e-mail messages contain headers and a body. All parts of a traditional message must be 
+represented using a 7-bit encoding, which generally prohibits the use of anything other than text using 
+the Latin alphabet as used in English. 
+Headers provide useful information for mail reader programs and for people reading mail. Contrary 
+to what many expect, except in special circumstances, the headers don’t directly dictate where messages 
+get sent. 
+Python’s e-mail modules can both generate messages and parse messages. To generate a traditional 
+message, an instance of email.mime.text.MIMEText or email.message.Message can be created. The Date 
+and Message-ID headers are not added by default, but can be easily added using convenience functions. 
+To parse a traditional or MIME message, just call email.message_from_file(fd) where fd is the file 
+descriptor from which to read its content. Parsing of Date headers can be tricky, but it is usually possible 
+without too much difficulty. 
+MIME is a set of extensions to the e-mail format that permit things such as non-text data, 
+attachments, alternative views of content, and different character sets. Multipart MIME messages can be 
+used for attachments and alternative views, and are constructed in a “tree” fashion. 

@@ -1,0 +1,693 @@
+第6 章 神经网络的发展及其TensorFlow 实现 ee 109 
+第6 章 
+神经网络的发展及其TensorFlow 实现 
+卷积神经网络（convolutional neural network，CNN）的演进从LeNet 到AlexNet，再到VggNet、
+GoogLeNet，最后到ResNet，演进的方式有一定规律，并且也在ImageNet LSVRC 竞赛上用120
+万张图片、1000 类标记上取得了很好的成绩。循环神经网络（recurrent neural networks，RNN）
+的演进从Vanilla RNN 到隐藏层结构精巧的GRU 和LSTM，再到双向和多层的Deep Bidirectional 
+RNN。本章主要介绍这些神经网络模型的结构和演化脉络，并且尝试用TensorFlow 去构建这些
+网络，为读者将来自己设计网络或者根据读到的论文构建网络模型打下基础。
+6.1 卷积神经网络 
+卷积神经网络（CNN），属于人工神经网络的一种，它的权值共享（weight sharing）的网
+络结构显著降低了模型的复杂度，减少了权值的数量，是目前语音分析和图像识别领域研究
+热点。
+在传统的识别算法中，我们需要对输入的数据进行特征提取和数据重建，而卷积神经网络
+可以直接将图片作为网络的输入，自动提取特征，并且对图片的变形（如平移、比例缩放、倾
+斜）等具有高度不变形。
+那什么是卷积（convolution）呢？卷积是泛函分析中的一种积分变换的数学方法，通过
+两个函数f 和g 生成第三个函数的一种数学算子，表征函数f 与g 经过翻转和平移的重叠部
+分的面积。
+①设f(x)和g(x)是R1 上的两个可积函数，做积分后的新函数就称为函数f 与g 的
+卷积：
+( ) (
+)d
+f
+g x
+E
+τ
+τ
+−
+∫
++∞
+-∞
+我们知道，神经网络（neural networks，NN）的基本组成包括输入层、隐藏层、输出层。
+卷积神经网络的特点在于隐藏层分为卷积层和池化层（pooling layer，又叫下采样层）。卷积
+层通过一块块卷积核（conventional kernel）在原始图像上平移来提取特征，每一个特征就是
+
+110 ff 第一篇 基础篇 
+一个特征映射；而池化层通过汇聚特征后稀疏参数来减少要学习的参数，降低网络的复杂度，
+池化层最常见的包括最大值池化（max pooling）和平均值池化（average pooling），如图 6-1
+所示。
+图6-1
+① 
+卷积核在提取特征映射时的动作称为padding，其有两种方式，即SAME 和VALID。由于
+移动步长（Stride）不一定能整除整张图的像素宽度，我们把不越过边缘取样称为Valid Padding，
+取样的面积小于输入图像的像素宽度；越过边缘取样称为Same Padding，取样的面积和输入图
+像的像素宽度一致。在图6-2 中，左边为Valid Padding，右边为Same Padding。 
+图6-2
+② 
+关于卷积神经网络的推导和实现可参参相关论文
+③。 
+6.2  卷积神经网络发展 
+神经网络的发展过程如图6-3 所示。本图参参了中国科学院计算技术研究所刘昕博士整理
+的卷积神经网络结构演化的历史。
+①
+本图参参https://classroom.udacity.com/courses/ud730/lessons/6370362152/concepts/63798118170923。
+② 本图参参https://classroom.udacity.com/courses/ud730/lessons/6370362152/concepts/63798118170923。
+③ http://cogprints.org/5869/1/cnn_tutorial.pdf
+
+第6 章 神经网络的发展及其TensorFlow 实现 ee 111 
+图6-3 
+卷积神经网络发展的起点是神经认知机（neocognitron）模型，当时已经出现了卷积结构。
+第一个卷积神经网络模型LeCun 诞生于1989 年，其发明人是LeCun。学习卷积神经网络的读
+本是Lecun 的论文
+①，在这篇论文里面较为详尽地解释了什么是卷积神经网络，并且阐述了为
+什么要卷积，为什么要降采样，径向基函数（radial basis function，RBF）怎么用，等等。 
+1998 年LeCun 提出了LeNet，但随后卷积神经网络的锋芒逐渐被SVM 等手工设计的特征
+的分类器盖过。随着ReLU 和Dropout 的提出，以及GPU 和大数据带来的历史机遇，卷积神经
+网络在2012 年迎来了历史性突破—AlexNet。 
+如图6-3 所示，AlexNet 之后卷积神经网络的演化过程主要有4 个方向的演化：一个是网络
+加深，二是增强卷积层的功能，三是从分类任务到检测任务，四是增加新的功能模块。
+下面就简单讲述各个阶段的几个网络的结构及特点。
+6.2.1  网络加深 
+1．LeNet 
+LeNet 的论文详见http://vision.stanford.edu/cs598_spring07/papers/Lecun98.pdf。LeNet 包含
+的组件如下。
+●
+输入层：32×32。
+●
+卷积层：3 个。
+●
+降采样层：2 个。
+●
+全连接层：1 个。
+●
+输出层（高参连接）：10 个类别（数字0～9 的概率）。
+①
+http://yann.lecun.com/exdb/publis/pdf/lecun-98.pdf
+
+112  第一篇 基础篇
+LeNet 的网络结构如图6-4 所示。 
+图6-4 
+下面就介绍一下各个层的用途及意义。 
+（1）输入层。输入图像尺寸为32×32。这要比MNIST 数据集中的字母（28×28）还大，
+即对图像做了预处理reshape 操作。这样做的目的是希望潜在的明显特征，如笔画断续、角点，
+能够出现在最高层特征监测卷积核的中心。 
+（2）卷积层（C1, C3, C5）。卷积运算的主要目的是使原信号特征增强，并且降低噪音。在一
+个可视化的在线演示示例
+①中，我们可以看出不同的卷积核输出特征映射的不同，如图 6-5 所示。 
+（3）下采样层（S2, S4）。下采样层主要是想降低网络训练参数及模型的过拟合程度。通常
+有以下两种方式。 
+●
+最大池化（max pooling）：在选中区域中找最大的值作为采样后的值。
+●
+平均值池化（mean pooling）：把选中的区域中的平均值作为采样后的值。
+（4）全连接层（F6）。F6 是全连接层，计算输入向量和权重向量的点积，再加上一个偏置。
+随后将其传递给sigmoid 函数，产生单元i 的一个状态。 
+（5）输出层。输出层由欧式径向基函数（Euclidean radial basis function）单元组成，每个类
+别（数字的0～9）对应一个径向基函数单元，每个单元有84 个输入。也就是说，每个输出RBF
+单元计算输入向量和该类别标记向量之间的欧式距离。距离越远，RBF 输出越大。 
+经过测试，采用LeNet，6 万张原始图片的数据集，错误率能够降低到0.95%；54 万张人
+工处理的失真数据集合并上6 万张原始图片的数据集，错误率能够降低到0.8%。
+② 
+接着，历史转折发生在2012 年，Geoffrey Hinton 和他的学生Alex Krizhevsky 在ImageNet
+竞赛中一举夺得图像分类的冠军，刷新了图像分类的记录，通过比赛回应了对卷积方法的质疑。
+比赛中他们所用网络称为AlexNet。 
+①
+https://graphics.stanford.edu/courses/cs178/applets/convolution.html
+②
+数据出自Yann LeCun、Leon Bottou、Yoshua Bengio 和Patrick Haffner 的论文《GradientBased Learning Applied to 
+Document Recognition》：http://vision.stanford.edu/cs598_spring07/papers/Lecun98.pdf。 
+
+第6 章 神经网络的发展及其TensorFlow 实现 ee 113 
+图6-5 
+
+114 ff 第一篇 基础篇 
+2．AlexNet 
+AlexNet 在2012 年的ImageNet 图像分类竞赛中，Top-5 错误率为15.3%；2011 年的冠军是
+采用基于传统浅层模型方法，Top-5 错误率为25.8%。AlexNet 也远远一过2012 年竞赛的第二
+名，错误率为26.2%。AlexNet 的论文详见Alex Krizhevsky、Ilya Sutskever 和Geoffrey E．Hinton
+的《ImageNet Classification with Deep Convolutional Neural Networks》
+①。 
+AlexNet 的结构如图6-6 所示。图中明确显示了两个GPU 之间的职责划分：一个GPU 运行
+图中顶部的层次部分，另一个GPU 运行图中底部的层次部分。GPU 之间仅在某些层互相通信。 
+图6-6 
+AlexNet 由5 个卷积层、5 个池化层、3 个全连接层，大约5000 万个可调参数组成。最后
+一个全连接层的输出被送到一个1000 维的softmax 层，产生一个覆盖1000 类标记的分布。 
+AlexNet 之所以能够成功，让深度学习卷积的方法重回到人们视野，原因在于使用了如下方法。 
+●
+防止过拟合：Dropout、数据增强（data augmentation）。
+●
+非线性激活函数：ReLU。
+●
+大数据训练：120 万（参万级）ImageNet 图像数据。
+●
+GPU 实现、LRN（local responce normalization）规范化层的使用。
+要学习如此多的参数，并且防止过拟合，可以采用两种方法：数据增强和Dropout。 
+（1）数据增强：增加训练数据是避免过拟合的好方法，并且能提升算法的准确率。当训练
+数据有限的时候，可以通过一些变换从已有的训练数据集中生成一些新数据，来扩大训练数据
+量。通常采用的变形方式以下几种，具体效果如图6-7 所示。 
+●
+水平翻转图像（又称反射变化，flip）。
+●
+从原始图像（大小为256×256）随机地平移变换（crop）出一些图像（如大小为224×224）。 
+●
+给图像增加一些随机的光照（又称光照、彩色变换、颜色抖动）。
+（2）Dropout。AlexNet 做的是以0.5 的概率将每个隐层神经元的输出设置为0。以这种方式
+①
+https://papers.nips.cc/paper/4824-imagenet-classification-with-deep-convolutional-neural-networks.pdf
+
+第6 章 神经网络的发展及其TensorFlow 实现 ee 115 
+被抑制的神经元既不参与前向传播，也不参与反向传播。因此，每次输入一个样本，就相当于
+该神经网络尝试了一个新结构，但是所有这些结构之间共享权重。因为神经元不能依赖于其他
+神经元而存在，所以这种技术降低了神经元复杂的互适应关系。因此，网络需要被迫学习更为
+健壮的特征，这些特征在结合其他神经元的一些不同随机子集时很有用。如果没有Dropout，
+我们的网络会表现出大量的过拟合。Dropout 使收敛所需的迭代次数大致增加了一倍。 
+图6-7 
+Alex 用非线性激活函数relu 代替了sigmoid，发现得到的SGD 的收敛速度会比sigmoid/tanh
+很很多。
+单个GTX 580 GPU 只有3 GB 内存，因此在其上训练的数据规模有限。从AlexNet 结构图
+可以看出，它将网络分布在两个GPU 上，并且能够直接从另一个GPU 的内存中读出和写入，
+不需要通过主机内存，极大地增加了训练的规模。
+6.2.2  增强卷积层的功能 
+1．VGGNet 
+VGGNet 可以看成是加深版本的AlexNet，参见Karen Simonyan 和Andrew Zisserman 的论
+文《Very Deep Convolutional Networks for Large-Scale Visual Recognition》
+①。 
+VGGNet 和下文中要提到的GoogLeNet 是2014 年ImageNet 竞赛的第二名和第一名，Top-5 错误
+率分别为7.32%和6.66%
+②。VGGNet 也是5 个卷积组、2 层全连接图像特征、1 层全连接分类特征，
+可以看作和AlexNet 一样总共8 个部分。根据前5 个卷积组，VGGNet 论文中给出了A～E 这5 种配
+置，如图6-8 所示。卷积层数从8（A 配置）到16（E 配置）递增。VGGNet 不同于AlexNet 的地方
+是：VGGNet 使用的层更多，通常有16～19 层，而AlexNet 只有8 层。VGGNet 的结构如图6-8 所示。 
+从VGGNet 的论文中可以看出，随着卷积层从8 到16 的一步步加深，通过加深卷积层数
+已经到达了准确率提升的瓶颈。从论文中给出的结果（如图6-9 所示）可以看到，再加深模型，
+①
+http://www.robots.ox.ac.uk/~vgg/research/very_deep/
+② 数据来源于竞赛结果官网：http://image-net.org/challenges/LSVRC/2014/results。
+
+116 ff 第一篇 基础篇 
+错误率已经很难再降低了。
+图6-8 
+ILSVRC-2012 上Top-5 分类任务错误率（%） 
+模型 
+验证集 
+测试集 
+16 层VGG 
+7.5%
+7.4%
+19 层VGG 
+7.5%
+7.3%
+VGG 和SVM 结合 
+7.1%
+7.0%
+图6-9 
+2．GoogLeNet 
+提到GoogleNet，我们首先要说起NIN（Network in Network）的思想
+①（详见Min Lin 和
+Qiang Chen 和Shuicheng Yan 的论文《Network In Network》），它对传统的卷积方法做了两点改
+进：将原来的线性卷积层（linear convolution layer）变为多层感知卷积层（multilayer perceptron）；
+将全连接层的改进为全局平均池化。这使得卷积神经网络向另一个演化分支—增强卷积模块
+的功能的方向演化，2014 年诞生了GoogLeNet（即Inception V1）。谷歌公司提出的GoogLeNet
+是2014 年ILSVRC 挑战赛的冠军，它将Top-5 的错误率降低到了6.67%。GoogLeNet 的更多内
+容详见Christian Szegedy 和Wei Liu 等人的论文《Going Deeper with Convolutions》
+②。 
+①
+https://arxiv.org/abs/1312.4400。 
+② https://arxiv.org/abs/1409.4842。 
+
+第6 章 神经网络的发展及其TensorFlow 实现 ee 117 
+GoogLeNet 的网络的中段结构如图6-10 所示。 
+图6-10 
+
+118 ff 第一篇 基础篇 
+论文中介绍了如何发现Inception 模型的最优结构，如图6-11 所示。原始的设计见图6-11
+的左侧，使用1×1、3×3、5×5 的卷积核对应图像的区域，然后连接起来到全连接层。降维后
+的设计如图6-11 的右侧，使用1×1 的卷积核进行降维，在全连接层将1×1、3×3、5×5 的卷积
+结果连接起来。这样做使网络的宽度和深度均可扩大。使用了Inception 模型的结构可以有2～
+3 倍的加速。 
+图6-11 
+GoogLeNet 的主要思想是围绕“深度”和“宽度”去实现的。 
+（1）深度。层数更深，论文中采用了22 层。为了避免梯度消失问题，GoogLeNet 巧妙地在
+不同深度处增加了两个损失函数来避免反向传播时梯度消失的现象。
+（2）宽度。增加了多种大小的卷积核，如1×1、3×3、5×5，但并没有将这些全都用在特
+征映射上，都结合起来的特征映射厚度将会很大。但是采用了图6-11 右侧所示的降维的Inception
+模型，在3×3、5×5 卷积前，和最大池化后都分别加上了1×1 的卷积核，起到了降低特征映
+射厚度的作用。
+3．ResNet 
+把网络加深和增强卷积模块功能两个演化方向相结合，诞生了ResNet（Residual Network，
+残差网络）。ReNet 是2015 年ILSVRC 竞赛中不依赖外部数据的物体检测和物体识别两个项目
+的冠军，是由MSRA 何凯明团队提出的，训练深达152 层的网络。同时，MSRA 也是2015 年
+ImageNet 竞赛的大赢家，在分类、检测、定位以及COCO 数据集上的检测（detection）和分隔
+（segmentation），都获得了冠军。图 6-12 展示的是一个 34 层的 ResNet 的结构。残差网络的更
+多内容详见Kaiming He、Xiangyu Zhang、Shaoqing Ren 和Jian Sun 的论文《Deep Residual Learning 
+for Image Recognition》
+①。 
+按照一般的经验，只要没有发生梯度消失或者梯度梯梯，并且不过拟合，网络应该是越深
+越好。但是，论文作者在CIFAR10 上训练网络时却发现，层数从20 层增加到56 层，错误率上
+升了，准确率下降了，如图6-13 所示。 
+①
+https://arxiv.org/abs/1512.03385
+
+第6 章 神经网络的发展及其TensorFlow 实现 ee 119 
+图6-12 
+
+120 ff 第一篇 基础篇 
+图6-13 
+这种情况被称为网络退化（network degradation）。为此ResNet 中引入了一个shortcut 结构
+（指图6-12 中卷积层之间的带箭头的曲线部分），将输入跳层传递与卷积的结果相加。 
+关于ResNet 中残差（residual）的含义，其实是如果能用几层网络去逼近一个复杂的非线
+性映射H(x)来预测图片的分类，那么同样可以用这几层网络去逼近它的残差函数（residual 
+function）F(x)= H(x)−x，并且我们认为优化残差映射要比直接优化H(x)简单。 
+6.2.3  从分类任务到检测任务 
+从分类任务到检测任务这个演化方向经历了从R-CNN 到Fast R-CNN，再到Faster R-CNN
+的演化。
+R-CNN 可以看作是Region Proposal Networks
+①（RPN）和CNN 结合的力作。在ImageNet、
+VOC、MSCOCO 数据集上都曾经取得过很好的效果。但它的主要缺点是重复计算，因为最后
+建议的区域（region）有几千个，多数都是互相重叠的，重叠的部分会被多次重复提取特性。 
+Fast R-CNN 是R-CNN 的加速版本，将最后建议的区域映射到CNN 的最后一个卷积层的
+特征映射上，这样一张图片只需要提取一次特征，大大提高了速度。但Fast R-CNN 的速度瓶
+颈在RPN 上。此外，Fast R-CNN 支持多类物体的同时检测，其行人与车辆检测技术就是汽车
+高级辅助驾驶系统的关键技术之一。
+Fater-R-CNN 将RPN 也交给CNN 来做，于是速度更很，可以达到实时。详见Shaoqing Ren、
+Kaiming He、Ross Girshick 和Jian Sun 的论文《Faster R-CNN: Towards Real-Time Object Detection 
+with Region Proposal Networks》
+②。 
+关于检测任务如图片目标检测、视频目标检测（VID）的更多资料请读者自行查阅。 
+①
+RPNs 是指从任意尺寸的图片中得到一系列的带有识别出物体概率分数的建议区域。具体流程是使用一个小的网络
+在最后卷积得到的特征映射上进行滑动扫描，这个滑动的网络每次与特征映射上的窗口进行全连接，然后映射到
+一个低维向量，如256D 或512D，最后将这个低维向量送入到两个全连接层，即box 回归层（box-regression layer）
+和box 分类层（box- classification layer）。 
+②
+https://arxiv.org/abs/1506.01497
+
+第6 章 神经网络的发展及其TensorFlow 实现 ee 121 
+6.2.4  增加新的功能模块 
+增加新的功能模块这个演化方向主要涉及FCN（反卷积）、STNet、CNN 与RNN/LSTM 的
+混合架构。这部分涉及的知识较深，更多资料请读者自行查阅。
+ 6.3  MNIST 的AlexNet 实现 
+接下来我们就试试用TensorFlow 来构建一个网络模型（这里以AlexNet 为例）。构建好模
+型后，使用MNIST 数据来看看训练结果如何。 
+现在我就一步步介绍如何将一个好的开源模型（如AlexNet）在TensorFlow 上实现。MNIST
+在TensorFlow 的例子中是用CNN 去训练的，而我们把原来普通的CNN 更改成AlexNet。这里
+我主要是参参代码https://github.com/aymericdamien/TensorFlow-Examples/blob/master/examples/ 
+3_NeuralNetworks/convolutional_network.py 和https://github.com/tensorflow/models/blob/master/ 
+tutorials/image/alexnet/alexnet_benchmark.py，然后根据AlexNet 的网络结构图来实现。 
+同时，一次完整的训练模型和评估模型的过程一般分为3 个步骤：加载数据，定义网络模
+型，训练模型和评估模型。接下来就分成这3 个部分讲解我们的代码。 
+6.3.1  加载数据 
+在加载数据的过程中，我们还要定义模型的一参数、模型所用的网络的参数以及数据的输
+入。如下：
+import tensorflow as tf 
+# 输入数据 
+from tensorflow.examples.tutorials.mnist import input_data 
+mnist = input_data.read_data_sets("/tmp/data/", one_hot=True) 
+# 定义网络的一参数 
+learning_rate = 0.001 
+training_iters = 200000 
+batch_size = 128 
+display_step = 10 
+# 定义网络的参数 
+n_input = 784  # 输入的维度(img shape: 28×28) 
+n_classes = 10 # 标记的维度 (0-9 digits) 
+dropout = 0.75 # Dropout 的概率，输出的可能性 
+# 输入占位符 
+
+122 ff 第一篇 基础篇 
+x = tf.placeholder(tf.float32, [None, n_input]) 
+y = tf.placeholder(tf.float32, [None, n_classes]) 
+keep_prob = tf.placeholder(tf.float32) #dropout  
+6.3.2  构建网络模型 
+接下来我们定义AlexNet 需要用到的卷积、池化和规范化操作。为了简单，我们将这些功
+能封装起来。代码如下：
+# 定义卷积操作 
+def conv2d(name, x, W, b, strides=1): 
+  x = tf.nn.conv2d(x, W, strides=[1, strides, strides, 1], padding='SAME') 
+  x = tf.nn.bias_add(x, b) 
+  return tf.nn.relu(x, name=name) # 使用relu 激活函数 
+# 定义池化层操作 
+def maxpool2d(name, x, k=2): 
+    return tf.nn.max_pool(x, ksize=[1, k, k, 1], strides=[1, k, k, 1], 
+ padding='SAME', name=name) 
+# 规范化操作 
+def norm(name, l_input, lsize=4): 
+  return tf.nn.lrn(l_input, lsize, bias=1.0, alpha=0.001 / 9.0, 
+beta=0.75, name=name) 
+定义所有的网络参数（网络参数的具体值详见AlexNet 的结构图，参见图6-6），如下： 
+# 定义所有的网络参数 
+weights = { 
+  'wc1': tf.Variable(tf.random_normal([11, 11, 1, 96])), 
+  'wc2': tf.Variable(tf.random_normal([5, 5, 96, 256])), 
+  'wc3': tf.Variable(tf.random_normal([3, 3, 256, 384])), 
+  'wc4': tf.Variable(tf.random_normal([3, 3, 384, 384])), 
+  'wc5': tf.Variable(tf.random_normal([3, 3, 384, 256])), 
+  'wd1': tf.Variable(tf.random_normal([4*4*256, 4096])), 
+  'wd2': tf.Variable(tf.random_normal([4096, 4096])), 
+  'out': tf.Variable(tf.random_normal([4096, 10])) 
+} 
+biases = { 
+  'bc1': tf.Variable(tf.random_normal([96])), 
+  'bc2': tf.Variable(tf.random_normal([256])), 
+  'bc3': tf.Variable(tf.random_normal([384])), 
+  'bc4': tf.Variable(tf.random_normal([384])), 
+  'bc5': tf.Variable(tf.random_normal([256])),  
+  'bd1': tf.Variable(tf.random_normal([4096])), 
+  'bd2': tf.Variable(tf.random_normal([4096])), 
+  'out': tf.Variable(tf.random_normal([n_classes])) 
+} 
+
+第6 章 神经网络的发展及其TensorFlow 实现 ee 123 
+定义AlexNet 的网络模型： 
+# 定义整个网络 
+def alex_net(x, weights, biases, dropout): 
+  # Reshape input picture 
+  x = tf.reshape(x, shape=[-1, 28, 28, 1]) 
+  # 第一层卷积 
+  # 卷积 
+  conv1 = conv2d('conv1', x, weights['wc1'], biases['bc1']) 
+  # 下采样 
+  pool1 = maxpool2d('pool1', conv1, k=2) 
+  # 规范化 
+  norm1 = norm('norm1', pool1, lsize=4) 
+  # 第二层卷积 
+  # 卷积 
+  conv2 = conv2d('conv2', conv1, weights['wc2'], biases['bc2']) 
+  # 最大池化（向下采样） 
+  pool2 = maxpool2d('pool2', conv2, k=2) 
+  # 规范化 
+  norm2 = norm('norm2', pool2, lsize=4) 
+  # 第三层卷积 
+  # 卷积 
+  conv3 = conv2d('conv3', norm2, weights['wc3'], biases['bc3']) 
+  # 下采样 
+  pool3 = maxpool2d('pool3', conv3, k=2) 
+  # 规范化 
+  norm3 = norm('norm3', pool3, lsize=4) 
+  # 第四层卷积 
+  conv4 = conv2d('conv4', norm3, weights['wc4'], biases['bc4']) 
+  # 第五层卷积 
+  conv5 = conv2d('conv5', norm3, weights['wc5'], biases['bc5']) 
+  # 下采样 
+  pool5 = maxpool2d('pool5', conv5, k=2) 
+  # 规范化 
+  norm5 = norm('norm5', pool5, lsize=4) 
+  # 全连接层1 
+  fc1 = tf.reshape(norm5, [-1, weights['wd1'].get_shape().as_list()[0]]) 
+  fc1 = tf.add(tf.matmul(fc1, weights['wd1']), biases['bd1']) 
+  fc1 = tf.nn.relu(fc1) 
+  # dropout 
+  fc1 = tf.nn.dropout(fc1, dropout) 
+  #全连接层2 
+  fc2 = tf.reshape(fc1, [-1, weights['wd1'].get_shape().as_list()[0]]) 
+  fc2 = tf.add(tf.matmul(fc2, weights['wd1']), biases['bd1']) 
+
+124 ff 第一篇 基础篇 
+  fc2 = tf.nn.relu(fc2) 
+  # dropout 
+  fc2 = tf.nn.dropout(fc2, dropout) 
+  # 输出层 
+  out = tf.add(tf.matmul(fc2, weights['out']), biases['out']) 
+  return out 
+构建模型，定义损失函数和优化器，并构建评估函数：
+# 构建模型 
+pred = alex_net(x, weights, biases, keep_prob) 
+# 定义损失函数和优化器 
+cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(pred, y)) 
+optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(cost) 
+# 评估函数 
+correct_pred = tf.equal(tf.argmax(pred, 1), tf.argmax(y, 1)) 
+accuracy = tf.reduce_mean(tf.cast(correct_pred, tf.float32)) 
+6.3.3  训练模型和评估模型 
+训练模型和评估模型的代码如下：
+# 初始化变量 
+init = tf.global_variables_initializer() 
+with tf.Session() as sess: 
+  sess.run(init) 
+  step = 1 
+  # 开始训练，直到达到training_iters，即200000 
+  while step * batch_size < training_iters: 
+    batch_x, batch_y = mnist.train.next_batch(batch_size) 
+    sess.run(optimizer, feed_dict={x: batch_x, y: batch_y, 
+keep_prob: dropout}) 
+    if step % display_step == 0: 
+# 计算损失值和准确度，输出 
+loss, acc = sess.run([cost, accuracy], feed_dict={x: batch_x, 
+y: batch_y, 
+keep_prob: 1.}) 
+print("Iter " + str(step*batch_size) + ", Minibatch Loss= " + \ 
+"{:.6f}".format(loss) + ", Training Accuracy= " + \ 
+"{:.5f}".format(acc)) 
+    step += 1 
+  print("Optimization Finished!") 
+
+第6 章 神经网络的发展及其TensorFlow 实现 ee 125 
+   # 计算测试集的准确度 
+   print("Testing Accuracy:", \ 
+     sess.run(accuracy, feed_dict={x: mnist.test.images[:256], 
+ y: mnist.test.labels[:256], 
+ keep_prob: 1.})) 
+输出结果如下：
+Iter 1280, Minibatch Loss= 397151.531250, Training Accuracy= 0.43750 
+Iter 2560, Minibatch Loss= 358224.781250, Training Accuracy= 0.48438 
+Iter 3840, Minibatch Loss= 208550.218750, Training Accuracy= 0.70312 
+我们也可以像实现AlexNet 的模型这样，用TensorFlow 实现其他网络（如VGGNet、GoogLeNet、
+ResNet），具体实现的步骤我们总结如下： 
+（1）仔细研读该网络的论文，理解每一层的输入/输出值以及网络结构； 
+（2）按照加载数据，定义网络模型，训练模型和评估模型这样的步骤实现网络。 
+读者可以从简单的VGGNet 开始动手试试。https://github.com/tensorflow/models/tree/master/ 
+slim/nets 有所有这几个经典网络的实现方式。 
+6.4 循环神经网络
+① 
+循环神经网络主要是自然语言处理（natural language processing，NLP）应用的一种网络模
+型。它不同于传统的前馈神经网络（feed-forward neural network，FNN），循环神经网络在网络
+中引入了定性循环，使信号从一个神经元传递到另一个神经元并不会马上消失，而是继续存活。
+这就是循环神经网络名称的来历。
+在传统的神经网络中，输入层到输出层的每层直接是全连接的，但是层内部的神经元彼
+此之间没有连接。这种网络结构应用到文本处理时却有难度。例如，我们要预测某个单词的
+下一个单词是什么，就需要用到前面的单词。循环神经网络的解决方式是，隐藏层的输入不
+仅包括上一层的输出，还包括上一时刻该隐藏层的输出。理论上，循环神经网络能够包含前
+面的任意多个时刻的状态，但实践中，为了降低训练的复杂性，一般只处理前面几个状态的
+输出。
+循环神经网络的特点在于它是按时间顺序展开的，下一步会受本步处理的影响，网络模型
+如图6-14 所示。在计算时间为2 的那步时，输入层和前一步（时间为1）的数据都会对时间为
+2 的那步的输出值有影响。 
+①
+本节代码参参https://github.com/aymericdamien/TensorFlow-Examples/blob/master/examples/3_NeuralNetworks/recurrent_ 
+network.py，并做了相应修改。 
+
+126 ff 第一篇 基础篇 
+图6-14
+① 
+循环神经网络的训练也是使用误差反向传播（backpropagation，BP）算法，并且参数w1、
+w2 和w3 是共享的。但是，其在反向传播中，不仅依赖当前层的网络，还依赖前面若干层的网
+络，这种算法称为随时间反向传播（backpropagation through time，BPTT）算法。BPTT 算法是
+BP 算法的扩展，可以将加载在网络上的时序信号按层展开，这样就使得前馈神经网络的静态网
+络转化为动态网络。
+6.5  循环神经网络发展 
+循环神经网络的发展如图6-15 所示。 
+图6-15 
+最初Vanilla RNN 的改进和CNN 的改进类似，也是朝着两个方向演化：一是隐藏层的功能逐
+渐增强，二是网络的双向化及加深。本节内容参参《Recurrent Neural Networks, Part 1–Introduction 
+to RNNs》
+②。 
+①
+本图出自Alex Graves 的论文《Supervised Sequence Labelling with Recurrent Neural Networks》：http://www.cs.toronto. 
+edu/～graves/preprint.pdf。 
+②
+http://www.wildml.com/2015/09/recurrent-neural-networks-tutorial-part-1-introduction-to-rnns/
+
+第6 章 神经网络的发展及其TensorFlow 实现 ee 127 
+6.5.1  增强隐藏层的功能 
+1．简单RNN 
+简单RNN（Simple RNN，SRNN）是一个3 层网络，在隐藏层（也叫上下文层）增加了上
+下文单元。图6-16 中的CONTEXT(t)是隐藏层，CONTEXT(t-1)是上下文单元。上下文单元节
+点与隐藏层中的节点的连接及权值都是固定的。
+图6-16 
+如图6-16 所示，假设当前是t 时刻，则分3 步来预测P(wm)： 
+●
+单词wm-1 映射到词向量，记作INPUT(t)；
+●
+连接上一次训练的隐藏层CONTEXT(t-1)，通过sigmoid 激活函数生成当前t 时刻的
+CONTEXT(t)；
+●
+利用softmax 函数，预测P(wm)。
+2．LSTM 
+一般的RNN 只能与前面若干序列有关，若一过十步，就很容易产生梯度消失或者梯度梯
+梯问题。产生梯度消失是因为导数的链式法则导致了连乘，造成梯度指数级消失。通过引入单
+元（cell）结构，得到了RNN 的改进模型长短期记忆（Long-Short Term Memory，LSTM）模型，
+这个模型可以解决梯度消失的问题，如图6-17 所示。 
+可以看出，把图6-14 中RNN 隐藏层中的黑圆圈换成图6-17 里LSTM 中的Block，就得到
+LSTM 模型了。这个Block 里面主要有1 个单元（cell），3 个门（gate）。 
+
+128 ff 第一篇 基础篇 
+图6-17
+① 
+●
+单元（cell）：主要有一个状态参数，用来记录状态。
+●
+输入门（input gate）和输出门（output gate）：对参数的输入、输出进行处理。
+●
+忘记门（forget gate）：用来设置选择性遗忘的权重，原始RNN 在这里权重是1。
+3．GRU 
+GRU
+②（Gated Recurrent Unit Recurrent Neural Network）中在隐藏层上不同距离处的单
+词对当前的隐藏层的状态的影响不同，距离越远的影响越小。在每个前面的状态对当前的
+隐藏层的状态的影响上进行了距离加权，距离越远权值越
+小。同时，在发生误差时，仅仅对产生误差的对应单词的权
+重进行更新。
+如图6-18 所示，GRU 的思想和LSTM 的十分相似。GRU
+有两个门，即重置门r 和更新门z。重置门决定如何组合新
+输入和之前的记忆，更新门决定留下多少之前的记忆。如
+果把重置门都设为1，更新门都设为0，就得到普通的RNN
+模型。
+①
+本图出自Alex Graves 的论文《Supervised Sequence Labelling with Recurrent Neural Networks》：http://www.cs.toronto. 
+edu/～graves/preprint.pdf
+②
+详见Junyoung Chung、Caglar Gulcehre、KyungHyun Cho、Yoshua Bengio 等人的论文《Empirical Evaluation of Gated
+Recurrent Neural Networks on Sequence Modeling》：https://arxiv.org/abs/1412.3555。 
+图6-18 
+
+第6 章 神经网络的发展及其TensorFlow 实现 ee 129 
+4．CW-RNN
+① 
+CW-RNN（Clockwork RNN）是一种使用时钟频率驱动的RNN。它将隐藏层分为几个组，
+通过不同的隐藏层组工作在不同的时钟频率下来解决长时间依赖问题。每一组按照自己规定的
+时钟频率对输入进行处理。将时钟时间离散化，不同的时间点不同的隐藏层组工作，所有的隐
+藏层组在每一步不会都同时工作，这样就加很网络的训练。此外，时钟周期大的组的神经元速
+度慢，周期小的速度很，连接方向是周期大的连接到周期小的，周期小的不会连接到周期大的。
+CW-RNN 的结构图如图6-19 所示。 
+图6-19 
+如图6-19 所示，隐藏层中的神经元会被划分为若干个组，记为g，每一组中的神经元个数相同，
+记为k，并为每一个组分配一个时钟周期Ti
+{
+∈T1, T 2,…, T g}，每一个组内的所有神经元是全连接的，
+但是组j 到组i 是循环连接，并需要满足Tj大于Ti。如图6-19 所示，这些组按照时钟周期递增从左
+到右进行排序，即T1<T2<…<Tg，连接方向便是从右到左，从速度慢的组连接到速度很的组。 
+6.5.2  双向化及加深网络 
+1．双向RNN 
+双向RNN
+②（Bidirectional RNN）假设当前（第t 步）的输出不仅与前面的序列有关，而且
+与后面的序列有关。原始的双向RNN 是一个相对较简单的RNN，由两个RNN 上下叠加在一
+起组成。输出由这两个RNN 的隐藏层的状态决定，如图6-20 所示。 
+①
+本小节参参Jan Koutník、Klaus Greff、Faustino Gomez、Jurgen Schmidhuber 的论文《A Clockwork RNN》：https://
+arxiv.org/pdf/1402.3511.pdf。 
+② Mike Schuster 和Kuldip K. Paliwal 的论文《Bidirectional Recurrent Neural Networks》。 
+
+130 ff 第一篇 基础篇 
+图6-20 
+目前的双向RNN 有所发展，例如，将双向的思想和LSTM、GRU 结合，变成双向LSTM、
+双向GRU 等。 
+2．深度双向RNN 
+“双向”与“深度”结合，就产生了深度双向RNN（Deep Bidirectional RNN），深度双向RNN
+与双向RNN 类似，但在隐藏层叠加了多层，使每一步的输入有多层网络，有更强大的表达与
+学习能力，但需要更多的训练数据。图 6-21 左侧表示了一个多个隐藏层的 RNN，右侧表示深
+度双向LSTM（DBLSTM）。 
+图6-21
+① 
+①
+图出自Alex Graves, Navdeep Jaitly and Abdel-rahman Mohamed 的论文《HYBRID SPEECH RECOGNITION WITH 
+DEEP BIDIRECTIONAL LSTM》：https://www.cs.toronto.edu/～graves/asru_2013.pdf
+
+第6 章 神经网络的发展及其TensorFlow 实现 ee 131 
+本节大致介绍了RNN 的发展脉络。除此之外，RNN 在训练的过程的学习算法也逐渐丰富，
+如BPTT（Back Propagation Through Time）、RTRL（Real-time Recurrent Learning）、EKF（Extended 
+Kalman Filter）等，读者可以自行查阅相关资料进行学习。 
+6.6  TensorFlow Model Zoo 
+TensorFlow 的模型都位于https://github.com/tensorflow/models。正如5.2 节中介绍的，这个
+目录中有很多图像和语音处理的模型，可以直接拿来用。这些模型的检查点文件（参参 4.8.1
+节ckpt 模型文件的保存）有的被打成压缩包，可以直接下载，当作预训练模型使用，如表6-1
+所示。
+表6-1 
+模型
+检查点
+Inception V1 
+inception_v1_2016_08_28.tar.gz 
+Inception V2 
+inception_v2_2016_08_28.tar.gz 
+Inception V3 
+inception_v3_2016_08_28.tar.gz 
+Inception V4 
+inception_v4_2016_09_09.tar.gz 
+Inception-ResNet-v2
+inception_resnet_v2.tar.gz
+ResNet 50 
+resnet_v1_50.tar.gz 
+ResNet 101 
+resnet_v1_101.tar.gz 
+ResNet 152 
+resnet_v1_152.tar.gz 
+VGG16
+vgg_16.tar.gz
+VGG19
+vgg_19.tar.gz
+此外，我们知道，Caffe 因为开源时间比较久，有很多训练好的模型，读者可以利用它作为
+自己训练项目的预训练模型，大大地减少训练时间和迭代次数。Caffe 的模型位于Caffe Model 
+Zoo 中，我们可以用工具
+①将Caffe 的模型转换为TensorFlow 的模型。 
+6.7  其他研究进展 
+了解了CNN 和RNN 的发展，现在再来看看深度学习还有什么令人激动的研究进展。目前
+TensorFlow 的拥趸巨多，这些新的进展一旦出现，在开源社区如GitHub 上就会立刻有人将其实
+现，并且很多也会慢慢合并到Keras 等第三方框架中，让开发人员运用新的算法更加得心应手。 
+①
+https://github.com/ethereon/caffe-tensorflow
+
+132 ff 第一篇 基础篇 
+6.7.1  强化学习 
+强化学习（reinforcement learning）是机器学习大家族中的一个分支，并且随着和深度神经
+网络相结合，体现出更强大的特性，并且在AlphaGo 的改良策略网络（policy network）中，也
+用到了强化学习的方法。
+强化学习介于有监督学习和无监督学习之间。在强化学习中，只有很少的标记（奖励），
+这些标记还有延迟。模型通过这些奖励，不断学习在环境中的行为。
+强化学习主要用在游戏、下棋、博弈这类有得分并且有很多步操作的活动中，主要是用来
+做连续决策。强化学习大家族中有很多方法，如Q-learning、Sarsa、Policy Gradient、Actor Critic
+等，一般包括算法更新和思维决策两个部分。如果与神经网络相结合，可以采用深度Q 网络
+（Deep Q Network，DQN）。目前也有很多使用Keras 的开源实现，读者可以自行查找。 
+6.7.2  深度森林 
+我们知道，使用深度神经网络训练模型时，首先需要大量的训练数据，尤其是很多标记数
+据，并且依赖强大的计算设施和一参数的调节。周志华教授在其论文《Deep Forest：Towards An 
+Alternative to Deep Neural Networks》
+①中提出了一种基于树的新方法—多粒度级联森林
+（multi-grained cascade forest，gcForest）。gcForest 在只有少量数据的情况下也可以训练，并且一
+参数比深度神经网络少得多，对一参数设定来说性能健壮性也很高，所以使用gcForest 训练起
+来很容易。此外，对于不同规模或者不同数据，也能使用默认设定取得很好的结果。
+这为我们使用深度神经网络之外的方法打开了一扇门。未来的深度学习中也许会出现更多
+神经网络方向外的思路。
+6.7.3  深度学习与艺术 
+在绘画领域，有一个非常著名的“艺术风格的神经网络算法”（A Neural Algorithm of Artistic 
+Style）
+②。这个算法主要是进行绘画风格的迁移。例如，把梵高、毕加索的绘画风格应用在选
+定的照片上。也就是说，它可以把一幅图片的风格和内容分开，从而把A 图片的风格和B 图片
+的内容组合起来，生成一幅风格化的内容图片。在美图秀秀、魔漫相机、脸萌等软件上，也有
+类似的玩法。这个算法也已经有了采用TensorFlow 的开源实现
+③。读者可以自己尝试，探究参
+数并了解原理。
+①
+https://arxiv.org/abs/1702.08835
+② Leon A. Gatys, Alexander S. Ecker,Matthias Bethge 的论文：https://arxiv.org/pdf/1508.06576v2.pdf
+③ https://github.com/anishathalye/neural-style
+
+第6 章 神经网络的发展及其TensorFlow 实现 ee 133 
+在音乐领域，也可以利用深度学习来进行创作。例如，用大量的MIDI 音频旋律作为训练
+数据，采用RNN 来生成一段旋律，有了这段旋律，就可以作为后续创作的种子和灵感，如果
+输入大量的巴赫、贝多芬、肖邦的乐曲，还可以模仿他们的作曲风格做出旋律。用音乐作曲已
+经有了TensorFlow 的开源实现
+①。 
+扩展到其他艺术领域，我们知道，一个创作者的天赋或者勤奋的大量积累是创作的灵感来
+源，甚至有时候需要从生活中的其他事物中寻找灵感。记得大张伟曾经说过他的创作过程就是
+去听几个GB 的歌去找灵感，每月要去听几千首的歌。深度学习可以帮你创作一些旋律小样，
+希望可以作为灵感的种子。
+ 6.8  小结 
+本章主要介绍了卷积神经网络和循环神经网络的发展过程，描述了发展的脉络和方向，对
+后来研究中设计模型结构很有启发意义。此外，本章还介绍了深度学习研究中的其他进展，如
+强化学习、深度森林、深度学习在音乐和绘画上的进展，都是目前很火的研发方向。本书还举
+例了TensorFlow 对AlexNet 的实现，以及TensorFlow 目前完善的预训练模型社区TensorFlow 
+Model Zoo，读者熟练后，可以找到跟自己业务模型相近的预训练模型进行训练。除此之外，迁
+移学习、One Shot 学习、目标检测、视觉跟踪、机器人技术目标分割等也是研究的热点，读者
+可以选择自己钻研的行业潜心研究。
+①
+https://github.com/tensorflow/magenta

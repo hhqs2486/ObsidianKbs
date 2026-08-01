@@ -1,0 +1,925 @@
+探索编译器
+Python 是一一款使用广泛而且成熟的语言，因此人们有很大的动力去改进它的性能，办法是直
+接将函数和方法编译成机器码，而不是在解释器中执行指令。第4 章介绍了一个这样的例子，它
+通过声明类型、编译成高效的C 代码井避免解释器调用来改善Pytho n 代码。
+本章将探索两个项目一一－Numba 和PyPy ，它们以与Cython 稍有不同的方式进行编译。Numba
+是一个库，设计用于动态地编译小型函数。它不是将Python 代码转换为C 代码，而是对Python
+函数进行分析并将其直接编译成机器码。
+PyPy 是一款解释器，它在运行阶段对代码进行分析，
+并自动对速度缓慢的循环进行优化。
+这些工具都被称为即时
+（ju s t-in-t i m e,
+JIT ）编译器，因为编译是在运行阶段而不是运行代码
+前进行的
+［在运行代码前进行编译的编译器称为预先（ahead-of-time, AOT ）编译器］。
+本章介绍如下主题：
+口N umba 基础；
+口使用原生模式编译实现快速函数；
+口理解并实现通用函数；
+口JIT 类；
+口安装PyPy;
+口使用PyPy 运行粒子模拟器；
+口其他有趣的编译器。
+5.1 
+Numba 
+Numb a 是2012 年面世的，出自N umPy 最初的开发者Trav is Olipha nt 之手。这是一个库，它
+在运行阶段使用低级虚拟机
+（
+l ow-l eve l virtual machine, LLVM ）工具链对Python 函数进行编译。
+LLVM 是一组设计用于编写编译器的工具，它并非针对特定语言的，因此被用来为众多的语言
+编写编译器（一个著名的例子是
+c l ang 编译器）。
+LLVM 的一个核心方面是中间表示（intermediate 
+
+5.1 
+Numba 
+83 
+representation ，即LLYMIR ），这是一种独立于平台的低级语言（类似于汇编语言），可通过对其
+进行编译来生成在特定平台上运行的机器码。
+Numba 检查Python 函数，并使用LLVM 将其编译为IR。正如你在前一章看到的，通过给变
+量和函数参数声明类型，可提升速度。Numba 实现了巧妙的类型猜测算法（这被称为类型推断），
+并通过编译包含类型信息的函数版本来提高执行速度。
+请注意，开发
+Numba 旨在改善执行数值计算的代码的性能，因此其重点是优化大量使用
+NumP y 数组的应用程序。
+。
+Numba 的发展速度非常快，每次推出新版本都可能有重大改进，有时还可能不
+向后兼容。要与时俱进，请务必参阅每版的发行说明。在本章余下的篇幅中，我
+们将使用Numba 0.30.1 版。为避免出现错误，请务必安装正确的版本。
+本章的完整代码示例可在notebook Numba.ipynb 中找到。
+5.1.1 
+Numba 入门
+N umba 很容易上手。作为第一个示例，我们将实现一个函数，它计算一个数组中所有元素的
+平方和。这个函数的定义如下：
+def sum_sq( a) : 
+result = O 
+N = len (a ) 
+for i in range (N) : 
+result += a [ i] 
+return result 
+要让Numba 对这个函数进行编译，只需将装饰器nb
+. j it 应用于它。
+from numba
+工mport nb 
+@nb . jit 
+def sum_sq(a) : 
+装饰器口b . j it 所做的工作不多，但这个函数首次被调用时，
+Numba 将检测输入参数（a)
+的类型，并编译出一个性能更高的特殊版本。
+要测量Numba 编译器带来的性能提升，可对原始函数和特殊函数的执行时间进行比较。要
+访问未经装饰的原始函数，可使用属性py_func 。这两个函数的执行时间如下：
+import numpy as np 
+x ＝口p
+. random
+. rand(10000)
+四
+
+84 
+第5 章探索编译器
+＃原始函数
+毡timeit sum_sq . py_func(x) 
+100 loops, best of 3 : 6.11 ms per loop 
+# Numba 版函数
+毛t 工me 工t sum_sq(x) 
+100000 loops, best of 3 : 
+11
+. 7
+口s per loop 
+从上面的输出可知，
+Numba 版的速度比Python 版快一个数量级（前者的执行时间为
+l 1.7 微
+秒，而后者的执行时间为6. 1 l 毫秒）。我们还可将这种实现与NumPy 标准运算符进行比较。
+宅t ime 工t
+(x**2) . sum() 
+10000 loops, best of 3 
+14 . 8 µs per loop 
+就这个示例而言，Numba 编译得到的函数的速度比NumPy 向量化运算稍快些。Numba 版本
+的速度之所以更高，很可能是因为NumPy 版本在求和前额外分配了数组，而函数sum_sq 在数
+组中就地执行运算。
+由于函数sum_sq 没有使用数组特有的方法，因此也可将这个函数用于包含浮点数的Python
+列表。有趣的是，相比于列表推导，
+Numb a 的速度要快得多。
+x_list = x . tolist() 
+%time 工t sum_ sq(x_list) 
+1000 loops , best of 3 : 199 µs per loop 
+革t 工meit sum( [x**2 for x in x_li st]) 
+1000 loops , best of 3 : 1 . 28 ms per loop 
+鉴于只需应用一个简单的装饰器，就可在计算不同数据类型的平方和时极大地提高速度，因
+此Numba 的所作所为就像是在变魔术。在接下来的两小节中，我们将深入探讨Numba 的工作原
+理，并对Numba 编译器的优点和局限性进行评估。
+5.1.2 
+类型特殊化
+正如你在前面看到的，装饰器由. j it 在遇到新参数类型后编译函数的特殊版本。为了更好
+地理解其中的工作原理，可查看sum_sq 示例中经过装饰的函数。
+Numba 通过属性signatures 暴露了特殊版本。在函数sum_sq 的定义后面，我们可通过
+访问sum_sq.s 工g口atures 来查看现有的特殊版本，如下所示。
+sum_ sq
+. s 工gnatures
+＃
+输出：
+#[] 
+如果我们使用特定的参数（如一个float64 数组）调用这个函数，将发现Numba 动态地编
+译了一个特殊版本。如果再使用一个
+fl oat32 数组调用这个函数，将发现列表
+sum_sq.
+
+signat ur e s 新增了一个元素。
+x = np . randorn.rand(lOOO) . astype
+（
+’ float64
+『
+）
+surn_sq(x) 
+surn_sq.s i gnatures 
+＃结果：
+# [(array(float64 , ld , C) , )J 
+x = np . randorn . rand(lOOO) astype( ' float32 ' ) 
+surn_ sq( x ) 
+su rn_sq
+. s 工g natures
+＃结果。
+# [(array(float64 , l d, C),), (array(float32, ld, C),) ] 
+5.1 Numba 
+85 
+可显式地针对特定类型来编译这个函数，为此可向函数由. jit 传递一个签名。
+要传递签名，可使用一个元组，其中包含可接受的类型。Numba 提供了大量的类型，这些类
+型可在模块nb
+. types 和顶级命名空间由中找到。如果要指定特定类型的数组，可将切片运算
+符（
+［：］）用于相应的类型。下面的示例演示了如何声明一个将
+float64 数组作为唯一参数的
+函数。
+@nb . j it ( ( nb . float 6 4 [ : J , ) ) 
+def surn_ sq(a ): 
+请注意，显式地声明签名后，就不能使用其他类型了，如下面的示例所示。如果我们试图传
+递一个float32 数组（x ), Numba 将引发TypeErr or 异常。
+S山n_ sq (x . as type ( ' float32 ' )) 
+# TypeError: No matching defin 工t 工on for argurne口t type(s) 
+array(float32 , ld , C) 
+另一种声明签名的方式是使用指定类型的字符串。例如，要声明一个函数，它将一个float64
+值作为输入，并输出一个float64 值，可使用字符串float64 ( float64 ）。要声明数组类型，
+可使用后缀［
+：］。结合使用这两项规则，可像下面这样声明我们的函数sum_ s q :
+@nb . ] it ( "float64 ( float64 [ : J )” ) 
+def s urn_s q( a ): 
+还可传人多个签名，为此可传入一个列表：
+@nb.jit([ "float64(float64[ ]) ”, 
+” float64 ( float32 [ J ) ”]) 
+def surn_ sq(a) : 
+5.1.3 
+对象模式和原生模式
+前面演示了Numba 在处理非常简单的函数时的行为。在这种情况下，
+Numb a 的表现非常出
+色，无论处理的是数组还是列表，性能都得到了极大的提高。
+’ 
+
+86 
+第5 章探索编译器
+Numba 能够在多大程度上进行优化取决于两个因素：能否准确地推断变量的类型；能否将标
+准Python 操作转换为速度更快的、针对特定类型的版本。如果Numb a 能够做到这两点，就能将
+解释器撇在一边，进而获得类似于使用Cython 的性能提升。
+如果Numba 无法推导出变量的类型，它依然会对代码进行编译，但在类型无法确定或操作
+没有得到支持时转而求助于解释器。在Numba 中，这被称为对象模式
+（object mode ），与之相对
+的是原生模式（不需要求助于解释器）。
+N umb a 提供了一个名为inspect_types 的函数，可帮助你了解类型推断的效果有多好，以
+及哪些操作被优化了。例如，我们可查看Numba 为函数sum
+sq 所做的类型推断：
+surn_sq
+. 工口spect_types ( ) 
+当你调用这个函数时，Numba 将打印为这个函数的每个版本推断出的类型。输出包含多个部
+分，其中列出了有关变量及其类型的信息。例如，请看其中的N
+= len(a ）行。
+# 
+LINE 4 ---
+# 
+a= arg(O, narne=a) 
+: array(float64, ld , A) 
+# 
+$0 . 1 = global(len : <built in functio口
+len>)
+Function(<bu 工lt-in function len>) 
+# 
+$0 . 3 =call $0 . l(a) 
+:: (array(float64, ld , 
+A ）
+，）－＞工nt64
+# 
+N = $0 . 3 
+:: int64 
+N = len(a) 
+对于每一行，
+Numba 都打印有关变量、函数和中间结果的详细描述。在上述输出的第2 行，
+正确地指出了参数a 的类型是一个float64 数组；而在第4 行，也正确地指出了函数l凹的输
+入和返回类型，它们分别是float64 数组和工时64 （可能经过了优化）。
+如果你在输出中滚动，将发现所有变量都有明确的类型。由此可以肯定，Numba 能够极其高
+效地编译这些代码。这种编译被称为原生模式。
+作为反例，我们来编写一个使用了不支持的操作的函数，看看结果如何。例如，在0.30.1 版
+中，
+Numba 对字符串操作的支持有限。
+我们可实现一个拼接一系列字符串的函数，并对其进行编译，如下所示。
+@nb.jit 
+def co口catenate(s trings)
+:
+result = '’ 
+for s
+工n
+s t ri口gs
+result += s 
+return result 
+接下来，我们使用一个字符串列表调用这个函数，并查看类型推导情况。
+
+5. 1 
+N umba 
+87 
+] 
+], 
+’
+) 
+dr 
+l
+t
+、
+l
+r
+s
+f
+飞
+O
+F
+飞
+S
+W
+←
+」
+e
+.
+sp 
+sly 
+’elt 
+’
+r
+- 
+oudt 
+ltec 
+、
+l
+a
+t
+e
+e
+口
+c
+p
+hges 
+－
+－
+1
+口
+rLSFI
+-- 
+(
+-e
+- 
+eere 
+←
+」
+←
+L
+r
+飞
+←
+I
+》
+aapia 
+n
+口
+n
+eee 
+←
+」
+←
+L
+．
+＋
+L
+a
+a
+中
+山
+a
+cere 
+R
+n
+甜
+咽
+口
+OOO 
+CC
+#
+C 
+Numba 的输出表明，生成的特殊版本的签名为reflected l 工st(str ）。我们可查看Numba
+是如何对第3 行代码进行推导的。下面是concatenate
+. inspect_types （）的输出。
+# 
+LINE 3 ---
+# 
+strings = arg(O , name=strings) 
+: : pyobject 
+＃丰const0.1 = const(str, ) 
+: : pyobject 
+# 
+古巴sult = $const0.1 
+: : pyobject 
+# 
+jump 6 
+# 
+label 6 
+result = ” 
+从中可知，这次每个变量（函数参数）的类型都是通用类型pyobject ，而不是特定的类型。
+这意味着如果不求助于Python 解释器，Numb a 将元法对这个操作进行编译。最重要的是，如果
+我们对原始函数和编译版的执行时间进行测量，将发现编译版的速度比纯粹的
+Python 版大约要
+慢3 倍。
+x = [’ hello 『
+l
+* 1000 
+宅t 工meit concatenate . py_func(x) 
+10000 loops , best of 3: 111 µs per loop 
+宅timeit concatenate(x) 
+1000 loops , best of 3 : 317 µs per loop 
+这是因为Numba 编译器不仅无法对代码进行优化，还给函数调用增加了额外的开销。
+你可能注意到了，Numb a 无声无息地编译代码，即使编译得到的代码的效率更低。其中的主
+要原因是Numba 能够高效地编译部分代码，而对于余下的代码，它可求助于Python 解释器。这
+种编译策略被称为对象模式。
+可强制使用原生模式，为此可给装饰器nb . j 工t 传递选项nopython=True。例如，如果我们
+在将这个装饰器应用于函数co口catenate 时这样做，首次调用这个函数时Numb a 将引发异常。
+@nb.jit(nopychon=True) 
+def concatenate(str 工ngs)
+:
+result = ' ' 
+for s
+工n
+str 工ngs
+result += s 
+retur口
+result
+concatenate(x) 
+＃异常
+# TypingError : Failed at
+口opytho口（nopython frontend) 
+对调试来说，这项功能很有用，它还可确保所有代码的速度都很快且指定了正确的类型。
+
+仅供非商业用途或交流学习使用
+88 
+第5 幸探索编译器
+5.1.4 
+Numba 和「、JumPy
+最初开发Numba 旨在提升使用NumPy 数组的代码的性能，当前，这个编译器高效地实现了
+NumPy 的很多功能。
+1. Numba 通用函数
+通用函数（universal function, ufunc ）是NumPy 中定义的特殊函数，可根据广播规则操作不
+同长度和形状的数组。Numba 最大的优点之一是实现了快速的ufunc 。
+你在第3 章见过一些ufunc ，例如，叩. log 就是一个ufunc ，因为它能够将标量以及长度和
+形状不同的数组作为输入。另外，接受多个参数的通用函数也根据广播规则进行工作，这样的通
+用函数包括叩. sum 和np.difference 。
+在NumPy 中，可这样定义通用函数：实现其标量版，并使用函数口p.vector 工ze 添加广播
+功能。例如，下面将演示如何编写康托尔配对函数
+（Cantor pairing function ）。
+配对函数将两个自然数编码成一个自然数，让你能够在这两种表示法之间轻松地转换。可以
+像下面这样编写康托尔配对函数：
+import numpy as np 
+def cantor(a , b) : 
+return int(O 5 * (a+ b) *( a + b + 1) + b) 
+前面说过，使用纯粹的Python 时，可使用装饰器ηp.vectorized 来创建通用函数。
+hu 
++ 
+寸
+4
++ 
+b 
++ 
+a 
+p* 
+) 
+b 
++ 
+a 
+* 
+EJ 
+nu 
+bt 
+n 
+e
+’
+’
+工
+za 
+－
+－
+、
+rrn 
+oor 
+←
+」
+←
+」
+u
+cnt 
+eae 
+vcr 
+p
+‘
+俨
+L
+口
+e
+白
+、
+『
+d
+cantor （口p
+. array([l, 2]) , 2) 
+＃结果：
+# array ( [ 8, 12] ) 
+如果不考虑便利性，使用纯粹的
+Python 来定义通用函数不是很有用，因为这涉及大量存在
+解释器开销的函数调用。有鉴于此，
+ufunc 通常是使用C 或Cython 实现的，但这些做法都不如
+Numba ，因为它提供了极大的便利性。
+在Numba 中，要完成定义通用函数所需的转换，只需使用与口p
+. vectorized 等价的装饰
+器由. vec torize 。我们可以比较标准np.vectorized 版（cantor_py ）的速度和使用标准
+NumPy 操作实现的版本的速度，如下面的代码所示。
+＃
+纯粹的Py tho口版本
+在timeit cantor_py(xl , x2) 
+100 loops , best of 3: 6. 06 ms per loop 
+# Numba 
+
+仅供非商业用途或交流学习侦用
+毡t 工me 工t
+ca口tor(xl,
+x2) 
+100000 loops, best of 3 : 15 µs per loop 
+# NumPy 
+毡t imeit (0.5 * (xl + x2)*(xl + x2 + 1) + x2) .astype(int) 
+10000 loops , best of 3 : 57 1 µs per loop 
+5.1 
+Numba 
+89 
+从中可知，
+Numba 遥遥领先于其他所有版本！
+Numba 之所以表现如此出色，是因为这个函
+数很简单，能够进行类型推导。
+。
+通用函数的另一个优点是，可并行地执行，因为它们依赖于各个值。
+Numba 提
+供了对这种函数进行并行化的简单方式：向装饰器nb.vector 工ze 传递关键字
+参数target ＝” cpu ”或target ="gpu ” 。
+2 . 泛化通用函数
+通用函数的一个局限性是其定义必须针对标量值。泛化通用函数（generalized universal 
+function, gufunc ）是对接受数组的过程的通用函数扩展。
+一个典型的示例是矩阵乘法。在NumPy 中，要执行矩阵乘法运算，可使用函数np . matmul ,
+它接受两个二维数组并返回一个二维数组。下面是一个使用np . matmul 的示例。
+a = np random . rand(3 , 3) 
+b = np . random.rand(3 , 3) 
+c = np .matmul(a , b) 
+c.shape 
+＃
+结采，
+lt 
+( 3 ' 
+3 ) 
+前一小节说过，
+ufunc 将操作广播到整个标量数组，因此一种自然而然的泛化是广播到数组
+的数组。例如，有两个由3 × 3 矩阵组成的数组，我们希望np . matmul 能够计算它们的乘积。在
+下面的示例中，有两个数组，它们分别包含
+10 个形状为
+（3
+'
+3 ）的矩阵。如果将它们传递给
+叩.matmul ，将计算相应矩阵的乘积，得到一个新数组，其中包含
+10 个结果（而每个结果也都
+是形状为（3'
+3 ）的矩阵）。
+a= np random. rand(lO , 3 , 3) 
+b = np random . rand(lO , 3 , 3) 
+c = np .matmul(a , b) 
+c . shape 
+＃输出
+# (10 , 3 , 3) 
+广播规则的工作原理与此类似。例如，如果有一个由口，
+3 ）矩阵组成的数组（其形状为（10 ' 
+3 ' 
+3) ），可使用np . matmul 来对其中的每个元素与一个（3 ' 
+3 ）的矩阵执行矩阵乘法运算。根
+据广播规则，将通过重复这个（3 '
+3 ）矩阵，得到一个形状为
+（10' 3 ' 
+3 ）的矩阵：
+a = np . random . rand(lO, 3, 3) 
+b = np . random . rand(3 , 3) # Broadcasted to shape (10 , 3 , 3) 
+c = np . matmul (a , b) 
+
+仅供非商业用途或交流学习使用
+90 
+第5 幸探索编译器
+c shape 
+＃
+结果
+# (10 , 3 , 3 ) 
+Numba 提供了装饰器由. guvecto rize ，以支持高效的泛化通用函数实现。例如，我们将
+实现一个泛化通用函数，它计算两个数组的欧几里得距离。要创建gufunc ，必须定义一个这样的
+函数：它将数组作为输入，并返回一个包含计算结果的数组。
+装饰器口b
+. guvec t o riz e 接受两个参数。
+口输入和输出的类型：两个作为输入的一维数组和一个作为输出的标量。
+口表示输入和输出长度的布局字符串；在这里，输入是两个长度相同的数组（用两个口表
+示），输出是一个标量。
+下面的示例演示了如何使用装饰器出. guvectori z e 来实现函数eucl idean
+@nb . guvectorize ([ ’ float64 [ l , float64 [ : ] , float64 [ : ] ＇
+］，『
+（n)
+,
+(n) 
+>() ’ )
+def euclidean(a , b , out) 
+N = a . shape[O] 
+out[O] = 0 . 0 
+for i in ra口ge(N)
+:
+out [0] += (a ［工l
+- b[i]) ** 2 
+这里有几个非常重要的地方需要说一说。我们将输入（a 和b ）的类型声明为float64 [: J, 
+因为它们是一维数组。但输出参数呢？前面不是说它是一个标量吗？没错，是标量，但Numba
+将标量视为长度为1 的数组，因此这里将它声明为fl oat64
+［
+：
+）。
+同样，布局字符串指出函数接受两个长度为n 的数组，而其输出是一个标量，用一对空的括
+号（（））表示。然而，传递的输出将是一个长度为
+l 的数组。
+另外请注意，这个函数什么都不返回，因此所有输出都必须写入到数组out 中。
+@ 
+前这布局字符串中的字母且是随意选择的，你也可使用字母k 或你喜欢的其他
+字母。另外，如果要组合长度不同的数组，
+可使用诸如（口，
+m ）这样的字符串。
+这个全新的函数euclide an 可用于不同形状的数组，如下面的示例所示。
+a = np random . rand(2) 
+b = np . random . rand (2 ) 
+c = euclidean(a , b) 
+＃
+形4犬：
+（1 , ) 
+a = np random . rand (lO, 2) 
+b = np . random. rand(lO, 2 ) 
+c = euclidean (a , b) 
+＃
+开lj~夫：（10 ') 
+a = np . random . rand(lO , 2) 
+b = np . random . rand(2) 
+c = euclidean(a , b) 
+＃
+开lj ~犬
+(10
+'
+)
+
+仅供二11：商业用途或交流学习侦m
+与标准NumP
+NL』I丁lPy 版本和刚定义的函数euclidean 进行了基准测试。
+a = np . random . rand(lOOOO , 2) 
+b = np random . rand(lOOOO , 2) 
+屯t 工meit
+((a - b)**2) . sum(axis=l) 
+1000 loops , best of 3 : 288 µs per loop 
+革t imeit euclidean(a, b) 
+10000 loops, best o f 3 : 35 . 6 µs per loop 
+同样，
+N umba 版本遥遥领先于NumPy 版本！
+5.1.5 
+JIT 类
+5.1 
+Numba 
+91 
+当前，
+Numba 不支持对泛型Python 对象进行优化。然而，这种局限性对数值计算代码的影
+响不大，因为这种代码通常只涉及数组和数学运算。
+尽管如此，对有些数据结构来说，使用对象实现起来要自然得多，因此Numba 支持定义类，
+而这些类可编译成快速的原生代码。
+别机这是一种最新推叫能但很有用，因为它允许我们扩展川以支持使用回
+数组不容易实现的数据结构。
+作为例子，我们将演示如何使用JIT 类来实现简单的链表。要实现链表，可定义一个Node
+类，这个类包含两个字段：一个值以及一个到下一个节点的链接。如下图所示，每个节点都链接
+到下一个节点并包含一个值，而最后一个节点包含一个断开的链接，我们将这个链接的值设置为
+None 。
+在Python 中，我们可以这样定义Node 类：
+class Node : 
+def _ init一＿
+（self,
+value) : 
+self.next =None 
+self.value = value 
+None 
+为管理一系列Node 实例，可创建另一个类一一L工时＜edList 。这个类跟踪链表的开头（在
+上图中，这对应于值为3 的节点）。要在链表开头插入一个节点，只需新建一个Node 实例，并
+仅供非商业用途成交流于习攸用
+
+仅供非商业用途或交流学习使用
+92 
+第5 章探索编译器
+将其链接到当前的链表头。
+在下面的代码中，我们为
+LinkedLi st 定义了初始化函数和方法
+push_back ，其中方法
+pu s h_bac k 使用前面所说的策略在链表开头插入一个节点。
+clas s 
+LinkedL 工st
+:
+def －－工nit一一（self)
+:
+self .head= No口巴
+def push_ front(self , value) : 
+if sel f. he ad == No口e
+:
+self .head= Node(value) 
+else : 
+＃
+替换链表头
+口ew head = Node (value) 
+new head next = self . head 
+self .head = new h ead 
+为方便调试，我们还可实现方法Li口kedList
+. show ，它遍历并打印链表中的每个节点。这
+个方法的代码如下所示：
+def s how(self) : 
+node = self head 
+wh ile node is not None : 
+pri nt(node . value) 
+node = node . next 
+现在可对L工出edList 进行测试，看看它的行为是否正确。为此，可创建一个空链表，添
+加几个节点，并打印链表的内容。请注意，由于我们在链表开头压人节点，因此最后插入的节点
+将最先打印。
+1st = L i nkedL 工st () 
+lst .push_ f r on t (l ) 
+1st .push front(2) 
+1st .push front(3) 
+1st . show() 
+＃
+输出
+# 3 
+# 2 
+# 1 
+最后，我们可实现一个函数一－sum_list ，它返回链表中所有节点值之和。我们将测量这
+个方法的Numba 版本和纯粹的Python 版本在执行时间上的差别。
+自口b . 〕工t
+def sum_list (1st) : 
+r esult = 0 
+node= 1st .head 
+while node is not No口e
+:
+r esult += node value 
+仅供非商业用途或交流学习使用
+
+node = node.next 
+return result 
+仅供非商业用途或交流学习使用
+5.1 
+Numba 
+93 
+如果测量原始版sum_list 和由. j it 版的执行时间，将发现没有多大的差别。这是因为
+Numba 无法推断类的类型。
+1st= LinkedList() 
+[1st .push front （工）
+for i
+工n range(lOOOO)] 
+毛timeit sum_list .py_func (1st) 
+1000 loops, best of 3: 2 . 36 ms per loop 
+在timeit
+sum_list (1st) 
+100 loops, best of 3 : 1 75 ms per loop 
+为改进sum
+list 的性能，可使用装饰器出. jitclass 来编译Node 和L 工出edList 类。
+装饰器由. jitclass 接受一个参数，其中包含被装饰类的属性的类型。在Node 类中，属
+性value 的类型为川t 64 ，而属性口ext 的类型为Node 。装饰器由. jitclass 还会编译类的
+所有方法。深入探讨代码前，还有两点需要说明。
+首先，必须先声明属性，再定义类，但如何声明还未定义的类型呢？Numba 提供了函数
+nb . deferred_ type （），可用来完成这项任务。
+其次，属性nex t 可以是No口e ，也可以是一个Node 实例。这被称为可选类型，而Numba
+提供了实用工具由. optional ，让你得以指出变量的取值可能为No口e 。
+下面的代码示例演示了如何将装饰器应用于Node 类。如你所见，预先使用nb . deferred_
+type （）声明了node_type 。属性是在一个列表中声明的，该列表中的每个元素都包含属性名和
+类型（另外请注意，其中还使用了
+nb . optional
+）。声明
+Node 类后，必须声明延迟的类型
+( deferred type ）。
+node_ type = nb . deferred_type() 
+node_spec = [ 
+( ’ next ' , nb . optional (node_ type) ) , 
+( ’ value ’
+，
+口b int64) 
+@nb . j 工tclass(node spec) 
+class Node : 
+# Node 类的类休j呈交
+node_type .def l口e (Node class_ type . instance_type) 
+LinkedList 类很容易编译，只需定义属性head ，并应用装饰器由. jitclass 即可，如
+下所示。
+ll_ spec = [ 
+（『head ’, nb.optional(Node . class_ type.instance type)) 
+仅供非商业用途或交流学习使用
+锢
+
+94 
+第5 章探索编译器
+@nb . j 工tclass(ll_ spec)
+class L 工nkedList
+:
+# LinkedList 类的类体i呈交
+仅供非商业用途或交流学习使用
+现在可以测量传入JIT 类LinkedList 的实例时，雨数sum
+list 的执行时间了。
+1st = LinkedList() 
+[1st . push front(i) for i 
+工口
+ra口ge(l0000)]
+毡t imeit sum list(lst) 
+1000 loops, best of 3 : 345 µs per loop 
+革t 工meit sum_list .py_func (1st) 
+100 loops, best of 3 : 3 . 36 ms per l oop 
+有趣的是，在编译型函数中使用J IT 类时，性能相比于纯粹的Pyth o n 版本有极大的提升。然
+而，在原始函数sum_list . py_ func ~！::r使用贝T 类时，性能反而降低了。因此，请务必只在编
+译型函数中使用JIT 类！
+5.1.6 
+Numba 的局限性
+在有些情况下，N umba 无法正确地推断出变量的类型，进而拒绝编译。在下面的示例中，我
+们定义了一个函数，它接受一个嵌套的整数列表，并返回每个子列表中所有元素之和。在这个示
+例中，
+Numb a 将引发ValueError 异常，并拒绝编译。
+a= [[0, 1, 2], 
+[3 ' 4]' 
+[ 5 ' 
+6 ' 7 ' 8]] 
+@nb 
+j 工t
+def sum_sublists (a): 
+result = [] 
+for sublist in a: 
+result append(sum(sublis t )) 
+return result 
+sum sublists(a) 
+# ValueError : cannot compute fingerprint of empty l 工st
+这些代码存在的问题是，Numba 无法确定列表r esult 的类型，因此以失败告终。要修复这
+种问题，一种办法是将列表result 初始化为包含一个元素，以帮助编译器确定该列表的类型，
+并在最后将这个元素删除。
+@nb . jit 
+def sum_sublists (a) : 
+result = [OJ 
+for sublist 工口a : 
+result append(sum(subl 工st))
+return result [l : ] 
+仅供非商业用途或交流学习使用
+
+仅供非商业用途或交流学习使用
+5.2 
+PyPy 项目
+95 
+在Numba 编译器中还没有实现的功能包括函数和类定义、列表、集推导和字典推导、生成
+器、
+with 语句以及try
+except 块。但请注意，其中许多功能未来都可能得到支持。
+5.2 
+PyPy 项目
+Py Py 是一个野心勃勃的项目，旨在改善Python 解释器的性能，这是通过在运行阶段自动编
+译速度缓慢的代码实现的。
+Py Py 是使用特殊语言RPython （而不是C 语言）编写的，让开发人员能够快速而可靠地实
+现高级功能和改进。
+RPyth o n 的意思是“受限的
+Python" ( restricted Python ），因为它只实现了
+Python 语言中用于开发编译器的那部分。
+当前，
+PyPy 5.6 版支持大量的Python 功能，完全可用于编写众多不同的应用程序。
+Py Py 采用一种非常巧妙的策略来编译代码，这种策略被称为跟踪式JIT 编译
+（tracing JIT 
+compilation ）。一开始，
+PyPy 像通常那样使用解释器调用来执行代码，然后开始剖析代码，找出
+耗时最多的循环。找出这些循环后，
+PyPy 编译器观察（跟踪）操作，并编译出经过优化且不需
+要解释器的版本。
+有了优化版代码后，
+PyPy 就能够以比解释型版本快得多的速度，运行原本速度缓慢的循环。
+这种策略与Numb a 的做法形成了鲜明的对比。在Numb a 中，编译单元为方法和函数，而PyPy 
+只专注于速度缓慢的循环。总体而言，这两个项目的关注点也有天壤之别：Numba 只能优化执行
+数值计算的代码，且需要做大量的准备工作，而PyPy 致力于取代CPython 解释器。
+接下来将演示如何使用PyPy 来执行粒子模拟器，并进行基准测试。
+5.2.1 
+安装PyPy 
+Py Py 是以预先编译好的二进制文件分发的，这个二进制文件可从
+http: //pypy.org/download.
+html 下载。
+当前，
+PyPy 支持Python 2.7 （在PyPy 5.6 中为beta 支持）和Python 3.3 （在PyPy 5.5 
+中为alph a 支持）。本章将演示如何在Python 2.7 中使用PyPy 。
+下载并解压缩PyPy 后，就可在解压缩到的文件夹中找到这个解释器，它位于该文件夹下的
+目录bin/pypy 中。你可使用下面的命令初始化一个新的虚拟环境，以便在其中安装其他的包。
+$ /path/to/bin/pypy -m ensurepip 
+$ /path/to/bin/pypy -m pip install virtualenv 
+$ 
+/path/t 口／bin/virtualenv my-pypy-env 
+要激活这个环境，可使用如下命令：
+$ source my-pypy-env/bin/activate 
+仅供非商业用途或交流学习使用
+锢
+
+仅供二｜｜二阴业用途或交流学习侦用
+96 
+第5 幸探索编译器
+现在可以核实Python 链接到PyPy 可执行文件了，为此可使用命令python
+- V。你还可以安
+装其他一些可能需要用到的包。
+PyPy 5 . 6 版对使用Python C API 的软件（其中最著名的是numpy
+和matplotlib 包）提供了有限的支持。我们可像通常那样安装这些包：
+(my-pypy-env) $ pip ins tall numpy matplotlib 
+@ 
+在有些平台上，
+numpy 和matplotlib 安装起来可能比较棘手。你可不安装这
+些包，并在后面将运行的脚本中删除导入它们的语句。
+5.2.2 
+在Py Py 中运行粒子模拟器
+安装PyPy 后，就可以运行粒子模拟器了。首先，我们将使用标准Python 解释器来执行第
+l
+章的粒子模拟器，并测量其执行时间。如果虚拟环境还处于活动状态，可使用命令deactivate
+来退出。为核实Python 解释器为标准解释器，可使用命令python
+-V。
+(my-pypy-env) $ deactivate 
+$ python -v 
+Python 3.5.2 :: Continuum Analytics ，工nc.
+现在可在命令行界面中使用time it 来测量代码的执行时间了。
+$ python -m timeit --setup ” from simul import benchmark,, ” benchmark ( )” 
+10 loops, best of 3: 886 msec per loop 
+我们可重新激活虚拟环境，并在P yPy 中运行这些代码。在Ubuntu 中，导人模块ma tplotlib.
+pyplot 时可能会遇到麻烦。为修复此问题，可尝试执行下面的
+export 命令，也可将导人
+matplotlib 的语句从simul
+. py 中删除。
+$ export MPLBACKEND=’ agg ’ 
+现在使用PyPy 来执行这些代码井测量执行时间。
+$ source my-pypy-env/bin/activate 
+Python 2.7.12 (aff251e54385, Nov 09 2016, 18:02:49) 
+[PyPy 5.6.0 with GCC 4.8.2] 
+(my-pypy-env) $ python -m timeit - - setup
+” from simul import benchmark" 
+” benchmark ( )” 
+WARNING: timeit is a very unreliable tool. use perf or something else for 
+real measurements 
+10 loops, average of 7: 106 +-
+0.383 msec per loop (using standard 
+deviation) 
+注意，性能得到了极大的提升，速度快了8 倍多！然而，
+PyPy 警告我们，模块time it 可
+能不可靠。为核实时间测量结果，可像PyPy 建议的那样使用模块perf 。
+(my- pypy-env) $ pip install perf 
+(my-pypy-env) $ python -m perf timeit --setup 'from simul import benchmark ’ 
+仅供非商业用途g)(交流于习攸用
+
+5.4 
+1 J 、结
+97
+’ benchmark () ' 
+Median +- std dev: 97. 8 ms +- 2. 3 ms 
+5.3 
+其他有趣的项目
+多年来，有很多项目试图通过多种不同的策略来改善Pytho n 的性能，但遗憾的是其中很多
+都以失败告终。当前，幸存的项目只有几个，它们有望提高Py thon 的速度。
+Numb a 和PyPy 都是成熟的项目，多年来一直在不断改善。它们不断地增加功能，是Pyth on
+未来的希望所在。
+Nuitka 是Kay Hayen 开发的一个程序，它将Python 代码编译成C 代码。当前（0.5.x 版），它
+与Python 语言的兼容性很高，能够生成高效的代码，这些代码在性能上的提升比CPyth o n 还高些。
+相比于Cyth on ,
+N uitka 有天壤之别，因为它专注于与Python 语言兼容，没有通过添加额外
+的结构来扩展Python 。
+Pys ton 是Dropb ox 开发的一款新解释器，用于支持JIT 编译器。它与PyPy 完全不同：不使
+用跟踪式JIT ，而是使用每次一个方法的JIT （就像Numb a 所做的那样）。与Numba 一样，Numb a
+也建报LLVM 问基阳之上。
+回
+Pysto n 还处于早期开发阶段
+（alph a 阶段），只支持
+Pytho n 2.7 。基准测试表明，其速度比
+CPython 快，但比PyPy 慢。虽然如此，它还是一个值得跟踪的项目，因为它添加了新功能，并
+且提高了兼容性。
+5.4 
+小结
+Numba 是一个在运行阶段编译
+Pyth on 函数的快速专用版本的工具。本章介绍了如何使用
+Numba 来编译函数以及如何查看并分析它们，还介绍了如何实现快速的NumPy 通用函数，这些
+函数在很多数值计算应用程序中都很有用。最后，我们使用装饰器由.jitclass 实现了一些比
+较复杂的数据结构。
+诸如PyPy 等工具让你能够原样运行Pyth on 程序，并极大地提高速度。我们演示了如何安装
+Py Py ，并使用它来运行了粒子模拟器，以看看性能改善情况。
+我们还简要地介绍了当前的Python 编译器生态系统，并对这些编译器做了比较。
+下一章将介绍并发性和异步编程。对于那些花大量时间等待网络和磁盘资源的应用程序，使
+用这些技术可改善其设计和响应速度。
+仅供非商业用途或交流学习使用

@@ -1,0 +1,676 @@
+第   章 
+照片马赛克 
+我在六年级时，看到一张类似图7-1 的图像，但不太明白它
+是什么。眯着眼睛看了一阵后，我终于想通了（把书倒过来，离
+远一点看它。
+照片马赛克是一张图像，它被分割成长方形的网格，每个长
+方形由另一张匹配“目标”的图像（最终希望出现在照片马赛克
+中的图像）替代。换言之，如果从远处看照片马赛克，会看到目
+标图像；但如果走近，会看到该图像实际上包含许多较小的图像。
+这个迷题有解是因为人眼的工作方式。图7-1 中的低分辨率块状图像，靠近了
+很难识别，但如果从远处看，就知道它代表什么，因为看到的细节较少，就使得边
+缘越光滑。照片马赛克的原理是相似的。从远处看，图像看起来正常，但走近时，
+秘密揭开了：每“块”都是一个独特的图像！
+本项目中，我们将学习如何用Python 创建照片马赛克。我们将目标图像划
+分成较小图像的网格，并用适当的图像替换网格中的每一小块，创建原始图像的
+照片马赛克。你可以指定网格的尺寸，并选择输入图像是否可以在马赛克中重复
+使用。
+在这个项目中，你将学习如何做到以下几点：
+•
+用Python 图像库（PIL）创建图像；
+7
+
+90 Python 极客项目编程 
+•
+计算图像的平均RGB 值；
+•
+剪切图像；
+•
+通过粘贴另一张图像来替代原图像的一部分；
+•
+利用平均距离测量来比较RGB 值。
+图7-1  令人费解的图像 
+7.1  工作原理 
+要创建照片马赛克，就从目标图像的块状低分辨率版本开始（因为在高分辨率
+的图像中，小块图像的数量会太大）。该图像的分辨率将决定马赛克的维度M×N
+（M 是行数，N 是列数）。接着，根据这种方法替换原始图像中的每一小块： 
+1．读入一些小块图像，它们将取代原始图像中的小块； 
+2．读入目标图像，将它分割成M×N 的小块网格； 
+3．对于每个小块，从输入的小块图像中找到最佳匹配； 
+4．将选择的输入图像安排在M×N 的网格中，创建最终的照片马赛克。 
+7.1.1  分割目标图像 
+按照图7-2 中的方案，开始将目标图像划分成M×N 的网格。 
+
+第7 章  照片马赛克 91 
+图7-2  分割目标图像 
+图7-2 中的图像展示了如何将原始图像分割成小块的网格。 x 轴表示网格的列，
+y 轴表示网格的行。 
+现在，看看如何计算网格中一个小块的坐标。下标为（i，j）的小块，左上角
+坐标为 (i*w, i*j)，右下角坐标为((i+1)*w, (j+1)*h)，其中w 和h 分别是小块的宽度
+和高度。PIL 可以用这些数据，从原图像创建小块。 
+7.1.2  平均颜色值 
+图像中的每个像素都有颜色，由它的红、绿、蓝值来表示。在这个例子中，使
+用8 位的图像，因此每个部分有8 位值，范围在[0,255]。如果一幅图像共有N 个像
+素，平均RGB 计算如下： 
+1
+2
+1
+2
+1
+2
+, ,
+,
+,
+N
+N
+N
+r
+r
+r
+g
+g
+g
+b
+b
+b
+r g b
+N
+N
+N
++
++
++
++
++
++
++
++
++
+
+
+
+
+
+
+
+
+
+请注意，平均RGB 也是一个三元组，不是标量或一个数字，因为平均值是针
+对每个颜色成分分别计算的。计算平均RGB 是为了匹配图像小块和目标图像。 
+7.1.3  匹配图像 
+对于目标图像中的每个小块，需要在用户指定的输入文件夹的一些图像中，找
+到一幅匹配的图像。要确定两个图像是否匹配，就使用平均RGB 值。最接近的匹
+配就是最接近平均RGB 值的图像。 
+要做到这一点，最简单的方法是计算一个像素中RGB 值之间的距离，以便从
+输入图像中找到最佳匹配。对于几何中的三维点，可以用以下的距离计算方法：
+
+92 Python 极客项目编程 
+2
+2
+2
+1,2
+1
+2
+1
+2
+1
+2
+(
+)
+(
+)
+(
+)
+D
+r
+r
+g
+g
+b
+b
+=
+−
++
+−
++
+−
+这里计算了点 (r1, g1, b1) 和 (r2, g2, b2) 之间的距离。给定一个目标图像的平均
+RGB 值，以及来自输入图像的平均RGB 值列表，你可以使用线性搜索和三维点的
+距离计算，来找到最匹配的图像。
+7.2  所需模块 
+这个项目将使用Pillow 读入图像，访问其底层数据，创建和修改图像。还会用
+numpy 来操作图像数据。 
+7.3  代码 
+首先读入那些小块图像，它们将用于创建照片马赛克。接下来，计算图像的平
+均RGB 值，然后将目标图像分割成图像网格，为小块找到最佳匹配。最后，组装
+图像小块，创建最终的照片马赛克。要查看完整的项目代码，请直接跳到7.4 节。 
+7.3.1  读入小块图像 
+首先，从给定的文件夹中读入输入图像。下面是具体做法：
+def getImages(imageDir): 
+ """ 
+ given a directory of images, return a list of Images 
+ """ 
+ 
+ files = os.listdir(imageDir) 
+ images = [] 
+ for file in files: 
+ 
+ filePath = os.path.abspath(os.path.join(imageDir, file)) 
+ try: 
+ # explicit load so we don't run into resource crunch 
+ 
+ fp = open(filePath, "rb") 
+ im = Image.open(fp) 
+ images.append(im) 
+ # force loading the image data from file 
+ 
+ im.load() 
+ # close the file 
+ 
+ fp.close() 
+ except: 
+ # skip 
+   print("Invalid image: %s" % (filePath,)) 
+ return images 
+在行，用os.listdir()将imageDir 目录中的文件放入一个列表。接下来，迭代
+遍历列表中的每个文件，将它载入一个PIL Image 对象。 
+
+第7 章  照片马赛克 93 
+在行，用os.path.abspath()和os.path.join()来获取图像的完整文件名。这个习
+惯用法在Python 中经常使用，以确保代码既能在相对路径下工作（如\foo\bar），也
+能在绝对路径下工作（c:\foo\bar\），并且能跨操作系统，不同的操作系统有不同的
+目录命名惯例（Windows 用\而Linux 用/）。 
+要将文件加载为PIL 的Image 对象，可以将每个文件名传入Image.open()方法，
+但如果照片马赛克文件夹中有几百张甚至几千张图片，这样做非常消耗资源。作为
+替代，可以用Python 打开每个小块图像，利用Image.open()将文件句柄fp 传入PIL()。
+图像加载后，关闭文件句柄并释放系统资源。
+在行，用open()打开图像文件。在随后的几行中，将文件句柄传入Image.open()，
+将得到的图像im 存入一个数组。 
+因为open()是一个惰性操作，所以在行调用Image.load()，强制加载im 中的
+图像数据。它确定了图像，但实际上没有读取全部图像数据，直到尝试使用该图像
+的时候才会那么做。
+在行，关闭文件句柄，释放系统资源。 
+7.3.2  计算输入图像的平均颜色值 
+读入输入图像后，需要计算它们的平均颜色值，以及目标图像中的每个小块的
+值。创建一个方法getAverageRGB()来计算这两个值。 
+def getAverageRGB(image): 
+ """ 
+ return the average color value as (r, g, b) for each input image 
+ """ 
+ # get each tile image as a numpy array 
+ 
+ im = np.array(image) 
+ # get the shape of each input image 
+ 
+ w,h,d = im.shape 
+ # get the average RGB value 
+ 
+ return tuple(np.average(im.reshape(w*h, d), axis=0)) 
+在行，用numpy 将每个Image 对象转换为数据数组。返回的numpy 数组形
+为(w, h, d)，其中，w 是图像的宽度，h 是高度，d 是深度，在这个例子中，是RGB
+图像的3 个单位（分别对应R，G 和B）。在行保存shape 元组，然后计算平均RGB
+值，将这个数组变形为更方便的形状(w*h, d)，这样就可以用numpy.average()计算出
+使用平均值。 
+7.3.3  将目标图像分割成网格 
+现在，需要将目标图像分割成M×N 网格，包含更小的图像。让我们创建一个
+方法来实现。
+
+94 Python 极客项目编程 
+def splitImage(image, size): 
+ """ 
+ given the image and dimensions (rows, cols), return an m*n list of images 
+ """ 
+ 
+ W, H = image.size[0], image.size[1] 
+ 
+ m, n = size 
+ 
+ w, h = int(W/n), int(H/m) 
+ # image list 
+ imgs = [] 
+ # generate a list of dimensions 
+ for j in range(m): 
+ for i in range(n): 
+ # append cropped image 
+ 
+   imgs.append(image.crop((i*w, j*h, (i+1)*w, (j+1)*h))) 
+ return imgs 
+首先，在行得到目标图像的维度，在行得到尺寸。在行，用基本除法计
+算目标图像中每一小块的尺寸。
+现在，需要迭代遍历网格的维度，分割并将每一小块保存为单独的图像。在
+行，image.crop()利用左上角图像坐标和裁剪图像的维度作为参数，剪裁出图像的一
+部分（在7.1.1 小节中讨论）。 
+7.3.4  寻找小块的最佳匹配 
+现在，让我们从输入图像的文件夹中，找到小块的最佳匹配。创建一个工具方
+法getBestMatchIndex()，如下所示： 
+def getBestMatchIndex(input_avg, avgs): 
+ """ 
+ return index of the best image match based on average RGB value distance 
+ """ 
+ # input image average 
+ avg = input_avg 
+ # get the closest RGB value to input, based on RGB distance 
+ index = 0 
+ 
+ min_index = 0 
+ 
+ min_dist = float("inf") 
+ 
+ for val in avgs: 
+ 
+ dist = ((val[0] - avg[0])*(val[0] - avg[0]) + 
+ (val[1] - avg[1])*(val[1] - avg[1]) + 
+   (val[2] - avg[2])*(val[2] - avg[2])) 
+ 
+ if dist < min_dist: 
+ min_dist = dist 
+   min_index = index 
+ index += 1 
+ return min_index 
+
+第7 章  照片马赛克 95 
+需要从列表avgs 中，找到最匹配平均RGB 值input_avg 的。avgs 是小块图像
+平均RGB 值的列表。 
+为了找到最佳匹配，比较这些输入图像的平均RGB 值。在行和行，将最接
+近的匹配下标初始化为0，最小距离初始化为无穷大。该测试在第一次总是会通过，
+因为任何距离都小于无穷大。在行，遍历平均值列表中的值，并开始在行用标
+准公式计算距离（比较距离的平方，以减少计算时间）。在行，如果计算的距离小
+于保存的最小距离min_dist，它就被替换为新的最小距离。迭代结束时，就得到了
+平均RGB 值列表args 中，最接近input_avg 的下标。现在可以利用这个下标，从小
+块图像的列表中选择匹配的小块图像了。
+7.3.5  创建图像网格 
+在继续创建照片马赛克之前，还需要一个工具方法。createImageGrid()方法将创
+建大小为M×N 的图像网格。这个图像网格是最终的照片马赛克图像，利用选择的
+小块图像列表来创建。
+def createImageGrid(images, dims): 
+ """ 
+ given a list of images and a grid size (m, n), create a grid of images 
+ """ 
+ 
+ m, n = dims 
+ # sanity check 
+ assert m*n == len(images) 
+ # get the maximum height and width of the images 
+ # don't assume they're all equal 
+ 
+ width = max([img.size[0] for img in images]) 
+ height = max([img.size[1] for img in images]) 
+ # create the target image 
+ 
+ grid_img = Image.new('RGB', (n*width, m*height)) 
+ # paste the tile images into the image grid 
+ for index in range(len(images)): 
+ 
+ row = int(index/n) 
+ 
+ col = index - n*row 
+ 
+ grid_img.paste(images[index], (col*width, row*height)) 
+ return grid_img 
+在行，取得网格的尺寸，然后用assert 检查，提供给createImageGrid()的图像
+数量是否符合网格的大小（assert 方法检查代码中的假定，特别是在开发和测试过
+程中的假定）。现在你有一个小块图像列表，基于最接近的RGB 值，你将用它来创
+建一幅图像，表现照片马赛克。由于大小差异，某些选定的图像可能不会正好填充
+一个小块，但这不会是一个问题，因为你首先用黑色背景填充小块。
+
+96 Python 极客项目编程 
+在行和下面一行，计算小块图像的最大宽度和高度（你没有对选择的输入图
+像的大小做出任何假定，无论它们相同或不同，代码都能工作），如果输入图像不
+能完全填充小块，小块之间的空间将显示为背景色，默认是黑色。
+在行，创建一个空的Image，大小符合网格中的所有图像。小块图像会粘贴
+到这个图像。然后填充图像网格。在行，循环遍历选定的图像，利用Image.paste()
+方法，将它们粘贴到相应的网格中。Image.paste()的第一个参数是要粘贴的Image
+对象，第二个参数是左上角的坐标。现在，你需要搞清楚小块图像要粘贴到图像网
+格的行和列。为了做到这一点，将图像下标表示为行和列。小块在图像网格中的下
+标由N*row + col 给出，其中N 是一行的小块数，(row, col)是在该网格中的坐标。
+在行，利用前面的公式给出行，行给出了列。 
+7.3.6  创建照片马赛克 
+现在，有了所有必需的工具方法，让我们编写一个main 函数，创建照片马赛克。 
+def createPhotomosaic(target_image, input_images, grid_size, reuse_images=True): 
+ """ 
+ creates a photomosaic given target and input images 
+ """ 
+ print('splitting input image...') 
+ # split the target image into tiles 
+ 
+ target_images = splitImage(target_image, grid_size) 
+ print('finding image matches...') 
+ # for each tile, pick one matching input image 
+ output_images = [] 
+ # for user feedback 
+ count = 0 
+ 
+ batch_size = int(len(target_images)/10) 
+ # calculate the average of the input image 
+ avgs = [] 
+ for img in input_images: 
+ 
+ avgs.append(getAverageRGB(img)) 
+ for img in target_images: 
+ # compute the average RGB value of the image 
+ 
+ avg = getAverageRGB(img) 
+ # find the matching index of closest RGB value 
+ # from a list of average RGB values 
+ 
+ match_index = getBestMatchIndex(avg, avgs) 
+ 
+ output_images.append(input_images[match_index]) 
+ # user feedback 
+ 
+ if count > 0 and batch_size > 10 and count % batch_size is 0: 
+   print('processed %d of %d...' %(count, len(target_images))) 
+ count += 1 
+ # remove the selected image from input if flag set 
+ 
+ if not reuse_images: 
+ input_images.remove(match) 
+
+第7 章  照片马赛克 97 
+ print('creating mosaic...') 
+ # create photomosaic image from tiles 
+ 
+ mosaic_image = createImageGrid(output_images, grid_size) 
+ # display the mosaic 
+ return mosaic_image 
+createPhotomosaic()方法的输入是目标图像、输入图像列表、生成照片马赛克的
+大小，以及一个标志，该标志表明图像是否可以复用。在行，它将目标图像分割
+成一个网格。图像被分割后，针对每个小块，从输入文件夹中寻找匹配的图像（因
+为这个过程可能很长，所以提供反馈给用户，让他们知道程序仍在工作）。
+在行，将batch_size 设置为小块图像总数的十分之一。在行，该变量将用
+于向用户更新信息（选择十分之一是任意的，只是一种方式让程序说：“我还活着。”
+每次程序处理了图像的十分之一，就打印一条消息，表明它仍在运行）。
+在行，为输入文件夹中的每个图像计算平均RGB 值，并保存在列表avgs 中。
+然后，开始迭代遍历目标图像网格中的每个小块。对于每个小块，计算平均RGB
+值。然后，在行，在输入图像的平均值列表中，寻找该值的最佳匹配。返回的
+结果是一个下标，在行用它取得Image 对象，并保存在列表中。 
+在行，每处理batch_size 个图像，就为用户打印一条消息。在行，如果
+reuse_images 标志设置为False，就从列表中删除选定的输入图像，这样就不会在另
+一个小块中重用（如果有广泛的输入图像可选，这种方式效果最好）。最后，在
+行，组合图像创建最终的照片马赛克。
+7.3.7  添加命令行选项 
+该程序的main()方法支持这些命令行选项： 
+ # parse arguments 
+ parser = argparse.ArgumentParser(description='Creates a photomosaic from 
+ input images') 
+ # add arguments 
+ parser.add_argument('--target-image', dest='target_image', required=True) 
+ parser.add_argument('--input-folder', dest='input_folder', required=True) 
+ parser.add_argument('--grid-size', nargs=2, dest='grid_size', required=True) 
+ parser.add_argument('--output-file', dest='outfile', required=False) 
+这段代码包含3 个必需的命令行参数：目标图像的名称、输入图像文件夹的名
+称，以及网格尺寸。第4 个参数是可选的文件名。如果省略该文件名，照片马赛克
+将写入文件mosaic.png。 
+7.3.8  控制照片马赛克的大小 
+要解决的最后一个问题是照片马赛克的大小。如果基于目标图像中匹配的小
+块，盲目地将输入图像粘贴在一起，就会得到一个巨大的照片马赛克，比目标图像
+
+98 Python 极客项目编程 
+大得多。为了避免这种情况，调整输入图像的大小，以匹配网格中每个小块的大小
+（这样做还有一个好处，可以加快平均RGB 的计算，因为用了较小的图像）。main()
+方法也进行这样的处理：
+ print('resizing images...') 
+ # for given grid size, compute the maximum width and height of tiles 
+ 
+ dims = (int(target_image.size[0]/grid_size[1]), 
+   int(target_image.size[1]/grid_size[0])) 
+ print("max tile dims: %s" % (dims,)) 
+ # resize 
+ for img in input_images: 
+ 
+ img.thumbnail(dims) 
+在行，根据指定的网格大小，计算目标图像的维度。随后，在行，用PIL 
+Image.thumbnail()方法来调整图像，以适应网格的大小。 
+7.4  完整代码 
+项目的完整代码可以在https://github.com/electronut/pp/tree/master/photomosaic/ 
+photomosaic.py 找到。 
+import sys, os, random, argparse 
+from PIL import Image 
+import imghdr 
+import numpy as np 
+def getAverageRGB(image): 
+ """ 
+ return the average color value as (r, g, b) for each input image 
+ """ 
+ # get each tile image as a numpy array 
+ im = np.array(image) 
+ # get the shape of each input image 
+ w,h,d = im.shape 
+ # get the average RGB value 
+ return tuple(np.average(im.reshape(w*h, d), axis=0)) 
+def splitImage(image, size): 
+ """ 
+ given the image and dimensions (rows, cols), returns an m*n list of images 
+ """ 
+ W, H = image.size[0], image.size[1] 
+ m, n = size 
+ w, h = int(W/n), int(H/m) 
+ # image list 
+ imgs = [] 
+ # generate a list of dimensions 
+ for j in range(m): 
+ for i in range(n): 
+ # append cropped image 
+   imgs.append(image.crop((i*w, j*h, (i+1)*w, (j+1)*h))) 
+ return imgs 
+def getImages(imageDir): 
+
+第7 章  照片马赛克 99 
+ """ 
+ given a directory of images, return a list of Images 
+ """ 
+ files = os.listdir(imageDir) 
+ images = [] 
+ for file in files: 
+ filePath = os.path.abspath(os.path.join(imageDir, file)) 
+ try: 
+ # explicit load so we don't run into a resource crunch 
+ fp = open(filePath, "rb") 
+ im = Image.open(fp) 
+ images.append(im) 
+ # force loading image data from file 
+ im.load() 
+ # close the file 
+ fp.close() 
+ except: 
+ # skip 
+   print("Invalid image: %s" % (filePath,)) 
+ return images 
+def getImageFilenames(imageDir): 
+ """ 
+ given a directory of images, return a list of image filenames 
+ """ 
+ files = os.listdir(imageDir) 
+ filenames = [] 
+ for file in files: 
+ filePath = os.path.abspath(os.path.join(imageDir, file)) 
+ try: 
+ imgType = imghdr.what(filePath) 
+ if imgType: 
+ filenames.append(filePath) 
+ except: 
+ # skip 
+   print("Invalid image: %s" % (filePath,)) 
+ return filenames 
+def getBestMatchIndex(input_avg, avgs): 
+ """ 
+ return index of the best image match based on average RGB value distance 
+ """ 
+ # input image average 
+ avg = input_avg 
+ # get the closest RGB value to input, based on RGB distance 
+ index = 0 
+ min_index = 0 
+ min_dist = float("inf") 
+ for val in avgs: 
+ dist = ((val[0] - avg[0])*(val[0] - avg[0]) + 
+ (val[1] - avg[1])*(val[1] - avg[1]) + 
+   (val[2] - avg[2])*(val[2] - avg[2])) 
+ if dist < min_dist: 
+ min_dist = dist 
+   min_index = index 
+ index += 1 
+ return min_index 
+
+100 Python 极客项目编程 
+def createImageGrid(images, dims): 
+ """ 
+ given a list of images and a grid size (m, n), create a grid of images 
+ """ 
+ m, n = dims 
+ # sanity check 
+ assert m*n == len(images) 
+ # get the maximum height and width of the images 
+ # don't assume they're all equal 
+ width = max([img.size[0] for img in images]) 
+ height = max([img.size[1] for img in images]) 
+ # create the target image 
+ grid_img = Image.new('RGB', (n*width, m*height)) 
+ # paste the tile images into the image grid 
+ for index in range(len(images)): 
+ row = int(index/n) 
+ col = index - n*row 
+ grid_img.paste(images[index], (col*width, row*height)) 
+ return grid_img 
+def createPhotomosaic(target_image, input_images, grid_size, reuse_images=True): 
+ """ 
+ creates photomosaic given target and input images 
+ """ 
+ print('splitting input image...') 
+ # split the target image into tiles 
+ target_images = splitImage(target_image, grid_size) 
+ print('finding image matches...') 
+ # for each tile, pick one matching input image 
+ output_images = [] 
+ # for user feedback 
+ count = 0 
+ batch_size = int(len(target_images)/10) 
+ # calculate the average of the input image 
+ avgs = [] 
+ for img in input_images: 
+ avgs.append(getAverageRGB(img)) 
+ for img in target_images: 
+ # compute the average RGB value of the image 
+ avg = getAverageRGB(img) 
+ # find the matching index of closest RGB value 
+ # from a list of average RGB values 
+ match_index = getBestMatchIndex(avg, avgs) 
+ output_images.append(input_images[match_index]) 
+ # user feedback 
+ if count > 0 and batch_size > 10 and count % batch_size is 0: 
+ print('processed %d of %d...' %(count, len(target_images))) 
+
+第7 章  照片马赛克 101 
+ count += 1 
+ # remove the selected image from input if flag set 
+ if not reuse_images: 
+ input_images.remove(match) 
+ print('creating mosaic...') 
+ # create photomosaic image from tiles 
+ mosaic_image = createImageGrid(output_images, grid_size) 
+ # display the mosaic 
+ return mosaic_image 
+# gather our code in a main() function 
+def main(): 
+ # command line arguments are in sys.argv[1], sys.argv[2], ... 
+ # sys.argv[0] is the script name itself and can be ignored 
+ # parse arguments 
+ parser = argparse.ArgumentParser(description='Creates a photomosaic from 
+ input images') 
+ # add arguments 
+ parser.add_argument('--target-image', dest='target_image', required=True) 
+ parser.add_argument('--input-folder', dest='input_folder', required=True) 
+ parser.add_argument('--grid-size', nargs=2, dest='grid_size', required=True) 
+ parser.add_argument('--output-file', dest='outfile', required=False) 
+ args = parser.parse_args() 
+ ###### INPUTS ###### 
+ # target image 
+ target_image = Image.open(args.target_image) 
+ # input images 
+ print('reading input folder...') 
+ input_images = getImages(args.input_folder) 
+ # check if any valid input images found 
+ if input_images == []: 
+ print('No input images found in %s. Exiting.' % (args.input_folder, )) 
+ exit() 
+ # shuffle list to get a more varied output? 
+ random.shuffle(input_images) 
+ # size of the grid 
+ grid_size = (int(args.grid_size[0]), int(args.grid_size[1])) 
+ # output 
+ output_filename = 'mosaic.png' 
+ if args.outfile: 
+ output_filename = args.outfile 
+ # reuse any image in input 
+ reuse_images = True 
+ # resize the input to fit the original image size? 
+ resize_input = True 
+ ##### END INPUTS ##### 
+
+102 Python 极客项目编程 
+ print('starting photomosaic creation...') 
+ # if images can't be reused, ensure m*n <= num_of_images 
+ if not reuse_images: 
+ if grid_size[0]*grid_size[1] > len(input_images): 
+ print('grid size less than number of images') 
+   exit() 
+ # resizing input 
+ if resize_input: 
+ print('resizing images...') 
+ # for given grid size, compute the maximum width and height of tiles 
+ dims = (int(target_image.size[0]/grid_size[1]), 
+ int(target_image.size[1]/grid_size[0])) 
+ print("max tile dims: %s" % (dims,)) 
+ # resize 
+ for img in input_images: 
+ img.thumbnail(dims) 
+ # create photomosaic 
+ mosaic_image = createPhotomosaic(target_image, input_images, grid_size, 
+ reuse_images) 
+ # write out mosaic 
+ mosaic_image.save(output_filename, 'PNG') 
+ print("saved output to %s" % (output_filename,)) 
+ print('done.') 
+# standard boilerplate to call the main() function 
+# to begin the program 
+if __name__ == '__main__': 
+ main() 
+7.5  运行照片马赛克生成程序 
+下面是该程序的运行示例：
+$ python photomosaic.py --target-image test-data/cherai.jpg --input-folder 
+test-data/set6/ --grid-size 128 128 
+reading input folder... 
+starting photomosaic creation... 
+resizing images... 
+max tile dims: (23, 15) 
+splitting input image... 
+finding image matches... 
+processed 1638 of 16384 ... 
+processed 3276 of 16384 ... 
+processed 4914 of 16384 ... 
+creating mosaic... 
+saved output to mosaic.png 
+done. 
+图7-3（a）展示了目标图像，（b）展示了照片马赛克。在（c），可以看到照片
+马赛克的特写。
+
+第7 章  照片马赛克 103 
+图7-3  照片马赛克运行示例 
+7.6  小结 
+在这个项目中，我们学习了如何利用给定的目标图像和一组输入图像，创建一
+个照片马赛克。从远处看，照片马赛克像原来的图像，但走近了看，可以看到各个
+图像组成的马赛克。
+7.7  实验 
+这里有一些方式，可以进一步探索照片马赛克。
+1．编写一个程序，创建图像的块状版本，类似图7-1。 
+2．利用本章的代码，通过粘贴匹配的图像创建照片马赛克，小块图像之间没
+有间隙。更艺术的表现形式，是在每个小块图像之间留出几个像素的均匀间隙。如
+何创建这样的间隙（提示：在计算最终的图像尺寸以及在createImageGrid()中粘贴
+时，考虑间隙的因素）？
+3．程序的大部分时间，用于从输入文件夹中寻找小块图像的最佳匹配。为
+了加快程序，getBestMatchIndex()需要运行得更快。这个方法是对平均值（看成
+三维的点）列表进行简单的线性搜索。这个任务的一般问题就是最近邻居搜索。
+找到最近点有一种特别有效的方法，即K-D 树搜索。SciPy 库有一个方便的类
+scipy.spatial.KDTree，可以创建K-D 并向它查询最近点的匹配。请尝试用SciPy
+的K-D 树替代线性搜索（参见http://docs.scipy.org/doc/scipy/reference/generated/ 
+scipy.spatial.KDTree.html）。 

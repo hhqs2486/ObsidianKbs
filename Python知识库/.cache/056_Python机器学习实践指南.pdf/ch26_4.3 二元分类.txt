@@ -1,0 +1,127 @@
+4.3 二元分类 103 
+图4-26 
+这步完成后，我们将进入建模阶段。
+4.3 二元分类 
+我们试图预测IPO 是否值得购买，而不是尝试准确地预测第一天的总收益是多少。这
+里，我们应该指出这里所做的不是投资建议，其
+目的只是为了说明某个案例。请不要使用这个模
+型开始随意地进行IPO 交易。后果会非常严重。
+现在，为了预测二进制的结果（即1 或0，是或
+否），我们将从称为逻辑回归（logistic regression）
+的模型开始。逻辑回归使用了逻辑函数。这是很
+理想的选择，因为逻辑回归有几个数学属性，使
+其易于使用，如图4-27 所示。 
+由于逻辑函数的形式，它特别适合于提供概
+率的估计，以及依据这些估计的二进制响应。任何大于0.5 的被分类为1，而任何低于0.5
+的被分类为0。这些1 和0 可以对应任何我们想要分类的事物，不过在这个应用程序中，
+它将决定我们对于发行股，是买入（1）还是不买入（0）。 
+继续下一步，在我们的数据上使用这个模型。我们通过有点不同寻常的方式，将数据
+进行拆分。机器学习模型的标准做法是随机地决定哪些实例作为模型的训练数据，而哪些
+实例被用作测试数据。但是，由于这里的数据是基于时间的，因此我们将使用除今年（2015
+年）之外的所有数据进行训练。然后在2015 年年初至今的数据上进行测试。 
+图4-27 
+
+104 第4 章使用逻辑回归预测IPO 市场 
+# 2188 是第一个2015 年数据的索引号，数据是按照日期排序的 
+X_train, X_test = X[:2188], X[2188:]  
+y_train = ipos['$ Chg Open to Close'][:2188].map(lambda x: 1 if x >= 1 else 0) 
+y_test = ipos['$ Chg Open to Close'][2188:].map(lambda x: 1 if x >= 1 else 0) 
+使用上面的代码，我们将数据分成训练集和测试集。请注意我们主观地为正向结果设
+置了1 美元的阈值。这是为了贯彻这个策略：瞄准长尾中的赢家，而不是任何收益大于0
+的收盘。
+现在，我们将拟合该模型，方法如下所示。
+clf = linear_model.LogisticRegression() 
+clf.fit(X_train, y_train) 
+上面的代码将生成图4-28 的输出。 
+图4-28 
+我们现在可以在预留的2015 年数据上，评估模型的表现。 
+clf.score(X_test, y_test)   
+上面的代码将生成图4-29 的输出。 
+从图4-29 中，我们可以看出82%的预测是准确的。对于2015 年而言，这当然是优于
+我们基本策略的预测，但这也可能是带有误导性的结果，因为实际上获益超过1 美元的IPO，
+其比例是非常低的。这意味着对于所有IPO 都将其预测猜测为0，也会给我们相同的结果，
+不过，这里让我们比较一下两者的区别。
+首先我们的基本策略如下。
+ipos[(ipos['Date']>='2015-01-01')]['$ Chg Open to Close'].describe() 
+上述代码生成图4-30 的输出。 
+图4-29 图4-30 
+
+4.3 二元分类 105 
+接下来，我们将处理预测的结果。首先使用结果设置一个数据框，然后输出它们。
+pred_label = clf.predict(X_test)  
+results=[]  
+for pl, tl, idx, chg in zip(pred_label, y_test, y_test.index,  
+ipos.ix[y_test.index]['$ Chg Open to Close']):  
+if pl == tl: 
+results.append([idx, chg, pl, tl, 1])  
+else:  
+results.append([idx, chg, pl, tl, 0])  
+rf = pd.DataFrame(results, columns=['index', '$ chg', 'predicted', 
+'actual', 'correct'])  
+rf 
+上述代码生成图4-31 的输出。 
+rf[rf['predicted']==1]['$ chg'].describe() 
+上述代码生成图4-32 的输出。 
+ 图4-31 图4-32 
+所以，总数从147 次买入降到6 次买入。我们的平均值从0.23 美元上涨到2.99 美元，
+但我们的中位数从0 美元下降到−0.02 美元。让我们看看回报的图表。 
+fig, ax = plt.subplots(figsize=(15,10))  
+rf[rf['predicted']==1]['$ chg'].plot(kind='bar') 
+ax.set_title('Model Predicted Buys', y=1.01)  
+ax.set_ylabel('$ Change Open to Close')  
+ax.set_xlabel('Index') 
+上述代码生成图4-33 的输出。 
+
+106 第4 章使用逻辑回归预测IPO 市场 
+图4-33 
+从图4-33 来看，似乎我们赢得了年中一次很大的收益，以及几次较小的收益和损失。
+我们对模型的测试还不是很充分。我们可能只是非常幸运地抓住了这次胜利。还需要评估
+模型的鲁棒性。我们可以通过几个方面来实现这点，这里仅仅做两件事情。首先，我们将
+阈值从1 美元降至0.25 美元，看看模型怎么反应。 
+X_train, X_test = X[:2188], X[2188:]  
+y_train = ipos['$ Chg Open to Close'][:2188].map(lambda x: 1 if x >= .25 else 0) 
+y_test = ipos['$ Chg Open to Close'][2188:].map(lambda x: 1 if x >= .25 else 0) 
+clf = linear_model.LogisticRegression()  
+clf.fit(X_train, y_train)  
+clf.score(X_test, y_test) 
+上述代码生成图4-34 的输出。 
+现在我们来检查一下结果。
+pred_label = clf.predict(X_test)  
+results=[]  
+for pl, tl, idx, chg in zip(pred_label, y_test, y_test.index, 
+ipos.ix[y_test.index]['$ Chg Open to Close']):  
+ if pl == tl: 
+  results.append([idx, chg, pl, tl, 1]) 
+ else:  
+图4-34 
+
+4.3 二元分类 107 
+  results.append([idx, chg, pl, tl, 0])  
+rf = pd.DataFrame(results, columns=['index', '$ chg', 'predicted', 
+'actual', 'correct'])  
+rf[rf['predicted']==1]['$ chg'].describe() 
+上述代码生成图4-35 的输出。 
+从结果来看，我们的准确率和平均值都下降了。但是，我们的统计数量从6 上升到了
+25，而且仍然远高于基础策略的结果。让我们再做一个测试。现在将2014 年的数据从训练
+数据中删除，并将其加入测试数据中。
+X_train, X_test = X[:1900], X[1900:]  
+y_train = ipos['$ Chg Open to Close'][:1900].map(lambda x: 1 if x >= .25 else 0) 
+y_test = ipos['$ Chg Open to Close'][1900:].map(lambda x: 1 if x >= .25 else 0) 
+clf = linear_model.LogisticRegression()  
+clf.fit(X_train, y_train)  
+clf.score(X_test, y_test) 
+上述代码生成图4-36 的输出。 
+ 图4-35 图4-36 
+再次检查结果。
+pred_label = clf.predict(X_test)  
+results=[]  
+for pl, tl, idx, chg in zip(pred_label, y_test, y_test.index, 
+ipos.ix[y_test.index]['$ Chg Open to Close']):  
+ if pl == tl: 
+ results.append([idx, chg, pl, tl, 1]) 
+ else: 
+  results.append([idx, chg, pl, tl, 0])  
+rf = pd.DataFrame(results, columns=['index', '$ chg', 'predicted', 
+'actual', 'correct'])  
+rf[rf['predicted']==1]['$ chg'].describe() 
+上述代码生成图4-37 的输出。 

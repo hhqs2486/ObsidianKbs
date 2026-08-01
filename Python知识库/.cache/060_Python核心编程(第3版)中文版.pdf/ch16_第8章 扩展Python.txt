@@ -1,0 +1,732 @@
+ 
+ 
+ 
+第8 章  扩展Python 
+C 语言效率很高。但这种效率的代价是需要用户亲自进行许多低级资源管理工作。由于
+现在的机器性能非常强大，这种亲历亲为是得不偿失的。如果能使用一种在机器执行效率较
+低而用户开发效率很高的语言，则是非常明智的。Python 就是这样的一种语言。 
+—Eric Raymond，1996 年10 月 
+ 
+本章内容： 
+• 简介和动机； 
+• 编写Python 扩展； 
+• 相关主题。 
+8 
+
+第8 章  扩展Python 287 
+ 
+本章将介绍如何编写扩展代码，并将其功能集成到Python 编程环境中。首先介绍这样做的
+动机，接着逐步介绍如何编写扩展。需要指出的是，虽然Python 扩展主要用C 语言编写，且出
+于通用性的考虑，本节的所有示例代码都是纯C 语言代码。因为C++是C 语言的超集，所以读
+者也可以使用C++。如果读者使用Microsoft Visual Studio 构建扩展，需要用到Visual C++。 
+8.1  简介和动机 
+本章第一节将介绍什么是Python 扩展，并尝试说明什么情况下需要（或不需要）考虑创
+建一个扩展。 
+8.1.1  Python 扩展简介 
+一般来说，任何可以集成或导入另一个Python 脚本的代码都是一个扩展。这些新代码可
+以使用纯Python 编写，也可以使用像C 和C++这样的编译语言编写（在Jython 中用Java 编
+写扩展，在IronPython 中用C#或VisualBasic.NET 编写扩展）。 
+ 
+  核心提示：在不同的平台上分别安装客户端和服务器来运行网络应用程序 
+这里需要提醒一下，一般来说，即使开发环境中使用了自行编译的Python 解释器，
+Python 扩展也是通用的。手动编译和获取二进制包之间存在着微妙的关系。尽管编译比直
+接下载并安装二进制包要复杂一些，但是前者可以灵活地定制所使用的Python 版本。如果
+需要创建扩展，就应该在与扩展最终执行环境相似的环境中进行开发。 
+本章的示例都是在基于UNIX 的系统上构建的（这些系统通常自带编译器），但这里假定
+读者有可用的C/C++（或Java）编译器，以及针对C/C++（或Java）的Python 开发环境。这
+两者的唯一区别仅仅是编译方法。而扩展中的实际代码可通用于任何平台上的Python 环境中。 
+如果是在Windows 平台上开发，需要用到Visual C++开发环境。Python 发行包中自
+带了7.1 版的项目文件，但也可以使用老版本的VC++。 
+关于构建Python 扩展的更多信息请查看下面的网址。 
+• 
+针对PC 上的C++：http://docs.python.org/extending/windows 
+• 
+Java/Jython：http://wiki.python.org/jython 
+• 
+IronPython–http://ironpython.codeplex.com 
+警告：尽管在相同架构下的不同计算机之间移动二进制扩展一般情况下不会出现问
+题，但是有时编译器或CPU 之间的细微差别可能导致代码不能正常工作。 
+ 
+Python 中一个非常好的特性是，无论是扩展还是普通Python 模块，解释器与其交互方式
+完全相同。这样设计的目的是对导入的模块进行抽象，隐藏扩展中底层代码的实现细节。除
+非模块使用者搜索相应的模块文件，否则他就不会知道某个模块是使用Python 编写，还是使
+
+288 第1 部分  通用应用主题 
+ 
+用编译语言编写的。 
+8.1.2  什么情况下需要扩展Python 
+简要纵观软件工程的历史，编程语言过去一直都根据原始定义来使用。只能使用语言定义的
+功能，就无法向已有的语言添加新的功能。然而，在现今的编程环境中，可定制性编程是很吸引
+人的特性，它可以促进代码重用。Tcl 和Python 就是第一批这样可扩展的语言，这些语言能够扩展
+其语言本身。那么为什么需要扩展像Python 这样已经很完善的语言呢？有下面几点充分的理由。 
+• 
+需要Python 没有的额外功能：扩展Python 的原因之一是需要该语言核心部分没有
+提供一些的新功能。使用纯Python 或编译后的扩展都可以做到这一点，不过像创建
+新的数据类型或在已有应用中嵌入Python，就必须使用编译后的模块。 
+• 
+改善瓶颈性能：众所周知，由于解释型语言的代码在运行时即时转换，因此执行起
+来比编译语言慢。一般来说，将一段代码移到扩展中可以提升总体性能。但问题在
+于，如果转移到扩展中，有时代价会过高。 
+从性价比的角度来看，先对代码进行一些简单的性能分析，找出瓶颈所在，然后将
+这些瓶颈处的代码移到扩展中是个更聪明的方式。这样既能更快地获得效率提升，
+也不会花费太多的资源。 
+• 
+隐藏专有代码：创建扩展的另一个重要原因是脚本语言的缺陷。所有这样易用的语
+言都没有关注源码的私密性，因为这些语言的源码本身就是可执行程序。 
+将代码从Python 中转到编译型语言中可以隐藏这些专有代码，因为后者提供的是二
+进制文件。编译过的文件相对来说不易进行逆向工程，这样就将源码隐藏起来了。
+在涉及特殊算法、加密或软件安全性时这，这就显得十分重要。 
+另一个保证代码私有的方式是只提供预编译的.pyc 文件。在提供实际代码（.py 文件）
+和将代码迁移到扩展这两种方法之间，这是比较好的折中。 
+8.1.3  什么情况下不应该扩展Python 
+在真正介绍如何编写扩展之前，还要了解什么情况下不应该编写扩展。这一节相当于一
+个告诫，否则读者会认为作者一直在为扩展Python 做虚假宣传。是的，编写扩展有前面提到
+的那些优点，但也有一些缺点。 
+• 
+必须编写C/C++代码。 
+• 
+需要理解如何在Python 和C/C++之间传递数据。 
+• 
+需要手动管理引用。 
+• 
+还有一些封装工具可以完成相同的事情，这些工具可以生成高效的C/C++代码，但
+用户又无须手动编写任何C/C++代码就可以使用这些代码。本章末尾将介绍其中一
+些工具。不要说我没提醒过你！下面继续…… 
+
+第8 章  扩展Python 289 
+ 
+8.2  编写Python 扩展 
+为Python 编写扩展主要涉及三个步骤。 
+1．创建应用代码。 
+2．根据样板编写封装代码。 
+3．编译并测试。 
+本节将深入了解这三个步骤。 
+8.2.1  创建应用代码 
+首先，所有需要成为扩展的代码应该组成一个独立的“库”。换句话说，要明白这些代码
+将作为一个Python 模块存在。因此在设计函数和对象时需要考虑Python 代码与C 代码之间
+的交互和数据共享，反之亦然。 
+下一步，创建测试代码来保证代码的正确性。甚至可以使用Python 风格的做法，即将
+main()函数放在C 中作为测试程序。如果代码编译、链接并加载到一个可执行程序中（而不
+是共享库文件），调用这样的可执行程序能对软件库进行回归测试。下面将要介绍的扩展示例
+都使用这种方法。 
+测试用例包含两个需要引入Python 环境中的C 函数。一个是递归阶乘函数fac()。另一
+个是简单的字符串逆序函数reverse()，主要用于“原地”逆序字符串，即在不额外分配字符
+串空间的情况下，逆序排列字符串中的字符。由于这些函数需要用到指针，因此需要仔细设
+计并调试这些C 代码，以防将问题带入Python。 
+第1 版的文件名为Extest1.c，参见示例8-1。 
+示例8-1  纯C 版本的库（Extest1.c） 
+下面显示的是C 函数库，需要对其进行封装以便在Python 解释器中使用。main()是测试函数。 
+ 
+
+290 第1 部分  通用应用主题 
+ 
+ 
+ 
+这段代码含有两个函数：fac()和reverse()，用来实现前面所说的功能。fac()接受一个整
+型参数，然后递归计算结果，最后从递归的最外层返回给调用者。 
+最后一部分是必要的main()函数。它用来作为测试函数，将不同的参数传入fac()和
+reverse()。通过这个函数可以判断前两个函数是否能正常工作。 
+现在编译这段代码。许多类UNIX 系统都含有gcc 编译器，在这些系统上可以使用下面
+的命令。 
+ 
+$ gcc Extest1.c -o Extest 
+$  
+要运行代码，可以执行下面的命令并获得输出。 
+ 
+$ Extest 
+4! == 24 
+8! == 40320 
+12! == 479001600 
+reversing 'abcdef', we get 'fedcba' 
+reversing 'madam', we get 'madam' 
+$  
+再次强调，必须尽可能先完善扩展程序的代码。把针对Python 程序的调试与针对扩
+展库本身bug 的调试混在一起是一件非常痛苦的事情。换句话说，将调试核心代码与调试
+Python 程序分开。与Python 接口的代码写得越完善，就越容易把它集成进Python 并正确
+工作。 
+
+第8 章  扩展Python 291 
+ 
+这里每个函数都接受一个参数，也只返回一个参数。这简单明了，因此集成进Python 应
+该不难。注意，到目前为止，还没涉及任何与Python 相关的内容。仅仅创建了一个标准的C
+或C++应用而已。 
+8.2.2  根据样板编写封装代码 
+完整地实现一个扩展都围绕“封装”相关的概念，读者应该熟悉这些概念，如组合类、
+修饰函数、类委托等。开发者需要精心设计扩展代码，无缝连接Python 和相应的扩展实现语
+言。这种接口代码通常称为样板（boilerplate）代码，因为如果需要与Python 解释器交互，
+会用到一些格式固定的代码。 
+样板代码主要含有四部分。 
+1．包含Python 头文件。 
+2．为每一个模块函数添加形如PyObject*Module_func()的封装函数。 
+3．为每一个模块函数添加一个PyMethodDef ModuleMethods[]数组/表。 
+4．添加模块初始化函数void initModule()。 
+包含Python 头文件 
+首先要做的是找到Python 包含文件，并确保编译器可以访问这个文件的目录。在大多数
+类UNIX 系统上，Python 包含文件一般位于/usr/local/include/python2.x 或/usr/include/python2.x
+中，其中2.x 是Python 的版本。如果通过编译安装的Python 解释器，应该不会有问题，因为
+系统知道安装文件的位置。 
+将Python.h 这个头文件包含在源码中，如下所示。 
+ 
+#include "Python.h" 
+ 
+这部分很简单。下面需要添加样板软件中的其他部分。 
+为函数编写形如PyObject* Module_func()的封装函数 
+这一部分有点难度。对于每个需要在Python 环境中访问的函数，需要创建一个以static 
+PyObject*标识，以模块名开头，紧接着是下划线和函数名本身的函数。 
+例如，若要让fac()函数可以在Python 中导入，并将Extest 作为最终的模块名称，需要创
+建一个名为Extest_fac()的封装函数。在用到这个函数的Python 脚本中，可以使用import Extest
+和Extest.fac()的形式在任意地方调用fac()函数（或者先from Extest import fac，然后直接     
+调用fac()）。 
+封装函数的任务是将Python 中的值转成成C 形式，接着调用相应的函数。当C 函数执
+行完毕时，需要返回Python 的环境中。封装函数需要将返回值转换成Pytho 形式，并进行真
+正的返回，传回所有需要的值。 
+
+292 第1 部分  通用应用主题 
+ 
+在fac()的示例中，当客户程序调用Extest.fac()时，会调用封装函数。这里会接受一个
+Python 整数，将其转换成C 整数，接着调用C 函数fac()，获取返回结果，同样是一个整数。
+将这个返回值转换成Python 整数，返回给调用者（记住，编写的封装函数就是def fac(n)声明
+的代理函数。当这个封装函数返回时，就相当于Python fac()函数执行完毕了）。 
+现在读者可能会问，怎样才能完成这种转换？答案是在从Python 到C 时，调用一系列的
+PyArg_Parse*()函数，从C 返回Python 时，调用Py_BuildValue()函数。 
+这些PyArg_Parse*()函数与C 中的sscanf()函数类似。其接受一个字节流，然后根据一
+些格式字符串进行解析，将结果放入到相应指针所指的变量中。若解析成功就返回1；否则
+返回0。 
+Py_BuildValue()的工作方式类似sprintf()，接受一个格式字符串，并将所有参数按照格式
+字符串指定的格式转换为一个Python 对象。 
+表8-1 总结了这些函数。 
+表8-1 在Python 和C/C++之间转换数据 
+函    数 
+说    明 
+从Python 到C 
+int PyArg_ParseTuple() 
+将位于元组中的一系列参数从Python 转化为C 
+int PyArg_ParseTupleAndKeywords() 
+与上一个类似，但还会解析关键字参数 
+从C 到Python 
+PyObject*Py_BuildValue() 
+将C 数据值转化为Python 返回对象，要么是单个对象，要么是一个含有多个对象的元组 
+ 
+在Python 和C 之间使用一系列的转换编码来转换数据对象。转换编码见表8-2。 
+表8-2  Python
+①和C/C++之间的“转换编码” 
+格式编码 
+Python 数据类型 
+C/C++数据类型 
+s、s# 
+str/unicode, len() 
+Char*(, int) 
+z、z# 
+str/unicode/None,len() 
+char*/NULL(, int) 
+u、u# 
+unicode, len() 
+(Py_UNICODE*, int) 
+i 
+int 
+int 
+b 
+int 
+char 
+h 
+int 
+short 
+l 
+int 
+long 
+k 
+int 或long 
+unsigned long 
+I 
+int 或long 
+unsigned int 
+B 
+int 
+unsigned char 
+H 
+int 
+unsigned short 
+L 
+long 
+long long 
+K 
+long 
+unsigned long long 
+
+第8 章  扩展Python 293 
+ 
+（续表）   
+格式编码 
+Python 数据类型 
+C/C++数据类型 
+c 
+str 
+char 
+d 
+float 
+double 
+f 
+float 
+float 
+D 
+complex 
+Py_Complex* 
+O 
+（任意类型） 
+PyObject* 
+S 
+str 
+PyStringObject 
+N
+② 
+（任意类型） 
+PyObject* 
+O& 
+（任意类型） 
+（任意类型） 
+① Python 2 和Python 3 之间的格式编码基本相同。 
+② 与“O”类似，但不递增对象的引用计数。 
+ 
+这些转换编码用在格式字符串中，用于指出对应的值在两种语言中应该如何转换。注意，
+其转换类型不可用于Java 中，Java 中所有数据类型都是类。可以阅读Jython 文档来了解Java
+类型和Python 对象之间的对应关系。对于C#和VB.NET 同样如此。 
+这里列出完整的Extest_fac()封装函数。 
+ 
+static PyObject * 
+Extest_fac(PyObject *self, PyObject *args) { 
+ 
+    int res;   
+ 
+ 
+// parse result 
+    int num;   
+ 
+ 
+// arg for fac() 
+    PyObject* retval;   
+// return value 
+ 
+    res = PyArg_ParseTuple(args, "i", &num); 
+    if (!res) {  
+ 
+ 
+// TypeError 
+        return NULL; 
+    } 
+    res = fac(num); 
+    retval = (PyObject*)Py_BuildValue("i", res); 
+    return retval; 
+}  
+封装函数中首先解析Python 中传递进来的参数。这里应该是一个普通的整型变量，所以使
+用“i”这个转换编码来告知转换函数进行相应的操作。如果参数的值确实是一个整型变量，则
+将其存入num 变量中。否则,PyArg_ParseTuple()会返回NULL，在这种情况下封装函数也会返回
+NULL。此时,它会生成TypeError 异常来通知客户端用户，所需的参数应该是一个整型变量。 
+接着使用num 作为参数调用fac()函数，将结果放在res 中，这里重用了res 变量。现在
+构建返回对象，即一个Python 整数，依然通过“i”这个转换编码。Py_BuildValue()创建一个
+整型Python 对象，并将其返回。这就是封装函数的所有内容。 
+
+294 第1 部分  通用应用主题 
+ 
+实际上，当封装函数写多了后，就会试图简化代码来避免使用中间变量。尽量让代码保
+持可读性。这里将Extest_fac()函数精简成下面这个更短的版本，它只用了一个变量num。 
+ 
+static PyObject * 
+Extest_fac(PyObject *self, PyObject *args) { 
+    int num; 
+    if (!PyArg_ParseTuple(args, "i", &num)) 
+          return NULL; 
+    return (PyObject*)Py_BuildValue("i", fac(num)); 
+}  
+那reverse()怎么实现？由于已经知道如何返回单个值，这里将对reverse()的需求稍微修
+改下，返回两个值。将以元组的形式返回一对字符串，第一个元素是传递进来的原始字符串，
+第二个是新逆序的字符串。 
+为了更灵活地调用函数，这里将该函数命名为Extest.doppel()，来表示其行为与reverse()
+有所不同。将C 代码封装进Extest_doppel()函数中，如下所示。 
+ 
+static PyObject * 
+Extest_doppel(PyObject *self, PyObject *args) { 
+    char *orig_str; 
+    if (!PyArg_ParseTuple(args, "s", &orig_str)) return NULL; 
+    return (PyObject*)Py_BuildValue("ss", orig_str, \ 
+        reverse(strdup(orig_str))); 
+}  
+在Extest_fac()中，接受一个字符串值作为输入，将其存入orig_str 中。注意，选择使用
+“s”这个转换编码。接着调用strdup()来创建该字符串的副本。（因为需要返回原始字符串，
+同时需要一个字符串来逆序，所以最好的选择是直接复制原始字符串。）strdup()创建并返回
+一个副本，该副本立即传递给reverse()。这样就获得逆序后的字符串。 
+如你所见，Py_BuildValue()使用转换字符串“ss”将这两个字符串放到了一起。这里创建
+了含有原始字符串和逆序字符串的元组。都结束了吗？还没有。 
+这里遇到了C 语言中一个危险的东西：内存泄露（分配了内存但没有释放）。内存泄露
+就相当于从图书馆借书，但是没有归还。在获取了某些资源后，当不再需要时，一定要释放
+这些资源。我们怎么能在代码中犯这样的错误呢（虽然看上去很无辜）？ 
+当Py_BuildValue()将值组合到一个Python 对象并返回时，它会创建传入数据的副本。在
+这里的例子中，创建了一对字符串。问题在于分配了第二个字符串的内存，但在结束时没有
+释放这段内存，导致了内存泄露。而实际想做的是构建返回值，接着释放在封装函数中分配
+的内存。为此，必须像下面这样修改代码。 
+ 
+static PyObject * 
+Extest_doppel(PyObject *self, PyObject *args) { 
+    char *orig_str;  
+ 
+ 
+ 
+// original string 
+
+第8 章  扩展Python 295 
+ 
+    char *dupe_str;  
+ 
+ 
+ 
+// reversed string 
+    PyObject* retval; 
+ 
+    if (!PyArg_ParseTuple(args, "s", &orig_str)) return NULL; 
+    retval = (PyObject*)Py_BuildValue("ss", orig_str, \ 
+        dupe_str=reverse(strdup(orig_str))); 
+    free(dupe_str); 
+    return retval; 
+}  
+这里引入了dupe_str 变量来指向新分配的字符串并构建返回对象。接着使用free()来释放
+分配的内容，并最终返回给调用者。现在才算真正完成。 
+为模块编写PyMethodDef  ModuleMethods[]数组 
+既然两个封装函数都已完成，下一步就需要在某个地方将函数列出来，以便让Python 解
+释器知道如何导入并访问这些函数。这就是ModuleMethods[]数组的任务。 
+这个数组由多个子数组组成，每个子数组含有一个函数的相关信息，母数组以NULL 数
+组结尾，表示在此结束。对Extest 模块来说，创建下面这个ExtestMethods[]数组。 
+ 
+static PyMethodDef 
+ExtestMethods[] = { 
+    { "fac", Extest_fac, METH_VARARGS }, 
+    { "doppel", Extest_doppel, METH_VARARGS }, 
+    { NULL, NULL }, 
+};  
+首先给出了在Python 中访问所用到的名称，接着是对应的封装函数。常量
+METH_VARARGS 表示参数以元组的形式给定。如果使用PyArg_ParseTupleAndKeywords()
+来处理包含关键字的参数，需要将这个标记与METH_KEYWORDS 常量进行逻辑OR 操作。
+最后，使用一对NULL 来表示结束函数信息列表，还表示只含有两个函数。 
+添加模块初始化函数void initModule() 
+最后一部分是模块初始化函数。当解释器导入模块时会调用这段代码。这段代码中只调
+用了Py_InitModule()函数，其第一个参数是模块名称，第二个是ModuleMethods[]数组，这样
+解释器就可以访问模块函数。对于Extest 模块，其initExtest()过程如下所示。 
+ 
+void initExtest() { 
+         Py_InitModule("Extest", ExtestMethods); 
+    } 
+ 
+现在已经完成了所有封装任务。将Extest1.c 中原先的代码与所有这些代码合并到一个新
+文件Extest2.c 中。至此，就完成了示例中的所有开发步骤。 
+
+296 第1 部分  通用应用主题 
+ 
+另一种创建扩展的方式是先编写封装代码，使用存根（stub）函数、测试函数或假函数，
+在开发的过程中将其替换成具有完整功能的实现代码。通过这种方式，可以保证Python 和C
+之间接口的正确性，并使用Python 来测试相应的C 代码。 
+8.2.3  编译 
+现在进入了编译阶段。为了构建新的Python 封装扩展，需要将其与Python 库一同编译。
+（从2.0 版开始）扩展的编译步骤已经跨平台标准化了，简化了扩展编写者的工作。现在使用
+distutils 包来构建、安装和发布模块、扩展和软件包。从Python 2.0 开始，这种方式替换了老
+版本1.x 中使用makefile 构建扩展的方式。使用distutils，可以通过下面这些简单的步骤构建
+扩展。 
+1．创建setup.py。 
+2．运行setup.py 来编译并链接代码。 
+3．在Python 中导入模块。 
+4．测试函数。 
+创建setup.py 
+第一步就是创建setup.py 文件。大部分编译工作由setup()函数完成。在该函数之前的所
+有代码都只是预备步骤。为了构建扩展模块，需要为每个扩展创建一个Extension 实例。因为
+这里只有一个扩展，所以只需一个Extension 实例。 
+ 
+Extension('Extest', sources=['Extest2.c']) 
+ 
+第一个参数是扩展的完整名称，以及该扩展中拥有的所有高阶包。该名称应该使用完整
+的点分割表示方式。由于这里是个独立的包，因此名称为“Extest”。sources 参数是所有源码
+文件的列表。同样，只有一个文件Extest2.c。 
+现在就可以调用setup()。其接受一个命名参数来表示构建结果的名称，以及一个列表来
+表示需要构建的内容。由于这里是创建一个扩展，因此设置一个含有扩展模块的列表，传递
+给ext_modules。语法如下所示。 
+ 
+setup('Extest', ext_modules=[...]) 
+ 
+由于这里只有一个模块，因此将扩展模块的实例化代码集成到setup()的调用中，在预备
+步骤中将模块名称设置为“常量”MOD。 
+ 
+MOD = 'Extest' 
+setup(name=MOD, ext_modules=[ 
+    Extension(MOD, sources=['Extest2.c'])]) 
+ 
+setup()中含有许多其他选项，这里就不一一列举了。读者可以在官方的Python 文档中找
+
+第8 章  扩展Python 297 
+ 
+到关于创建setup.py 和调用setup()的更多信息，在本章末尾可以找到这些链接。示例8-2 显
+示了示例扩展中用到的完整脚本。 
+示例8-2  构建脚本（setup.py） 
+这段脚本将扩展编译到build/lib.*子目录中。 
+ 
+ 
+运行setup.py 来编译并链接代码 
+既然有了setup.py 文件，就运行python setup.py build 命令构建扩展。这里在Mac 上完成
+构建（根据操作系统和Python 版本的不同，对应的输出与下面的内容会有些差别）。 
+ 
+$ python setup.py build 
+running build 
+running build_ext 
+building 'Extest' extension 
+creating build 
+creating build/temp.macosx-10.x-fat-2.x 
+gcc -fno-strict-aliasing -Wno-long-double -no-cpp- 
+precomp-mno-fused-madd -fno-common -dynamic -DNDEBUG –g 
+-I/usr/include -I/usr/local/include -I/sw/include -I/ 
+usr/local/include/python2.x -c Extest2.c -o build/temp.macosx-10.x- 
+fat2.x/Extest2.o 
+creating build/lib.macosx-10.x-fat-2.x 
+gcc -g -bundle -undefined dynamic_lookup -L/usr/lib -L/ 
+usr/local/lib -L/sw/lib -I/usr/include -I/usr/local/ 
+include -I/sw/include build/temp.macosx-10.x-fat-2.x/Extest2.o -o 
+build/lib.macosx-10.x-fat-2.x/Extest.so 
+8.2.4  导入并测试 
+最后一步是回到Python 中使用扩展包，就像这个扩展就是用纯Python 编写的那样。 
+在Python 中导入模块 
+扩展模块会创建在build/lib.*目录下，即运行setup.py 脚本的位置。要么切换到这个目录
+中，要么用下面的方式将其安装到Python 中。 
+ 
+$ python setup.py install 
+
+298 第1 部分  通用应用主题 
+ 
+ 
+如果安装该扩展，会得到下面的输出。 
+ 
+running install 
+running build 
+running build_ext 
+running install_lib 
+copying build/lib.macosx-10.x-fat-2.x/Extest.so -> 
+/usr/local/lib/python2.x/site-packages 
+ 
+现在可以在解释器中测试模块了。 
+ 
+>>> import Extest 
+>>> Extest.fac(5) 
+120 
+>>> Extest.fac(9) 
+362880 
+>>> Extest.doppel('abcdefgh') 
+('abcdefgh', 'hgfedcba') 
+>>> Extest.doppel("Madam, I'm Adam.") 
+("Madam, I'm Adam.", ".madA m'I ,madaM") 
+添加测试函数 
+需要完成的最后一件事是添加测试函数。实际上，我们已经有测试函数了，就是那个
+main()函数。但要小心，在扩展代码中含有main()函数有潜在的风险，因为系统中应该只有
+一个main()函数。将main()的名称改成test()并对其封装可以消除这个风险，添加Extest_test()
+并更新ExtestMethods 数组，如下所示。 
+ 
+static PyObject * 
+Extest_test(PyObject *self, PyObject *args) { 
+    test(); 
+    return (PyObject*)Py_BuildValue(""); 
+} 
+static PyMethodDef 
+ExtestMethods[] = { 
+    { "fac", Extest_fac, METH_VARARGS }, 
+    { "doppel", Extest_doppel, METH_VARARGS }, 
+    { "test", Extest_test, METH_VARARGS }, 
+    { NULL, NULL }, 
+};  
+Extest_test()模块函数仅仅运行test()并返回一个空字符串，在Python 中是一个None 值返
+回给调用者。 
+现在可以在Python 中进行相同的测试。 
+
+第8 章  扩展Python 299 
+ 
+ 
+>>> Extest.test() 
+4! == 24 
+8! == 40320 
+12! == 479001600 
+reversing 'abcdef', we get 'fedcba' 
+reversing 'madam', we get 'madam' 
+>>> 
+ 
+示例8-3 中列出了Extest2.c 的最终版本，上述输出都是用这个版本来完成的。 
+示例8-3  C 函数库的Python 封装版本（Extest2.c） 
+ 
+ 
+
+300 第1 部分  通用应用主题 
+ 
+ 
+ 
+ 
+在这个示例中，仅在同一个文件中将原始的C 代码与Python 相关的封装代码进行了
+隔离。这样方便阅读，在这个短小的例子中也没有什么问题。但在实际应用中，源码文
+件会越写越大，可以将其分割到不同的源码文件中，使用如ExtestWrappers.c 这样好记的
+名字。 
+8.2.5  引用计数 
+也许读者还记得Python 使用引用计数来追踪对象，并释放不再引用的对象。这是Python
+垃圾回收机制的一部分。当创建扩展时，必须额外注意如何处理Python 对象，必须留心是否
+需要修改此类对象的引用计数。 
+
+第8 章  扩展Python 301 
+ 
+一个对象有两种类型的引用，一种是拥有引用（owned reference），对该对象的引用计数递
+增1 表示拥有该对象的所有权。当从零创建一个Python 对象时，就一定会含有一个拥有引用。 
+当使用完一个Python 对象后，必须对所有权进行处理，要么递减其引用计数，通过传递
+它转移其所有权，要么将该对象存储到其他容器。如果没有处理引用计数，则会导致内存泄漏。 
+对象还有一个借用引用（borrowered reference）。相对来说，这种方式的责任就小一些。一
+般用于传递对象的引用，但不对数据进行任何处理。只要在其引用计数递减至零后不继续使用
+这个引用，就无须担心其引用计数。可以通过递增对象的引用计数来将借用引用转成拥有引用。 
+Python 提供了一对C 宏来改变Python 对象的引用计数。如表8-3 所示。 
+表8-3  用于执行Python 对象引用计数的宏 
+函    数 
+说    明 
+Py_INCREF(obj) 
+递增对象obj 的引用计数 
+Py_DECREF(obj) 
+递减对象obj 的引用计数 
+ 
+在上面的Extest_test()函数中，在构建PyObject 对象时使用空字符串来返回None。但可
+以通过拥有一个None 对象来完成这个任务。即递增一个PyNone 的引用计数并显式返回这个
+对象，如下所示。 
+ 
+static PyObject * 
+Extest_test(PyObject *self, PyObject *args) { 
+        test(); 
+        Py_INCREF(Py_None); 
+        return PyNone; 
+}  
+Py_INCREF()和 Py_DECREF()还有一个先检测对象是否为 NULL 的版本，分别为
+Py_XINCREF()和Py_XDECREF()。 
+这里强烈建议读者阅读相关Python 文档中关于扩展和嵌入Python 里面所有关于引用计
+数的细节（详见附录C 中的参考文献部分）。 
+8.2.6  线程和全局解释器锁 
+扩展的编写者必须要注意，他们的代码可能在多线程Python 环境中执行。4.3.1 节介绍了
+Python 虚拟机（Python Virtual Machine，PVM）和全局解释器锁（Global Interpreter Lock，GIL），
+描述了在PVM 中，任意时间只有一个线程在执行，GIL 就负责阻止其他线程的执行。除此之
+外，还指出了调用外部函数的代码，如扩展代码，将会锁住GIL，直至外部函数返回。 
+但也提到了一种折衷方法，即让扩展开发者释放GIL。例如，在执行系统调用前就可以
+实现。这是通过将代码和线程隔离实现的，这些线程使用了另外的两个C 宏：
+Py_BEGIN_ALLOW_THREADS 和Py_END_ALLOW_THREADS，保证了运行和非运行时的
+安全性。用这些宏围起来的代码块会允许其他线程在其执行时同步执行。 
+
+302 第1 部分  通用应用主题 
+ 
+与引用计数宏相同，这里也建议读者阅读Python 文档中关于扩展和嵌入Python 的内容，
+以及Python/C API 参考手册。 
+8.3  相关主题 
+本章最后一节将介绍其他用来编写扩展的工具，如SWIG、Pyrex、Cython、psyco 和PyPy。
+最后简要讨论一个相关主题，即嵌入Python，以此来结束本章。 
+8.3.1  SWIG 
+这款称为简化的封装和接口生成器（Simplified Wrapper and Interface Generator，SWIG）
+的外部工具，由David Beazley 编写，他同时也是Python Essential Reference 的作者。这款工
+具可以将注释过的C/C++头文件生成可以用于封装Python、Tcl 和Perl 的封装代码。使用SWIG
+可以从本章前面介绍的样板代码中解放出来。只须关注如何用C/C++解决实际问题。所要做
+的就是按照SWIG 的格式创建相应的文件，SWIG 会为用户完成剩下的工作。在下面的链接
+中可以找到关于SWIG 的更多信息。 
+• http://swig.org 
+• http://en.wikipedia.org/wiki/SWIG 
+8.3.2  Pyrex 
+通过Python C API 或SWIG 创建C/C++扩展的一个缺点就是必须要编写C/C++代码。这
+种方式虽然可以使用C/C++的强大功能，但更麻烦的是，也会遇到其中的陷阱。Pyrex 提供
+了一种新的方式，既可以利用扩展的优势，也不必牵扯到C/C++这些令人头疼的内容。Pyrex
+是一种新的语言，专门用于编写Python 扩展。它是C 和Python 的混合体，但更接近于Python。
+实际上，在Pyrex 官网上，描述是“Pyrex 是含有C 数据类型的Python”。所要做的就是以Pyrex
+语言编写代码，并运行Pyrex 编译器编译代码，Pyrex 会创建C 文件，用来编译成普通的扩
+展。通过Pyrex 可以永远脱离C 语言。可以在Pyrex 官网获得Pyrex。 
+• http://cosc.canterbury.ac.nz/~greg/python/Pyrex 
+• http://en.wikipedia.org/wiki/Pyrex_(programming_language) 
+8.3.3  Cython 
+Cython 起始于2007 年一个Pyrex 的分支， Cython 的第一个版本是0.9.6，与Pyrex 0.9.6
+同时出现。与Pyrex 开发团队的谨慎相比，Cython 开发者在Cpython 的开发过着中更加敏捷
+和激进。这导致了向Cython 添加的补丁、改进和扩展比Pyrex 要多得多。但这两个项目都是
+活跃的项目。可以通过下面的链接来阅读关于Cython 及其与Pyrex 区别的更多信息。 
+• 
+http://cython.org 
+
+第8 章  扩展Python 303 
+ 
+• 
+http://wiki.cython.org/DifferencesFromPyrex 
+• 
+http://wiki.cython.org/FAQ 
+8.3.4  Psyco 
+Pyrex 和Cython 都可以不用编写纯C 代码之外。但需要学习新的语法（还有新的语言）。
+最终，Pyrex/Cython 的代码都将转成C 的形式。开发者编写扩展或使用类似SWIG 或
+Pyrex/Cython 的工具来提升效率。但如果只用Python 编写代码就能获得这样的性能提升呢？ 
+Pysco 的理念与前面的方式有很大不同。除了编写C 代码之外，为什么不直接让已有的
+Python 代码运行得更快呢？Psyco 类似一个即时（JIT）编译器，所以不需要改变Python 源码，
+只需导入Psyco 模块，让其在运行时优化代码。 
+Pysco还可以分析Python代码，找出其中瓶颈所在。甚至可以启用日志来查看Pysco在优
+化时做了哪些工作。唯一的限制是其只支持32位的Intel 386 架构（Linux、Mac OS X、Windows、
+BSD），其中运行Python 2.2.2-2.6.x版本，而不是3.x版。在撰写本书时，对2.7 版本的支持尚
+未完成。更多信息参见下面的链接
+①
+8.3.5  PyPy 
+。 
+• 
+http://psyco.sf.net 
+• 
+http://en.wikipedia.org/wiki/Psyco 
+PyPy 是Psyco 的继承项目。其有一个非常宏伟的目标，即为开发解释型语言创建一个独
+立于平台或目标执行环境的通用开发环境。PyPy 自身从零起步，使用Python 编写创建一个
+Python 解释器。大部分人仍然都是这么认为的，但实际上，这个特定的解释器是整个PyPy
+生态系统的一部分。 
+这些工具集含有许多实用的东西，允许语言设计者仅仅关注解释型语言的解析和语义分
+析。而翻译到本地架构所有困难的部分时，如内存管理、字节码转换、垃圾回收、数值类型
+的内部表示、原始数据结构、原生架构等，工具集都会为设计者处理周全。 
+这是通过用含有限制、静态类型的Python（称为Rpython）来实现新语言的。前面提到，
+Python 是第一种实现的目标语言，所以用RPython 编写一个Python 解释器与PyPy 的字面意
+思很接近。但通过RPython 可以实现任何语言，而不仅仅是Python。 
+这个工具链会将RPython 代码转成某种底层显示，如C、Java 字节码或通用中间语言（CIL），
+即根据通用语言结构（Common Language Infrastructure, CLI）标准编写的语言字节码。换句话说，
+解释型语言的开发只需考虑语言设计，而很少关心其实现和目标架构。更多信息见下面的链接。 
+• 
+http://pypy.org 
+• 
+http://codespeak.net/pypy 
+                                                        
+① Pysco 已于2012 年3 月12 日终止。—译者注 
+ 
+
+304 第1 部分  通用应用主题 
+ 
+• 
+http://en.wikipedia.org/wiki/PyPy 
+8.3.6  嵌入Python 
+嵌入是Python 的另一项特性。其与扩展相反，不是将C 代码封装进Python 中，而是在
+C 应用中封装Python 解释器。这样可以为一个庞大、单一、要求严格、专有，并（或）针对
+关键任务的应用利用Python 解释器的强大功能。一旦在C 环境中拥有了Python 解释器，就
+进入一个全新的领域。 
+Python 提供了许多官方文档供扩展开发者来查阅相关信息。 
+http://docs.python.org/extending/embedding 中是其中一些与本章相关的Python 文档的链接。 
+扩展和嵌入 
+http://docs.python.org/ext 
+Python/C API 
+http://docs.python.org/c-api 
+发布Python 模块 
+http://docs.python.org/distutils 
+8.4  练习 
+8-1  扩展Python。Python 扩展有哪些优点？ 
+8-2  扩展Python。使用扩展有哪些缺点和危险？ 
+8-3  编写Python 扩展。获得一个C/C++编译器，并熟悉C/C++编程。创建一个简单的
+工具函数，并配置成一个扩展。在C/C++和Python 中执行并验证扩展。 
+8-4  从Python 移植到C。选取前几章中的一些练习，将其作为扩展模块移植到C/C++中。 
+8-5  封装C 代码。选取很久之前编写但想转成Python 的一段C/C++代码。将其作为一
+个扩展模块。 
+8-6  编写扩展Core Python Programming 或Core Python language Fundamentals。在面向对
+象编程章节的一个练习中，在一个类中创建一个dollarize()函数，用来将浮点数格式
+化为金融格式的字符串。创建一个扩展来封装dollarize()函数，并集成一个回归测试
+函数（如test()）到模块中。选做题：除了创建C 扩展之外，还在Pyrex 和Cython
+中重写dollarize()。 
+8-7  扩展与嵌入。扩展和嵌入有哪些区别？ 
+8-8  不编写扩展。将练习8-3、8-4 或8-5 中编写的C/C++代码在Pyrex 或Cython 中用
+伪Python 代码重写。描述使用Pyrex/Cython 编写代码与将C/C++代码集成进C 扩
+展中的经验。 
+
+ 
+ 
+ 
+第2 部分 
+Web 开发 
+II 

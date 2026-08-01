@@ -1,0 +1,84 @@
+100 第7 章  Web 爬虫 
+在上面这段代码中，我们为每个产品目录都编写了一个相应的解析方法。如果想建立
+一个价格汇总/比对程序的话，这显然是个不错的用例。在这里，需要针对不同产品的不同
+属性进行解析，例如对于电子类产品，可能要收集的是它的技术规格、附件以及价格信息；
+对于服装类产品，可能就更关心它们的大小和颜色。建议读者找一个零售类网站来亲自尝
+试一下，在shell 中通过相关的获取模式来收集不同目标项的大小、颜色与价格信息。如果
+这样做了，就等于在一个良好的状态下写出了第一个符合工业标准的蜘蛛程序。
+在某些情况下，想要爬取的网站必须要先行登录，然后才能进入该网站的某些部分。
+Scrapy 库目前对此也有了一个解决方法。它们实现了FormRequest 对象，该对象将以POST
+的形式来呼叫HTTP 服务器并获得响应。下面，就通过具体的蜘蛛程序代码来深入地了解
+一下：
+>>> class LoginSpider(BaseSpider): 
+>>>     name = 'example.com' 
+>>>     start_URLss = ['http://www.example.com/users/login.php'] 
+>>>     def parse(self, response): 
+>>> 
+return [FormRequest.from_response(response,  
+formdata={'username': 'john', 'password': 'secret'}, callback=self.after_  
+login)]  
+>>>     def after_login(self, response): 
+>>> 
+# check login succeed before going on 
+>>> 
+if "authentication failed" in response.body: 
+>>> 
+self.log("Login failed", level=log.ERROR) 
+>>> 
+return 
+对于只需要输入用户名和密码而无需任何验证码的网站，只需在上述代码中添加特定
+的详细登录信息即可。这也是解析方法的一部分，因为大多数情况下都想要在首页中进行
+登录的。在完成登录之后，就可以针对目标项以及其他细节信息来编写属于自己的回调方
+法after_login()了。 
+7.5  目标项管道 
+下面，来谈一谈关于目标项的后续处理。在这方面，Scrapy 库提供了一种为目标项定
+义管道的方式，可以通过这种方式来定义相关的目标项后续要执行怎样的处理。这是一种
+有条不紊的、优秀的程序设计思维。
+如果想要对之前所收集的目标项进行处理，如移除干扰词、执行大小写转换以及需要
+对目标中某个值进行其他处理，例如想根据出生日期（DOB）来计算年龄，或者根据原价
+
+7.5  目标项管道 101 
+格来计算折扣，这些都需要专门构建属于自己的目标项管道。而且到最后，可能还需要通
+过这些管道将目标项各自转储到某个文件中。
+下面就来看看这种方式的具体实现步骤。
+1．首先，需要在setting.py 中定义一个目标项管道： 
+ITEM_PIPELINES = { 
+    'myproject.pipeline.CleanPipeline': 300, 
+    'myproject.pipeline.AgePipeline': 500, 
+    'myproject.pipeline.DuplicatesPipeline: 700, 
+    'myproject.pipeline.JsonWriterPipeline': 800, 
+} 
+2．然后，来编写一个类，清理一下目标项： 
+>>>from scrapy.exceptions import Item 
+>>>import datetime 
+>>>import datetime 
+>>>class AgePipeline(object): 
+>>>    def process_item(self, item, spider): 
+>>>
+if item['DOB']: 
+>>>
+item['Age'] = (datetime.datetime. 
+strptime(item['DOB'], '%d-%m-%y').date()-datetime.datetime.  
+strptime('currentdate, '%d-%m-%y').date()).days/365 
+>>>          return item 
+3．接着，需要根据出生日期来推导出年龄，这里将会用到Python 的日期函数： 
+>>>from scrapy import signals 
+>>>from scrapy.exceptions import Item 
+>>>class DuplicatesPipeline(object): 
+>>>    def __init__(self): 
+>>>
+self.ids_seen = set()  
+>>>    def process_item(self, item, spider): 
+>>>
+if item['id'] in self.ids_seen: 
+>>>
+raise DropItem("Duplicate item found: %s" % item) 
+>>>
+else: 
+>>>
+self.ids_seen.add(item['id']) 
+>>>
+return item 
+4．还需要移除掉重复的内容。由于Python 的 set()数据结构可以确保其项目值的唯一
+性，所以我们可以用Scrapy 库来创建一个管道，下面是其实现代码DuplicatesPipeline.py： 
+>>> from scrapy import signals 

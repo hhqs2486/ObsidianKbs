@@ -1,0 +1,509 @@
+Kubernetes简介
+Kubernetes是谷歌开源的容器集群管理系统，是Google多年大规模容器管理技术Borg的
+开源版本，主要功能包括：
+基于容器的应用部署、维护和滚动升级
+负载均衡和服务发现
+跨机器和跨地区的集群调度
+自动伸缩
+无状态服务和有状态服务
+广泛的Volume支持
+插件机制保证扩展性
+Kubernetes发展非常迅速，已经成为容器编排领域的领导者。
+Kubernetes架构
+1. Kubernetes简介
+8
+
+Kubernetes主要由以下几个核心组件组成：
+etcd保存了整个集群的状态；
+apiserver提供了资源操作的唯一入口，并提供认证、授权、访问控制、API注册和
+发现等机制；
+controller manager负责维护集群的状态，比如故障检测、自动扩展、滚动更新等；
+scheduler负责资源的调度，按照预定的调度策略将Pod调度到相应的机器上；
+kubelet负责维护容器的生命周期，同时也负责Volume（CVI）和网络（CNI）的管
+理；
+Container runtime负责镜像管理以及Pod和容器的真正运行（CRI）；
+kube-proxy负责为Service提供cluster内部的服务发现和负载均衡
+1. Kubernetes简介
+9
+
+Kubernetes基本概念
+Pod
+Pod是一组紧密关联的容器集合，它们共享IPC、Network和UTC namespace，是
+Kubernetes调度的基本单位。Pod的设计理念是支持多个容器在一个Pod中共享网络和
+文件系统，可以通过进程间通信和文件共享这种简单高效的方式组合完成服务。
+在Kubernetes中，所有对象都使用manifest（yaml或json）来定义，比如一个简单的
+nginx服务可以定义为nginx.yaml，它包含一个镜像为nginx的容器：
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+  labels:
+    app: nginx
+spec:
+  containers:
+  - name: nginx
+    image: nginx
+    ports:
+    - containerPort: 80
+Node
+1.1 基本概念
+10
+
+Node是Pod真正运行的主机，可以物理机，也可以是虚拟机。为了管理Pod，每个Node
+节点上至少要运行container runtime（比如docker或者rkt）、 kubelet 和 kube-
+proxy 服务。
+Namespace
+Namespace是对一组资源和对象的抽象集合，比如可以用来将系统内部的对象划分为不
+同的项目组或用户组。常见的pods, services, replication controllers和deployments等都
+是属于某一个namespace的（默认是default），而node, persistentVolumes等则不属于
+任何namespace。
+Service
+Service是应用服务的抽象，通过labels为应用提供负载均衡和服务发现。匹配labels的
+Pod IP和端口列表组成endpoints，由kube-proxy负责将服务IP负载均衡到这些
+endpoints上。
+1.1 基本概念
+11
+
+每个Service都会自动分配一个cluster IP（仅在集群内部可访问的虚拟地址）和DNS
+名，其他容器可以通过该地址或DNS来访问服务，而不需要了解后端容器的运行。
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx
+spec:
+  ports:
+  - port: 8078 # the port that this service should serve on
+    name: http
+    # the container on each pod to connect to, can be a name
+    # (e.g. 'www') or a number (e.g. 80)
+    targetPort: 80
+    protocol: TCP
+  selector:
+    app: nginx
+Label
+1.1 基本概念
+12
+
+Label是识别Kubernetes对象的标签，以key/value的方式附加到对象上（key最长不能超
+过63字节，value可以为空，也可以是不超过253字节的字符串）。
+Label不提供唯一性，并且实际上经常是很多对象（如Pods）都使用相同的label来标志
+具体的应用。
+Label定义好后其他对象可以使用Label Selector来选择一组相同label的对象（比如
+ReplicaSet和Service用label来选择一组Pod）。Label Selector支持以下几种方式：
+等式，如 app=nginx 和 env!=production 
+集合，如 env in (production, qa) 
+多个label（它们之间是AND关系），如 app=nginx,env=test 
+Annotations
+Annotations是key/value形式附加于对象的注解。不同于Labels用于标志和选择对象，
+Annotations则是用来记录一些附加信息，用来辅助应用部署、安全策略以及调度策略
+等。比如deployment使用annotations来记录rolling update的状态。
+1.1 基本概念
+13
+
+Kubernetes 101
+体验Kubernetes最简单的方法是跑一个nginx容器，然后使用kubectl操作该容器。
+Kubernetes提供了一个类似于 docker run 的命令 kubectl run ，可以方便的创建一
+个容器（实际上创建的是一个由deployment来管理的Pod）：
+$ kubectl run --image=nginx nginx-app --port=80               
+deployment "nginx-app" created                                       
+  
+$ kubectl get pods
+NAME                         READY     STATUS    RESTARTS   AGE
+nginx-app-4028413181-cnt1i   1/1       Running   0          52s
+等到容器变成Running后，就可以用 kubectl 命令来操作它了，比如
+ kubectl get  - 类似于 docker ps ，查询资源列表
+ kubectl describe  - 类似于 docker inspect ，获取资源的详细信息
+ kubectl logs  - 类似于 docker logs ，获取容器的日志
+ kubectl exec  - 类似于 docker exec ，在容器内执行一个命令
+$ kubectl get pods
+NAME                         READY     STATUS    RESTARTS   AGE
+nginx-app-4028413181-cnt1i   1/1       Running   0          6m
+$ kubectl exec nginx-app-4028413181-cnt1i ps aux
+USER       PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMM
+AND
+root         1  0.0  0.5  31736  5108 ?        Ss   00:19   0:00 ngin
+x: master process nginx -g daemon off;
+nginx        5  0.0  0.2  32124  2844 ?        S    00:19   0:00 ngin
+x: worker process
+root        18  0.0  0.2  17500  2112 ?        Rs   00:25   0:00 ps a
+ux
+$ kubectl describe pod nginx-app-4028413181-cnt1i
+Name:          nginx-app-4028413181-cnt1i
+Namespace:         default
+Node:          boot2docker/192.168.64.12
+1.2 Kubernetes 101
+14
+
+Start Time:        Tue, 06 Sep 2016 08:18:41 +0800
+Labels:        pod-template-hash=4028413181
+               run=nginx-app
+Status:        Running
+IP:            172.17.0.3
+Controllers:       ReplicaSet/nginx-app-4028413181
+Containers:
+  nginx-app:
+    Container ID:              docker://4ef989b57d0a7638ad9c5bbc22e16
+d5ea5b459281c77074fc982eba50973107f
+    Image:                 nginx
+    Image ID:              docker://sha256:4efb2fcdb1ab05fb03c9435234
+343c1cc65289eeb016be86193e88d3a5d84f6b
+    Port:                  80/TCP
+    State:                 Running
+      Started:             Tue, 06 Sep 2016 08:19:30 +0800
+    Ready:                 True
+    Restart Count:             0
+    Environment Variables:         <none>
+Conditions:
+  Type         Status
+  Initialized      True
+  Ready            True
+  PodScheduled     True
+Volumes:
+  default-token-9o8ks:
+    Type:          Secret (a volume populated by a Secret)
+    SecretName:    default-token-9o8ks
+QoS Tier:          BestEffort
+Events:
+  FirstSeen        LastSeen           Count      From               S
+ubobjectPath              Type           Reason         Message
+  ---------        --------           -----      ----               -
+------------              --------           ------         -------
+  8m           8m             1          {default-scheduler }        
+               Normal         Scheduled          Successfully assigne
+d nginx-app-4028413181-cnt1i to boot2docker
+  8m           8m             1          {kubelet boot2docker}      s
+pec.containers{nginx-app}         Normal         Pulling        pulli
+ng image "nginx"
+  7m           7m             1          {kubelet boot2docker}      s
+pec.containers{nginx-app}         Normal         Pulled         Succe
+1.2 Kubernetes 101
+15
+
+ssfully pulled image "nginx"
+  7m           7m             1          {kubelet boot2docker}      s
+pec.containers{nginx-app}         Normal         Created        Creat
+ed container with docker id 4ef989b57d0a
+  7m           7m             1          {kubelet boot2docker}      s
+pec.containers{nginx-app}         Normal         Started        Start
+ed container with docker id 4ef989b57d0a
+$ kubectl logs nginx-app-4028413181-cnt1i
+127.0.0.1 - - [06/Sep/2016:00:27:13 +0000] "GET / HTTP/1.0 " 200 612 
+"-" "-" "-"
+127.0.0.1 - - [06/Sep/2016:00:27:15 +0000] "GET / HTTP/1.0 " 200 612 
+"-" "-" "-"
+使用yaml定义Pod
+上面是通过 kubectl run 来启动了第一个Pod，但是 kubectl run 并不支持所有的
+功能。在Kubernetes中，更经常使用yaml文件来定义资源，并通过 kubectl create -
+f file.yaml 来创建资源。比如，一个简单的nginx Pod可以定义为：
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+  labels:
+    app: nginx
+spec:
+  containers:
+  - name: nginx
+    image: nginx
+    ports:
+    - containerPort: 80
+前面提到， kubectl run 并不是直接创建一个Pod，而是先创建一个Deployment资源
+（replicas=1），再由Deployment来自动创建Pod，这等价于这样一个配置：
+1.2 Kubernetes 101
+16
+
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  labels:
+    run: nginx-app
+  name: nginx-app
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      run: nginx-app
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        run: nginx-app
+    spec:
+      containers:
+      - image: nginx
+        name: nginx-app
+        ports:
+        - containerPort: 80
+          protocol: TCP
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+使用Volume
+Pod的生命周期通常比较短，只要出现了异常，就会创建一个新的Pod来代替它。那容
+器产生的数据呢？容器内的数据会随着Pod消亡而自动消失。Volume就是为了持久化容
+器数据而生，比如可以为redis容器指定一个hostPath来存储redis数据：
+1.2 Kubernetes 101
+17
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: redis
+spec:
+  containers:
+  - name: redis
+    image: redis
+    volumeMounts:
+    - name: redis-persistent-storage
+      mountPath: /data/redis
+  volumes:
+  - name: redis-persistent-storage
+    hostPath:
+      path: /data/
+Kubernetes volume支持非常多的插件，可以根据实际需要来选择：
+emptyDir
+hostPath
+gcePersistentDisk
+awsElasticBlockStore
+nfs
+iscsi
+flocker
+glusterfs
+rbd
+cephfs
+gitRepo
+secret
+persistentVolumeClaim
+downwardAPI
+azureFileVolume
+vsphereVolume
+使用Service
+1.2 Kubernetes 101
+18
+
+前面虽然创建了Pod，但是在kubernetes中，Pod的IP地址会随着Pod的重启而变化，并
+不建议直接拿Pod的IP来交互。那如何来访问这些Pod提供的服务呢？使用Service。
+Service为一组Pod（通过labels来选择）提供一个统一的入口，并为它们提供负载均衡
+和自动服务发现。比如，可以为前面的 nginx-app 创建一个service：
+$ kubectl expose deployment nginx-app --type=NodePort --port=80 --tar
+get-port=80
+service "nginx-app" exposed
+$ kubectl describe service nginx-app
+Name:              nginx-app
+Namespace:             default
+Labels:            run=nginx-app
+Selector:              run=nginx-app
+Type:              NodePort
+IP:                10.0.0.66
+Port:              <unset>    80/TCP
+NodePort:              <unset>    30772/TCP
+Endpoints:             172.17.0.3:80
+Session Affinity:          None
+No events.
+这样，在cluster内部就可以通过 http://10.0.0.66 和 http://node-ip:30772 来访
+问nginx-app。而在cluster外面，则只能通过 http://node-ip:30772 来访问。
+1.2 Kubernetes 101
+19
+
+Kubernetes 201
+扩展应用
+通过修改Deployment中副本的数量（replicas），可以动态扩展或收缩应用：
+这些自动扩展的容器会自动加入到service中，而收缩回收的容器也会自动从service中删
+除。
+$ kubectl scale --replicas=3 deployment/nginx-app
+$ kubectl get deploy
+NAME        DESIRED   CURRENT   UP-TO-DATE   AVAILABLE   AGE
+nginx-app   3         3         3            3           10m
+滚动升级
+1.3 Kubernetes 201
+20
+
+滚动升级（Rolling Update）通过逐个容器替代升级的方式来实现无中断的服务升级：
+kubectl rolling-update frontend-v1 frontend-v2 --image=image:v2
+1.3 Kubernetes 201
+21
+
+1.3 Kubernetes 201
+22
+
+1.3 Kubernetes 201
+23
+
+在滚动升级的过程中，如果发现了失败或者配置错误，还可以随时回滚：
+kubectl rolling-update frontend-v1 frontend-v2 --rollback
+需要注意的是，rolling-update只针对ReplicationController，不能用在策略不是
+RollingUpdate的Deployment上（Deployment可以在spec中设置更新策略为
+RollingUpdate，默认就是RollingUpdate）：
+  spec:
+    replicas: 3
+    selector:
+      matchLabels:
+        run: nginx-app
+    strategy:
+      rollingUpdate:
+        maxSurge: 1
+        maxUnavailable: 1
+      type: RollingUpdate
+1.3 Kubernetes 201
+24
+
+而更新应用的话，就可以直接用 kubectl set 命令：
+kubectl set image deployment/nginx-app nginx-app=nginx:1.9.1
+滚动升级的过程可以用 rollout 命令查看:
+$ kubectl rollout status deployment/nginx-app
+Waiting for rollout to finish: 2 out of 3 new replicas have been upda
+ted...
+Waiting for rollout to finish: 2 of 3 updated replicas are available.
+..
+Waiting for rollout to finish: 2 of 3 updated replicas are available.
+..
+Waiting for rollout to finish: 2 of 3 updated replicas are available.
+..
+Waiting for rollout to finish: 2 of 3 updated replicas are available.
+..
+Waiting for rollout to finish: 2 of 3 updated replicas are available.
+..
+deployment "nginx-app" successfully rolled out
+Deployment也支持回滚：
+$ kubectl rollout history deployment/nginx-app
+deployments "nginx-app"
+REVISION    CHANGE-CAUSE
+1        <none>
+2        <none>
+$ kubernetes kubectl rollout undo deployment/nginx-app
+deployment "nginx-app" rolled back
+资源限制
+Kubernetes通过cgroups提供容器资源管理的功能，可以限制每个容器的CPU和内存使
+用，比如对于刚才创建的deployment，可以通过下面的命令限制nginx容器最多只用
+50%的CPU和128MB的内存：
+1.3 Kubernetes 201
+25
+
+$ kubectl set resources deployment nginx-app -c=nginx --limits=cpu=50
+0m,memory=128Mi
+deployment "nginx" resource requirements updated
+这等同于在每个Pod中设置resources limits：
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    app: nginx
+  name: nginx
+spec:
+  containers:
+    - image: nginx
+      name: nginx
+      resources:
+        limits:
+          cpu: "500m"
+          memory: "128Mi"
+健康检查
+Kubernetes作为一个面向应用的集群管理工具，需要确保容器在部署后确实处在正常的
+运行状态。Kubernetes提供了两种探针（Probe，支持exec、tcp和http方式）来探测容
+器的状态：
+LivenessProbe：探测应用是否处于健康状态，如果不健康则删除重建改容器
+ReadinessProbe：探测应用是否启动完成并且处于正常服务状态，如果不正常则更
+新容器的状态
+对于已经部署的deployment，可以通过 kubectl edit deployment/nginx-app 来更
+新manifest，增加健康检查部分：
+1.3 Kubernetes 201
+26
+
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  labels:
+    app: nginx
+  name: nginx-default
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - image: nginx
+        imagePullPolicy: Always
+        name: http
+        resources: {}
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "128Mi"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 15
+          timeoutSeconds: 1
+        readinessProbe:
+          httpGet:
+            path: /ping
+            port: 80
+          initialDelaySeconds: 5
+          timeoutSeconds: 1
+1.3 Kubernetes 201
+27
+
+Kubernetes集群
+一个Kubernetes集群由分布式存储etcd、控制节点controller以及服务节点Node组成。
+控制节点主要负责整个集群的管理，比如容器的调度、维护资源的状态、自动扩展
+以及滚动更新等
+服务节点是真正运行容器的主机，负责管理镜像和容器以及cluster内的服务发现和
+负载均衡
+etcd集群保存了整个集群的状态
+详细的介绍请参考Kubernetes架构。
+集群联邦
+集群联邦（Federation）用于跨可用区的Kubernetes集群，需要配合云服务商（如
+GCE、AWS）一起实现。
+1.4 Kubernetes集群
+29
+
+详细的介绍请参考Federation。
+创建Kubernetes集群
+可以参考Kubernetes部署指南来部署一套Kubernetes集群。而对于初学者或者简单验证
+测试的用户，则可以使用以下几种更简单的方法。
+minikube
+创建Kubernetes cluster（单机版）最简单的方法是minikube:
+1.4 Kubernetes集群
+30
+
+$ minikube start
+Starting local Kubernetes cluster...
+Kubectl is now configured to use the cluster.
+$ kubectl cluster-info
+Kubernetes master is running at https://192.168.64.12:8443
+kubernetes-dashboard is running at https://192.168.64.12:8443/api/v1/
+proxy/namespaces/kube-system/services/kubernetes-dashboard
+To further debug and diagnose cluster problems, use 'kubectl cluster-
+info dump'.
+play-with-k8s
+Play with Kubernetes提供了一个免费的Kubernets体验环境，直接访问http://play-with-
+k8s.com就可以使用kubeadm来创建Kubernetes集群。注意，每个创建的集群最长可以
+使用4小时。
+Play with Kubernetes有个非常方便的功能：自动在页面上显示所有NodePort类型服务
+的端口，点解该端口即可访问对应的服务。
+详细使用方法可以参考Play-With-Kubernetes。
+Katacoda playground
+Katacoda playground也提供了一个免费的2节点Kuberentes体验环境，网络基于
+WeaveNet，并且会自动部署整个集群。但要注意，刚打开Katacoda playground页面时
+集群有可能还没初始化完成，可以在master节点上运行 launch.sh 等待集群初始化完
+成。
+部署并访问kubernetes dashboard的方法：
+# 在master node上面运行
+kubectl create -f https://git.io/kube-dashboard
+kubectl proxy --address='0.0.0.0' --port=8080 --accept-hosts='^*$'&
+然后点击Terminal Host 1右边的，从弹出的菜单里选择View HTTP port 8080 on Host
+1，即可打开Kubernetes的API页面。在该网址后面增加 /ui 即可访问dashboard。
+1.4 Kubernetes集群
+31

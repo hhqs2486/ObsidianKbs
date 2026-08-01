@@ -1,0 +1,2676 @@
+Part 3
+Unsupervised learning
+This third part of Machine Learning in Action deals with unsupervised learn-
+ing. This is a break from what was covered in the first two sections. In unsuper-
+vised learning we don’t have a target variable as we did in classification and
+regression. Instead of telling the machine “Predict Y for our data X,” we’re ask-
+ing “What can you tell me about X?” Things we ask the machine to tell us about
+X may be “What are the six best groups we can make out of X?” or “What three
+features occur together most frequently in X?”
+ We start our study of unsupervised learning by discussing clustering (group-
+ing similar items together) and the k-means clustering algorithm in chapter 10.
+Next, we look into association analysis or shopping basket analysis with the Apri-
+ori algorithm in chapter 11. Association analysis can help us answer the question
+“What items are mostly commonly bought together?” We finish our study of
+unsupervised learning in chapter 12 with a more efficient algorithm for associa-
+tion analysis: the FP-growth algorithm.
+
+
+207
+Grouping unlabeled items
+ using k-means clustering
+The 2000 and 2004 presidential elections in the United States were close—very close.
+The largest percentage of the popular vote that any candidate received was 50.7%
+and the lowest was 47.9%. If a percentage of the voters were to have switched sides,
+the outcome of the elections would have been different. There are small groups of
+voters who, when properly appealed to, will switch sides. These groups may not be
+huge, but with such close races, they may be big enough to change the outcome of
+the election.1 How do you find these groups of people, and how do you appeal to
+them with a limited budget? The answer is clustering. 
+This chapter covers
+■The k-means clustering algorithm
+■Cluster postprocessing
+■Bisecting k-means
+■Clustering geographic points
+1 For details on how microtargeting was used successfully in the 2004 U.S. presidential campaign, see
+Fournier, Sosnik, and Dowd, Applebee’s America (Simon & Schuster, 2006).
+
+208
+CHAPTER 10
+Grouping unlabeled items using k-means clustering
+ Let me tell you how it’s done. First, you collect information on people either with
+or without their consent: any sort of information that might give some clue about
+what is important to them and what will influence how they vote. Then you put this
+information into some sort of clustering algorithm. Next, for each cluster (it would be
+smart to choose the largest one first) you craft a message that will appeal to these vot-
+ers. Finally, you deliver the campaign and measure to see if it’s working. 
+ Clustering is a type of unsupervised learning that automatically forms clusters of
+similar things. It’s like automatic classification. You can cluster almost anything, and
+the more similar the items are in the cluster, the better your clusters are. In this chap-
+ter, we’re going to study one type of clustering algorithm called k-means. It’s called k-
+means because it finds k unique clusters, and the center of each cluster is the mean of
+the values in that cluster. You’ll see this in more detail in a little bit. 
+ Before we get into k-means, let’s talk about cluster identification. Cluster identifi-
+cation tells an algorithm, “Here’s some data. Now group similar things together and
+tell me about those groups.” The key difference from classification is that in classifica-
+tion you know what you’re looking for. That’s not the case in clustering. Clustering is
+sometimes called unsupervised classification because it produces the same result as clas-
+sification but without having predefined classes. 
+ With cluster analysis we’re trying to put similar things in a cluster and dissimilar
+things in a different cluster. This notion of similarity depends on a similarity mea-
+surement. You’ve seen different similarity measures in previous chapters, and they’ll
+come up in later chapters as well. The type of similarity measure used depends on
+the application. 
+ We’ll build the k-means algorithm and see it in action. We’ll next discuss some
+drawbacks of the simple k-means algorithm. To improve some of these problems, we
+can apply postprocessing to produce better clusters. Next, you’ll see a more efficient
+version of k-means called bisecting k-means. Finally, you’ll see an example where we’ll
+use bisecting k-means to find optimal parking locations while visiting multiple night-
+life hotspots. 
+10.1
+The k-means clustering algorithm
+k-means is an algorithm that will find k clusters for a given dataset. The number of
+clusters k is user defined. Each cluster is described by a single point known as the
+centroid. Centroid means it’s at the center of all the points in the cluster. 
+k-means clustering
+Pros: Easy to implement 
+Cons: Can converge at local minima; slow on very large datasets 
+Works with: Numeric values
+
+209
+The k-means clustering algorithm
+ The k-means algorithm works like this. First, the k centroids are randomly assigned
+to a point. Next, each point in the dataset is assigned to a cluster. The assignment is done
+by finding the closest centroid and assigning the point to that cluster. After this step, the
+centroids are all updated by taking the mean value of all the points in that cluster. 
+ Here’s how the pseudo-code would look: 
+Create k points for starting centroids (often randomly)
+While any point has changed cluster assignment
+    for every point in our dataset:
+        for every centroid
+           calculate the distance between the centroid and point
+        assign the point to the cluster with the lowest distance 
+    for every cluster calculate the mean of the points in that cluster
+        assign the centroid to the mean
+I mentioned “closest” centroid. This implies some sort of distance measure. You can
+use any distance measure you please. The performance of k-means on a dataset will be
+determined by the distance measure you use. Let’s get started coding this. First, create
+a file called kMeans.py and enter the code from the following listing.
+from numpy import *
+def loadDataSet(fileName): 
+    dataMat = []          
+    fr = open(fileName)
+    for line in fr.readlines():
+        curLine = line.strip().split('\t')
+        fltLine = map(float,curLine) 
+        dataMat.append(fltLine)
+    return dataMat
+def distEclud(vecA, vecB):
+Listing 10.1
+k-means support functions
+General approach to k-means clustering
+1. Collect: Any method.
+2. Prepare: Numeric values are needed for a distance calculation, and nominal val-
+ues can be mapped into binary values for distance calculations.
+3. Analyze: Any method.
+4. Train: Doesn’t apply to unsupervised learning.
+5. Test: Apply the clustering algorithm and inspect the results. Quantitative error
+measurements such as sum of squared error (introduced later) can be used. 
+6. Use: Anything you wish. Often, the clusters centers can be treated as represen-
+tative data of the whole cluster to make decisions. 
+
+210
+CHAPTER 10
+Grouping unlabeled items using k-means clustering
+    return sqrt(sum(power(vecA - vecB, 2)))
+def randCent(dataSet, k):
+    n = shape(dataSet)[1]
+    centroids = mat(zeros((k,n)))
+    for j in range(n):                     
+        minJ = min(dataSet[:,j]) 
+        rangeJ = float(max(dataSet[:,j]) - minJ)
+        centroids[:,j] = minJ + rangeJ * random.rand(k,1)
+    return centroids
+The code in listing 10.1 contains a few helper functions you’ll need for the k-means
+algorithm. The first function, loadDataSet(), is the same as in previous chapters. It
+loads a text file containing lines of tab-delimited floats into a list. Each of these lists is
+appended to a list called dataMat, which is returned. The return value is a list contain-
+ing many other lists. This format allows you to easily pack values into a matrix. 
+ The next function, distEclud(), calculates the Euclidean distance between two
+vectors. This is our initial distance function, which you can replace with other distance
+metrics. 
+ Finally, the last function in listing 10.1 is randCent(), which creates a set of k ran-
+dom centroids for a given dataset. The random centroids need to be within the
+bounds of the dataset. This is accomplished by finding the minimum and maximum
+values of each dimension in the dataset. Random values from 0 to 1.0 are then chosen
+and scaled by the range and minimum value to ensure that the random points are
+within the bounds of the data. OK, let’s see these three functions in action. Save
+kMeans.py and enter the following code in your Python shell:
+>>> import kMeans
+>>> from numpy import *
+To create a data matrix from a text file, enter the following (testSet.txt is included
+with the source code for chapter 10): 
+>>> datMat=mat(kMeans.loadDataSet('testSet.txt'))
+You can explore this two-dimensional matrix. We’ll use it later to test the full k-means
+algorithm. Let’s see if randCent() works now. First, let’s see what the minimum and
+maximum values are in our matrix:
+>>> min(datMat[:,0])
+matrix([[-5.379713]])
+>>> min(datMat[:,1])
+matrix([[-4.232586]])
+>>> max(datMat[:,1])
+matrix([[ 5.1904]])
+>>> max(datMat[:,0])
+matrix([[ 4.838138]])
+Now let’s see if randCent() produces a value between min and max.
+>>> kMeans.randCent(datMat, 2)
+matrix([[-3.24278889, -0.04213842],
+        [-0.92437171,  3.19524231]])
+Create cluster 
+centroids
+
+211
+The k-means clustering algorithm
+It does, so these functions work as promised. Last, let’s test the distance metric. 
+>>> kMeans.distEclud(datMat[0], datMat[1])
+5.184632816681332
+Now that we have the support functions working, we’re ready to implement the full
+k-means algorithm. The algorithm will create k centroids, then assign each point to
+the closest centroid, and then recalculate the centroids. This process will repeat
+until the points stop changing clusters. Open kMeans.py and enter the code from
+the following listing. 
+def kMeans(dataSet, k, distMeas=distEclud, createCent=randCent):
+    m = shape(dataSet)[0]
+    clusterAssment = mat(zeros((m,2))) 
+    centroids = createCent(dataSet, k)
+    clusterChanged = True
+    while clusterChanged:
+        clusterChanged = False
+        for i in range(m):
+            minDist = inf; minIndex = -1
+            for j in range(k):                                
+                distJI = distMeas(centroids[j,:],dataSet[i,:])  
+                if distJI < minDist:                          
+                    minDist = distJI; minIndex = j
+            if clusterAssment[i,0] != minIndex: clusterChanged = True
+            clusterAssment[i,:] = minIndex,minDist**2
+        print centroids
+        for cent in range(k):                                            
+            ptsInClust = dataSet[nonzero(clusterAssment[:,0].A==cent)[0]]
+            centroids[cent,:] = mean(ptsInClust, axis=0)                 
+    return centroids, clusterAssment
+The k-means algorithm appears in listing 10.2. The function kMeans() accepts four
+input parameters. The dataset and the number of clusters to generate are the only
+required parameters. A function to use as the distance metric is optional, and a func-
+tion to create the initial centroids is also optional. The function starts out by finding
+the number of items in the dataset and then creates a matrix to store cluster assign-
+ments. The cluster assignment matrix, called clusterAssment, has two columns; one
+column is for the index of the cluster and the second column is to store the error.
+This error is the distance from the cluster centroid to the current point. We’ll use this
+error later on to measure how good our clusters are. 
+ You iterate until none of the data points changes its cluster. You create a flag called
+clusterChanged, and if this is True you continue iterating. The iteration is handled by
+a while loop. You next loop over all the data points to find the closest centroid. This is
+done by looping over all the centroids and measuring the distance to each one. B
+The distance is measured by whatever function you pass to distMeas. The default is
+distEclud(), which we wrote in listing 10.1. If any of these clusters changes, you
+update the clusterChanged flag.
+Listing 10.2
+The k-means clustering algorithm
+Find the 
+closest 
+centroid
+B
+Update centroid
+location C
+
+212
+CHAPTER 10
+Grouping unlabeled items using k-means clustering
+Finally, you loop over all the centroids and update their values. C This is done by first
+doing some array filtering to get all the points in a given cluster. Next, you take the
+mean values of all these points. The option axis=0 in the mean calculation does the
+mean calculation down the columns. Finally, the centroids and cluster assignments
+are returned. See figure 10.1.
+ Let’s see the code from listing 10.2 in action. After saving kMeans.py, enter the fol-
+lowing in your Python shell:
+>>> reload(kMeans)
+<module 'kMeans' from 'kMeans.pyc'>
+If you don’t have a copy of datMat from the previous example, you can enter the fol-
+lowing command (remember to import NumPy):
+>>> datMat=mat(kMeans.loadDataSet('testSet.txt'))
+Now you can cluster the data points in datMat. I have a hunch there should be four clus-
+ters, because the image looks like there could be four clusters, so enter the following:
+>>> myCentroids, clustAssing = kMeans.kMeans(datMat,4)
+[[-4.06724228  0.21993975]
+ [ 0.73633558 -1.41299247]
+ [-2.59754537  3.15378974]
+ [ 4.49190084  3.46005807]]
+[[-3.62111442 -2.36505947]
+Figure 10.1
+Clusters resulting from k-means clustering. After three iterations, the 
+algorithm converged on these results. Data points with similar shapes are in similar 
+clusters. The cluster centers are marked with a cross. 
+
+213
+Improving cluster performance with postprocessing 
+ [ 2.21588922 -2.88365904]
+ [-2.38799628  2.96837672]
+ [ 2.6265299   3.10868015]]
+[[-3.53973889 -2.89384326]
+ [ 2.65077367 -2.79019029]
+ [-2.46154315  2.78737555]
+      [ 2.6265299   3.10868015]]
+The four centroids are displayed. You can see after three iterations that k-means con-
+verges. A plot of these four centroids, along with the original data, is given in figure 10.1.
+ Everything went smoothly with this clustering, but things don’t always go that way.
+We’ll next talk about some possible problems with k-means clustering and how to fix
+those problems. 
+10.2
+Improving cluster performance with postprocessing 
+We talked about putting data points in k clusters where k is a user-defined parameter.
+How does the user know that k is the right number? How do you know that the clus-
+ters are good clusters? In the matrix with the cluster assignments is a value represent-
+ing the error of each point. This value is the squared error. It’s the squared distance of
+the point to the cluster center. We’ll discuss ways you can use this error to find out the
+quality of your clusters. 
+ Consider for a moment the plot in figure 10.2. This is the result of running k-
+means on a dataset with three clusters. k-means has converged, but the cluster assign-
+ment isn’t that great. The reason that k-means converged but we had poor clustering
+was that k-means converges on a local minimum, not a global minimum. (A local min-
+imum means that the result is good but not necessarily the best possible. A global
+minimum is the best possible.) 
+Figure 10.2
+Cluster 
+centroids incorrectly 
+assigned because of 
+poor initialization with 
+random initialization in 
+k-means. Additional 
+postprocessing is re-
+quired to clean up the 
+clusters.
+
+214
+CHAPTER 10
+Grouping unlabeled items using k-means clustering
+One metric for the quality of your cluster assignments you can use is the SSE, or sum
+of squared error. This is the sum of the values in column 1 of clusterAssment in list-
+ing 10.2. A lower SSE means that points are closer to their centroids, and you’ve done
+a better job of clustering. Because the error is squared, this places more emphasis on
+points far from the centroid. One sure way to reduce the SSE is to increase the num-
+ber of clusters. This defeats the purpose of clustering, so assume that you have to
+increase the quality of your clusters while keeping the number of clusters constant. 
+ How can you fix the situation in figure 10.2? You can postprocess the clusters. One
+thing you can do is take the cluster with the highest SSE and split it into two clusters.
+You can accomplish this by filtering out the points from the largest cluster and then
+running k-means on just those points with a k value set to 2. 
+ To get your cluster count back to the original value, you could merge two clusters.
+From looking at figure 10.2, it seems obvious to merge the incorrectly placed cen-
+troids at the bottom of the figure. That was easy to visualize in two dimensions, but
+how could you do that in 40 dimensions? 
+ Two quantifiable ideas are merging the closest centroids or merging the two cen-
+troids that increase the total SSE the least. You could calculate distances between all
+centroids and merge the closest two. The second method would require merging two
+clusters and then calculating the total SSE. You’d have to repeat this for all pairs of
+clusters to find the best pair to merge. We’ll next discuss an algorithm that uses these
+cluster-splitting techniques to form better clusters. 
+10.3
+Bisecting k-means
+To overcome the problem of poor clusters because of k-means getting caught in a
+local minimum, another algorithm has been developed. This algorithm, known as
+bisecting k-means, starts out with one cluster and then splits the cluster in two. It then
+chooses a cluster to split. The cluster to split is decided by minimizing the SSE.
+This splitting based on the SSE is repeated until the user-defined number of clusters
+is attained. 
+ Pseudocode for bisecting k-means will look like this:
+Start with all the points in one cluster
+While the number of clusters is less than k
+    for every cluster
+        measure total error
+        perform k-means clustering with k=2 on the given cluster
+        measure total error after k-means has split the cluster in two
+    choose the cluster split that gives the lowest error and commit this split
+Another way of thinking about this is to choose the cluster with the largest SSE and
+split it and then repeat until you get to the user-defined number of clusters. This
+doesn’t sound too difficult to code, does it? To see this in action, open kMeans.py and
+enter the code from the following listing. 
+
+215
+Bisecting k-means
+def biKmeans(dataSet, k, distMeas=distEclud):
+    m = shape(dataSet)[0]
+    clusterAssment = mat(zeros((m,2)))
+    centroid0 = mean(dataSet, axis=0).tolist()[0]  
+    centList =[centroid0]                                  
+    for j in range(m):
+        clusterAssment[j,1] = distMeas(mat(centroid0), dataSet[j,:])**2
+    while (len(centList) < k):
+        lowestSSE = inf
+        for i in range(len(centList)):
+            ptsInCurrCluster =\                                   
+                   dataSet[nonzero(clusterAssment[:,0].A==i)[0],:] 
+            centroidMat, splitClustAss = \                        
+                   kMeans(ptsInCurrCluster, 2 , distMeas)         
+            sseSplit = sum(splitClustAss[:,1])
+            sseNotSplit = \
+              sum(clusterAssment[nonzero(clusterAssment[:,0].A!=i)[0],1])
+            print "sseSplit, and notSplit: ",sseSplit,sseNotSplit
+            if (sseSplit + sseNotSplit) < lowestSSE:
+                bestCentToSplit = i
+                bestNewCents = centroidMat
+                bestClustAss = splitClustAss.copy()
+                lowestSSE = sseSplit + sseNotSplit
+        bestClustAss[nonzero(bestClustAss[:,0].A == 1)[0],0] =\ 
+                             len(centList)                        
+        bestClustAss[nonzero(bestClustAss[:,0].A == 0)[0],0] =\ 
+                             bestCentToSplit                    
+        print 'the bestCentToSplit is: ',bestCentToSplit
+        print 'the len of bestClustAss is: ', len(bestClustAss)
+        centList[bestCentToSplit] = bestNewCents[0,:]    
+        centList.append(bestNewCents[1,:])
+        clusterAssment[nonzero(clusterAssment[:,0].A == \
+                             bestCentToSplit)[0],:]= bestClustAss
+    return mat(centList), clusterAssment
+The code in listing 10.3 has the same arguments as kMeans() in listing 10.2. You give it
+a dataset, the number of clusters you want, and a distance measure, and it gives you the
+clusters. Similar to kMeans() in listing 10.2, you can change the distance metric used.
+ The function starts out by creating a matrix to store the cluster assignment and
+squared error for each point in the dataset. Next, one centroid is calculated for the
+entire dataset, and a list is created to hold all the centroids. B Now that you have a
+centroid, you can go over all the points in the dataset and calculate the error between
+that point and the centroid. Later, you’ll need the error. 
+ Next, you enter the while loop, which splits clusters until you have the desired
+number of clusters. You can measure the number of clusters you have by measuring
+the number of items in the cluster list. You’re going to iterate over all the clusters and
+find the best cluster to split. To do this, you need to compare the SSE after each split.
+You first initialize the lowest SSE to infinity; then you start looping over each cluster in
+the centList cluster list. For each of these clusters, you create a dataset of only the
+Listing 10.3
+The bisecting k-means clustering algorithm 
+Initially create 
+one cluster
+B
+Try 
+splitting 
+every 
+cluster
+C
+Update 
+the cluster 
+assignments
+D
+
+216
+CHAPTER 10
+Grouping unlabeled items using k-means clustering
+points from that cluster. This dataset is called ptsInCurrCluster and is fed into
+kMeans(). The k-means algorithm gives you two new centroids as well as the squared
+error for each of those centroids. C These errors are added up along with the error
+for the rest of the dataset. If this split produces the lowest SSE, then it’s saved. After
+you’ve decided which cluster to split, it’s time to apply this split. Applying the split is as
+easy as overwriting the existing cluster assignments for the cluster you’ve decided to
+split. When you applied kMeans() with two clusters, you had two clusters returned
+labeled 0 and 1. You need to change these cluster numbers to the cluster number
+you’re splitting and the next cluster to be added. This is done with two array filters. D
+Finally, these new cluster assignments are updated and the new centroid is appended
+to centList. 
+ When the while loop ends, the centroid list and the cluster assignments are
+returned, the same way that they’re done in kMeans(). 
+ Let’s see this in action. After you’ve entered the code from listing 10.3, save
+kMeans.py and enter the following in your Python shell: 
+>>> reload(kMeans)
+<module 'kMeans' from 'kMeans.py'>
+You can run it on our original dataset or you can load the “difficult” dataset in figure 10.2
+by entering the following:
+>>> datMat3=mat(kMeans.loadDataSet('testSet2.txt'))
+To run biKmeans(), enter the following command:
+>>> centList,myNewAssments=kMeans.biKmeans(datMat3,3)
+sseSplit, and notSplit:  491.233299302 0.0
+the bestCentToSplit is:  0
+the len of bestClustAss is:  60
+sseSplit, and notSplit:  75.5010709203 35.9286648164
+sseSplit, and notSplit:  21.40716341 455.304634485
+the bestCentToSplit is:  0
+the len of bestClustAss is:  40
+Now, let’s inspect the centroids:
+>>> centList
+[matrix([[-3.05126255,  3.2361123 ]]), matrix([[-0.28226155, -2.4449763 ]]), 
+matrix([[ 3.1084241,  3.0396009]])]
+You can run this multiple times and the clustering will converge to the global mini-
+mum, whereas the original kMeans() would occasionally get stuck in the local
+minimum. A plot of the data points and centroids after running biKmeans() is shown
+in figure 10.3. 
+ Now that you have the bisecting k-means algorithm working, you’re ready to put it
+to use on some real data. In the next section, we’ll take some geographic coordinates
+on a map and create clusters from that. 
+
+217
+Example: clustering points on a map
+10.4
+Example: clustering points on a map
+Here’s the situation: your friend Drew wants you to take him out on the town for his
+birthday. A number of other friends are going to come also, so you need to provide a
+plan that everyone can follow. Drew has given you a list of places he wants to go. This
+list is long; it has 70 establishments in it. I included the list in a file called portland-
+Clubs.txt, which is packaged with the code. The list contains similar establishments in
+the greater Portland, Oregon, area. 
+ Seventy places in one night! You decide the best strategy is to cluster these places
+together. You can arrange transportation to the cluster centers and then hit the places
+on foot. Drew’s list includes addresses, but addresses don’t give you a lot of informa-
+tion about how close two places are. What you need are the latitude and longitude.
+Then, you can cluster these places together and plan your trip. 
+Figure 10.3
+Cluster assignment after running the bisecting k-means algorithm. The 
+cluster assignment always results in good clusters.
+Example: using bisecting k-means on geographic data
+1. Collect: Use the Yahoo! PlaceFinder API to collect data.
+2. Prepare: Remove all data except latitude and longitude.
+3. Analyze: Use Matplotlib to make 2D plots of our data, with clusters and map.
+4. Train: Doesn’t apply to unsupervised learning.
+5. Test: Use biKmeans(), developed in section 10.4.
+6. Use: The final product will be your map with the clusters and cluster centers.
+
+218
+CHAPTER 10
+Grouping unlabeled items using k-means clustering
+You need a service that will convert an address to latitude and longitude. Luckily, Yahoo!
+provides such a service. We’re going to explore how to use the Yahoo! PlaceFinder API.
+Then, we’ll cluster our coordinates and plot the coordinates along with cluster centers
+to see how good our clustering job was. 
+10.4.1 The Yahoo! PlaceFinder API 
+The wonderful people at Yahoo! have provided a free API that will return a latitude
+and longitude for a given address. You can read more about it at the following URL:
+http://developer.yahoo.com/geo/placefinder/guide/. 
+ In order to use it, you need to sign up for an API key. To do that, you have to sign
+up for the Yahoo! Developer Network: http://developer.yahoo.com/. Create a desk-
+top app and you’ll get an appid. You’re going to need the appid to use the geocoder.
+A geocoder takes an address and returns the latitude and longitude of that address.
+The code listing will wrap all this together. Open kMeans.py and add the code from
+the following listing.
+import urllib
+import json
+def geoGrab(stAddress, city):
+    apiStem = 'http://where.yahooapis.com/geocode?'  
+    params = {}
+    params['flags'] = 'J'                           
+    params['appid'] = 'ppp68N8t'
+    params['location'] = '%s %s' % (stAddress, city)
+    url_params = urllib.urlencode(params)
+    yahooApi = apiStem + url_params      
+    print yahooApi                               
+    c=urllib.urlopen(yahooApi)
+    return json.loads(c.read())
+from time import sleep
+def massPlaceFind(fileName):
+    fw = open('places.txt', 'w')
+    for line in open(fileName).readlines():
+        line = line.strip()
+        lineArr = line.split('\t')
+        retDict = geoGrab(lineArr[1], lineArr[2])
+        if retDict['ResultSet']['Error'] == 0:
+            lat = float(retDict['ResultSet']['Results'][0]['latitude'])
+            lng = float(retDict['ResultSet']['Results'][0]['longitude'])
+            print "%s\t%f\t%f" % (lineArr[0], lat, lng)
+            fw.write('%s\t%f\t%f\n' % (line, lat, lng))
+        else: print "error fetching"
+        sleep(1)
+    fw.close()
+The code in listing 10.4 contains two functions: geoGrab() and massPlaceFind(). The
+function geoGrab() gets a dictionary of values from Yahoo, while massPlaceFind()
+automates this and saves the relevant information to a file. 
+Listing 10.4
+Yahoo! PlaceFinder API
+Set JSON as 
+return type
+B
+Print 
+outgoing URL
+C
+
+219
+Example: clustering points on a map
+ In geoGrab(), you first set the apiStem for Yahoo APIs; then you create a diction-
+ary. You’ll set various values of this dictionary, including flags=J, so that the output
+will be returned in the JSON format. B (If you’re not familiar with JSON, don’t worry.
+It’s a format for serializing arrays and dictionaries, but we won’t look at any JSON.
+JSON stands for JavaScript Object Notation. You can find more information at
+www.json.org.) You next use the urlencode() function from urllib to pack up your
+dictionary in a format you can pass on in a URL. Finally, open the URL and read the
+return value. The return value is in JSON format, so you use the JSON Python module
+to decode it into a dictionary. The decoded dictionary is returned, and you’ve finished
+geocoding one address. 
+ The second function in listing 10.4 is massPlaceFind(). This opens a tab-delimited
+text file and gets the second and third fields. These are fed to geoGrab(). The output
+dictionary from geoGrab() is then checked to see if there are any errors. If not, then the
+latitude and longitude are read out of the dictionary. These values are appended to the
+original line and written to a new file. If there’s an error, you don’t attempt to extract
+the latitude and longitude. Last, the sleep function is called to delay massPlaceFind()
+for one second. This is done to ensure that you don’t make too many API calls too
+quickly. If you do, you may get blocked, so it’s a good idea to put in this delay. 
+ After you’ve saved kMeans.py, enter the following in your Python shell:
+>>> reload(kMeans)
+<module 'kMeans' from 'kMeans.py'>
+To try out geoGrab, enter a street address and a city string such as
+>>> geoResults=kMeans.geoGrab('1 VA Center', 'Augusta, ME')
+http://where.yahooapis.com/
+geocode?flags=J&location=1+VA+Center+Augusta%2C+ME&appid=ppp68N6k
+The actual URL used is printed so you can see exactly what’s going on. If you get sick
+of seeing the URL, feel free to comment out that print statement in listing 10.4. C
+Now let’s see what was returned. It should be a big dictionary. 
+>>> geoResults
+{u'ResultSet': {u'Locale': u'us_US', u'ErrorMessage': u'No error', 
+u'Results': [{u'neighborhood': u'', u'house': u'1', u'county': u'Kennebec 
+County', u'street': u'Center St', u'radius': 500, u'quality': 85, u'unit': 
+u'', u'city': u'Augusta', u'countrycode': u'US', u'woeid': 12759521, 
+u'xstreet': u'', u'line4': u'United States', u'line3': u'', u'line2': 
+u'Augusta, ME  04330-6410', u'line1': u'1 Center St', u'state': u'Maine', 
+u'latitude': u'44.307661', u'hash': u'B8BE9F5EE764C449', u'unittype': u'', 
+u'offsetlat': u'44.307656', u'statecode': u'ME', u'postal': u'04330-6410', 
+u'name': u'', u'uzip': u'04330', u'country': u'United States', 
+u'longitude': u'-69.776608', u'countycode': u'', u'offsetlon': u'-
+69.776528',u'woetype': 11}], u'version': u'1.0', u'Error': 0, u'Found': 1, 
+u'Quality': 87}}
+This is a dictionary with one key, ResultSet, which contains another dictionary with the
+following keys: Locale, ErrorMessage, Results, version, Error, Found, and Quality.
+
+220
+CHAPTER 10
+Grouping unlabeled items using k-means clustering
+ You can explore all these things, but the two we’re interested in are Error and
+Results. 
+ The Error key tells us the error code. 0 means that there were no errors. Anything
+else means that we didn’t get the address we were looking for. You can get this error by
+typing
+>>> geoResults['ResultSet']['Error']
+0
+Now let’s see the latitude and longitude. You can get these by entering the following: 
+>>> geoResults['ResultSet']['Results'][0]['longitude']
+u'-69.776608'
+>>> geoResults['ResultSet']['Results'][0]['latitude']
+u'44.307661'
+These are strings, and you’ll have to get them as floats using float() to use them as
+numbers. Now, to see this in action on multiple lines, execute the second function in
+listing 10.4: 
+>>> kMeans.massPlaceFind('portlandClubs.txt')
+Dolphin II      45.486502       -122.788346
+                           .
+                           .
+                            
+Magic Garden    45.524692       -122.674466
+Mary's Club     45.535101       -122.667390
+Montego's       45.504448       -122.500034
+This generates a text file called places.txt in your working directory. We’ll now use the
+points for clustering. We’ll plot the clubs along with their cluster centers on a map of
+the city. 
+10.4.2 Clustering geographic coordinates
+Now that we have a list properly formatted with geographic coordinates, we can clus-
+ter the clubs together. We used the Yahoo! PlaceFinder API to get the latitude and lon-
+gitude of each point. Now we need to use that to calculate a distance between points
+and for cluster centers. 
+ The clubs we’re trying to cluster in this example are given to us in latitude and lon-
+gitude, but this isn’t enough to tell us a distance. Near the North Pole, you can walk a
+few meters, and your longitude will vary by tens of degrees. Walk the same distance at
+the equator, and your longitude varies a fraction of a degree. You can use something
+called the spherical law of cosines to compute the distance between two sets of lati-
+tude and longitude. To see this implemented in code along with a function for plot-
+ting the clustered clubs, open kMeans.py and add the code from the following listing. 
+def distSLC(vecA, vecB):                          
+    a = sin(vecA[0,1]*pi/180) * sin(vecB[0,1]*pi/180)
+    b = cos(vecA[0,1]*pi/180) * cos(vecB[0,1]*pi/180) * \
+                      cos(pi * (vecB[0,0]-vecA[0,0]) /180)
+Listing 10.5
+Spherical distance measure and cluster-plotting functions 
+
+221
+Example: clustering points on a map
+    return arccos(a + b)*6371.0
+import matplotlib
+import matplotlib.pyplot as plt
+def clusterClubs(numClust=5):
+    datList = []
+    for line in open('places.txt').readlines():
+        lineArr = line.split('\t')
+        datList.append([float(lineArr[4]), float(lineArr[3])])
+    datMat = mat(datList)
+    myCentroids, clustAssing = biKmeans(datMat, numClust, \
+                                          distMeas=distSLC)
+    fig = plt.figure()
+    rect=[0.1,0.1,0.8,0.8]
+    scatterMarkers=['s', 'o', '^', '8', 'p', \
+                    'd', 'v', 'h', '>', '<']
+    axprops = dict(xticks=[], yticks=[])
+    ax0=fig.add_axes(rect, label='ax0', **axprops)
+    imgP = plt.imread('Portland.png')                
+    ax0.imshow(imgP)
+    ax1=fig.add_axes(rect, label='ax1', frameon=False)
+    for i in range(numClust):
+        ptsInCurrCluster = datMat[nonzero(clustAssing[:,0].A==i)[0],:]
+        markerStyle = scatterMarkers[i % len(scatterMarkers)]
+        ax1.scatter(ptsInCurrCluster[:,0].flatten().A[0],\
+                    ptsInCurrCluster[:,1].flatten().A[0],\
+                   marker=markerStyle, s=90)
+    ax1.scatter(myCentroids[:,0].flatten().A[0],\
+                myCentroids[:,1].flatten().A[0], marker='+', s=300)
+    plt.show()
+The code in listing 10.5 contains two functions. The first one, distSLC(), is the a dis-
+tance metric for two points on the earth’s surface. The second one, clusterClubs(),
+clusters the clubs from a text file and plots them. 
+ The function distSLC() returns the distance in miles for two points on the earth’s
+surface. Two points are given in latitude and longitude, and you use the spherical law
+of cosines to calculate the distance between these two points. Our latitudes and longi-
+tudes are given in degrees, but sin() and cos() take radians as inputs. You convert
+from degrees to radians by dividing by 180 and multiplying by pi. Pi was imported
+when you imported everything from NumPy. 
+ The second function, clusterClubs(), takes one input that’s the number of clus-
+ters you’d like to create. This function wraps up parsing a text file, clustering, and
+plotting. You first create an empty list and then open places.txt and get the fourth and
+fifth fields, which contain the latitude and longitude. A matrix is then created from
+the list of latitude/longitude pairs. You next run biKmeans() on these data points and
+use the distSLC() distance measure for your clustering. You then plot the clusters
+and cluster centers. 
+ In order to plot the clusters, you first create a figure and a rectangle. You’re going
+to use this rectangle to determine the amount of the figure to dedicate to plotting.
+Next, you create a list of all the available marker types for scatter plotting. You’ll use
+this later to give a unique marker to each cluster. You next use imread() to create a
+Create matrix 
+from image
+B
+
+222
+CHAPTER 10
+Grouping unlabeled items using k-means clustering
+matrix from an image. B You can plot this matrix using imshow(). Next, you create a
+new plot on the same figure as the image you just plotted. This allows you to use two
+coordinate systems without any scaling or shifting. Next, you loop over every cluster
+and plot these out. A marker type is chosen from scatterMarkers, which you created
+earlier. You use the index i % len(scatterMarkers) so that you can loop over the list
+if you have more clusters than available marker types. Finally, the clusters are plotted
+as crosses, and you show the plot. 
+ To see this in action, enter the following in your Python shell after you’ve saved
+kMeans.py: 
+>>> reload(kMeans)
+<module 'kMeans' from 'kMeans.py'>
+>>> kMeans.clusterClubs(5)
+sseSplit, and notSplit:  3073.83037149 0.0
+the bestCentToSplit is:  0
+                       .
+                       .
+                       .
+sseSplit, and notSplit:  307.687209245 1118.08909015
+the bestCentToSplit is:  3
+the len of bestClustAss is:  25
+A figure similar to figure 10.4 should appear after you’ve executed this command. 
+ Try this out with different cluster numbers. What do you think is a good number of
+clusters?
+Figure 10.4
+Clustering of nighttime entertainment locations in Portland, Oregon
+
+223
+Summary
+10.5
+Summary
+Clustering is a technique used in unsupervised learning. With unsupervised learning
+you don’t know what you’re looking for, that is, there are no target variables. Cluster-
+ing groups data points together, with similar data points in one cluster and dissimilar
+points in a different group. A number of different measurements can be used to mea-
+sure similarity. 
+ One widely used clustering algorithm is k-means, where k is a user-specified num-
+ber of clusters to create. The k-means clustering algorithm starts with k-random clus-
+ter centers known as centroids. Next, the algorithm computes the distance from every
+point to the cluster centers. Each point is assigned to the closest cluster center. The
+cluster centers are then recalculated based on the new points in the cluster. This pro-
+cess is repeated until the cluster centers no longer move. This simple algorithm is
+quite effective but is sensitive to the initial cluster placement. To provide better clus-
+tering, a second algorithm called bisecting k-means can be used. Bisecting k-means
+starts with all the points in one cluster and then splits the clusters using k-means with
+a k of 2. In the next iteration, the cluster with the largest error is chosen to be split.
+This process is repeated until k clusters have been created. Bisecting k-means creates
+better clusters than k-means. 
+ k-means and its derivatives aren’t the only clustering algorithms. Another type of
+clustering, known as hierarchical clustering, is also a widely used clustering algorithm.
+In the next chapter, we’ll examine the Apriori algorithm for finding association rules
+in a dataset. 
+
+224
+Association analysis
+ with the Apriori algorithm
+A trip to the grocery store provides many examples of machine learning in action
+today and future uses of it. The way items are displayed, the coupons offered to you
+after you purchase something, and loyalty programs all are driven by massive
+amounts of data crunching. The store wants to get as much money as possible from
+you, and they certainly will use technology for this purpose. 
+ Loyalty programs, which give the customer a discount by using a loyalty card,
+can give the store a glimpse at what one consumer is purchasing. If you don’t use a
+loyalty card, the store can also look at the credit card you used to make the pur-
+chases. If you don’t use a loyalty card and pay with cash, a store can look at the
+items purchased together. (For more ideas on possible uses of technology in the
+grocery store, see The Numerati by Stephen Baker.) 
+This chapter covers
+■The Apriori algorithm
+■Frequent item set generation
+■Association rule generation
+■Finding association rules in voting
+
+225
+Association analysis
+ Looking at items commonly purchased together can give stores an idea of customers’
+purchasing behavior. This knowledge, extracted from the sea of data, can be used for
+pricing, marketing promotions, inventory management, and so on. Looking for hidden
+relationships in large datasets is known as association analysis or association rule learning.
+The problem is, finding different combinations of items can be a time-consuming task
+and prohibitively expensive in terms of computing power. Brute-force solutions aren’t
+capable of solving this problem, so a more intelligent approach is required to find fre-
+quent itemsets in a reasonable amount of time. In this chapter we’ll focus on the Apriori
+algorithm to solve this problem. 
+ We’ll first discuss association analysis in detail, and then we’ll discuss the Apriori
+principle, which leads to the Apriori algorithm. We’ll next create functions to effi-
+ciently find frequent items sets, and then we’ll extract association rules from the fre-
+quent items sets. We’ll finish up with an example of extracting association rules from
+congressional voting records and an example of finding common features in poison-
+ous mushrooms.
+11.1
+Association analysis
+Association analysis is the task of finding interesting relationships in large datasets.
+These interesting relationships can take two forms: frequent item sets or association
+rules. Frequent item sets are a collection of items that frequently occur together. The sec-
+ond way to view interesting relationships is association rules. Association rules suggest
+that a strong relationship exists between two items. I’ll illustrate these two concepts
+with an example. A list of transactions from a grocery store is shown in figure 11.1.
+ Frequent items sets are lists of items that commonly appear together. One example
+from figure 11.1 is {wine, diapers, soy milk}. (Recall that sets are denoted by a pair of
+brackets {}). From the dataset we can also find an association rule such as diapers ➞
+wine. This means that if someone buys diapers, there’s a good chance they’ll buy wine.
+With the frequent item sets and association rules, retailers have a much better under-
+standing of their customers. Although common examples of association analysis are
+Apriori
+Pros: Easy to code up 
+Cons: May be slow on large datasets
+Works with: Numeric values, nominal values
+Figure 11.1
+A simple 
+list of transactions 
+from a natural foods 
+grocery store called 
+Hole Foods
+
+226
+CHAPTER 11
+Association analysis with the Apriori algorithm
+from the retail industry, it can be applied to a number of other industries, such as web-
+site traffic analysis and medicine.
+How do we define these so-called interesting relationships? Who defines what’s inter-
+esting? When we’re looking for frequent item sets, what’s the definition of frequent?
+There are a number of concepts we can use to select these things, but the two most
+important are support and confidence.
+ The support of an itemset is defined as the percentage of the dataset that contains
+this itemset. From figure 11.1, the support of {soy milk} is 4/5. The support of {soy
+milk, diapers} is 3/5 because of the five transactions, three contained both soy milk
+and diapers. Support applies to an itemset, so we can define a minimum support and
+get only the itemsets that meet that minimum support.
+ The confidence is defined for an association rule like {diapers} ➞ {wine}. The confi-
+dence for this rule is defined as support({diapers, wine})/support({diapers}). From
+figure 11.1, the support of {diapers, wine} is 3/5. The support for diapers is 4/5, so the
+confidence for diapers ➞ wine is 3/4 = 0.75. That means that in 75% of the items in
+our dataset containing diapers, our rule is correct. 
+ The support and confidence are ways we can quantify the success of our associa-
+tion analysis. Let’s assume we wanted to find all sets of items with a support greater
+than 0.8. How would we do that? We could generate a list of every combination of
+items and then count how frequently that occurs. It turns out that doing this can be
+very slow when we have thousands of items for sale. In the next section we’ll address
+this in detail, and we’ll look at something called the Apriori principle, which will allow
+us to reduce the number of calculations we need to do to learn association rules. 
+11.2
+The Apriori principle 
+Let’s assume that we’re running a grocery store with a very limited selection. We’re
+interested in finding out which items were purchased together. We have only four
+items: item0, item1, item2, and item3. What are all the possible combinations in which
+can be purchased? We can have one item, say item0, alone, or two items, or three items,
+or all of the items together. If someone purchased two of item0 and four of item2, we
+don’t care. We’re concerned only that they purchased one or more of an item. 
+diapers ➞ beer
+The most famous example of association analysis is diapers Þ beer. It has been
+reported that a grocery store chain in the Midwest of the United States noticed that
+men bought diapers and beer on Thursdays. The store could have profited from this
+by placing diapers and beer close together and making sure they were full price on
+Thursdays, but they did not.† 
+† DSS News, “Ask Dan! What is the true story about data mining, beer and diapers?” http://www
+.dssresources.com/newsletters/66.php, retrieved March 28, 2011.
+
+227
+The Apriori principle 
+A diagram showing all possible combina-
+tions of the items is shown in figure 11.2.
+To make the diagram easier to read, we
+use the item number such as 0 instead of
+item0. Also, the first set is a big Ø, which
+means the null set or a set containing no
+items. Lines connecting item sets indi-
+cate that two or more sets can be com-
+bined to form a larger set. 
+ Remember that our goal is to find sets
+of items that are purchased together fre-
+quently. If you recall from section 11.1,
+we measured frequency by the support of
+a set. The support of a set counted the
+percentage of transactions that con-
+tained that set. How do we calculate this
+support for a given set, say {0,3}? Well, we go through every transaction and ask, ”Did this
+transaction contain 0 and 3?” If the transaction did contain both those items, we incre-
+ment the total. After scanning all of our data, we divide the total by the number of trans-
+actions, and we have our support. This result is for only one set: {0,3}. We’ll have to do
+this many times to get the support for every possible set. We can count the sets in fig-
+ure 11.2 and see that for four items, we have to go over the data 15 times. This number
+gets large quickly. A data set that contains N possible items can generate 2N-1 possible
+itemsets. Stores selling 10,000 or more items aren’t uncommon. Even a store selling 100
+items can generate 1.26*1030 possible itemsets. This would take a very long time to com-
+pute on a modern computer. 
+ To reduce the time needed to compute this value, researchers identified some-
+thing called the Apriori principle. The Apriori principle helps us reduce the number
+of possible interesting itemsets. The Apriori principle says that if an itemset is fre-
+quent, then all of its subsets are frequent. In figure 11.2 this means that if {0,1} is
+frequent, then {0} and {1} have to be frequent. This rule as it is doesn’t help us, but if
+General approach to the Apriori algorithm
+1. Collect: Any method.
+2. Prepare: Any data type will work as we’re storing sets.
+3. Analyze: Any method.
+4. Train: Use the Apriori algorithm to find frequent itemsets.
+5. Test: Doesn’t apply.
+6. Use: This will be used to find frequent itemsets and association rules between
+items.
+Figure 11.2
+All possible itemsets from the avail-
+able set {0, 1, 2, 3}
+
+228
+CHAPTER 11
+Association analysis with the Apriori algorithm
+we turn it inside out, it will help us. The rule turned around says that if an itemset is
+infrequent, then its supersets are also infrequent, as shown in figure 11.3. 
+In figure 11.3, the shaded itemset {2,3} is
+known to be infrequent. From this
+knowledge, we know that itemsets
+{0,2,3}, {1,2,3}, and {0,1,2,3} are also infre-
+quent. This tells us that once we’ve com-
+puted the support of {2,3}, we don’t have
+to compute the support of {0,2,3}, {1,2,3},
+and {0,1,2,3} because we know they won’t
+meet our requirements. Using this prin-
+ciple, we can halt the exponential
+growth of itemsets and in a reasonable
+amount of time compute a list of fre-
+quent item sets. 
+ In the next section, you’ll see the
+Apriori algorithm based on this Apriori
+principle. We’ll code it in Python and
+put it to use on a simple data set from
+our fictional grocery store, Hole Foods. 
+11.3
+Finding frequent itemsets with the Apriori algorithm
+We discussed in section 11.1 that in association analysis we’re after two things: fre-
+quent item sets and association rules. We first need to find the frequent itemsets, and
+then we can find association rules. In this section, we’ll focus only on finding the fre-
+quent itemsets. 
+ The way to find frequent itemsets is the Apriori algorithm. The Apriori algorithm
+needs a minimum support level as an input and a data set. The algorithm will gener-
+ate a list of all candidate itemsets with one item. The transaction data set will then be
+scanned to see which sets meet the minimum support level. Sets that don’t meet the
+minimum support level will get tossed out. The remaining sets will then be combined
+to make itemsets with two elements. Again, the transaction dataset will be scanned
+and itemsets not meeting the minimum support level will get tossed. This procedure
+will be repeated until all sets are tossed out. 
+Apriori
+A priori means “from before” in Latin. When defining a problem, it’s common to state
+prior knowledge, or assumptions. This is written as “a priori.” In Bayesian statistics,
+it’s common to make inferences conditional upon this a priori knowledge. A priori
+knowledge can come from domain knowledge, previous measurements, and so on. 
+Figure 11.3
+All possible itemsets shown, with in-
+frequent itemsets shaded in gray. With the knowl-
+edge that the set {2,3} is infrequent, we can deduce 
+that {0,2,3}, {1,2,3}, and {0,1,2,3} are also infre-
+quent, and we don’t need to compute their support.
+
+229
+Finding frequent itemsets with the Apriori algorithm
+11.3.1 Generating candidate itemsets
+Before we code the whole algorithm in Python, we’ll need to create a few helper func-
+tions. We’ll create a function to create an initial set, and we’ll create a function to scan
+the dataset looking for items that are subsets of transactions. Pseudocode for scanning
+the dataset would look like this:
+For each transaction in tran the dataset:
+For each candidate itemset, can:
+        Check to see if can is a subset of tran
+        If so increment the count of can
+For each candidate itemset:
+If the support meets the minimum, keep this item
+Return list of frequent itemsets
+To see this in action, create a file called apriori.py and add the following code.
+def loadDataSet():
+    return [[1, 3, 4], [2, 3, 5], [1, 2, 3, 5], [2, 5]]
+def createC1(dataSet):
+    C1 = []
+    for transaction in dataSet:
+        for item in transaction:
+            if not [item] in C1:
+                C1.append([item])
+    C1.sort()
+    return map(frozenset, C1)                    
+def scanD(D, Ck, minSupport):
+    ssCnt = {}
+    for tid in D:
+        for can in Ck:
+            if can.issubset(tid):
+                if not ssCnt.has_key(can): ssCnt[can]=1
+                else: ssCnt[can] += 1
+    numItems = float(len(D))
+    retList = []
+    supportData = {}
+    for key in ssCnt:
+        support = ssCnt[key]/numItems          
+        if support >= minSupport:
+            retList.insert(0,key)
+        supportData[key] = support
+    return retList, supportData
+Listing 11.1 contains three functions: loadDataSet(), which creates a simple dataset
+for testing, createC1(), and scanD(). 
+ The function createC1() creates—you guessed it—C1. C1 is a candidate itemset of
+size one. In the Apriori algorithm, we create C1, and then we’ll scan the dataset to see
+if these one itemsets meet our minimum support requirements. The itemsets that do
+Listing 11.1
+Apriori algorithm helper functions
+Create a frozenset 
+of each item in C1
+B
+Calculate support 
+for every itemset
+C
+
+230
+CHAPTER 11
+Association analysis with the Apriori algorithm
+meet our minimum requirements become L1. L1 then gets combined to become C2
+and C2 will get filtered to become L2. I think you get the idea. 
+ So here you need a function, createC1(), that creates our first list of candidate
+itemsets, C1. You need a special function for the first list of candidate itemsets because
+initially you’re reading from input, whereas later lists will be properly stored format-
+ted. The format you’re using is frozensets. Frozensets are sets that are frozen, which
+means they’re immutable; you can’t change them. You need to use the type frozenset
+instead of set because you’ll later use these sets as the key in a dictionary; you can do
+that with frozensets but not with sets. 
+ You first create an empty list, C1. This will be used to store all our unique values.
+Next, you iterate over all the transactions in our dataset. For each transaction, you
+iterate over all the items in that transaction. If an item isn’t in C1, you add it to C1. You
+don’t simply add the item; you add a list containing just one item. You do this to cre-
+ate a set of each item, because later in the Apriori algorithm you’ll be doing set opera-
+tions. You can’t create a set of just one integer in Python. It needs to be a list (try it
+out). That’s why you create a list of single-item lists. Finally, you sort the list and then
+map every item in the list to frozenset() and return this list of frozensets. B 
+ The second function in listing 11.1 is scanD(). This function takes three argu-
+ments: a dataset, Ck, a list of candidate sets, and minSupport, which is the minimum
+support you’re interested in. This is the function you’ll use to generate L1 from C1.
+Additionally, this function returns a dictionary with support values for use later. This
+function creates an empty dictionary, ssCnt, and then goes over all the transactions in
+the dataset and all the candidate sets in C1. If the sets of C1 are part of the dataset,
+then you’ll increment the count in the dictionary. The set is the key in the dictionary.
+After you’ve scanned over all the items in the dataset and all the candidate sets, you
+need to calculate the support. Sets that don’t meet your minimum support levels
+won’t be output. First, you create an empty list that will hold the sets that do meet the
+minimum support. The next loop goes over every element in the dictionary and mea-
+sures the support. C If the support meets your minimum support requirements, then
+you add it to retList. You insert any new sets at the beginning of the list with
+retList.insert(0,key). It isn’t necessary to insert at the beginning; it just makes the
+list look organized. You also return supportData, which holds the support values for
+your frequent itemsets. This will be useful in the next section. 
+ Let’s see this in action! After you’ve saved apriori.py, enter the following in your
+Python shell:
+>>> import apriori
+Now let’s import the dataset:
+>>> dataSet=apriori.loadDataSet()
+>>> dataSet
+[[1, 3, 4], [2, 3, 5], [1, 2, 3, 5], [2, 5]]
+Now create our first candidate itemset, C1:
+
+231
+Finding frequent itemsets with the Apriori algorithm
+>>> C1=apriori.createC1(dataSet)
+>>> C1
+[frozenset([1]), frozenset([2]), frozenset([3]), frozenset([4]), 
+frozenset([5])]
+C1 contains a list of all the items in frozenset. Now let’s create D, which is a dataSet in
+the set form:
+>>> D=map(set,dataSet)
+>>> D
+[set([1, 3, 4]), set([2, 3, 5]), set([1, 2, 3, 5]), set([2, 5])]
+Now that you have everything in set form, you can remove items that don’t meet our
+minimum support. For this example use 0.5 as our minimum support level:
+>>> L1,suppData0=apriori.scanD(D, C1, 0.5)
+>>> L1
+[frozenset([1]), frozenset([3]), frozenset([2]), frozenset([5])]
+These four items make up our L1 list, that is, the list of one-item sets that occur in at
+least 50% of all transactions. Item 4 didn’t make the minimum support level, so it’s
+not a part of L1. That’s OK. By removing it, you’ve removed more work from when you
+find the list of two-item sets. 
+11.3.2 Putting together the full Apriori algorithm
+Pseudo-code for the whole Apriori algorithm would look like this:
+While the number of items in the set is greater than 0:
+    Create a list of candidate itemsets of length k
+    Scan the dataset to see if each itemset is frequent
+    Keep frequent itemsets to create itemsets of length k+1
+Now that you can filter out sets, it’s time to build the full Apriori algorithm. Open
+apriori.py and add the code from the following listing. 
+def aprioriGen(Lk, k): #creates Ck
+    retList = []
+    lenLk = len(Lk)
+    for i in range(lenLk):
+        for j in range(i+1, lenLk): 
+            L1 = list(Lk[i])[:k-2]; L2 = list(Lk[j])[:k-2]
+            L1.sort(); L2.sort()                           
+            if L1==L2:                                   
+                retList.append(Lk[i] | Lk[j]) 
+    return retList
+def apriori(dataSet, minSupport = 0.5):
+    C1 = createC1(dataSet)
+    D = map(set, dataSet)
+    L1, supportData = scanD(D, C1, minSupport)
+    L = [L1]
+Listing 11.2
+The Apriori algorithm
+Join sets if 
+first k-2 items 
+are equal
+B
+
+232
+CHAPTER 11
+Association analysis with the Apriori algorithm
+    k = 2
+    while (len(L[k-2]) > 0):
+        Ck = aprioriGen(L[k-2], k)
+        Lk, supK = scanD(D, Ck, minSupport)     
+        supportData.update(supK)
+        L.append(Lk)
+        k += 1
+    return L, supportData
+The code in listing 11.2 contains two functions: aprioriGen() and apriori(). The
+main function is apriori(); it will call aprioriGen() to create candidate itemsets: Ck. 
+ The function aprioriGen() will take a list of frequent itemsets, Lk, and the size of
+the itemsets, k, to produce Ck. For example, it will take the itemsets {0}, {1}, {2} and so
+on and produce {0,1} {0,2}, and {1,2}. This is accomplished by first creating an empty
+list and then measuring how many elements are in Lk. Next, compare each item in Lk
+with all of the other items in Lk. The two for loops accomplish that. Next, take two
+sets in our list and compare them. If the first k-2 items are equal, then you combine
+the two sets to make a set of size k. B The sets are combined using the set union,
+which is the | symbol in Python. 
+ The k-2 thing may be a little confusing. Let’s look at that a little further. When you
+were creating {0,1} {0,2}, {1,2} from {0}, {1}, {2}, you just combined items. Now, what if
+you want to use {0,1} {0,2}, {1,2} to create a three-item set? If you did the union of every
+set, you’d get {0, 1, 2}, {0, 1, 2}, {0, 1, 2}. That’s right. It’s the same set three times. Now
+you have to scan through the list of three-item sets to get only unique values. You’re
+trying to keep the number of times you go through the lists to a minimum. Now, if you
+compared the first element {0,1} {0,2}, {1,2} and only took the union of those that had
+the same first item, what would you have? {0, 1, 2} just one time. Now you don’t have to
+go through the list looking for unique values. 
+ Everything gets wrapped up in the apriori() function. You give this a dataset and
+a support number, and it will generate a list of candidate itemsets. This works by first cre-
+ating C1 and then taking the dataset and turning that into D, which is a list of sets. You
+use the map function to map set() to every item in the dataSet list. Next, you use
+scanD() from listing 11.1 to create L1 and place this inside a list, L. L will contain L1, L2,
+L3, .... Now that you have L1, you want to find L2, L3, .... This is done with a while loop,
+which creates larger lists of larger itemsets until the next-largest itemset is empty. If this
+sounds confusing, hold on a second, and you’ll see how it works. You use aprioriGen()
+to create Ck. Then you use scanD() to create Lk from Ck. Ck is a list of candidate itemsets,
+and then scanD() goes through Ck and throws out itemsets that don’t meet the mini-
+mum support levels. C This Lk list gets appended to L, and then you increment k and
+repeat. Finally, when Lk is empty, you return L and exit. 
+ To see this in action, enter the following after you’ve saved apriori.py:
+>>> reload(apriori)
+<module 'apriori' from 'apriori.pyc'>
+This created six unique two-item sets. Now let’s check out apriori:
+Scan data set to 
+get Lk from Ck
+C
+
+233
+Mining association rules from frequent item sets 
+>>> L,suppData=apriori.apriori(dataSet)
+>>> L
+[[frozenset([1]), frozenset([3]), frozenset([2]), frozenset([5])], 
+[frozenset([1, 3]), frozenset([2, 5]), frozenset([2, 3]), frozenset([3, 5])],
+[frozenset([2, 3, 5])], []]
+L contains some lists of frequent itemsets that met a minimum support of 0.5. Let’s
+look at those:
+>>> L[0]
+[frozenset([1]), frozenset([3]), frozenset([2]), frozenset([5])]
+>>> L[1]
+[frozenset([1, 3]), frozenset([2, 5]), frozenset([2, 3]), 
+frozenset([3, 5])]
+>>> L[2]
+[frozenset([2, 3, 5])]
+>>> L[3]
+[]
+Each of these itemsets was generated in apriori() with aprioriGen(). Let’s see how
+aprioriGen() works:
+>>> apriori.aprioriGen(L[0], 2)
+[frozenset([1, 3]), frozenset([1, 2]), frozenset([1, 5]), 
+frozenset([2, 3]), frozenset([3, 5]), frozenset([2, 5])]
+The six items here are the candidate itemset Ck. Four of these items are in L[1], and
+the other two items get filtered out by scanD().
+ Let’s try it with a support of 70%:
+>>> L,suppData=apriori.apriori(dataSet,minSupport=0.7)
+>>> L
+[[frozenset([3]), frozenset([2]), frozenset([5])], [frozenset([2, 5])], []]
+The variable suppData is a dictionary with the support values of our itemsets. We don’t
+care about those values right now, but we’ll use them in the next section. 
+ You now know which items occur in 70% of all transactions, and you can begin to
+draw conclusions from this. You can take this data and begin to draw conclusions,
+which many applications do, or you can take it and generate association rules to try to
+get an if-then understanding of the data. We’ll do that in the next section. 
+11.4
+Mining association rules from frequent item sets 
+Back in section 11.2, I mentioned that you can look for many interesting things with
+association analysis. Two common things that people look for are frequent itemsets
+and association rules. You just saw how you can find frequent itemsets with the Apriori
+algorithm. Now we need to figure out how to find association rules. 
+ To find association rules, we first start with a frequent itemset. We know this set of
+items is unique, but we want to see if there is anything else we can get out of these
+items. One item or one set of items can imply another item. From the grocery store
+example, if we have a frequent itemset, {soy milk, lettuce}, one example of an associa-
+tion rule is soy milk ➞ lettuce. This means if someone purchases soy milk, then there’s
+
+234
+CHAPTER 11
+Association analysis with the Apriori algorithm
+a statistically significant chance that they’ll purchase lettuce. The converse doesn’t
+always hold. That is, just because soy milk ➞ lettuce is statistically significant, it doesn’t
+mean that lettuce ➞ soy milk is statistically significant. (In the study of logic, the set on
+the left side of the arrow is called the antecedent, and the set on the right side of the
+arrow is the consequent.)
+ In section 11.3, we quantified an itemset as frequent if it met our minimum sup-
+port level. We have a similar measurement for association rules. This measurement is
+called the confidence. The confidence for a rule P ➞ H is defined as support(P | H)/
+support(P). Remember, in Python, the | symbol is the set union; the mathematical
+symbol is U. P | H means all the items in set P or in set H. We calculated the support for
+all the frequent itemsets in the previous section. Now, when we want to calculate the
+confidence, all we have to do is call up those support values and do one divide. 
+ From one frequent itemset, how many association rules can we have? Figure 11.4
+shows a lattice with all the different possible association rules from the itemset
+{0,1,2,3}. To find interesting rules, we generate a list of possible rules and then test the
+confidence of each rule. If the confidence doesn’t meet our minimum requirement,
+then we throw out the rule. 
+ Similar to frequent itemset generation in the last section, we can generate many
+association rules for each frequent itemset. It would be good if we could reduce the
+number of rules to keep the problem tractable. We can observe that if a rule doesn’t
+meet the minimum confidence requirement, then subsets of that rule also won’t meet
+the minimum. Please refer to figure 11.4. Assume that the rule 0,1,2 ➞ 3 doesn’t meet
+the minimum confidence. We know that any rule where the left-hand side is a subset
+of {0,1,2} will also not meet the minimum confidence. I shaded all of those rules in fig-
+ure 11.4. 
+ We can use this property of association rules to reduce the number of rules we
+need to test. Similar to the Apriori algorithm in listing 11.2, we can start with a fre-
+quent itemset. We’ll then create a list of sets with one item on the right-hand side and
+test all of those. Next, we’ll merge the remaining rules to create a list of rules with two
+items on the right-hand side. This sort of approach is known as level-wise. To see this
+in action, open apriori.py and add the following code. 
+Figure 11.4
+Association rule 
+lattice for the frequent itemset 
+{0,1,2,3}. The gray area shows 
+rules with a low confidence. If 
+we find that 0,1,2 ➞ 3 is a low 
+confidence rule, then all other 
+rules with 3 in the consequent 
+(shaded) will also have a low 
+confidence.
+
+235
+Mining association rules from frequent item sets 
+def generateRules(L, supportData, minConf=0.7):  
+    bigRuleList = []
+    for i in range(1, len(L)):              
+        for freqSet in L[i]:
+            H1 = [frozenset([item]) for item in freqSet]
+            if (i > 1):
+                rulesFromConseq(freqSet, H1, supportData, bigRuleList,\
+                                minConf)
+            else:
+                calcConf(freqSet, H1, supportData, bigRuleList, minConf) 
+    return bigRuleList
+def calcConf(freqSet, H, supportData, brl, minConf=0.7):
+    prunedH = [] 
+    for conseq in H:
+        conf = supportData[freqSet]/supportData[freqSet-conseq] 
+        if conf >= minConf: 
+            print freqSet-conseq,'-->',conseq,'conf:',conf
+            brl.append((freqSet-conseq, conseq, conf))
+            prunedH.append(conseq)
+    return prunedH
+def rulesFromConseq(freqSet, H, supportData, brl, minConf=0.7):
+    m = len(H[0])
+    if (len(freqSet) > (m + 1)):                         
+        Hmp1 = aprioriGen(H, m + 1)                                
+        Hmp1 = calcConf(freqSet, Hmp1, supportData, brl, minConf)
+        if (len(Hmp1) > 1):    
+            rulesFromConseq(freqSet, Hmp1, supportData, brl, minConf)
+The code in listing 11.3 contains three functions. The first one, generateRules(), is the
+main command, which calls the other two. The other two functions, rulesFromConseq()
+and calcConf(), generate a set of candidate rules and evaluate those rules, respectively. 
+ The generateRules() function takes three inputs: a list of frequent itemsets, a dic-
+tionary of support data for those itemsets, and a minimum confidence threshold. It’s
+going to generate a list of rules with confidence values that we can sort through later.
+These rules are stored in bigRuleList. If no minimum confidence threshold is given,
+it’s set to 0.7. The other two inputs are the exact outputs from the apriori() function
+in listing 11.2. This function loops over every frequent itemset in L and creates a list of
+single-item sets: H1 for each frequent itemset. You start with the frequent itemsets that
+have two or more items because it’s impossible to create a rule from a single item. B
+If you started with the {0,1,2} set, H1 would be [{0},{1},{2}]. If the frequent itemset has
+more than two items in it, then it could be considered for further merging. The merg-
+ing is done with rulesFromConseq(), which we’ll discuss last. If the itemset only has
+two items in it, then you calculate the confidence with calcConf(). 
+ You’re interested in calculating the confidence of a rule and then finding out
+which rules meet the minimum confidence. All of this is done in calcConf(), and the
+Listing 11.3
+Association rule-generation functions
+Get only sets with 
+two or more items
+B
+Try further 
+merging
+C
+Create Hm+1
+new candidates D
+
+236
+CHAPTER 11
+Association analysis with the Apriori algorithm
+rest of listing 11.3 prepares rules for this. You’ll return a list of rules that meet the min-
+imum confidence; to hold this you create an empty list, prunedH. Next, you iterate
+over all the itemsets in H and calculate the confidence. The confidence is calculated
+with support values in supportData. By importing these support values, you save a lot
+of computing time. If a rule does meet the minimum confidence, then you print the
+rule to the screen. The passing rule is also returned and will be used in the next func-
+tion, rulesFromConseq(). You also fill in the list brl, which is the bigRuleList passed
+in earlier. 
+ To generate more association rules from our initial itemset, you use the
+rulesFromConseq() function. This takes a frequent itemset and H, which is a list of
+items that could be on the right-hand side of a rule. The code then measures m, which
+is the size of the itemsets in H. C You next see if the frequent itemset is large enough
+to have subsets of size m removed; if so, you proceed. You use the aprioriGen() func-
+tion from listing 11.2 to generate combinations of the items in H without repeating. D
+This is stored in Hmp1, which will be the H list in the next iteration. Hmp1 contains all
+the possible rules. You want to see if any of these make sense by testing their confi-
+dence in calcConf(). If more than one rule remains, then you recursively call
+rulesFromConseq() with Hmp1 to see if you could combine those rules further. 
+ To see this in action, save apriori.py and enter the following in your Python shell: 
+>>> reload(apriori)
+<module 'apriori' from 'apriori.py'>
+Now let’s generate a set of frequent itemsets with a support of 0.5:
+>>> L,suppData=apriori.apriori(dataSet,minSupport=0.5)
+>>> rules=apriori.generateRules(L,suppData, minConf=0.7)
+>>> rules
+ [(frozenset([1]), frozenset([3]), 1.0), (frozenset([5]), frozenset([2]), 
+1.0), (frozenset([2]), frozenset([5]), 1.0)]
+frozenset([1]) --> frozenset([3]) conf: 1.0
+frozenset([5]) --> frozenset([2]) conf: 1.0
+frozenset([2]) --> frozenset([5]) conf: 1.0
+This gives you three rules: {1} ➞ {3},{5} ➞ {2},and {2} ➞ {5}. It’s interesting to see that
+the rule with 2 and 5 can be flipped around but not the rule with 1 and 3. Let’s lower
+the confidence threshold and see what we get: 
+>>> rules=apriori.generateRules(L,suppData, minConf=0.5)
+>>> rules
+ [(frozenset([3]), frozenset([1]), 0.6666666666666666), (frozenset([1]), 
+frozenset([3]), 1.0), (frozenset([5]), frozenset([2]), 1.0), 
+(frozenset([2]), frozenset([5]), 1.0), (frozenset([3]), frozenset([2]), 
+0.6666666666666666), (frozenset([2]), frozenset([3]), 0.6666666666666666), 
+(frozenset([5]), frozenset([3]), 0.6666666666666666), (frozenset([3]), 
+frozenset([5]), 0.6666666666666666), (frozenset([5]), frozenset([2, 3]), 
+0.6666666666666666), (frozenset([3]), frozenset([2, 5]), 
+0.6666666666666666), (frozenset([2]), frozenset([3, 5]), 
+0.6666666666666666)]
+frozenset([3]) --> frozenset([1]) conf: 0.666666666667
+frozenset([1]) --> frozenset([3]) conf: 1.0
+frozenset([5]) --> frozenset([2]) conf: 1.0
+
+237
+Example: uncovering patterns in congressional voting
+frozenset([2]) --> frozenset([5]) conf: 1.0
+frozenset([3]) --> frozenset([2]) conf: 0.666666666667
+frozenset([2]) --> frozenset([3]) conf: 0.666666666667
+frozenset([5]) --> frozenset([3]) conf: 0.666666666667
+frozenset([3]) --> frozenset([5]) conf: 0.666666666667
+frozenset([5]) --> frozenset([2, 3]) conf: 0.666666666667
+frozenset([3]) --> frozenset([2, 5]) conf: 0.666666666667
+frozenset([2]) --> frozenset([3, 5]) conf: 0.666666666667
+We got a lot more rules (11) once we lowered the confidence. Now that you see this
+works on a trivial dataset, let’s put it to work on a bigger, real-life dataset. In the next
+section we’ll examine the voting records of the U.S. congress. 
+11.5
+Example: uncovering patterns in congressional voting
+Now that we can find frequent itemsets and association rules, it’s time to put these
+tools to use on a real-life dataset. What can we use? Shopping is a good example, but
+it’s played out. Another example is search terms from a search engine. That sounds
+interesting, but a more interesting example I saw was voting by members of the
+U.S. congress.
+ There’s a data set of congressional voting records from 1984 in the University of
+California at Irvine machine learning dataset repository: http://archive.ics.uci.edu/
+ml/datasets/Congressional+Voting+Records. This is a little old, and the issues don’t
+mean much to me. Let’s try to get some more recent data. There are a number of
+organizations devoted to making government data public. One organization is Project
+Vote Smart (http://www.votesmart.org), which has a public API. You’ll see how to get
+the data from Votesmart.org into a format that you can use for generating frequent
+itemsets and association rules. This data could be used for campaign purposes or to
+forecast how politicians will vote.
+Next, we’ll take the voting records and create a transaction database. This will require
+some creative thinking. Finally, we’ll use the code written earlier in this chapter to
+generate a list of frequent itemsets and association rules.
+Example: finding association rules in congressional voting records
+1. Collect: Use the votesmart module to access voting records.
+2. Prepare: Write a function to process votes into a series of transaction records.
+3. Analyze: We’ll look at the prepared data in the Python shell to make sure it’s
+correct. 
+4. Train: We’ll use the apriori() and generateRules() functions written earlier
+in this chapter to find the interesting information in the voting records.
+5. Test: Doesn’t apply.
+6. Use: For entertainment purposes, but you could use the results for a political
+campaign or to forecast how elected officials will vote. 
+
+238
+CHAPTER 11
+Association analysis with the Apriori algorithm
+11.5.1 Collect: build a transaction data set of congressional voting records
+Project Vote Smart has collected a large amount of government data. They have also pro-
+vided a public API to access this data at http://api.votesmart.org/docs/terms.html.
+Sunlight Labs has written a Python module to access this data. The Python module is
+well documented at https://github.com/sunlightlabs/python-votesmart. We’re going
+to get some recent voting data from the U.S. congress and try to learn some association
+rules from this.
+ We eventually want the data to be in the same form as shown in figure 11.1. Each
+row will be a member of the U.S. congress, and the columns will be different things
+they’ve voted on. Let’s start by trying to get some things that they voted on recently. If
+you haven’t installed python-votesmart and gotten an API key, you’ll need to do that
+now. You can see appendix A for how to install python-votesmart. 
+ To get started with the votesmart API, you need to import votesmart: 
+>>> from votesmart import votesmart
+Next, you need to enter your API key:1
+>>> votesmart.apikey = '49024thereoncewasamanfromnantucket94040'
+Now you can start using the votesmart API. To get the 100 most recent bills enter 
+>>> bills = votesmart.votes.getBillsByStateRecent()
+To see what each bill is, enter the following: 
+>>> for bill in bills:
+...     print bill.title,bill.billId
+...
+Amending FAA Rulemaking Activities 13020
+Prohibiting Federal Funding of National Public Radio 12939
+Additional Continuing Appropriations 12888
+Removing Troops from Afghanistan 12940
+                           .
+                           .
+                           .
+"Whistleblower Protection" for Offshore Oil Workers 11820
+When you get this book, the most recent 100 bills will be different, so I’ve saved the
+top 100 titles and billIds to a file called recent100bills.txt. 
+ You can get further information about each of these bills by using the getBill()
+method. We’ll use that last bill, the “Whistleblower Protection” bill, which has a
+billId of 11820. Let’s see that in action: 
+>>> bill = votesmart.votes.getBill(11820)
+This returns a BillDetail object with a whole lot of information. You can investigate
+all the information there, but what we’re interested in are the actions taken on the
+bill. You can see these by entering
+>>> bill.actions
+1 This key is just an example. You need to request your own key at http://votesmart.org/share/api/register.
+
+239
+Example: uncovering patterns in congressional voting
+This will give you a number of actions—one when the bill is introduced and another
+when the bill is voted on. We’re interested in the one where the voting took place. You
+can get this by typing in the following commands:
+>>> for action in bill.actions:
+...     if action.stage=='Passage':
+...             print action.actionId
+...
+31670
+This isn’t the full story. There are multiple stages to a bill. A bill is introduced, voted
+on by congress, and voted on by the House of Representatives before it goes through
+the executive office. The Passage stage can be deceptive because it could be in the Pas-
+sage stage at the executive office, where there is no vote. 
+ To get all the votes from a single bill, use the getBillActionVotes() method:
+>>> voteList = votesmart.votes.getBillActionVotes(31670)
+voteList is a list of Vote objects. To see what’s inside, enter the following:
+>>> voteList[22]
+Vote({u'action': u'No Vote', u'candidateId': u'430', u'officeParties':
+     u'Democratic', u'candidateName': u'Berry, Robert'})
+>>> voteList[21]
+Vote({u'action': u'Yea', u'candidateId': u'26756', u'officeParties':
+      u'Democratic', u'candidateName': u'Berman, Howard'})
+Now that we’ve played around with all the relevant APIs, we can put all this together.
+We’re going to write a function to go from the billIds in the text file to an actionId.
+As I mentioned earlier, not every bill has been voted on, and some bills have been
+voted on in multiple places. We have to filter out the actionIds to get actionIds that
+will give us some vote data. I’ve filtered the 100 bills down into 20 bills that I thought
+were interesting. It’s provided in a file called recent20bills.txt. We’ll write one func-
+tion called getActionIds() to handle filtering out the actionIds. Open apriori.py
+and enter the code from the following listing.2 
+from time import sleep
+from votesmart import votesmart
+votesmart.apikey = '49024thereoncewasamanfromnantucket94040'
+def getActionIds():
+    actionIdList = []; billTitleList = []
+    fr = open('recent20bills.txt') 
+    for line in fr.readlines():
+        billNum = int(line.split('\t')[0])
+        try:
+            billDetail = votesmart.votes.getBill(billNum) 
+            for action in billDetail.actions:
+Listing 11.4
+Functions for collecting action IDs for bills in Congress
+2 Don’t forget to enter your API key instead of the example key!
+
+240
+CHAPTER 11
+Association analysis with the Apriori algorithm
+                if action.level == 'House' and \    
+                (action.stage == 'Passage' or \             
+                  action.stage == 'Amendment Vote'):
+                    actionId = int(action.actionId)
+                    print 'bill: %d has actionId: %d' % (billNum, actionId)
+                    actionIdList.append(actionId)
+                    billTitleList.append(line.strip().split('\t')[1])
+        except:
+            print "problem getting bill %d" % billNum
+        sleep(1)                                     
+    return actionIdList, billTitleList
+The code in listing 11.4 imports sleep so that you can delay the API calls, and it imports
+the votesmart module. The getActionsIds() function will get actionIds for the bills
+stored in recent20bills.txt. You start by importing API key and then creating two empty
+lists. The lists will be used to return the actionsIds and titles. You first open the file
+recent20bills.txt and then for each line split it by the tab and enter a try, except block.
+It’s good practice to use these when dealing with outside APIs because you may get an
+error, and you don’t want an error to waste all the time you spent fetching data. So you
+first try to get a billDetail object using the getBill() method. You next iterate over
+all the actions in this bill looking for something with some voting data. There’s voting
+data on the Passage stage and the Amendment Vote stage, so you look for those. Now
+there’s also a Passage stage at the executive level and that doesn’t contain any voting
+data, so you make sure the level is House B. If this is true, you print the actionId to
+the screen and append it to actionIdList. At this time, you also append the bill title
+to billTitleList. This way, if there is an error with the API call, you don’t append
+billTitleList. If there is an error, the except block is called, which prints the error to
+the screen. Finally, there’s a sleep of one second to be polite and not bombard Votes-
+mart.org with a bunch of rapid API calls C. The actionIdList and billTitleList are
+returned for further processing. 
+ Let’s see this in action. After you enter the code from listing 11.4 into apriori.py,
+enter the following commands: 
+>>> reload(apriori)
+<module 'apriori' from 'apriori.py'>
+>>> actionIdList,billTitles = apriori.getActionIds()
+bill: 12939 has actionId: 34089
+bill: 12940 has actionId: 34091
+bill: 12988 has actionId: 34229
+                    .
+                    .
+                    .
+The actionId is displayed, but it’s also being added to the output, actionIdList, so
+that you can use it later. If there is an error, then the try..except code will catch it. I
+had one error when I was getting all the actiondIds. Now you can move on to getting
+votes on these actionIds. 
+ The candidates can vote Yea or Nay, or they can choose not to vote. We need a way
+of encoding this into something like an itemset and a transaction database. Remember
+Filter out 
+actions that 
+have votes
+B
+Delay to 
+be polite
+C
+
+241
+Example: uncovering patterns in congressional voting
+that a transaction data set has only the absence or presence of an item, not the quantity
+in it. With our voting data, we can treat the presence of a Yea or Nay as an item. 
+ There are two major political parties in the United States: Republicans and Demo-
+crats. We’d like to encode this information in our transaction dataset. Luckily this
+information comes over in the vote data. This is how we’ll construct the transaction
+dataset: we’ll create a dictionary with the politician’s name as the key. When the politi-
+cian is first encountered we’ll add him/her to the dictionary along with their political
+affiliation—Democrat or Republican. We’ll use zero for a Democrat, and one for a
+Republican. Now how do we encode the votes? For each bill we’ll make two items:
+bill+'Yea' and bill+'Nay'. This method will allow us to properly encode if a politi-
+cian didn’t vote at all. The translation from votes to items is shown in figure 11.5.
+ Now that we have a system for encoding
+the votes to items, it’s time to generate our
+transaction dataset. Once we have the
+transaction dataset, we can use the Apriori
+code written earlier. We’re going to write a
+function to take in a series of actionIds
+and fetch the voting records from Votes-
+mart’s API. Then we’ll encode the voting
+for each candidate into an itemset. Each
+candidate is going to be a row or a transac-
+tion in the transaction dataset. To see this
+in action, open apriori.py and add the
+code from the following listing.
+def getTransList(actionIdList, billTitleList): 
+    itemMeaning = ['Republican', 'Democratic']
+    for billTitle in billTitleList:                 
+        itemMeaning.append('%s -- Nay' % billTitle)       
+        itemMeaning.append('%s -- Yea' % billTitle) 
+    transDict = {} 
+    voteCount = 2
+    for actionId in actionIdList:
+        sleep(3)
+        print 'getting votes for actionId: %d' % actionId
+        try:
+            voteList = votesmart.votes.getBillActionVotes(actionId)
+            for vote in voteList:
+                if not transDict.has_key(vote.candidateName): 
+                    transDict[vote.candidateName] = []
+                    if vote.officeParties == 'Democratic':
+                        transDict[vote.candidateName].append(1)
+                    elif vote.officeParties == 'Republican':
+                        transDict[vote.candidateName].append(0)
+                if vote.action == 'Nay':
+                    transDict[vote.candidateName].append(voteCount)
+Listing 11.5
+Transaction list population with voting data
+Fill up 
+itemMeaning list
+B
+Figure 11.5
+Mapping between congressional 
+information and item numbers
+
+242
+CHAPTER 11
+Association analysis with the Apriori algorithm
+                elif vote.action == 'Yea':
+                    transDict[vote.candidateName].append(voteCount + 1)
+        except: 
+            print "problem getting actionId: %d" % actionId
+        voteCount += 2
+    return transDict, itemMeaning
+The getTransList() function will create the transaction dataset so that you can use
+the Apriori code written earlier to generate frequent itemsets and association rules. It
+also creates a title list so that you can easily see what each item means. The first thing
+you do is create the meaning list, itemMeaning, with the first two elements. When you
+want to know what something means, all you have to do is enter the item number as
+the index to itemMeaning. Next, you loop over all the bills you have and add Nay or
+Yea to the bill title and then add it to the itemMeaning list. B Next you create an
+empty dictionary to add the items to. You then start going over every actionId you
+obtained from getActionIds(). The first thing you do is sleep; this is a delay placed
+in the for loop so that you don’t make too many API calls too quickly. Next, you print
+to screen what you’re trying to do so that you can see this is working. You now have the
+try.except block, which tries to use the Votesmart API to get all the votes on a partic-
+ular actionId. Then, you loop over all the votes (usually there are more than 400
+votes in voteList.) When you loop over all the votes, you fill up transDict by using
+the politician’s name as the dictionary key. If you haven’t encountered a politician
+before, you get his/her party affiliation. Each politician in the dictionary has a list to
+store the items they voted on or their party affiliation. Then you see if this politician
+voted Nay or Yea on this bill. If they voted either way, then you add this to the list. If
+something goes wrong during the API call, the except block is called, and it prints an
+error message to the screen and the function continues. Finally, the transDict trans-
+action dictionary and the item meaning list, itemMeaning, are returned. 
+ Let’s try this out by getting the first two items voted on and see if our code is working:
+>>> reload(apriori)
+<module 'apriori' from 'apriori.py'>
+>>>transDict,itemMeaning=apriori.getTransList(actionIdList[:2], 
+billTitles[:2])
+getting votes for actionId: 34089
+getting votes for actionId: 34091
+Let’s see what’s inside transDict:
+>>> for key in transDict.keys():
+...     print transDict[key]
+[1, 2, 5]
+[1, 2, 4]
+[0, 3, 4]
+[0, 3, 4]
+[1, 2, 4]
+[0, 3, 4]
+[1]
+[1, 2, 5]
+[1, 2, 4]
+[1]
+
+243
+Example: uncovering patterns in congressional voting
+[1, 2, 4]
+[0, 3, 4]
+[1, 2, 5]
+[1, 2, 4]
+[0, 3, 4]
+Don’t be alarmed if many of these lists look similar. Many politicians vote alike. Now,
+given a list of items, you can quickly decode what it means with the itemMeaning list:
+>>> transDict.keys()[6]
+u' Doyle,  Michael 'Mike''
+>>> for item in transDict[' Doyle,  Michael 'Mike'']:
+...     print itemMeaning[item]
+...
+Republican
+Prohibiting Federal Funding of National Public Radio -- Yea
+Removing Troops from Afghanistan – Nay
+Your output may be different depending on the results returned from the Votesmart
+server. 
+ Now, let’s try it with the full list:
+>>> transDict,itemMeaning=apriori.getTransList(actionIdList, billTitles)
+getting votes for actionId: 34089
+getting votes for actionId: 34091
+getting votes for actionId: 34229
+                    .
+                    .
+                    .
+Now, before you’re ready to use the Apriori algorithm we developed earlier, you need
+to make a list of all the transactions. You can do that with a list comprehension similar
+to the previous for loop:
+>>> dataSet = [transDict[key] for key in transDict.keys()]
+Doing this throws out the keys, which are the politicians’ names. That’s OK. You
+aren’t interested in that. You’re interested in the items and associations among
+them. We’re now going to mine the frequent itemsets and association rules using the
+Apriori algorithm. 
+11.5.2 Test: association rules from congressional voting records
+Now you can apply the Apriori algorithm from section 11.3. If you try the default sup-
+port setting of 50%, you won’t get many frequent itemsets:
+>>> L,suppData=apriori.apriori(dataSet, minSupport=0.5)
+>>> L
+[[frozenset([4]), frozenset([13]), frozenset([0]), frozenset([21])], 
+[frozenset([13, 21])], []]
+Using a lower minimum support of 30% gives you many more frequent itemsets:
+>>> L,suppData=apriori.apriori(dataSet, minSupport=0.3)
+>>> len(L)
+8
+
+244
+CHAPTER 11
+Association analysis with the Apriori algorithm
+With a support of 30%, you have lots of frequent itemsets. You even have six sets with
+seven items inside: 
+>>> L[6]
+[frozenset([0, 3, 7, 9, 23, 25, 26]), frozenset([0, 3, 4, 9, 23, 25, 26]), 
+frozenset([0, 3, 4, 7, 9, 23, 26]), frozenset([0, 3, 4, 7, 9, 23, 25]), 
+frozenset([0, 4, 7, 9, 23, 25, 26]), frozenset([0, 3, 4, 7, 9, 25, 26])]
+You now have the frequent itemsets. We could stop here, but let’s try to generate asso-
+ciation rules using the code we wrote in section 11.4. You can first try the default min-
+imum confidence of 0.7:
+>>> rules = apriori.generateRules(L,suppData)
+That generated way too many rules. Let’s try increasing the minimum confidence:
+>>> rules = apriori.generateRules(L,suppData, minConf=0.95)
+frozenset([15]) --> frozenset([1]) conf: 0.961538461538
+frozenset([22]) --> frozenset([1]) conf: 0.951351351351
+                                   .
+                                   .
+                                   .
+frozenset([25, 26, 3, 4]) --> frozenset([0, 9, 7]) conf: 0.97191011236
+frozenset([0, 25, 26, 4]) --> frozenset([9, 3, 7]) conf: 0.950549450549
+Try increasing the confidence even more: 
+>>> rules = apriori.generateRules(L,suppData, minConf=0.99)
+frozenset([3]) --> frozenset([9]) conf: 1.0
+frozenset([3]) --> frozenset([0]) conf: 0.995614035088
+frozenset([3]) --> frozenset([0, 9]) conf: 0.995614035088
+frozenset([26, 3]) --> frozenset([0, 9]) conf: 1.0
+frozenset([9, 26]) --> frozenset([0, 7]) conf: 0.957547169811
+                                   .
+                                   .
+                                   .
+frozenset([23, 26, 3, 4, 7]) --> frozenset([0, 9]) conf: 1.0
+frozenset([23, 25, 3, 4, 7]) --> frozenset([0, 9]) conf: 0.994764397906
+frozenset([25, 26, 3, 4, 7]) --> frozenset([0, 9]) conf: 1.0
+These all provide some interesting rules. To find out what each rule means, enter the
+rule number as the index to itemMeaning:
+>>> itemMeaning[26]
+'Prohibiting the Use of Federal Funds for NASCAR Sponsorships -- Nay'
+>>> itemMeaning[3]
+'Prohibiting Federal Funding of National Public Radio -- Yea'
+>>> itemMeaning[9]
+'Repealing the Health Care Bill -- Yea'
+I’ve included the following rules in figure 11.6: {3} ➞ {0}, {22} ➞ {1}, and {9,26} ➞ {0,7}.
+ There are many more interesting and entertaining rules in the data. Do you
+remember that we initially used the support level of 30%? This means that these
+rules show up in at least 30% of all the transactions. That is meaningful because
+what it says is that we’re going to see these association rules in at least 30% of the
+
+245
+Example: finding similar features in poisonous mushrooms
+votes, and in the case of {3} ➞ {0} this rule is right 99.6% of the time. I wish I could
+bet on this sort of stuff. 
+11.6
+Example: finding similar features in poisonous mushrooms
+Sometimes you don’t want to look for the frequent itemsets; you may only be inter-
+ested in itemsets containing a certain item. In the final example, we’re going to look
+for common features in poisonous mushrooms. You can then use these common fea-
+tures to help you avoid eating mushrooms that are poisonous. The UCI Machine
+Learning Repository has a dataset with 23 features taken from species of gilled mush-
+rooms. Each of the features contains nominal values. We’re going to need to trans-
+form these nominal values into a set similar to what we did with the votes in the
+previous example. Luckily, this transformation was already done for us.3 Roberto
+Bayardo has parsed the UCI mushrooms dataset into a set of features for each sample
+of mushroom. Each possible value for each feature is enumerated, and if a sample
+contains that feature, then its integer value is included in the dataset. Let’s take a
+closer look at the dataset. It’s included in the source repository under the name mush-
+room.dat. Compare this to the original dataset located at http://archive.ics.uci.edu/
+ml/machine-learning-databases/mushroom/agaricus-lepiota.data. 
+ Take a look at the first few lines of the prepared file mushroom.dat: 
+1 3 9 13 23 25 34 36 38 40 52 54 59 63 67 76 85 86 90 93 98 107 113
+2 3 9 14 23 26 34 36 39 40 52 55 59 63 67 76 85 86 90 93 99 108 114
+2 4 9 15 23 27 34 36 39 41 52 55 59 63 67 76 85 86 90 93 99 108 115
+The first feature is poisonous or edible. If a sample is poisonous, you get a 1. If it’s edi-
+ble, you get a 2. The next feature is cap shape, which has six possible values that are
+represented with the integers 3–8. 
+ To find features in common with poisonous mushrooms, you can run the Apriori
+algorithm and look for itemsets with feature 2. 
+>>> mushDatSet = [line.split() for line in 
+open('mushroom.dat').readlines()]
+3 “Frequent Itemset Mining Dataset Repository” retrieved July 10, 2011; http://fimi.ua.ac.be/data/.
+Figure 11.6
+Association 
+rules {3} ➞ {0}, {22} ➞ {1}, 
+and {9,26} ➞ {0,7} with 
+their meanings and confi-
+dence levels
+
+246
+CHAPTER 11
+Association analysis with the Apriori algorithm
+Now let’s run the Apriori algorithm on this dataset:
+>>> L,suppData=apriori.apriori(mushDatSet, minSupport=0.3)
+Now you can search the frequent itemsets for the poisonous feature 2: 
+>>> for item in L[1]:
+...     if item.intersection('2'): print item
+...
+frozenset(['2', '59'])
+frozenset(['39', '2'])
+frozenset(['2', '67'])
+frozenset(['2', '34'])
+frozenset(['2', '23'])
+You can also repeat this for the larger itemsets:
+>>> for item in L[3]:
+...     if item.intersection('2'): print item
+...
+frozenset(['63', '59', '2', '93'])
+frozenset(['39', '2', '53', '34'])
+frozenset(['2', '59', '23', '85'])
+frozenset(['2', '59', '90', '85'])
+frozenset(['39', '2', '36', '34'])
+frozenset(['39', '63', '2', '85'])
+frozenset(['39', '2', '90', '85'])
+frozenset(['2', '59', '90', '86'])
+Now you need to look up these features so you know what to look for in wild mush-
+rooms. If you see any of these features, avoid eating the mushroom. One final dis-
+claimer: although these features may be common in poisonous mushrooms, the
+absence of these features doesn’t make a mushroom edible. Eating the wrong mush-
+room can kill you.
+11.7
+Summary
+Association analysis is a set of tools used to find interesting relationships in a large set
+of data. There are two ways you can quantify the interesting relationships. The first
+way is a frequent itemset, which shows items that commonly appear in the data
+together. The second way of measuring interesting relationships is association rules.
+Association rules imply an if..then relationship between items. 
+ Finding different combinations of items can be a time-consuming task and prohib-
+itively expensive in terms of computing power. More intelligent approaches are
+needed to find frequent itemsets in a reasonable amount of time. One such approach
+is the Apriori algorithm, which uses the Apriori principle to reduce the number of sets
+that are checked against the database. The Apriori principle states that if an item is
+infrequent, then supersets containing that item will also be infrequent. The Apriori
+algorithm starts from single itemsets and creates larger sets by combining sets that
+meet the minimum support measure. Support is used to measure how often a set
+appears in the original data. 
+
+247
+Summary
+ Once frequent itemsets have been found, you can use the frequent itemsets to gen-
+erate association rules. The significance of an association rule is measured by confi-
+dence. Confidence tells you how many times this rule applies to the frequent itemsets. 
+ Association analysis can be performed on many different items. Some common
+examples are items in a store and pages visited on a website. Association analysis has
+also been used to look at the voting history of elected officials and judges. 
+ The Apriori algorithm scans over the dataset each time you increase the length of
+your frequent itemsets. When the datasets become very large, this can drastically
+reduce the speed of finding frequent itemsets. The next chapter introduces the FP-
+growth algorithm.4 In contrast to Apriori, it only needs to go over the dataset twice,
+which can lead to a significant increase in speed. 
+4 H. Li, Y. Wang, D. Zhang, M. Zhang, and E. Chang, “PFP: Parallel FP-Growth for Query Recommendation,”
+RecSys 2008, Proceedings of the 2008 ACM Conference on Recommender Systems; http://portal.acm.org/
+citation.cfm?id=1454027.
+
+248
+Efficiently
+ finding frequent
+ itemsets with FP-growth
+Have you ever gone to a search engine, typed in a word or part of a word, and the
+search engine automatically completed the search term for you? Perhaps it recom-
+mended something you didn’t even know existed, and you searched for that
+instead. That has happened to me, sometimes with comical results when I started a
+search with “why does....” To come up with those search terms, researchers at the
+search company used a version of the algorithm we’ll discuss in this chapter. They
+looked at words used on the internet and found pairs of words that frequently
+occur together.1 This requires a way to find frequent itemsets efficiently.
+This chapter covers
+■Finding common patterns in transaction data
+■The FP-growth algorithm
+■Finding co-occurring words in a Twitter feed
+1 J. Han, J. Pei, Y. Yin, R. Mao, “Mining Frequent Patterns without Candidate Generation: A Frequent-Pattern
+Tree Approach,” Data Mining and Knowledge Discovery 8 (2004), 53–87.
+
+249
+FP-trees: an efficient way to encode a dataset
+ This chapter expands on the topics in the previous chapter. This chapter covers a
+great algorithm for uncovering frequent itemsets. The algorithm, called FP-growth, is
+faster than Apriori in the previous chapter. It builds from Apriori but uses some differ-
+ent techniques to accomplish the same task. That task is finding frequent itemsets or
+pairs, sets of things that commonly occur together, by storing the dataset in a special
+structure called an FP-tree. This results in faster execution times than Apriori, com-
+monly with performance two orders of magnitude better. 
+ In the last chapter, we discussed ways of looking at interesting things in datasets.
+Two of the most common ways of looking at things in the dataset are frequent itemsets
+and association rules. In chapter 11, we did both. In this chapter, we’ll focus on fre-
+quent itemsets. We’ll dive deeper into that task, exploring the FP-growth algorithm,
+which allows us to mine data more efficiently. This algorithm does a better job of find-
+ing frequent itemsets, but it doesn’t find association rules.
+ The FP-growth algorithm is faster than Apriori because it requires only two scans of
+the database, whereas Apriori will scan the dataset to find if a given pattern is frequent
+or not—Apriori scans the dataset for every potential frequent item. On small datasets,
+this isn’t a problem, but when you’re dealing with larger datasets, this will be a prob-
+lem. The FP-growth algorithm scans the dataset only twice. The basic approach to
+finding frequent itemsets using the FP-growth algorithm is as follows:
+1
+Build the FP-tree. 
+2
+Mine frequent itemsets from the FP-tree.
+We’ll discuss the FP-tree data structure and then look at how to encode a dataset in
+this structure. We’ll next look at how we can mine frequent itemsets from the FP-
+tree. Finally, we’ll look at an example of mining commonly used words from a
+stream of Twitter text and an example of mining common patterns in people’s web-
+browsing behavior.
+12.1
+FP-trees: an efficient way to encode a dataset
+The FP-growth algorithm stores data in a compact data structure called an FP-tree.
+The FP stands for “frequent pattern.” An FP-tree looks like other trees in computer sci-
+ence, but it has links connecting similar items. The linked items can be thought of as a
+linked list. An example FP-tree is shown in figure 12.1. 
+ Unlike a search tree, an item can appear multiple times in the same tree. The FP-
+tree is used to store the frequency of occurrence for sets of items. Sets are stored as
+FP-growth
+Pros: Usually faster than Apriori. 
+Cons: Difficult to implement; certain datasets degrade the performance.
+Works with: Nominal values.
+
+250
+CHAPTER 12
+Efficiently finding frequent itemsets with FP-growth
+Figure 12.1
+An example FP-tree. 
+The FP-tree looks like a generic tree 
+with links connecting similar items.
+paths in the tree. Sets with similar items will share
+part of the tree. Only when they differ will the tree
+split. A node identifies a single item from the set
+and the number of times it occurred in this
+sequence. A path will tell you how many times a
+sequence occurred. Don’t worry if this sounds con-
+fusing. Shortly we’ll walk through how to create
+this tree. 
+ The links between similar items, known as node
+links, will be used to rapidly find the location of sim-
+ilar items. Don’t worry if this sounds a little confus-
+ing right now; we’ll work through a simple
+example. The data used to generate the tree in fig-
+ure 12.1 is shown in table 12.1.
+In figure 12.1 the item z appeared five times, and the set {r,z} appeared once. We can
+conclude that z must have appeared four times with other symbols or on its own. Let’s
+look at the other possibilities for z. The set {t,s,y,x,z} appeared two times, and the set
+{t,r,y,x,z} appeared once. The item z has a 5 next to it, so it occurred five times, and we
+have four accounted for, so it must have appeared once on its own. Inspect table 12.1
+to verify that this is true. I mentioned that {t,r,y,x,z} appeared once, but in the transac-
+tion dataset you can see item 005 was {y,r,x,z,q,t,p}. What happened to q and p? 
+ We used the term support in chapter 11, which was a minimum threshold, below
+which we considered items infrequent. If you set the minimum support to 3 and apply
+frequent item analysis, you’ll get only itemsets that appear three or more times. In
+generating the tree in figure 12.1, the minimum support was 3, so q and p don’t
+appear in the tree. 
+ The FP-growth algorithm works like this. First, you build the FP-tree, and then you
+mine it for frequent itemsets. To build the tree, you scan the original dataset twice.
+The first pass counts the frequency of occurrence of all the items. Remember the
+Apriori principle from chapter 11. If an item is infrequent, supersets containing that
+item will also be infrequent, so you don’t have to worry about them. You use the first
+TID
+Items in transaction 
+001
+r, z, h, j, p
+002
+z, y, x, w, v, u, t, s
+003
+z
+004
+r, x, n, o, s
+005
+y, r, x, z, q, t, p
+006
+y, z, x, e, q, s, t, m
+Table 12.1
+Sample transaction dataset, 
+used to generate the FP-tree in figure 12.1
+
+251
+Build an FP-tree
+pass to count the frequency of occurrence and then address only the frequent items in
+the second pass. 
+12.2
+Build an FP-tree
+In the second pass of the dataset, you build the FP-tree. In order to build a tree you
+need a container to hold the tree. 
+12.2.1 Creating the FP-tree data structure 
+The tree in this chapter is more involved than the other trees in this book, so you’ll
+create a class to hold each node of the tree. Create a file called fpGrowth.py and add
+the code from the following listing. 
+class treeNode:
+    def __init__(self, nameValue, numOccur, parentNode):
+        self.name = nameValue
+        self.count = numOccur
+        self.nodeLink = None
+        self.parent = parentNode
+        self.children = {}
+    def inc(self, numOccur):
+        self.count += numOccur
+        
+    def disp(self, ind=1):
+        print '  '*ind, self.name, ' ', self.count
+        for child in self.children.values():
+            child.disp(ind+1)
+The code in listing 12.1 is a class definition for the nodes of the FP-tree. It has vari-
+ables to hold the name of the node, a count. The nodeLink variable will be used to
+link similar items (the dashed lines in figure 12.1). Next, the parent variable is used to
+refer to the parent of this node in the tree. Often, you don’t need this in trees because
+you’re recursively accessing nodes. Later in this chapter, you’ll be given a leaf node
+Listing 12.1
+FP-tree class definition 
+General approach to FP-growth
+1. Collect: Any method.
+2. Prepare: Discrete data is needed because we’re storing sets. If you have contin-
+uous data, it will need to be quantized into discrete values. 
+3. Analyze: Any method.
+4. Train: Build an FP-tree and mine the tree.
+5. Test: Doesn’t apply.
+6. Use: This can be used to identify commonly occurring items that can be used
+to make decisions, suggest items, make forecasts, and so on. 
+
+252
+CHAPTER 12
+Efficiently finding frequent itemsets with FP-growth
+and you’ll need to ascend the tree, which requires a pointer to the parent. Lastly, the
+node contains an empty dictionary for the children of this node. 
+ There are two methods in listing 12.1; inc()increments the count variable by a
+given amount. The last method, disp(), is used to display the tree in text. It isn’t
+needed to create the tree, but it’s useful for debugging. 
+ Try out this code:
+>>> import fpGrowth
+>>> rootNode = fpGrowth.treeNode('pyramid',9, None)
+This creates a single tree node. Now, let’s add a child node to it: 
+>>> rootNode.children['eye']=fpGrowth.treeNode('eye', 13, None)
+To display the child node, type
+>>> rootNode.disp()
+   pyramid   9
+     eye   13
+Add another node to see how two child nodes are displayed:
+>>> rootNode.children['phoenix']=fpGrowth.treeNode('phoenix', 3, None)
+>>> rootNode.disp()
+   pyramid   9
+     eye   13
+     phoenix   3
+Now that you have the tree data structure built, you can construct the FP-tree. 
+12.2.2 Constructing the FP-tree
+In addition to the FP-tree shown in figure 12.1,
+you need a header table to point to the first
+instance of a given type. The header table will
+allow you to quickly access all of the elements
+of a given type in the FP-tree. The header table
+is shown in figure 12.2. 
+ You’ll use a dictionary as your data struc-
+ture to store the header table. In addition to
+storing pointers, you can use the header table
+to keep track of the total count of every type
+of element in the FP-tree. 
+ The first pass through the dataset will
+count the frequency of occurrence of each
+item. Then, you’ll eliminate any items that
+don’t meet the minimum support. In the next step, you’ll build the FP-tree. When you
+build the tree, you’ll take each itemset and add it to an existing path if one exists. If it
+doesn’t exist, you’ll create a new path. Each transaction is a set, which is an unordered
+collection. If you have {z,x,y} and {y,z,r}, you need the similar items to overlap. To solve
+Figure 12.2
+FP-tree with header table. The 
+header table serves as a starting point to 
+find similar items.
+
+253
+Build an FP-tree
+this, you need to sort each set before it’s added to the tree. The sort is done using the
+absolute item frequency. Using the values in the header table in figure 12.2, the fil-
+tered and reordered dataset from table 12.1 is shown in table 12.2. 
+After you have the transactions filtered and sorted, you can start building the tree. You
+start with the null set (symbol Ø) and add frequent itemsets to it. The filtered and
+sorted transactions are successively added to the tree, incrementing existing elements
+and branching out if no existing element exists. This process is illustrated in figure 12.3
+with the first two transactions from table 12.2.
+Now that you have an idea of how to go from a transaction dataset to an FP-tree, let’s
+write some code to create the tree. Open fpGrowth.py and add the code from the fol-
+lowing listing. 
+def createTree(dataSet, minSup=1): 
+    headerTable = {}
+    for trans in dataSet
+        for item in trans:
+            headerTable[item] = headerTable.get(item, 0) + dataSet[trans]
+Table 12.2
+Transaction dataset with infrequent items removed and items reordered
+TID
+Items in transaction 
+Filtered and sorted transactions 
+001
+r, z, h, j, p
+z, r
+002
+z, y, x, w, v, u, t, s
+z, x, y, s, t
+003
+z
+z
+004
+r, x, n, o, s
+x, s, r
+005
+y, r, x, z, q, t, p
+z, x, y, r, t
+006
+y, z, x, e, q, s, t, m
+z, x, y, s, t
+Listing 12.2
+FP-tree creation code
+Figure 12.3
+An illustration of the 
+FP-tree creation process, showing 
+the first two steps in creating the 
+FP-tree using the data in table 12.2
+
+254
+CHAPTER 12
+Efficiently finding frequent itemsets with FP-growth
+    for k in headerTable.keys():               
+        if headerTable[k] < minSup:                  
+            del(headerTable[k])                
+    freqItemSet = set(headerTable.keys())
+    if len(freqItemSet) == 0: return None, None       
+    for k in headerTable:
+        headerTable[k] = [headerTable[k], None]  
+    retTree = treeNode('Null Set', 1, None) 
+    for tranSet, count in dataSet.items(): 
+        localD = {}
+        for item in tranSet:                        
+            if item in freqItemSet:                      
+                localD[item] = headerTable[item][0] 
+        if len(localD) > 0:
+            orderedItems = [v[0] for v in sorted(localD.items(), 
+                                     key=lambda p: p[1], reverse=True)]
+            updateTree(orderedItems, retTree, \        
+                       headerTable, count)            
+    return retTree, headerTable 
+def updateTree(items, inTree, headerTable, count):
+    if items[0] in inTree.children:
+        inTree.children[items[0]].inc(count) 
+    else:   
+        inTree.children[items[0]] = treeNode(items[0], count, inTree)
+        if headerTable[items[0]][1] == None: 
+            headerTable[items[0]][1] = inTree.children[items[0]]
+        else:
+            updateHeader(headerTable[items[0]][1],
+                                inTree.children[items[0]])
+    if len(items) > 1:   
+        updateTree(items[1::], inTree.children[items[0]], 
+                                   headerTable, count)   
+def updateHeader(nodeToTest, targetNode): 
+    while (nodeToTest.nodeLink != None): 
+        nodeToTest = nodeToTest.nodeLink
+    nodeToTest.nodeLink = targetNode
+The code in listing 12.2 has three functions. The first one, createTree(), takes the
+dataset and the minimum support as arguments and builds the FP-tree. This makes
+two passes through the dataset. The first pass goes through everything in the dataset
+and counts the frequency of each term. These are stored in the header table. Next,
+the header table is scanned and items occurring less than minSup are deleted. B If no
+item is frequent, then you do no further processing. C Next, the header table is
+slightly expanded so it can hold a count and pointer to the first item of each type.
+You then create the base node, which contains the null set Ø. Finally, you iterate over
+the dataset again, this time using only items that are frequent. D These items are
+sorted, as shown in table 12.2, and the updateTree() method is called. E We’ll dis-
+cuss updateTree() next. 
+ To grow the FP-tree (this is where the growth in FP-growth comes from), you call
+updateTree with an itemset. Figure 12.3 illustrates what happens in updateTree(). It
+Remove items 
+not meeting 
+min support
+B
+If no items meet 
+min support, exit
+C
+Sort transactions 
+by global 
+frequency
+D
+Populate tree with 
+ordered freq itemset
+E
+Recursively call 
+updateTree on 
+remaining items
+F
+
+255
+Build an FP-tree
+first tests if the first item in the transaction exists as a child node. If so, it updates the
+count of that item. If the item doesn’t exist, it creates a new treeNode and adds it as a
+child. At this time, the header table is also updated to point to this new node. The
+header table is updated with the updateHeader() function, which we’ll discuss next.
+The last thing updateTree() does is recursively call itself with the first element in the
+list removed. F
+ The last function in listing 12.2 is updateHeader(), which makes sure the node
+links point to every instance of this item in the tree. You start with the first nodeLink in
+the header table and then follow the nodeLinks until you find the end. This is a linked
+list. When working with trees, the natural reaction is to do everything recursively. This
+can get you in trouble when working with a linked list because if the list is long
+enough, you’ll hit the limits of recursion.
+ Before you can run this example, you need a dataset. You can get this from the code
+repo, or you can enter it by hand. The loadSimpDat() function will return a list of trans-
+actions. These are the same as the transactions in table 12.1. The createTree() func-
+tion will be used later when you’re mining the tree so it doesn’t take the input data as
+lists. It expects a dictionary with the itemsets as the dictionary keys and the frequency
+as the value. A createInitSet() function does this conversion for you, so add these to
+fpGrowth.py, as shown in the following listing. 
+def loadSimpDat():
+    simpDat = [['r', 'z', 'h', 'j', 'p'],
+               ['z', 'y', 'x', 'w', 'v', 'u', 't', 's'],
+               ['z'],
+               ['r', 'x', 'n', 'o', 's'],
+               ['y', 'r', 'x', 'z', 'q', 't', 'p'],
+               ['y', 'z', 'x', 'e', 'q', 's', 't', 'm']]
+    return simpDat
+def createInitSet(dataSet):
+    retDict = {}
+    for trans in dataSet:
+        retDict[frozenset(trans)] = 1
+    return retDict
+OK, let’s see this in action. After you’ve entered the code from listing 12.3 to
+fpGrowth.py, enter the following in your Python shell: 
+>>> reload(fpGrowth)
+<module 'fpGrowth' from 'fpGrowth.py'>
+First, let’s load the example dataset:
+>>> simpDat = fpGrowth.loadSimpDat()
+>>> simpDat
+[['r', 'z', 'h', 'j', 'p'], ['z', 'y', 'x', 'w', 'v', 'u', 't', 's'], 
+['z'], ['r', 'x', 'n', 'o', 's'], ['y', 'r', 'x', 'z', 'q', 't', 'p'], 
+['y', 'z', 'x', 'e', 'q', 's', 't', 'm']]
+Listing 12.3
+Simple dataset and data wrapper
+
+256
+CHAPTER 12
+Efficiently finding frequent itemsets with FP-growth
+Now, you need to format this for createTree():
+>>> initSet = fpGrowth.createInitSet(simpDat)
+>>> initSet
+{frozenset(['e', 'm', 'q', 's', 't', 'y', 'x', 'z']): 1, frozenset(['x', 
+'s', 'r', 'o', 'n']): 1, frozenset(['s', 'u', 't', 'w', 'v', 'y', 'x', 
+'z']): 1, frozenset(['q', 'p', 'r', 't', 'y', 'x', 'z']): 1, 
+frozenset(['h', 'r', 'z', 'p', 'j']): 1, frozenset(['z']): 1}
+Now, you can create the FP-tree:
+>>> myFPtree, myHeaderTab = fpGrowth.createTree(initSet, 3)
+You can display a text representation of the tree with the disp() method:
+>>> myFPtree.disp()
+   Null Set   1
+     x   1
+       s   1
+         r   1
+     z   5
+       x   3
+         y   3
+           s   2
+             t   2
+           r   1
+             t   1
+       r   1
+The item and its frequency count are displayed with indentation representing the
+depth of the tree. Verify that this tree is the same as the one in figure 12.2. 
+ Now that you’ve created the FP-tree, it’s time to mine it for the frequent items. 
+12.3
+Mining frequent items from an FP-tree
+Most of the hard work is over. We won’t be writing as much code as we did in section 12.1.
+Now that you have the FP-tree, you can extract the frequent itemsets. You’ll follow some-
+thing similar to the Apriori algorithm where you start with the smallest sets containing
+one item and build larger sets from there. But you’ll do this with the FP-tree, and you’ll
+no longer need the original dataset. 
+ There are three basic steps to extract the frequent itemsets from the FP-tree, as
+follows:
+1
+Get conditional pattern bases from the FP-tree.
+2
+From the conditional pattern base, construct a conditional FP-tree.
+3
+Recursively repeat steps 1 and 2 on until the tree contains a single item.
+Now, you’ll focus on the first step, which is finding the conditional pattern base. After
+that you’ll create conditional FP-trees from each of the conditional pattern bases.
+You’ll finally write a little code to wrap these two functions together and get the fre-
+quent itemsets from the FP-tree. 
+
+257
+Mining frequent items from an FP-tree
+12.3.1 Extracting conditional pattern bases
+You’ll start with the single items you found to be frequent in the last section. You
+already have these items in the header table. For each of these items, you’ll get the
+conditional pattern base. The conditional pattern base is a collection of paths that end
+with the item you’re looking for. Each of those paths is a prefix path. In short, a prefix
+path is anything on the tree between the item you’re looking for and the tree root. 
+ Referring back to figure 12.2, the prefix paths for the symbol r are {x,s}, {z,x,y}, and
+{z}. Each of these prefix paths also has a count associated with it. The count is the same
+number as the beginning item. This identifies the number of rs on each path. Table 12.3
+lists all of the prefix paths for each frequent item in our example. 
+The prefix paths will be used to create a conditional FP-tree, but don’t worry about
+that for now. To get these prefix paths, you could exhaustively search the tree until
+you hit your desired frequent item, or you could use a more efficient method. The
+more efficient method you’ll use takes advantage of the header table created earlier.
+The header table is the starting point for a linked list containing items of the same
+type. Once you get to each item, you can ascend the tree until you hit the root node. 
+ Code to find the prefix paths is shown in the following listing. Add it to
+fpGrowth.py. 
+def ascendTree(leafNode, prefixPath): 
+    if leafNode.parent != None:                   
+        prefixPath.append(leafNode.name)
+        ascendTree(leafNode.parent, prefixPath)
+def findPrefixPath(basePat, treeNode): 
+    condPats = {}
+    while treeNode != None:
+        prefixPath = []
+        ascendTree(treeNode, prefixPath)
+        if len(prefixPath) > 1: 
+            condPats[frozenset(prefixPath[1:])] = treeNode.count
+        treeNode = treeNode.nodeLink
+    return condPats
+Frequent item
+Prefix paths
+z
+{}5
+r
+{x,s}1, {z,x,y}1, {z}1
+x
+{z}3, {}1
+y
+{z,x}3
+s
+{z,x,y}2, {x}1
+t
+{z,x,y,s}2, {z,x,y,r}1
+Listing 12.4
+A function to find all paths ending with a given item
+Recursively 
+ascend the tree
+B
+Table 12.3
+Prefix paths 
+for each frequent item
+
+258
+CHAPTER 12
+Efficiently finding frequent itemsets with FP-growth
+The code in listing 12.4 is used to generate a conditional pattern base given a single item.
+This is accomplished by visiting every node in the tree that contains the given
+item. When you were creating the tree, you used the header table to point to the
+first item of this type and successive item to link together. The findPrefixPath()
+function iterates through the linked list until it hits the end. For each item it encounters,
+it calls ascendTree(), which ascends the tree, collecting the names of items it encoun-
+ters. B This list is returned and added to the conditional pattern base dictionary
+called condPats.
+ Let’s see this in action with the tree you made earlier: 
+>>> reload(fpGrowth)
+<module 'fpGrowth' from 'fpGrowth.py'>
+>>> fpGrowth.findPrefixPath('x', myHeaderTab['x'][1])
+{frozenset(['z']): 3}
+>>> fpGrowth.findPrefixPath('z', myHeaderTab['z'][1])
+{}
+>>> fpGrowth.findPrefixPath('r', myHeaderTab['r'][1])
+{frozenset(['x', 's']): 1, frozenset(['z']): 1,
+    frozenset(['y', 'x', 'z']): 1}
+Check to see if these values match the values in table 12.3. Now that you have the con-
+ditional pattern bases, we can move on to creating conditional FP-trees. 
+12.3.2 Creating conditional FP-trees
+For each of your frequent items, you’ll create a conditional FP-tree. You’ll create a
+conditional tree for z and x and so on. You’ll create the conditional pattern bases you
+just found as the input data to create these trees with the same tree-generating code.
+Then, you’ll recursively find frequent items, find conditional pattern bases, and then
+find another conditional tree. For example, for the frequent item t, you’ll create a
+conditional FP-tree. Then, you’ll repeat this process for {t,y}, {t,x}, .... The creation of
+the conditional FP-tree for item t is shown in figure 12.4.
+ In figure 12.4, note that items s and r are part of the conditional pattern bases, but
+they don’t make it to the conditional FP-tree. Why is this? If we’re still talking about s
+Figure 12.4
+The creation of the 
+conditional FP-tree for item t. Ini-
+tially the tree starts out as only 
+the null set as the root. Next, the 
+set {y,x,z} is added from the orig-
+inal set {y,x,s,z}; the character s
+didn’t make it because it didn’t 
+meet the minimum support. Sim-
+ilarly, {y,x,z} is added from the 
+original set {y,x,r,z}.
+
+259
+Mining frequent items from an FP-tree
+and r, aren’t they frequent items? They’re frequent items, but they aren’t frequent
+items in t’s conditional tree: {t,r} and {t,s} aren’t frequent. 
+ Next, you mine the conditional tree for {t,z}, {t,x}, and {t,y}. These will lead to more
+complex frequent itemsets. This process repeats until you run out of items in the con-
+ditional tree. Then you know you can stop. The code to do this is relatively straightfor-
+ward with a little recursion and the code we wrote earlier. Open fpGrowth.py and add
+the code from the following listing.
+def mineTree(inTree, headerTable, minSup, preFix, freqItemList):
+    bigL = [v[0] for v in sorted(headerTable.items(), 
+                                  key=lambda p: p[1])]
+    for basePat in bigL:                                 
+        newFreqSet = preFix.copy()
+        newFreqSet.add(basePat)
+        freqItemList.append(newFreqSet)
+        condPattBases = findPrefixPath(basePat, headerTable[basePat][1])
+        myCondTree, myHead = createTree(condPattBases,\                    
+                                       minSup)                             
+        if myHead != None:             
+            mineTree(myCondTree, myHead, minSup, newFreqSet, freqItemList)
+The process of creating conditional trees and prefix paths and conditional bases
+sounds complex, but the code to do this is relatively simple. The code starts by sorting
+the items in the header table by their frequency of occurrence. (Remember that the
+default sort is lowest to highest.) B Then, each frequent item is added to your list of
+frequent itemsets, freqItemList. Next, you recursively call findPrefixPath() from
+listing 12.4, to create a conditional base. This conditional base is treated as a new data-
+set and fed to createTree(). C I added enough flexibility to createTree() that it
+could be reused to create conditional trees. Finally, if the tree has any items in it,
+you’ll recursively call mineTree(). D
+ Let’s see the code from listing 12.5 in action by putting the whole program
+together. After you’ve added the code from listing 12.5 to fpGrowth.py, save the file,
+and enter the following your Python shell:
+>>> reload(fpGrowth)
+<module 'fpGrowth' from 'fpGrowth.py'>
+Now create an empty list to store all the frequent itemsets:
+>>> freqItems = []
+Now, run mineTree() and all the conditional trees will be displayed. 
+>>> fpGrowth.mineTree(myFPtree, myHeaderTab, 3, set([]), freqItems)
+conditional tree for: set(['y'])
+   Null Set   1
+     x   3
+Listing 12.5
+The mineTree function recursively finds frequent itemsets.
+Start from bottom 
+of header table
+B
+Construct cond. FP-tree from
+cond. pattern base C
+Mine cond. FP-tree D
+
+260
+CHAPTER 12
+Efficiently finding frequent itemsets with FP-growth
+       z   3
+conditional tree for:  set(['y', 'z'])
+   Null Set   1
+     x   3
+conditional tree for:  set(['s'])
+   Null Set   1
+     x   3
+conditional tree for:  set(['t'])
+   Null Set   1
+     y   3
+       x   3
+         z   3
+conditional tree for:  set(['x', 't'])
+   Null Set   1
+     y   3
+conditional tree for:  set(['z', 't'])
+   Null Set   1
+     y   3
+       x   3
+conditional tree for:  set(['x', 'z', 't'])
+   Null Set   1
+     y   3
+conditional tree for:  set(['x'])
+   Null Set   1
+     z   3
+To get the output like the previous code, I added two lines to mineTree(): 
+print 'conditional tree for: ',newFreqSet
+myCondTree.disp(1)
+These were added in the last if statement: if myHead != None: before call to the mineTree
+function.
+ Now, let’s check to see if the itemsets returned matched the condition trees:
+>>> freqItems
+ [set(['y']), set(['y', 'z']), set(['y', 'x', 'z']), set(['y', 'x']), 
+set(['s']), set(['x', 's']), set(['t']), set(['y', 't']), set(['x', 
+'t']), set(['y', 'x', 't']), set(['z', 't']), set(['y', 'z', 't']), 
+set(['x', 'z', 't']), set(['y', 'x', 'z', 't']), set(['r']), set(['x']), 
+set(['x', 'z']), set(['z'])]
+The itemsets match the conditional FP-trees, which is what you’d expect. Now that you
+have the full FP-growth algorithm working, let’s try it out on a real-world example.
+You’ll see if you can get some common words from the microblogging site, Twitter. 
+12.4
+Example: finding co-occurring words in a Twitter feed
+You’ll be using a Python library called python-twitter. The source code can be found
+at http://code.google.com/p/python-twitter/. As you may have guessed, it allows you
+to access the microblogging site, Twitter, with Python. If you aren’t familiar with Twit-
+ter.com, it’s a channel for communicating with others. Posts are limited to 140 charac-
+ters in length. Each post is called a tweet. 
+
+261
+Example: finding co-occurring words in a Twitter feed
+ The documentation for the Twitter API can be found at http://dev.twitter.com/doc.
+The keywords aren’t exactly the same between the API documentation and the Python
+module. I recommend looking at the Python file twitter.py to fully understand how to
+use the library. See appendix A for installation instructions for the module. You’ll use
+only one small portion of the library, but you can do much more with the API, so I
+encourage you to explore all functionality of the API. 
+You need two sets of credentials before you can start using the API. The first set is
+consumer_key and consumer_secret, which you can get from the Twitter Dev site
+when you register to develop an app (https://dev.twitter.com/apps/new). These keys
+are specific to the app you’re going to be writing. The second set, access_token_key
+and access_token_secret, are specific to a Twitter user. To get these, you need to check
+out the get_access_token.py file that comes with the Twitter-Python install (or get
+them from Twitter Dev site). This is a command-line Python script that uses OAuth to
+tell Twitter that this application has the right to post on behalf of this user. Once that’s
+done, you can put those values into the previous code and get moving.
+ You’re going to use the FP-growth algorithm to find frequent words in tweets for a
+given search term. You’ll retrieve as many tweets as you can (1,400) and then put the
+tweets through the FP-growth algorithm. Add the code from the following listing to
+fpGrowth.py.
+import twitter
+from time import sleep
+import re
+def getLotsOfTweets(searchStr):
+    CONSUMER_KEY = 'get when you create an app'
+    CONSUMER_SECRET = 'get when you create an app'
+    ACCESS_TOKEN_KEY = 'get from Oauth, specific to a user'
+Listing 12.6
+Code to access the Twitter Python library
+Example: finding co-occurring words in a Twitter feed
+1. Collect: Use the python-twitter module to access tweets.
+2. Prepare: Write a function to remove URLs, remove punctuation, convert to lower-
+case, and create a set of words from a string.
+3. Analyze: We’ll look at the prepared data in the Python shell to make sure it’s cor-
+rect. 
+4. Train: We’ll use createTree() and mineTree(), developed earlier in this chap-
+ter, to perform the FP-growth algorithm. 
+5. Test: Doesn’t apply.
+6. Use: Not performed in this example. You could do sentiment analysis or pro-
+vide search query suggestion.
+
+262
+CHAPTER 12
+Efficiently finding frequent itemsets with FP-growth
+    ACCESS_TOKEN_SECRET = 'get from Oauth, specific to a user'
+    api = twitter.Api(consumer_key=CONSUMER_KEY,  
+                      consumer_secret=CONSUMER_SECRET,
+                      access_token_key=ACCESS_TOKEN_KEY, 
+                      access_token_secret=ACCESS_TOKEN_SECRET)
+    #you can get 1500 results 15 pages * 100 per page
+    resultsPages = []
+    for i in range(1,15):
+        print "fetching page %d" % i
+        searchResults = api.GetSearch(searchStr, per_page=100, page=i)
+        resultsPages.append(searchResults)
+        sleep(6)
+    return resultsPages
+There are three library imports you’ll need to add: one for the twitter library, one
+for regular expressions, and the sleep function. You’ll use the regular expressions to
+help parse the text later. 
+ The getLotsOfTweets() function handles authentication and then creates an
+empty list. The search API allows you to get 100 tweets at a time. Each of those is con-
+sidered a page, and you’re allowed 14 pages. After you make the search call, there’s a
+six-second sleep to be polite by not making too many requests too quickly. There’s also
+a print statement to let you know the program is still running and not dead. 
+ Let’s get some tweets. Enter the following in your Python shell:
+>>> reload(fpGrowth)
+<module 'fpGrowth' from 'fpGrowth.py'>
+I’m going to search for a stock symbol named RIMM:
+>>> lotsOtweets = fpGrowth.getLotsOfTweets('RIMM')
+fetching page 1
+fetching page 2
+                           .
+                           .
+                           .
+The lotsOtweets list contains 14 lists with 100 tweets inside. You can explore the
+tweets by typing
+>>> lotsOtweets[0][4].text
+u"RIM: Open The Network, Says ThinkEquity: In addition, RIMM needs to 
+reinvent its image, not only demonstrating ... http://bit.ly/lvlV1U"
+As you can see, some people put URLs in the tweets, and when you parse them, you’ll
+get a mess. You need to remove URLs, so you can get at the words in the tweet. We’ll
+now write some code to parse the tweets into a list of strings, and a function to run the
+FP-growth algorithm on the dataset. Add the following code to fpGrowth.py:
+def textParse(bigString):
+    urlsRemoved = re.sub('(http[s]?:[/][/]|www.)([a-z]|[A-Z]|[0-9]|[/
+.]|[~])*',
+                         '', bigString)
+Listing 12.7
+Text parsing and glue code
+
+263
+Example: finding co-occurring words in a Twitter feed
+    listOfTokens = re.split(r'\W*', urlsRemoved)
+    return [tok.lower() for tok in listOfTokens if len(tok) > 2]
+def mineTweets(tweetArr, minSup=5):
+    parsedList = []
+    for i in range(14):
+        for j in range(100):
+            parsedList.append(textParse(tweetArr[i][j].text))
+    initSet = createInitSet(parsedList)
+    myFPtree, myHeaderTab = createTree(initSet, minSup)
+    myFreqList = []
+    mineTree(myFPtree, myHeaderTab, minSup, set([]), myFreqList)
+    return myFreqList
+The first function in listing 12.7 is from chapter 4, but I added one line to remove URLs.
+This calls the regular expression module and removes any URLs. The other function in
+listing 12.7, mineTweets(), calls textParse on every tweet. Lastly, mineTweets() wraps
+up some commands we used in section 12.2 to build the FP-tree and mine it. A list of all
+the frequent itemsets is returned. 
+ Let’s try this out:
+>>> reload(fpGrowth)
+<module 'fpGrowth' from 'fpGrowth.py'>
+Let’s look for sets that occur more than 20 times:
+>>> listOfTerms = fpGrowth.mineTweets(lotsOtweets, 20)
+How many sets occurred in 20 or more of the documents?
+>>> len(listOfTerms)
+455
+The day before I wrote this, a company that trades under the RIMM ticker symbol had
+a conference call that didn’t please investors. The stock opened 22% lower than it had
+closed the previous day. Let’s see if that shows up in the tweets:
+>>> for t in listOfTerms:
+...     print t
+set([u'rimm', u'day'])
+set([u'rimm', u'earnings'])
+set([u'pounding', u'value'])
+set([u'pounding', u'overnight'])
+set([u'pounding', u'drops'])
+set([u'pounding', u'shares'])
+set([u'pounding', u'are'])
+                            .
+                            .
+                            .
+set([u'overnight'])
+set([u'drops', u'overnight'])
+set([u'motion', u'drops', u'overnight'])
+set([u'motion', u'drops', u'overnight', u'value'])
+set([u'drops', u'overnight', u'research'])
+set([u'drops', u'overnight', u'value', u'research'])
+set([u'motion', u'drops', u'overnight', u'value', u'research'])
+set([u'motion', u'drops', u'overnight', u'research'])
+set([u'drops', u'overnight', u'value'])
+
+264
+CHAPTER 12
+Efficiently finding frequent itemsets with FP-growth
+It would be interesting to try out some other values for minSupport and some other
+search terms. 
+ Recall that the FP-trees are built by applying one instance at a time. But you assume
+that all the data is present and you iterate over all the available data. You could rewrite
+the createTree() function to take in one instance at a time and grow the tree with
+inputs from the Twitter stream. There’s a good map-reduce version of FP-growth that
+can be used to scale this to multiple machines. Google has used it to find frequent co-
+occurring words, running a large body of text through it, similar to the example we
+did here.2
+12.5
+Example: mining a clickstream from a news site
+All right; that last example was cool, but you’re probably thinking to yourself, “Dude,
+this algo is supposed to be fast. That was only 1,400 tweets!” You’re right. Let’s look at
+this on a bigger file. In the source repository is a file called kosarak.dat, which con-
+tains close to one million records.3 Each line of this file contains news stories viewed
+by a user. Some users viewed only a single story, whereas someone viewed 2,498 stories.
+The users and the stories are anonymized as integers, so there won’t be much you can
+get from viewing the frequent itemsets, but this does a good job of demonstrating the
+speed of the FP-growth algorithm. 
+ First, load the dataset into a list:
+>>> parsedDat = [line.split() for line in open('kosarak.dat').readlines()]
+Next, you need to format the initial set:
+>>> initSet = fpGrowth.createInitSet(parsedDat)
+Now, create the FP tree and look for stories or sets of stories that at least 100,000 peo-
+ple viewed:
+>>> myFPtree, myHeaderTab = fpGrowth.createTree(initSet, 100000)
+Creating this tree and scanning the one million lines took only a few seconds on my
+humble laptop. This should demonstrate the power of the FP-growth algorithm. Now
+you need to create an empty list to hold the frequent itemsets:
+>>> myFreqList = []
+>>> fpGrowth.mineTree(myFPtree, myHeaderTab, 100000, set([]), myFreqList)
+Let’s see how many stories or sets of stories were viewed by 100,000 or more people:
+>>> len(myFreqList)
+9
+2 H. Li, Y. Wang, D. Zhang, M. Zhang, E. Chang, “PFP: Parallel FP-Growth for Query Recommendation,” RecSys
+’08, Proceedings of the 2008 ACM Conference on Recommender Systems; http://infolab.stanford.edu/
+~echang/recsys08-69.pdf.
+3 Hungarian online news portal clickstream retrieved July 11, 2011; from Frequent Itemset Mining Dataset
+Repository, http://fimi.ua.ac.be/data/, donated by Ferenc Bodon.
+
+265
+Summary
+Nine. Now let’s see which ones:
+>>> myFreqList
+[set(['1']), set(['1', '6']), set(['3']), set(['11', '3']), set(['11', '3', 
+'6']), set(['3', '6']), set(['11']), set(['11', '6']), set(['6'])]
+Try this out with some other settings, perhaps lowering the support level. 
+12.6
+Summary
+The FP-growth algorithm is an efficient way of finding frequent patterns in a dataset.
+The FP-growth algorithm works with the Apriori principle but is much faster. The
+Apriori algorithm generates candidate itemsets and then scans the dataset to see if
+they’re frequent. FP-growth is faster because it goes over the dataset only twice. The
+dataset is stored in a structure called an FP-tree. After the FP-tree is built, you can find
+frequent itemsets by finding conditional bases for an item and building a conditional
+FP-tree. This process is repeated, conditioning on more items until the conditional FP-
+tree has only one item. 
+ The FP-growth algorithm can be used to find frequent words in a series of text doc-
+uments. The microblogging site Twitter provides a number of APIs for developers to
+use their services. The Python module Python-Twitter allows easy access to Twitter.
+Applying the FP-growth algorithm to a Twitter feed on a certain topic can give you
+some summary information for that topic. There are a number of other uses for fre-
+quent itemset generation such as shopping transactions, medical diagnosis, and study
+of the atmosphere.
+ In the next few chapters we’ll be looking at some additional tools. Chapters 13
+and 14 will cover some dimensionality-reduction techniques. You can use these tech-
+niques to distill your data down to only the important information and remove the
+noise. Chapter 15 will cover MapReduce, which you’ll need when your data exceeds
+the processing abilities of one machine. 
+

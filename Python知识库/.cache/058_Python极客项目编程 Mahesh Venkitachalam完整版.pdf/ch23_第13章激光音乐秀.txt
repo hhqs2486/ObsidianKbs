@@ -1,0 +1,849 @@
+第       章 
+激光音乐秀 
+在第12 章中，我们学习了Arduino 的基础知识，这很适
+合与底层电子设备接口。在本项目中，我们将利用Arduino
+搭建硬件，通过音频信号产生有趣的激光图案。这一次，
+Python 会承担更重的任务。除了处理串口通信之外，它还会
+基于实时音频数据进行计算，并利用该数据来调整激光显示
+设备中的电机。
+出于这些目的，请将激光当作一束强烈的光束，即使通过很大距离投射，它仍
+保持聚焦在一个微小的点上。这种聚焦是可能的，因为光束被组织成光波只沿一个
+方向行进，且彼此同相。这个项目将用一个便宜的、容易获得的激光笔来创建激光
+图案，与音乐同步（或任何音频输入）。我们用激光笔和两个连接到电机的旋转镜，
+来构建生成有趣图案的硬件。我们用Arduino 设置电机的方向和旋转速度，利用
+Python 通过串口来控制。Python 程序将读取音频输入，分析它，并将它转换为电机
+速度和方向数据来控制电机。我们还将学习如何设置电机的速度和方向，让图案与
+音乐同步。
+本项目将进一步提升你的Arduino 和Python 知识。以下是将要介绍的一些
+主题：
+•
+用激光和两个旋转镜产生有趣的图案；
+13 
+
+230 Python 极客项目编程 
+•
+用快速傅立叶变换从信号中获得频率信息；
+•
+用numpy 计算快速傅里叶变换；
+•
+用pyaudio 读取音频数据；
+•
+在计算机和Arduino 之间设置串口通信；
+•
+用Arduino 驱动电机。
+13.1  用激光产生图案 
+为了在此项目中生成激光图案，我们用激光笔和两个镜子连接到两个小型直流
+电机的轴上，如图13-1 所示。如果你平面镜（反射镜A）的表面照射激光，即使电
+机正在旋转，投影的反射将保持为一个点。因为激光器的反射平面垂直于电机的旋
+转轴，所以就像镜子根本不旋转一样。
+现在，假设镜子与轴成一定角度连接，如图13-1 右侧所示（反射镜B）。当轴
+旋转时，投影点的轨迹是一个椭圆，而且如果电机旋转足够快，观察者会感觉到移
+动点是连续的形状。
+图13-1  平面镜（镜子A）反射单个点。倾斜的镜子（镜子B）的反射在电动机旋转时产生一个圆 
+如果安排镜子，使从镜子A 反射的光投影到镜子B 上，会怎么样？现在当电
+机A 和电机B 旋转时，由反射点产生的图案将是电机A 和电机B 的两个旋转运
+动的组合，产生出有趣的图案，如图13-2 所示。 
+产生的图案将取决于两个电机的旋转速度和旋转方向，但是它们类似于在第2
+章中探讨的万花尺产生的长短辐圆内旋轮线。
+13.1.1  电机控制 
+我们用Arduino 来控制电机的速度和方向。 这种设置要小心，确保它可以接受
+电机相对较高的电压，因为Arduino 只能承担这么大的电流，否则会损坏。可以用
+
+第13 章  激光音乐秀 231 
+图13-3（a）所示的SparkFun TB6612FNG 外设“分线（breakout）”板来保护Arduino，
+简化设计并缩短开发时间。利用分线板从Arduino 同时控制两个电机。 
+图13-2  反射激光离开两面旋转的、倾斜的镜子，产生了有趣的复杂图案 
+（a）                          （b） 
+图13-3  SparkFun 电机驱动器1A 双通道TB6612FNG 
+图13-3（b）展示了分线板的焊接背面。引脚名称中的A 和B 表示两个电机。
+
+232 Python 极客项目编程 
+IN 引脚控制电机的方向，01 和02 引脚为电机供电，PWM 引脚控制电机速度。通
+过写入这些引脚，你可以控制每个电机的旋转方向和速度，而这正是本项目需要的。 
+注意
+可以用任何你熟悉的电机控制电路替换该分线板部分，只要适当地修改
+Arduino 程序即可。 
+13.1.2  快速傅里叶变换 
+因为本项目的最终目标是基于音频输入控制电机速度，所以需要能够分析音频
+的频率。
+回顾一下第4 章，来自乐器的音调是多种频率或泛音的混合。事实上，任何声
+音都可以用傅立叶变换分解为成分频率。将傅里叶变换应用于数字信号时，结果称
+为离散傅里叶变换（DFT），因为数字信号由许多离散样本组成。在本项目中，我们
+用Python 来实现快速傅立叶变换（FFT）算法，计算DFT（在本章中，我将使用
+FFT 来指代算法和结果）。 
+下面是一个简单的FFT 示例。图13-4 展示了一个只包含两个正弦波的信号，
+下面是对应的FFT。上面的波可以用以下等式表示，是两个波相加： 
+y(t) = 4sin(2π10t) + 2.5sin(2π30t) 
+图13-4  从音乐中记录的音频信号（上）及相应的FFT（下） 
+请注意第一个波的表达式中的4 和10：4 是波的振幅，10 是波的频率（以赫兹
+为单位）。同时，第二个波的振幅是2.5，频率是30。 
+
+第13 章  激光音乐秀 233 
+FFT 揭示了波的分量频率及其相对振幅，显示峰值在10 Hz 和30 Hz。第一个
+峰值的强度约为第二个峰值的强度的两倍。
+现在来看一个更复杂的例子。图13-5 展示了上面的音频信号，以及下面相应的
+FFT。 
+图13-5  FFT 算法利用振幅信号（上）计算其分量频率（下） 
+音频输入（或信号）处在“时域”中，因为振幅数据随时间变化。FFT 处在“频
+域”中。注意图13-5 中，FFT 显示了一系列峰值，显示了信号中各种频率的强度。 
+要计算FFT，需要一组样本。样本数的选择是有点随意的，但是小的样本规模
+不能给出信号频率特征的良好图景，还可能意味着更大的计算量，因为每秒需要计
+算更多的FFT。另一方面，过大的样本规模让信号的变化平均化，因此不会得到信
+号的“实时”频率响应。对于本项目采用的44100Hz 的采样率，2048 的样本大小
+表示大约0.046 秒的数据。 
+对于本项目，我们需要将音频数据分解成它的组成频率，并用该信息控制电机。
+首先，将频率范围（以Hz 为单位）分成3 个频段：[0,100]、[100,1000]和[1000，2500]。
+我们将计算每个频带的平均振幅，每个值将不同程度地影响电机和产生的激光图
+案，如下所示：
+•
+低频平均振幅的变化将影响第一个电机的速度；
+•
+中频平均振幅的变化将影响第二个电机的速度；
+•
+高频峰值高于某个阈值时，第一个电机将改变方向。
+13.2  所需模块 
+以下是构建此项目所需物品的列表：
+•
+一支小激光笔；
+
+234 Python 极客项目编程 
+•
+两个直流电动机，如用于小玩具（额定为9V）的电机；
+•
+两个小镜子，直径约2.54 厘米或更小；
+•
+SparkFun 电机驱动器1A 双通道TB6612FNG；
+•
+Arduino Uno 或类似板卡；
+•
+连接的电线（单芯连接线，两侧的公插针工作良好）；
+•
+四节AA 电池组；
+•
+一些乐高模块，将电机和激光笔从安装板上抬起，使镜子可以自由旋转；
+•
+一个矩形的纸板或丙烯酸树脂板，约20.3 厘米×15.2 厘米，以安装硬件；
+•
+一把热胶枪；
+•
+烙铁。
+13.2.1  搭建激光秀 
+第一件事是将镜子连接到电机。反射镜必须与电机轴成一个小角度。要安装镜
+子，将其面朝下放置在平坦的表面上，并在中心滴一滴热胶。小心地将电机轴浸入
+胶水中，使其垂直于镜子，直到胶水硬化（如图13-6 所示）。要测试它，就用手旋
+转镜子，同时用激光笔照射它。你应该发现反射的激光点投射在平坦表面上时，移
+动轨迹是一个椭圆中。对第二面镜子也一样操作。
+图13-6  以微小角度将反射镜连接到每个电机轴 
+对准镜子 
+接下来，将激光笔与反射镜对准，使激光从反射镜A 反射到B，如图13-7 所
+
+第13 章  激光音乐秀 235 
+示。确保在反射镜A 的整个旋转范围内，来自反射镜A 的反射激光保持在反射镜B
+的圆周内（这需要一些尝试，可能会犯些错）。要测试，请手动旋转反射镜A。另
+外，确保在两个反射镜的旋转范围内，反射镜B 的位置让它反射的光落在一个平面
+上（如墙上）。
+图13-7  激光笔和反射镜的对准 
+注意
+调整时，需要保持激光笔打开。如果激光笔有一个开启按钮，请用胶带让
+它保持打开（或者参见13.8 节，了解更优雅的控制激光笔电源的方法）。 
+对镜子的位置感到满意后，将激光笔和两个带有镜子的电机用热熔胶粘到3 个
+一样的乐高模块上，将它们升起，让它们能够自由旋转。接下来，将模块放在安装
+板上，当你对它们的摆放感到满意时，通过用铅笔记录它们的边缘，标记每个模块
+的位置。然后将模块粘在板上。
+为电机供电 
+如果电机没有附带连接到它们的端子上的电线（大多数没有），就将电线焊接
+到两个端子，确保留出足够的电线（例如15 厘米），以便将电机连接到电机驱动板
+卡上。电机由电池组中的四节AA 电池供电，可以用热熔胶将它粘在安装板的背面，
+如图13-8 所示。 
+现在用手旋转两个镜子来测试硬件，同时用激光照射它们。如果足够快地旋转
+它们，应该看到一些有趣的图案，窥见结果的样子！
+
+236 Python 极客项目编程 
+图13-8  将电池组固定在安装板背面 
+13.2.2  连接电机驱动器 
+本项目用Arduino 通过Sparkfun 电机驱动器（TB6612FNG）来控制电机。我不
+会详细介绍这个板卡的工作原理，但如果你好奇，可以从了解“H 桥”开始，这是
+一种常见的电路设计，用“金属氧化物半导体场效应晶体管（MOSFET）”来控制
+电机。
+现在将电机连接到SparkFun 电机驱动器和Arduino。有不少电线要连接，如表
+13-1 所示。一个电机标记为A，另一个为B，在接线时遵守这个惯例。 
+表13-1  SparkFun 电机驱动器到Arduino 的接线 
+从 
+至 
+Arduino Digital Pin 12 TB6612FNG 
+Pin BIN2 
+Arduino Digital Pin 11 TB6612FNG 
+Pin BIN1 
+Arduino Digital Pin 10 TB6612FNG 
+Pin STBY 
+Arduino Digital Pin 9 TB6612FNG 
+Pin AIN1 
+Arduino Digital Pin 8 TB6612FNG 
+Pin AIN2 
+Arduino Digital Pin 5 TB6612FNG 
+Pin PWMB 
+Arduino Digital Pin 3 TB6612FNG 
+Pin PWMA 
+Arduino 5V Pin TB6612FNG 
+Pin VCC 
+Arduino GND TB6612FNG  
+Pin GND 
+Arduino GND Battery Pack  
+GND (–) 
+
+第13 章  激光音乐秀 237 
+续表
+从 
+至 
+Battery Pack VCC (+) TB6612FNG 
+Pin VM 
+Motor #1 Connector #1 (polarity doesn’t matter) TB6612FNG 
+Pin A01 
+Motor #1 Connector #2 (polarity doesn’t matter) TB6612FNG 
+Pin A02 
+Motor #2 Connector #1 (polarity doesn’t matter) TB6612FNG 
+Pin B01 
+Motor #2 Connector #2 (polarity doesn’t matter) TB6612FNG 
+Pin B02 
+Arduino USB connector  
+计算机的USB 口 
+图13-9 展示了所有接线。 
+图13-9  完全连好线的激光秀装置 
+现在来看看Arduino 程序。 
+13.3  Arduino 程序 
+程序开始时，设置Arduino 的数字输出引脚。然后，在主循环中，从串口读入
+数据，并将数据转换为需要发送到电机驱动器板卡的参数。我们还要了解如何实现
+电机的速度和方向控制。
+
+238 Python 极客项目编程 
+13.3.1  配置Arduino 数字输出引脚 
+首先，根据表13-1 将Arduino 数字引脚映射到电机驱动器上的引脚，并将引脚
+设置为输出。
+// motor A connected to A01 and A02 
+// motor B connected to B01 and B02 
+ int STBY = 10; //standby 
+// Motor A 
+int PWMA = 3; //speed control 
+int AIN1 = 9; //direction 
+int AIN2 = 8; //direction 
+// Motor B 
+int PWMB = 5; //speed control 
+int BIN1 = 11; //direction 
+ int BIN2 = 12; //direction 
+void setup(){ 
+ 
+ pinMode(STBY, OUTPUT); 
+ pinMode(PWMA, OUTPUT); 
+ pinMode(AIN1, OUTPUT); 
+ pinMode(AIN2, OUTPUT); 
+ pinMode(PWMB, OUTPUT); 
+ pinMode(BIN1, OUTPUT); 
+ pinMode(BIN2, OUTPUT); 
+ // initialize serial communication 
+ 
+ Serial.begin(9600); 
+} 
+ 
+从行到行，将Arduino 引脚的名称映射到电机驱动器引脚。例如，PWMA
+（脉冲调制A）控制电机A 的速度，并分配给Arduino 引脚3。PWM 是为设备供
+电的一种方式，通过发送快速打开和关闭的数字脉冲，让器件“看到”连续的电
+压。数字脉冲接通的时间部分称为“占空比”，以百分比表示。通过更改这个百
+分比，可以为设备提供不同的功率水平。PWM 通常用于控制可调光LED 和电机
+速度。
+然后，在行调用setup()方法，在后续几行中，将所有7 个数字引脚设置为输
+出。在行，开始串口通信，读取由Arduino 上的计算机发送的串行数据。 
+13.3.2  主循环 
+程序中的主循环等待串行数据到达，解析它以提取电机速度和方向，并利用该
+信息来设置控制电机的驱动板的数字输出。
+
+第13 章  激光音乐秀 239 
+// main loop that reads the motor data sent by laser.py 
+void loop() 
+{ 
+ // data sent is of the form 'H' (header), speed1, dir1, speed2, dir2 
+ 
+ if (Serial.available() >= 5) { 
+ 
+ if(Serial.read() == 'H') { 
+ // read the next 4 bytes 
+ 
+ byte s1 = Serial.read(); 
+ byte d1 = Serial.read(); 
+ byte s2 = Serial.read(); 
+ byte d2 = Serial.read(); 
+ // stop the motor if both speeds are 0 
+ 
+ if(s1 == 0 && s2 == 0) { 
+ stop(); 
+ } 
+ else { 
+ // set the motors' speed and direction 
+ 
+ move(0, s1, d1); 
+ move(1, s2, d2); 
+ } 
+ // slight pause for 20 ms 
+ 
+ delay(20); 
+ } 
+ else { 
+ // if there is invalid data, stop the motors 
+ 
+ stop(); 
+ } 
+ } 
+ else { 
+ // if there is no data, pause for 250 ms 
+ 
+ delay(250); 
+ } 
+} 
+ 
+电机控制数据以5 个字节为一组发送：H 后跟4 个单字节数字s1、d1、s2 和
+d2，表示电机的速度和方向。由于串行数据连续输入，所以在行，检查并确保已
+收到至少5 个字节。如果没有，就延迟250 毫秒，并尝试在下一个周期中再次读
+取数据。
+在行，检查读入的第一个字节是一个H，以确保在一组正确的控制数据的开
+始处，接下来的4 个字节是期望的数据。如果不是，就在行停止电机，因为数据
+可能因传输或连接错误而被损坏。
+从行开始，程序读取两个电机的速度和方向数据。如果两个电机速度都设置为
+零，就停止电机。如果不是，则在行用move()方法将速度和方向值分配给电机。
+在行，在数据读取中添加一个小延迟，让电机能跟上，确保没有太快地读入数据。 
+下面是用于设置电机速度和方向的move()方法： 
+// set motor speed and direction 
+// motor: A -> 1, B -> 0 
+// direction: 1/0 
+void move(int motor, int speed, int direction) 
+{ 
+
+240 Python 极客项目编程 
+ // disable standby 
+ 
+ digitalWrite(STBY, HIGH); 
+ 
+ boolean inPin1 = LOW; 
+ boolean inPin2 = HIGH; 
+ 
+ if(direction == 1){ 
+ inPin1 = HIGH; 
+ inPin2 = LOW; 
+ } 
+ if(motor == 1){ 
+ 
+ digitalWrite(AIN1, inPin1); 
+ digitalWrite(AIN2, inPin2); 
+ analogWrite(PWMA, speed); 
+ } 
+ else{ 
+ 
+ digitalWrite(BIN1, inPin1); 
+ digitalWrite(BIN2, inPin2); 
+ analogWrite(PWMB, speed); 
+ } 
+} 
+ 
+电机驱动器具有待机模式，以便在电机关闭时节省电力。在行，通过写入
+HIGH 到待机引脚，退出待机。在行，定义两个布尔变量，它们确定电机的旋转
+方向。在行，如果direction 参数设置为1，则翻转这些变量的值，这让你在下面
+的代码中切换电机的方向。
+在行，为电机A 设置引脚AIN1、AIN2 和PWMA。引脚AIN1 和AIN2 控
+制电机的方向，根据需要，我们用Arduino 的digitalWrite()方法将一个引脚设置为
+HIGH（1），一个设置为LOW（0）。对于引脚PWMA，我们发送PWM 信号，如
+前所述，这可以控制电机的速度。要控制PWM 的值，可以用analogWrite()方法将
+范围[0,255]内的值写入Arduino 输出引脚（不同的是，digitalWrite()方法只允许将
+1 或0 写入输出引脚）。 
+在行，设置电机B 的引脚。 
+13.3.3  停止电机 
+要停止电机，将LOW 写入电机驱动器的待机引脚。 
+void stop(){ 
+ //enable standby 
+ digitalWrite(STBY, LOW); 
+} 
+13.4  Python 代码 
+现在来看看在计算机上运行的Python 代码。这段代码完成了繁重的工作：它读入
+音频，计算FFT，并发送串行数据到Arduino。可以在13.5 节中找到完整的项目代码。 
+
+第13 章  激光音乐秀 241 
+13.4.1  选择音频设备 
+首先，需要利用pyaudio 模块读入音频数据。初始化pyaudio 模块如下： 
+p = pyaudio.PyAudio() 
+接下来，可以用pyaudio中的辅助函数访问计算机的音频输入设备。getInputDevice()
+方法的代码如下所示：
+# get pyaudio input device 
+def getInputDevice(p): 
+ 
+ index = None 
+ 
+ nDevices = p.get_device_count() 
+ print('Found %d devices. Select input device:' % nDevices) 
+ # print all devices found 
+ for i in range(nDevices): 
+ 
+ deviceInfo = p.get_device_info_by_index(i) 
+ 
+ devName = deviceInfo['name'] 
+ 
+ print("%d: %s" % (i, devName)) 
+ # get user selection 
+ try: 
+ # convert to integer 
+ 
+   index = int(input()) 
+ except: 
+ pass 
+ # print the name of the chosen device 
+ if index is not None: 
+ devName = p.get_device_info_by_index(index)["name"] 
+   print("Input device chosen: %s" % devName) 
+ 
+ return index 
+在行，将index 变量设置为None（该index 是行的函数返回值，如果返回
+为None，则表明找不到合适的输入设备）。在行，用get_device_count()方法获取
+计算机上音频设备的数量，包括所有音频硬件，如麦克风、线路输入或线路输出。
+然后遍历所有找到的设备，获取每个设备的信息。
+行的get_device_info_by_index()函数返回一个字典，其中包含每个音频设备
+的各种特征信息，但我们只想查看设备的名称，因为我们正在查找输入设备。在
+行，保存设备名称，在行，打印出设备的索引和名称。在行，利用input()方法
+读入用户的选择，将读入的字符串转换为整数索引。在行，这个选定的索引从函
+数返回。
+13.4.2  从输入设备读取数据 
+选择输入设备后，需要从中读取数据。为此，我们先打开音频流，如下所示（注
+意，所有的代码在while 循环中连续执行）。 
+
+242 Python 极客项目编程 
+ # set FFT sample length 
+ 
+ fftLen = 2**11 
+ # set sample rate 
+ 
+ sampleRate = 44100 
+ print('opening stream...') 
+ 
+ stream = p.open(format = pyaudio.paInt16, 
+ channels = 1, 
+ rate = sampleRate, 
+ input = True, 
+ frames_per_buffer = fftLen, 
+ input_device_index = inputIndex) 
+在行，将FFT 缓冲区的长度（用于计算FFT 的音频采样数）设置为2048（是
+211，FFT 算法针对2 的幂进行了优化）。然后，将pyaudio 的采样率设置为44100，
+即44.1 kHz ，这是CD 质量录音的标准。 
+接下来，打开pyaudio 流，并指定几个选项： 
+•
+pyaudio.paInt16 表示读取的数据作为16 位整数；
+•
+channels 设置为1，因为我们将音频作为单个频道读取；
+•
+rate 设置为选定的采样速率44100 Hz；
+•
+input 设置为True；
+•
+frames_per_buffer 设置为FFT 缓冲区长度；
+•
+input_device_index 设置为我们在getInputDevice()方法中选择的设备。
+13.4.3  计算数据流的FFT 
+以下是从流中读取数据的代码：
+ # read a chunk of data 
+ 
+ data = stream.read(fftLen) 
+ # convert the data to a numpy array 
+ 
+ dataArray = numpy.frombuffer(data, dtype=numpy.int16) 
+在行，从音频输入流读取最近的fftLen 样本。然后在行，将该数据转换为
+16 位整数numpy 数组。 
+现在计算这个数据的FFT。 
+ # get FFT of data 
+ 
+ fftVals = numpy.fft.rfft(dataArray)*2.0/fftLen 
+ # get absolute values of complex numbers 
+ 
+ fftVals = numpy.abs(fftVals) 
+在行，用numpy fft 模块中的rfft()方法，计算numpy 数组中的值的FFT。
+该方法接受由“实数”（如音频数据）组成的信号并计算FFT，通常结果是一组
+“复数”。2.0/fftLen 是归一化因子，用来将FFT 值映射到希望的范围。然后，因
+为rfft()方法返回复数，所以使用numpy 的abs()方法来获取这些复数的大小，
+它是实数。
+
+第13 章  激光音乐秀 243 
+13.4.4  从FFT 值提取频率信息 
+接下来，从FFT 值中提取相关的频率信息。 
+ # average 3 frequency bands: 0-100 Hz, 100-1000 Hz, and 1000-2500 Hz 
+ levels = [numpy.sum(fftVals[0:100])/100, 
+ numpy.sum(fftVals[100:1000])/900, 
+ numpy.sum(fftVals[1000:2500])/1500] 
+为了分析音频信号，我们将频率范围分为3 个频段：0 至100 Hz、100 至1000 
+Hz 和1000 至2500 Hz。我们最感兴趣的是较低的低音频段（0-100 Hz）和中音
+（100-1000 Hz）频段，分别大致对应于一首歌曲中的节拍和人声。对于每个范围，
+我们在代码中用numpy.sum()方法计算平均FFT 值。 
+13.4.5  将频率转换为电机速度和方向 
+现在将该频率信息转换为电机速度和方向。
+ # 'H' (header), speed1, dir1, speed2, dir2 
+ 
+ vals = [ord('H'), 100, 1, 100, 1] 
+ # speed1 
+ 
+ vals[1] = int(5*levels[0]) % 255 
+ # speed2 
+ 
+ vals[3] = int(100 + levels[1]) % 255 
+ # dir 
+ d1 = 0 
+ 
+ if levels[2] > 0.1: 
+   d1 = 1 
+ vals[2] = d1 
+ 
+ vals[4] = 0 
+在行，初始化要发送到Arduino 的电机速度和方向值的列表（5 个字节，从H
+开始，前面讨论过）。用内置ord()函数将字符串转换为整数，然后将3 个频带的平
+均值转换为电机速度和方向，填充该列表。
+注意
+这部分确实是自由发挥：没有特别优雅的规则来管理这些转换。这些值随
+着音频信号而不断变化，你提出的任何方法都可以改变电机速度，并随音乐一
+起影响激光模式。只需确保转换将电机速度设置在[0,255]范围内，并且方向总
+是设置为1 或0。我选择的方法只是基于试验和错误，我在播放各种类型的音乐
+时观察FFT 值。 
+在行，从最低频率范围获取值，放大5 倍，转换为整数，并用取模运算符（%）
+确保该值位于[0,255]范围内。该值控制第一电机的速度。在行，将中间频率值加
+上100，并放在[0,255]范围内。该值控制第二电机的速度。 
+
+244 Python 极客项目编程 
+然后，在行，只要最高频率范围的值超过阈值0.1，就切换电机A 方向。电
+机B 的方向保持为0（通过尝试和错误，我发现，这些方法产生很好的图案变化，
+但我建议你改变这些值，并创建自己的转换。这里没有错误的答案）。
+13.4.6  测试电机设置 
+在用实时音频流测试硬件之前，先检查电机设置。这里展示的autoTest()函数就
+是做这件事的：
+# automatic test for sending motor speeds 
+def autoTest(ser): 
+ print('starting automatic test...') 
+ try: 
+ while True: 
+ # for each direction combination 
+ 
+ for dr in [(0, 0), (1, 0), (0, 1), (1, 1)]: 
+ # for a range of speeds 
+ 
+ for j in range(25, 180, 10): 
+ 
+ for i in range(25, 180, 10): 
+ 
+ vals = [ord('H'), i, dr[0], j, dr[1]] 
+ 
+ print(vals[1:]) 
+ 
+ data = struct.pack('BBBBB', *vals) 
+ 
+ ser.write(data) 
+ sleep(0.1) 
+ except KeyboardInterrupt: 
+ print('exiting...') 
+ # shut off motors 
+ 
+ vals = [ord('H'), 0, 1, 0, 1] 
+ data = struct.pack('BBBBB', *vals) 
+ ser.write(data) 
+ ser.close() 
+该方法通过改变每个电机的速度和方向，让两个电机在一定范围内运动。因为
+每个电动机的方向可以是顺时针或逆时针，所以在行的外层循环中表示4 个这样
+的组合。对于每种组合，行和行的循环以不同的速度运转电机。 
+注意
+我使用范围（25，180，10），这意味着速度从25 变到180，步长为10。我
+没有用电机的完整运动范围[0，255]，因为电机很少转速低于25，而200 以上
+的转速真的很快。
+在行，生成5 字节的电机数据值，在行，打印它们的方向和速度值（使用
+Python 字符串切割vals [1：]将获得除列表中的第一个元素之外的所有内容）。 
+在行，将电机数据打包到字节数组中，并在行将其写入串口。按Ctrl-C 键
+中断这个测试，在行通过清理来处理这个异常，停止电机并关闭串口，像你这样
+负责的程序员都会这么做。
+
+第13 章  激光音乐秀 245 
+13.4.7  命令行选项 
+与以前的项目一样，可以用argparse 模块来解析程序的命令行参数。 
+# main method 
+def main(): 
+ # parse arguments 
+   parser = argparse.ArgumentParser(description='Analyzes audio input and 
+sends motor control information via serial port') 
+ # add arguments 
+ parser.add_argument('--port', dest='serial_port_name', required=True) 
+ parser.add_argument('--mtest', action='store_true', default=False) 
+ parser.add_argument('--atest', action='store_true', default=False) 
+ args = parser.parse_args() 
+在这段代码中，串口是必需的命令行选项。还有两个可选的命令行选项：一个
+用于自动测试（前面介绍过），另一个用于手动测试（稍后将讨论）。
+下面是main()方法中解析命令行选项后发生的情况： 
+ # open serial port 
+ strPort = args.serial_port_name 
+ print('opening ', strPort) 
+ 
+ ser = serial.Serial(strPort, 9600) 
+ if args.mtest: 
+   manualTest(ser) 
+ elif args.atest: 
+   autoTest(ser) 
+ else: 
+ 
+ fftLive(ser) 
+在行，利用pySerial 用传入程序的字符串打开一个串口。串行通信的速度或
+波特率设置为每秒9600 位。如果没有使用其他命令参数（--atest 或--mtest），则在
+行继续音频处理和FFT 计算，这封装在fftLive()方法中。 
+13.4.8  手动测试 
+这个手动测试允许你输入特定的电机方向和速度，以便看到它们对激光图案的
+影响。
+# manual test of motor direction and speeds 
+def manualTest(ser): 
+ print('starting manual test...') 
+ try: 
+ while True: 
+ print('enter motor control info such as < 100 1 120 0 >') 
+ 
+ strIn = raw_input() 
+ 
+ vals = [int(val) for val in strIn.split()[:4]] 
+ 
+ vals.insert(0, ord('H')) 
+ 
+ data = struct.pack('BBBBB', *vals) 
+ 
+ ser.write(data) 
+ except: 
+ print('exiting...') 
+ # shut off the motors 
+
+246 Python 极客项目编程 
+ 
+ vals = [ord('H'), 0, 1, 0, 1] 
+ data = struct.pack('BBBBB', *vals) 
+ ser.write(data) 
+ ser.close() 
+在行，用raw_input()方法等待，直到用户在命令提示符下输入值。预期输入
+的形式为100 1 120 0，表示电机A 的速度和方向，然后是电机B 的速度和方向。在
+行，将字符串解析为整数列表。在行，插入一个“H”构成完整的电机数据，
+在行和行，打包此数据并通过串口以预期的格式发送。如果用户用Ctrl-C 中断
+测试（或者发生任何异常），就在行完成清理工作，正常关闭电机和串口。 
+13.5  完整的Python 代码 
+下面是本项目的完整的Python 代码。也可以在https://github.com/electronut/pp/ 
+tree/master/arduino-laser/laser.py 找到它。 
+import sys, serial, struct 
+import pyaudio 
+import numpy 
+import math 
+from time import sleep 
+import argparse 
+# manual test of motor direction speeds 
+def manualTest(ser): 
+ print('staring manual test...') 
+ try: 
+ while True: 
+ print('enter motor control info: eg. < 100 1 120 0 >') 
+ strIn = raw_input() 
+ vals = [int(val) for val in strIn.split()[:4]] 
+ vals.insert(0, ord('H')) 
+ data = struct.pack('BBBBB', *vals) 
+ ser.write(data) 
+ except: 
+ print('exiting...') 
+ # shut off motors 
+ vals = [ord('H'), 0, 1, 0, 1] 
+ data = struct.pack('BBBBB', *vals) 
+ ser.write(data) 
+ ser.close() 
+# automatic test for sending motor speeds 
+def autoTest(ser): 
+ print('staring automatic test...') 
+ try: 
+ while True: 
+ # for each direction combination 
+ for dr in [(0, 0), (1, 0), (0, 1), (1, 1)]: 
+ # for a range of speeds 
+ for j in range(25, 180, 10): 
+ for i in range(25, 180, 10): 
+
+第13 章  激光音乐秀 247 
+ vals = [ord('H'), i, dr[0], j, dr[1]] 
+ print(vals[1:]) 
+ data = struct.pack('BBBBB', *vals) 
+ ser.write(data) 
+ sleep(0.1) 
+ except KeyboardInterrupt: 
+ print('exiting...') 
+ # shut off motors 
+ vals = [ord('H'), 0, 1, 0, 1] 
+ data = struct.pack('BBBBB', *vals) 
+ ser.write(data) 
+ ser.close() 
+# get pyaudio input device 
+def getInputDevice(p): 
+ index = None 
+ nDevices = p.get_device_count() 
+ print('Found %d devices. Select input device:' % nDevices) 
+ # print all devices found 
+ for i in range(nDevices): 
+ deviceInfo = p.get_device_info_by_index(i) 
+ devName = deviceInfo['name'] 
+ print("%d: %s" % (i, devName)) 
+ # get user selection 
+ try: 
+ # convert to integer 
+   index = int(input()) 
+ except: 
+ pass 
+ # print the name of the chosen device 
+ if index is not None: 
+ devName = p.get_device_info_by_index(index)["name"] 
+   print("Input device chosen: %s" % devName) 
+ return index 
+# FFT of live audio 
+def fftLive(ser): 
+ # initialize pyaudio 
+ p = pyaudio.PyAudio() 
+ # get pyAudio input device index 
+ inputIndex = getInputDevice(p) 
+ # set FFT sample length 
+ fftLen = 2**11 
+ # set sample rate 
+ sampleRate = 44100 
+ print('opening stream...') 
+ stream = p.open(format = pyaudio.paInt16, 
+ channels = 1, 
+ rate = sampleRate, 
+ input = True, 
+ frames_per_buffer = fftLen, 
+ input_device_index = inputIndex) 
+
+248 Python 极客项目编程 
+ try: 
+ while True: 
+ # read a chunk of data 
+ data = stream.read(fftLen) 
+ # convert to numpy array 
+ dataArray = numpy.frombuffer(data, dtype=numpy.int16) 
+ # get FFT of data 
+ fftVals = numpy.fft.rfft(dataArray)*2.0/fftLen 
+ # get absolute values of complex numbers 
+ fftVals = numpy.abs(fftVals) 
+ # average 3 frequency bands: 0-100 Hz, 100-1000 Hz and 1000-2500 Hz 
+ levels = [numpy.sum(fftVals[0:100])/100, 
+ numpy.sum(fftVals[100:1000])/900, 
+ numpy.sum(fftVals[1000:2500])/1500] 
+ # the data sent is of the form: 
+ # 'H' (header), speed1, dir1, speed2, dir2 
+ vals = [ord('H'), 100, 1, 100, 1] 
+ # speed1 
+ vals[1] = int(5*levels[0]) % 255 
+ # speed2 
+ vals[3] = int(100 + levels[1]) % 255 
+ # dir 
+ d1 = 0 
+ if levels[2] > 0.1: 
+   d1 = 1 
+ vals[2] = d1 
+ vals[4] = 0 
+ # pack data 
+ data = struct.pack('BBBBB', *vals) 
+ # write data to serial port 
+ ser.write(data) 
+ # a slight pause 
+ sleep(0.001) 
+ except KeyboardInterrupt: 
+   print('stopping...') 
+ finally: 
+ print('cleaning up') 
+ stream.close() 
+p.terminate()
+ # shut off motors 
+ vals = [ord('H'), 0, 1, 0, 1] 
+ data = struct.pack('BBBBB', *vals) 
+ ser.write(data) 
+ # close serial 
+ ser.flush() 
+ ser.close() 
+# main method 
+def main(): 
+ # parse arguments 
+   parser = argparse.ArgumentParser(description='Analyzes audio input and 
+sends motor control information via serial port') 
+ # add arguments 
+
+第13 章  激光音乐秀 249 
+ parser.add_argument('--port', dest='serial_port_name', required=True) 
+ parser.add_argument('--mtest', action='store_true', default=False) 
+ parser.add_argument('--atest', action='store_true', default=False) 
+ args = parser.parse_args() 
+ # open serial port 
+ strPort = args.serial_port_name 
+ print('opening ', strPort) 
+ ser = serial.Serial(strPort, 9600) 
+ if args.mtest: 
+   manualTest(ser) 
+ elif args.atest: 
+   autoTest(ser) 
+ else: 
+ fftLive(ser) 
+# call main function 
+if __name__ == '__main__': 
+ main() 
+13.6  运行程序 
+为了测试本项目，请组装硬件，将Arduino 连接到计算机，并将电机驱动程序
+代码上传到Arduino。确保电池组已连接，激光笔已打开并投射在墙壁这样的平坦
+表面上。我建议首先通过运行以下程序来测试激光显示部分（不要忘记更改串口字
+符串以符合你的计算机）！
+$ python3 laser.py --port /dev/tty.usbmodem411 --atest 
+('opening ', '/dev/tty.usbmodem1411') 
+staring automatic test... 
+[25, 0, 25, 0] 
+[35, 0, 25, 0] 
+[45, 0, 25, 0] 
+... 
+该测试通过速度和方向的各种组合来运转两个电机。你应该看到投射到墙上的
+不同激光图案。要停止程序和电机，请按Ctrl-C。 
+如果测试成功，就可以开始真正的激光秀了。在计算机上开始播放你喜欢的音
+乐，然后运行程序如下。（同样，注意串口字符串！）
+$ python3 laser.py --port /dev/tty.usbmodem411 
+('opening ', '/dev/tty.usbmodem1411') 
+Found 4 devices. Select input device: 
+0: Built-in Microph 
+1: Built-in Output 
+2: BoomDevice 
+3: AirParrot 
+0 
+Input device chosen: Built-in Microph 
+opening stream... 
+
+250 Python 极客项目编程 
+你应该看到激光秀产生了许多有趣的图案，随着音乐和时间变化，如图13-10
+所示。
+图13-10  激光秀的完整布线和投影在墙上的图案 
+13.7  小结 
+本章通过构建一个较复杂的项目，来提升你的Python 和Arduino 技能。你学习
+了如何使用Python 和Arduino 控制电机，用numpy 来获得音频数据的FFT，控制
+串口通信，甚至是激光！
+13.8  实验 
+下面是修改此项目的一些方法。
+1．该程序采用一种自由发挥的方案将FFT 值转换为电机速度和方向数据。请
+尝试修改此方案。例如，尝试使用不同的频带和标准来改变电机的方向。
+
+第13 章  激光音乐秀 251 
+2．在本项目中，从音频信号收集的频率信息被转换为电机速度和方向。请尝
+试根据音乐的整体“节奏”或音量来让电机运动。为此，你可以计算信号幅度的“均
+方根（RMS）”值。该计算类似于FFT 计算。读入一组音频数据并放入numpy 数组
+x 后，可以按如下方式计算RMS 值： 
+rms = numpy.sqrt(numpy.mean(x**2)) 
+此外，回忆一下，项目中振幅表示为16 位有符号整数，其最大值为32768（一
+个要记住的有用数字，用于标准化）。用这个RMS 振幅与FFT 结合，让激光图案产
+生更大的变化。
+在项目中，我们比较朴素地用了一些胶带来保持激光笔的打开状态，测试并进
+行硬件设置。能找到更好的方法来控制激光吗？请阅读光隔离器和继电器的相关材
+料
+①
+①“Relays and Optoisolators,” What-When-How, http://what-when-how.com/8051-microcontroller/relays-and-optoisolators/。 
+，这是可以打开和关闭外部电路的设备。要使用这些设备，首先需要改造激光
+笔，让它可以通过外部开关切换。一种方法是永久地将激光笔的按钮粘接到ON位
+置，取出电池，并将两个引线焊接到电池触点上。现在就可以用这些电线和激光笔
+的电池手动打开和关闭激光笔。接下来，通过继电器或光隔离器连接激光笔，并使
+用Arduino上的数字引脚将其打开，用数字开关替换此方案。如果使用光隔离器，可
+以直接用Arduino切换激光开关。如果使用继电器，还需要一个驱动器，通常是一个
+简单的晶体管电路。
+有这样的设置后，请添加一些代码，让Python 程序运行时，发送一个串行命令
+到Arduino，在开始之前打开激光笔。 

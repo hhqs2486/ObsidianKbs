@@ -1,0 +1,1701 @@
+第6章　深入分析集群安全机制
+Kubernetes通过一系列机制来实现集群的安全控制，其中包括API
+Server的认证授权、准入控制机制及保护敏感信息的Secret机制等。集群
+的安全性必须考虑如下几个目标。
+◎　保证容器与其所在宿主机的隔离。
+◎　限制容器给基础设施或其他容器带来的干扰。
+◎　最小权限原则，即合理限制所有组件的权限，确保组件只执行
+它被授权的行为，通过限制单个组件的能力来限制它的权限范围。
+◎　明确组件间边界的划分。
+◎　划分普通用户和管理员的角色。
+◎　在必要时允许将管理员权限赋给普通用户。
+◎　允许拥有Secret数据（Keys、Certs、Passwords）的应用在集群
+中运行。
+下面分别从Authentication、Authorization、Admission 
+Control、
+Secret和Service Account等方面来说明集群的安全机制。
+6.1　API Server认证管理
+我们知道，Kubernetes集群中所有资源的访问和变更都是通过
+Kubernetes API Server的REST API实现的，所以集群安全的关键点就在
+于如何识别并认证客户端身份（Authentication），以及随后访问权限的
+授权（Authorization）这两个关键问题，本节将讲解认证管理的内容。
+Kubernetes集群有两种用户账号：第1种是集群内部的Service
+Account；第2种是外部的用户账号，可能是某个运维人员或外部应用的
+账号。Kubernetes并不支持常规的个人账号，但拥有被Kubernetes集群的
+CA证书签名的有效证书，个人用户就可被授权访问Kubernetes集群了，
+
+在这种情况下，证书中Subject（主题）里的信息被当作用户名
+如"/CN=bob"。因此，任一Kubernetes API的访问都属于以下三种方式之
+一：
+◎　以证书方式访问的普通用户或进程，包括运维人员及kubectl、
+kubelets等进程；
+◎　以Service Account方式访问的Kubernetes的内部服务进程；
+◎　以匿名方式访问的进程。
+Kubernetes集群提供了以下用户身份认证方式。
+◎　HTTPS证书认证：基于CA根证书签名的双向数字证书认证方
+式。
+◎　HTTP Bearer Token认证：通过一个Bearer Token识别合法用
+户。
+◎　OpenID Connect Token第三方认证：通过第三方OIDC协议进行
+认证。
+◎　Webhook Token认证：通过外部Webhook服务进行认证。
+◎　Authenticating Proxy认证：通过认证代理程序进行认证。
+本节对这些认证方式的原理和使用方式进行详细说明。
+6.1.1　HTTPS证书认证
+这里需要有一个CA证书，CA是PKI系统中通信双方都信任的实
+体，被称为可信第三方（Trusted Third Party，TTP）。CA作为可信第三
+方的重要条件之一，就是其行为具有非否认性。作为第三方而不是简单
+的上级，就必须让信任者有追究自己责任的能力。CA通过证书证实他
+人的公钥信息，在证书上有CA的签名。如果用户因为信任证书而有了
+损失，证书就可以作为有效的证据用于追究CA的法律责任。CA正是因
+为对责任的承诺，也被称为可信第三方。在很多情况下，CA与用户都
+是相互独立的实体，CA作为服务提供方，有可能因为服务质量问题
+（例如发布的公钥数据有错误）而给用户带来损失。在证书中绑定了公
+
+钥数据和相应私钥拥有者的身份信息，并带有CA的数字签名；在证书
+中也包含了CA的名称，以便于依赖方找到CA的公钥，验证证书上的数
+字签名。
+CA认证涉及诸多安全术语，比如根证书、自签名证书、密钥、私
+钥、加密算法及HTTPS等，本节主要讲解CA认证的工作流程，以进一
+步理解Kubernetes CA认证的配置流程。
+如图6.1所示，CA认证的工作流程如下。
+（1）HTTPS通信双方的服务端向CA机构申请证书，CA机构是可
+信的第三方机构，它可以是一个公认的权威企业，也可以是企业自身。
+企业内部系统一般都用企业自身的认证系统。CA机构下发根证书、服
+务端证书及私钥给申请者。
+（2）HTTPS通信双方的客户端向CA机构申请证书，CA机构下发
+根证书、客户端证书及私钥给申请者。
+（3）客户端向服务端发起请求，服务端下发服务端证书给客户
+端。客户端在接收到证书后，通过私钥解密证书，并利用服务端证书中
+的公钥认证证书信息比较证书里的消息，例如，比较域名和公钥与服务
+器刚刚发送的相关消息是否一致，如果一致，则客户端认可这个服务器
+的合法身份。
+（4）客户端发送客户端证书给服务端，服务端在接收到证书后通
+过私钥解密证书，获得客户端证书公钥，并用该公钥认证证书的信息，
+确认客户端是否合法。
+（5）客户端通过随机密钥加密信息，并发送加密后的信息给服务
+端。在服务端和客户端协商好加密方案后，客户端会产生一个随机的密
+钥，客户端通过协商好的加密方案加密该随机密钥，并发送该随机密钥
+到服务端。服务端接收这个密钥后，双方通信的所有内容都通过该随机
+密钥加密。
+
+图6.1　CA认证的工作流程
+上述是双向CA认证协议的具体通信流程，在这种情况下要求服务
+器和用户双方都拥有证书。单向认证协议则不需要客户端拥有CA证
+书，对于上面的步骤，只需将服务端验证客户证书的过程去掉，之后协
+商对称密码方案和对称通话密钥时，服务端发送给客户端的密码没被加
+密即可。
+6.1.2　HTTP Bearer Token认证
+为了验证使用者的身份，需要客户端向服务端提供一个可靠的身份
+信息，称之为Token，这个Token被放在HTTP 
+Header头里，在Token里
+有信息来表明客户身份。Token通常是一个有一定长度的难以被篡改的
+字符串，比如 31ada4fd-adec-460c-809a-9e56ceb75269，我们用私钥签名
+一个字符串后的数据也可被当作一个加密的Token。在Kubernetes中，每
+个Bearer Token都对应一个用户名，存储在API Server能访问的一个文件
+中（Static 
+Token 
+file）。客户端发起API调用请求时，需要在HTTP
+
+Header里放入此Token，这样一来，API Server就能识别合法用户和非法
+用户了。
+要使用这种认证方式，就需要为API Server服务设置一个保存用户
+信息和Token的文件，通过启动参数--token-auth-file=SOMEFILE指定文
+件路径。该文件为CSV文本文件格式，每行内容都由以下字段组成：
+对其中各字段说明如下。
+◎　token：必填，Token字符串。
+◎　user：必填，用户名。
+◎　uid：必填，用户ID。
+◎　groupnames：可选，用户组列表，如果有多个组，则必须使用
+双引号。
+Token文件示例如下：
+通过Service 
+Account认证方式访问API 
+Server，其实也采用了与
+HTTP Bearer Token相同的实现方式。我们知道，每个Service Account都
+对应一个Secret对象，在Secret对象中就有一个加密的Token字段，这个
+Token字段就是Bearer Token。这个Token是用哪个私钥加密的，要取决
+于API Server的启动参数--service-account-key-file设置的文件，如果没有
+指定该参数，则会采用API Server自己的私钥进行加密。为了方便Pod里
+的用户进程使用这个Token访问API Server，Secret Token里的内容会被
+映射到Pod中固定路径和名字的文件中。另外，如果API Server设置了启
+动参数--service-account-lookup=true，API 
+Server就会验证Token是否在
+etcd中存在，如果已从etcd中删除，则将注销容器中Token的有效性。
+
+6.1.3　OpenID Connect Token第三方认证
+Kubernetes也支持使用OpenID Connect协议（简称OIDC）进行身份
+认证。OIDC协议是基于OAuth 
+2.0协议的身份认证标准协议，在OAuth
+2.0上构建了一个身份层，OIDC的登录过程与OAuth相比，最主要的扩
+展就是提供了ID Token，这是一个JWT格式的加密Token。API Server本
+身与OIDC Server（即Identity Provider）没有太多交互，用户（主要是
+kubectl用户）通过OIDC Server得到一个合法的ID Token，并作为命令行
+参数（或者kubectl的配置文件）传递给API Server，API Server则通过验
+证该Token是否合法及是否有效来确定用户的身份。虽然在OIDC Server
+中可以做到用户的权限管理，但Kubernetes并不使用OIDC Server的权限
+管理，因为它有自己完善的BRAC权限管理体系。
+要使用OIDC Token认证方式，就需要为API Server配置以下启动参
+数。
+◎　--oidc-issuer-url：必填，设置允许API Server发现公共签名密钥
+的URL，仅支持HTTPS，通常应为/.well-known/openid-configuration路径
+的上一级URL，例如谷歌提供的公共签名密钥URL
+为“https：//accounts.google.com/.well-known/openid-configuration”，则将
+该参数的值设置为“https：//accounts.google.com”。
+◎　--oidc-client-id：必填，需要颁发Token的客户端ID，例
+如“kubernetes”。
+◎　--oidc-username-claim：可选，用作用户名的JWT Claim名称，
+默认值为“sub”。
+◎　--oidc-username-prefix：可选，设置用户名Claim的前缀，以防
+止与已存在的名称（如以system：开头的用户名）产生冲突，例
+如“oidc：”。
+◎　--oidc-groups-claim：可选，用作用户组的JWT Claim名称，需
+要将其设置为字符串数组格式。
+◎　--oidc-groups-prefix：可选，设置用户组Claim的前缀，以防止
+与已存在的名称（如以system：开头的组名）产生冲突，例
+如“oidc：”。
+
+◎　--oidc-required-claim：可选，设置ID 
+Token中必需的Claim信
+息，以key=value的格式设置，重复该参数以设置多个Claim。
+◎　--oidc-ca-file：可选，将其设置为对ID提供商的Web证书进行
+签名的CA根证书全路径，例如/etc/kubernetes/ssl/kc-ca.pem。
+需要说明的是，Kubernetes本身不提供OpenID Connect ID服务，用
+户可以选择使用互联网ID提供商的服务，或者使用第三方系统，例如
+dex、Keycloak、CloudFoundry UAA、OpenUnison等。
+为了与Kubernetes一起工作，ID提供商必须满足以下要求。
+◎　提供OpenID Connect发现机制。
+◎　基于TLS协议运行，并且不存在已过时的密码。
+◎　拥有经过权威CA中心签发的证书。
+4.Webhook Token认证
+Kubernetes也支持通过外部Webhook认证服务器，配合HTTP Bearer
+Token来实现自定义的用户身份认证功能。
+其工作原理和流程：开启并配置API 
+Server的Webhook 
+Token
+Authentication功能，API Server在收到客户端发起的一个需要认证的请
+求后，从HTTP 
+Header中提取出Token信息，然后将包含该Token的
+TokenReview资源以HTTP 
+POST方式发送给远程Webhook服务进行认
+证。然后，API 
+Server根据远程Webhook服务返回的结果判断是否认证
+成功。远程Webhook服务返回的结果也需要是一个TokenReview资源对
+象，并且它的apiVersion需要与API 
+Server发出请求的apiVersion保持一
+致，即同为authentication.k8s.io/v1beta1或authentication.k8s.io/v1。
+要使用Webhook Token认证方式，就需要为API Server配置以下启动
+参数。
+◎　--authentication-token-webhook-config-file：说明如何访问远程
+Webhook服务的配置文件。
+◎　--authentication-token-webhook-cache-ttl：缓存Webhook服务返
+回的认证结果的时间，默认值为2min。
+◎　--authentication-token-webhook-version：发送给Webhook服务的
+
+TokenReview资源的API版本号，API组为authentication.k8s.io，版本号可
+以为"v1beta1"或"v1"，默认版本号为"v1beta1"。
+访问远程Webhook服务的配置文件使用kubeconfig格式，其中
+clusters字段设置远程Webhook服务的信息，users字段设置API Server的
+信息，例如：
+
+API Server在收到客户端的认证请求之后，提取其HTTP Header中的
+Token之后，将会生成如下内容的TokenReview资源对象：
+API Server将这个TokenReview资源对象的JSON报文序列化后发送
+给远程Webhook服务，认证结果也以TokenReview资源对象的格式返回
+给API Server，结果通过status字段进行声明。
+一个认证成功的应答TokenReview内容示例如下：
+
+一个认证失败的应答TokenReview内容示例如下：
+
+6.1.4　Authenticating Proxy（认证代理）
+在这种方式下，将API 
+Server配置为从HTTP 
+Header（例如X-
+Remote-User字段）对用户进行识别。这需要与Authenticating Proxy程序
+一同工作，由Authenticating Proxy设置HTTP Header的值。
+要使用这种认证方式，就需要为API Server配置以下启动参数。
+◎　--requestheader-username-headers：必填，区分大小写，在
+HTTP Header中用于设置用户名的字段名称列表，API Server将按顺序检
+查用户身份。第1个设置了值的Header字段将被用作用户名。常用的字
+段名为“X-Remote-User”。
+◎　--requestheader-group-headers：在Kubernetes 
+1.6版本以上可配
+置，可选，区分大小写。在HTTP Header中用于设置用户组的字段名称
+列表，API 
+Server将按顺序校验用户的身份。常用的字段名为“X-
+Remote-Group”。
+◎　--requestheader-extra-headers-prefix：在Kubernetes 1.6版本以上
+可配置，可选，区分大小写。Header字段的前缀用于确定用户的其他信
+息（通常由配置的授权插件使用）。常用的字段名为“X-Remote-
+Extra-”。
+
+如果在一个请求中包含以下HTTP Header字段：
+则将生成如下用户信息：
+为了验证Authenticating Proxy程序的身份，Authenticating Proxy程序
+需要把有效的客户端CA证书先提供给API Server，使得API Server可以
+
+向CA中心进行身份认证。只有在API 
+Server验证了该客户端CA证书有
+效之后，才会校验在HTTP Header中设置的用户名。这需要为API Server
+通过以下启动参数进行配置。
+◎　--requestheader-client-ca-file：必填，Authenticating 
+Proxy程序
+的有效客户端CA证书文件全路径。
+◎　--requestheader-allowed-names：可选，通用名称值（CN）列
+表，如果设置，则在客户端CA证书中必须包含CN列表中的值；如果将
+其设置为空，则表示允许任何CN。
+6.2　API Server授权管理
+当客户端发起API Server调用时，API Server内部要先进行用户认
+证，然后执行用户授权流程，即通过授权策略（Authorization 
+Policy）
+决定一个API调用是否合法。对合法用户进行授权并随后在用户访问时
+进行鉴权，是权限与安全系统中的重要一环。简单地说，授权就是授予
+不同的用户不同的访问权限。API Server目前支持以下授权策略。
+◎　AlwaysDeny：表示拒绝所有请求，仅用于测试。
+◎　AlwaysAllow：允许接收所有请求，如果集群不需要授权流
+程，则可以采用该策略。
+◎　ABAC（Attribute-Based Access Control）：基于属性的访问控
+制，表示使用用户配置的授权规则对用户的请求进行匹配和控制。
+◎　RBAC：Role-Based Access Control，是基于角色的访问控制。
+◎　Webhook：通过调用外部的REST服务对用户进行授权。
+◎　Node：是一种对kubelet进行授权的特殊模式。
+AlwaysDeny因为缺乏实际意义，已于Kubernetes 1.13版本之后被废
+弃。AlwaysAllow基本不会被用于实际生产中。ABAC是Kubernetes 
+1.6
+版本之前的默认授权模式，功能强大，但存在理解和配置复杂、修改后
+需要重启API Server等硬伤，因此从Kubernetes 1.6版本开始，已被全新
+的RBAC授权模式替代。如果RBAC仍然不满足某些特定需求，则用户
+
+还可以自行编写授权逻辑并通过Webhook方式注册为Kubernetes的授权
+服务，以实现更加复杂的授权规则。
+通过API 
+Server的启动参数--authorization-mode可配置多种授权策
+略，用逗号分隔即可。在通常情况下，我们会设置授权策略为Node，
+RBAC，API Server在收到请求后，会读取该请求中的数据，生成一个访
+问策略对象，API Server会将这个访问策略对象和配置的授权模式逐条
+进行匹配，第一个被满足或拒绝的授权策略决定了该请求的授权结果，
+如果匹配的结果是禁止访问，则API Server会终止API调用流程，并返回
+客户端的错误调用码。
+Node授权策略用于对kubelet发出的请求进行访问控制，与用户的应
+用授权无关，属于Kubernetes自身安全的增强功能。简单来说，就是限
+制每个Node只访问它自身运行的Pod及相关的Service、Endpoints等信
+息；也只能受限于修改自身Node的一些信息，比如Label；也不能操作
+其他Node上的资源。而之前用RBAC这种通用权限模型其实并不能满足
+Node这种特殊的安全要求，所以将其剥离出来定义为新的Node授权策
+略。
+6.2.1　ABAC授权模式详解
+在API 
+Server启用ABAC模式时，集群管理员需要指定授权策略文
+件的路径和名称（--authorization-policy-file=SOME_FILENAME），授
+权策略文件里的每一行都以一个Map类型的JSON对象进行设置，它被
+称为“访问策略对象”。在授权策略文件中，集群管理员需要设置访问策
+略对象中的apiVersion、kind、spec属性来确定具体的授权策略，其中，
+apiVersion的当前版本为abac.authorization.kubernetes.io/v1beta1；kind被
+设置为Policy；spec指详细的策略设置，包括主体属性、资源属性、非
+资源属性这三个字段。
+（1）对主体属性说明如下。
+◎　user（用户名）：字符串类型，该字符串类型的用户名来源于
+Token文件（--token-auth-file参数设置的文件）或基本认证文件中用户名
+称段的值。
+
+◎　group（用户组）：在被设置为“system：authenticated”时，表
+示匹配所有已认证请求；在被设置为“system：unauthenticated”时，表示
+匹配所有未认证请求。
+（2）对资源属性说明如下。
+◎　apiGroup（API组）：字符串类型，表明匹配哪些API Group，
+例如extensions或*（表示匹配所有API Group）。
+◎　namespace（命名空间）：字符串类型，表明该策略允许访问
+某个Namespace的资源，例如kube-system或*（表示匹配所有
+Namespace）。
+◎　resource（资源）：字符串类型，表明要匹配的API资源对象，
+例如pods或*（表示匹配所有资源对象）。
+（3）对非资源属性说明如下。
+◎　nonResourcePath（非资源对象类路径）：非资源对象类的URL
+路径，例如/version或/apis，*表示匹配所有非资源对象类的请求路径，
+也可以将其设置为子路径，/foo/*表示匹配所有/foo路径下的所有子路
+径。
+◎　readonly（只读标识）：布尔类型，当它的值为true时，表明仅
+允许GET请求通过。下面对ABAC授权算法、使用kubectl时的授权机
+制、常见的ABAC授权示例及如何对Service 
+Account进行授权进行说
+明。
+1.ABAC授权算法
+API Server进行ABAC授权的算法为：在API Server收到请求之后，
+首先识别出请求携带的策略对象的属性，然后根据在策略文件中定义的
+策略对这些属性进行逐条匹配，以判定是否允许授权。如果有至少一条
+匹配成功，这个请求就通过了授权（不过还是可能在后续的其他授权校
+验中失败）。常见的策略配置如下。
+◎　要允许所有认证用户做某件事，则可以写一个策略，将group
+属性设置为system：authenticated。
+◎　要允许所有未认证用户做某件事，则可以把策略的group属性
+设置为system：unauthenticated。
+
+◎　要允许一个用户做任何事，则将策略的apiGroup、namespace、
+resource和nonResourcePath属性设置为“*”即可。
+2.使用kubectl时的授权机制
+kubectl使用API 
+Server的/api和/apis端点来获取版本信息。要验证
+kubectl 
+create/update命令发送给服务器的对象，kubectl则需要向
+OpenAPI查询，对应的URL路径为/openapi/v2。
+使用ABAC授权模式时，以下特殊资源必须显式地通过
+nonResourcePath属性设置。
+◎　API版本协商过程中的/api、/api/*、/apis和/apis/*。
+◎　通过kubectl version命令从服务器中获取版本时的/version。
+◎　create/update操作过程中的/swaggerapi/*。
+使用kubectl操作时，如果需要查看发送到API Server的HTTP请求，
+则可以将日志级别设置为8，例如：
+3.常见的ABAC授权示例
+下面通过几个授权策略文件（JSON格式）示例说明ABAC的访问控
+制用法。
+（1）允许用户alice对所有资源做任意操作：
+（2）kubelet可以读取任意Pod：
+
+（3）kubelet可以读写Event对象：
+（4）用户bob只能读取projectCaribou中的Pod：
+（5）任意用户都可以对非资源类路径进行只读请求：
+如果添加了新的ABAC策略，则需要重启API Server以使其生效。
+4.对Service Account进行授权
+Service 
+Account会自动生成一个ABAC用户名（username），用户
+名按照以下命名规则生成：
+
+创建新的命名空间时，会产生一个如下名称的Service Account：
+如果希望kube-system命名空间中的Service 
+Account“default”具有全
+部权限，就需要在策略文件中加入如下内容：
+6.2.2　Webhook授权模式详解
+Webhook定义了一个HTTP回调接口，实现Webhook的应用会在指
+定事件发生时向一个URL地址发送（POST）通知信息。启用Webhook
+授权模式后，Kubernetes会调用外部REST服务对用户访问资源进行授
+权。
+Webhook模式用参数--authorization-webhook-config-
+file=SOME_FILENAME来设置远端授权服务的信息。
+配置文件使用的是kubeconfig文件的格式，文件里users一节的内容
+设置的是API Server的信息。相对于远程授权服务来说，API Server是客
+户端，也就是用户；clusters一节的内容设置的是远程授权服务器的信
+息。下面是一个使用HTTPS客户端认证的配置示例：
+
+在授权开始时，API 
+Server会生成一个API版本
+为“authorization.k8s.io/v1beta1”的SubjectAccessReview资源对象，用于描
+述操作信息，在进行JSON序列化之后以HTTP 
+POST方式发送给远程
+Webhook授权服务。在SubjectAccessReview资源对象中包含用户尝试访
+
+问资源的请求动作的描述，以及需要访问的资源信息。
+SubjectAccessReview资源对象和其他API对象一样，遵循同样的版
+本兼容性规则，在实现时要注意apiVersion字段的版本，以实现正确的
+反序列化操作。另外，API 
+Server必须启用authorization.k8s.io/v1beta1
+API扩展（--runtime-config=authorization.k8s.io/v1beta1=true）。
+下面是一个希望获取Pod列表的请求报文示例：
+
+远程Webhook授权服务需要填充SubjectAccessReview资源对象的
+status字段，返回允许访问或者不允许访问的结果。应答报文中的spec字
+段是无效的，也可以省略。
+一个返回“允许访问”（allowed=true）的应答报文示例如下：
+返回“不允许访问”的应答有两种方法。
+（1）仅返回“不允许访问”（allowed=false），但配置的其他授权者
+仍有机会对请求进行授权，这也是多数情况下的通用做法，示例如下：
+
+（2）返回“不允许访问”（allowed=false），同时立刻拒绝其他授权
+者再对请求进行授权（denied=true），这要求Webhook服务了解集群的
+详细配置以能够做出准确的授权判断，示例如下：
+除了对资源对象的访问进行授权，还可以对非资源对象的请求路径
+进行授权。
+非资源的请求路径包
+括/api、/apis、/metrics、/logs、/debug、/healthz、/livez、/openapi/v2、/re
+和/version。客户端需要访问/api、/api/*、/apis、/apis/*和/version等路
+径，用于发现服务端提供的API资源列表和版本信息，通常应授权为“允
+许访问”。对于其他非资源的访问一般可以禁止，以限制客户端对API
+Server进行不必要的访问。
+查询/debug的请求报文示例如下：
+
+6.2.3　RBAC授权模式详解
+RBAC（Role-Based Access Control，基于角色的访问模式控制）从
+Kubernetes 
+1.5版本开始引入，在1.6版本时升级为Beta版本，在1.8版本
+时升级为GA稳定版本。作为kubeadm安装方式的默认选项，足见其重要
+性。
+相对于其他访问控制方式，RBAC授权具有如下优势。
+◎　对集群中的资源和非资源权限均有完整的覆盖。
+
+◎　RBAC的权限配置通过几个API对象即可完成，同其他API对象
+一样，可以用kubectl或API进行操作。
+◎　可以在运行时进行调整，无须重新启动API Server。
+要使用RBAC授权模式，首先需要在kube-apiserver服务的启动参数
+authorization-mode（授权模式）的列表中加上RBAC，例如--
+authorization-mode=...，RBAC。
+本节对RBAC的原理和应用进行详细说明。
+1.RBAC的API资源对象说明
+在RBAC管理体系中，Kubernetes引入了4个资源对象：Role、
+ClusterRole、RoleBinding和ClusterRoleBinding。同其他API资源对象一
+样，用户可以使用kubectl或者API调用等方式操作这些资源对象。
+1）角色（Role）和集群角色（ClusterRole）
+一个角色就是一组权限的集合，在Role中设置的权限都是许可
+（Permissive）形式的，不可以设置拒绝（Deny）形式的规则。Role设
+置的权限将会局限于命名空间（namespace）范围内，如果需要在集群
+级别设置权限，就需要使用ClusterRole了。
+角色（Role）示例
+下面是一个Role定义示例，该角色具有在命名空间default中读取
+（get、watch、list）Pod资源对象信息的权限：
+
+Role资源对象的主要配置参数都在rules字段中进行设置，如下所
+述。
+◎　resources：需要操作的资源对象类型列表，例
+如"pods"、"deployments"、"jobs"等。
+◎　apiGroups：资源对象API组列表，例
+如""（Core）、"extensions"、"apps"、"batch"等。
+◎　verbs：设置允许对资源对象操作的方法列表，例
+如"get"、"watch"、"list"、"delete"、"replace"、"patch"等。
+集群角色（ClusterRole）示例
+集群角色除了具有和角色一致的命名空间内资源的管理能力，因其
+集群级别的范围，还可以用于以下授权应用场景中。
+◎　对集群范围内资源的授权，例如Node。
+◎　对非资源型的授权，例如/healthz。
+◎　对包含全部namespace资源的授权，例如pods（用于kubectl get
+pods--all-namespaces这样的操作授权）。
+
+◎　对某个命名空间中多种权限的一次性授权。
+下面是一个ClusterRole定义示例，该集群角色有权访问一个或所有
+namespace的secrets（根据其被RoleBinding还是ClusterRoleBinding绑定
+而定）的权限：
+2）角色绑定（RoleBinding）和集群角色绑定
+（ClusterRoleBinding）
+角色绑定或集群角色绑定用来把一个角色绑定到一个目标主体上，
+绑定目标可以是User（用户）、Group（组）或者Service 
+Account。
+RoleBinding用于某个命名空间中的授权，ClusterRoleBinding用于集群范
+围内的授权。
+角色绑定（RoleBinding）示例
+RoleBinding可以与属于相同命名空间的Role或者某个集群级别的
+ClusterRole绑定，完成对某个主体的授权。
+下面是与相同命名空间中的Role进行绑定的示例，通过这个绑定操
+作，就完成了以下授权规则：允许用户jane读取命名空间default的Pod资
+源对象信息：
+
+RoleBinding也可以引用ClusterRole，对目标主体在其所在命名空间
+授予在ClusterRole中定义的权限。一种常见的用法是集群管理员预先定
+义好一组ClusterRole（权限设置），然后在多个命名空间中重复使用这
+些ClusterRole。
+例如，在下面的例子中为用户“dave”授权一个ClusterRole“secret-
+reader”，虽然secret-reader是一个集群角色，但因为RoleBinding的作用
+范围为命名空间development，所以用户dave只能读取命名空间
+development中的secret资源对象，而不能读取其他命名空间中的secret资
+源对象：
+
+图6.2展示了上述对Pod的get、watch、list操作进行授权的Role和
+RoleBinding的逻辑关系。
+
+图6.2　Role和RoleBinding的逻辑关系
+集群角色绑定（ClusterRoleBinding）示例
+ClusterRoleBinding用于进行集群级别或者对所有命名空间都生效的
+授权。下面的例子允许manager组的用户读取任意命名空间中的secret资
+
+源对象：
+注意，在集群角色绑定（ClusterRoleBinding）中引用的角色只能是
+集群级别的角色（ClusterRole），而不能是命名空间级别的Role。
+一旦通过创建RoleBinding或ClusterRoleBinding与某个Role或
+ClusterRole完成了绑定，用户就无法修改与之绑定的Role或ClusterRole
+了。只有删除了RoleBinding或ClusterRoleBinding，才能修改Role或
+ClusterRole。Kubernetes限制roleRef字段中的内容不可更改，主要有以
+下两个原因。
+◎　从逻辑上来说，与一个新的Role进行绑定实际上是一次全新的
+授权操作。通过删除或重建的方式更改绑定的Role，可以确保给主体授
+予新角色的权限（而不是在不验证所有现有主体的情况下去修改
+roleRef）。
+
+◎　使roleRef不变，可以授予某个用户对现有绑定对象（Binding
+object）的更新（update）权限，以便其管理授权主体（subject），同时
+禁止更改角色中的权限设置。
+2.RBAC对资源的引用方式
+在Kubernetes系统中，大多数资源对象都可以用其名称字符串来表
+达，例如pods、services、deployments等，在RBAC的权限设置中引用的
+就是资源对象的字符串名称。
+某些Kubernetes API还包含下级子资源（subresource），例如Pod日
+志（log）。Pod日志的API 
+Endpoint是
+GET/api/v1/namespaces/{namespace}/pods/{name}/log。对于这种资源，
+在RBAC权限设置中引用的格式是“主资源名称/子资源名称”，中间
+以“/”分隔，对于Pod的log这个例子来说，需要将其配置为pods/log。
+Role中的resources可以引用多个资源对象，以数组的形式表示。
+例如，下面的RBAC规则设置的是对资源pods和pods/log授予get和
+list权限：
+仅设置资源对象的名称，作用范围将是此类对象的所有实例。如果
+
+希望只授权某种资源对象中的特定实例，则还可以通过资源对象的实例
+名称（ResourceName）进行设置。在指定ResourceName后，使用get、
+delete、update和patch的请求就会被限制在这个资源实例范围内。例
+如，下面的设置让一个主体只能对名为“my-configmap”的ConfigMap资
+源对象进行get和update操作，而不能操作其他ConfigMap资源对象：
+可想而知，resourceName这种用法对list、watch、create或
+deletecollection操作是无效的，这是因为必须要通过URL进行鉴权，而
+资源名称在list、watch、create或deletecollection请求中只是请求Body数
+据的一部分。
+3.聚合ClusterRole
+Kubernetes支持将多个ClusterRole聚合成一个新的ClusterRole，这在
+希望将多个ClusterRole的授权规则（例如由CRD或Aggregated 
+API
+Server提供的资源授权规则）进行合并使用时，可以简化管理员的手工
+配置工作，完成对系统默认ClusterRole的扩展。
+
+在聚合ClusterRole的定义中，通过aggregationRule字段设置需要包
+含的ClusterRole，使用Label Selector的形式进行设置，逻辑为包含具有
+指定标签的ClusterRole。Kubernetes 
+Master中的Controller会根据Label
+Selector持续监控系统中的ClusterRole，将选中的多个ClusterRole的规则
+进行合并，形成一个完整的授权规则列表（在rules字段中体现）。
+下面是一个聚合ClusterRole示例，其Label Selector设置的条件为包
+含标签rbac.example.com/aggregate-to-monitoring=true的全部
+ClusterRole。
+如果用户创建了一个包含上述标签的ClusterRole，则系统会自动为
+聚合ClusterRole设置其rules。例如创建一个查看services、endpoints、
+pods的ClusterRole：
+
+查看之前创建的聚合ClusterRole，将看到系统自动为其设置的
+rules：
+
+下面再看看如何使用聚合规则对系统默认的ClusterRole进行扩展。
+Kubernetes系统内置了许多ClusterRole，包括admin、edit、view等
+（完整列表和说明参见下文中的说明），其中的某些ClusterRole本身就
+
+是聚合类型的（通过aggregationRule设置了需要聚合的ClusterRole的
+Label），例如名为“edit”的ClusterRole设置的聚合规则如下：
+名为“view”的ClusterRole则包含标签
+rbac.authorization.k8s.io/aggregate-to-edit=true，说明edit中的规则都将被
+设置到admin的规则中：
+而名为“view”的ClusterRole本身也是聚合类型的，其聚合规则为包
+含标签rbac.authorization.k8s.io/aggregate-to-view=true：
+
+假设用户希望为其自定义资源对象crontabs设置只读权限，并加入
+系统内置的名为“view”的ClusterRole中，则基于view设置的聚合规则，
+用户只需新建一个ClusterRole，并设置其标签
+为“rbac.authorization.k8s.io/aggregate-to-view=true”，即可将相关授权规
+则添加到view的权限列表中：
+4.常见的授权规则示例
+下面对常见的角色（Role）和角色绑定（RoleBinding）内容进行示
+例说明，在本示例中仅展示关键rules配置的授权规则内容，省略资源对
+象本身的元数据内容。
+
+（1）允许读取Pod资源对象（属于Core API Group）的信息：
+（2）允许读写extensions和apps两个API Group中deployment资源对
+象的信息：
+（3）允许读取Pod资源对象的信息，并允许读写batch和extensions
+两个API Group中Job资源对象的信息：
+
+（4）允许读取名为“my-config”的ConfigMap资源对象的信息（必须
+绑定到一个RoleBinding来限制一个命名空间中的特定ConfigMap实
+例）：
+（5）读取Node资源对象（属于Core 
+API 
+Group）的信息，由于
+Node是集群级别的资源对象，所以必须存在于ClusterRole中，并使用
+ClusterRoleBinding进行绑定：
+（6）允许对非资源类型的/healthz端点（Endpoint）及其所有子路
+径进行GET和POST操作（必须使用ClusterRole和ClusterRoleBinding）：
+在RBAC系统中，通过角色绑定（RoleBinding或
+
+ClusterRoleBinding）的定义，将在角色（Role或ClusterRole）中设置的
+授权规则与某个目标主体（Subject）绑定。授权的目标主体可以是用户
+（User）、用户组（Group）和ServiceAccount三者之一。
+用户名由字符串进行标识，例如人名（alice）、Email地址
+（bob@example.com）、用户ID（1001）等，通常应该在客户端CA证
+书中进行设置。需要注意的是，Kubernetes内置了一组系统级别的用户/
+用户组，以“system：”开头，用户自定义的名称不应该使用这个前缀。
+用户组与用户名类似，由字符串进行标识，通常也应该在客户端
+CA证书中进行设置，并且要求不以“system：”为前缀。
+ServiceAccount在Kubernetes系统中的用户名会被设置成以“system：
+serviceaccount：”为前缀的名称，其所属的组名会被设置成以“system：
+serviceaccounts：”为前缀的名称。
+5.常见的角色绑定示例
+下面对常见的角色绑定（RoleBinding）和集群角色绑定
+（ClusterRoleBinding）进行示例说明，在本示例中仅展示关键subject的
+授权目标的主体设置，省略资源对象本身的元数据及需要引用的授权规
+则（Role或ClusterRole）的内容。
+（1）为用户alice@example.com授权：
+（2）为frontend-admins组授权：
+
+（3）为kube-system命名空间中的默认Service Account授权：
+（4）为qa命名空间中的所有Service Account授权：
+（5）为所有命名空间中的所有Service Account授权：
+
+（6）为所有已认证用户授权：
+（7）为所有未认证用户授权：
+（8）为全部用户授权：
+6.Kubernetes系统默认的授权规则（ClusterRole和
+ClusterRoleBinding）
+
+API 
+Server会创建一组系统默认的ClusterRole和ClusterRoleBinding
+对象，其中很多都是以“system：”为前缀的，以表明这些资源被
+Kubernetes master直接管理，对这些对象的改动可能会造成集群故障。
+例如system：node这个ClusterRole为kubelet设置了对Node的操作权限，
+如果这个ClusterRole被改动，kubelet就可能无法正常工作。
+所有系统默认的ClusterRole和RoleBinding都会用标签
+kubernetes.io/bootstrapping=rbac-defaults进行标记。
+授权规则的自动恢复（Auto-reconciliation）功能从Kubernetes 1.6版
+本开始引入。每次集群启动时，API Server都会更新默认的集群角色的
+缺失权限，也会更新在默认的角色绑定中缺失的主体，这样就防止了一
+些破坏性的修改，也保证了在集群升级的情况下相关内容能够及时更
+新。如果不希望使用这一功能，则可以为一个默认的集群角色或者集群
+角色绑定设置
+annotation“rbac.authorization.kubernetes.io/autoupdate=false”。该自动恢复
+功能在启用RBAC授权模式后自动开启。
+下面对系统提供的默认授权规则（ClusterRole和
+ClusterRoleBinding）进行说明。
+1）API发现（API Discovery）相关的ClusterRole
+默认的集群角色绑定（ClusterRoleBinding）为已认证用户
+（authenticated）和未认证用户（unauthenticated）都授予了读取系统
+API信息的权限，系统默认访问这些API安全。
+如果不希望匿名用户访问API，则可以通过kube-apiserver服务的启
+动参数设置--anonymous-auth=false。
+该默认集群角色（ClusterRole）的名称为“system：discovery”，可
+以通过kubectl get命令查看其允许访问的各个API路径的授权策略：
+
+
+API发现相关的系统默认ClusterRole如表6.1所示。
+表6.1　API发现相关的默认ClusterRole
+
+2）面向用户（User-facing）的ClusterRole
+有些系统的默认角色不是以“system：”为前缀的，这部分角色是面
+向用户设置的。其中包含超级用户角色（cluster-admin）、集群级别授
+权的角色（cluster-status），以及面向命名空间授权的角色（admin、
+edit、view）。
+面向用户的ClusterRole允许管理员使用聚合ClusterRole（Aggretated
+ClusterRole）机制将多个ClusterRole进行组合，通常用于将用户自定义
+CRD资源对象的授权补充到系统默认的ClusterRole中进行扩展。对聚合
+ClusterRole的详细说明请参考前文的说明。
+面向用户的系统默认ClusterRole如表6.2所示。
+表6.2　面向用户的默认ClusterRole
+
+
+3）核心组件（Core Component）的ClusterRole
+核心系统组件的默认ClusterRole如表6.3所示。
+表6.3　核心系统组件的默认ClusterRole
+续表
+4）其他组件的ClusterRole
+
+其他组件的默认ClusterRole如表6.4所示。
+表6.4　其他组件角色
+5）系统内置控制器（Controller）的ClusterRole
+
+在Kubernetes Master核心组件Controller Manager中运行了管理各种
+资源的控制器（Controller）。如果kube-controller-manager服务设置了启
+动参数--use-service-account-credentials，kube-controller-manager服务就
+会为每一个Controller都设置一个单独的ServiceAccount。相关的
+ClusterRole已在系统中默认设置完成，这些ClusterRole的名称
+以“system：controller：”为前缀。如果kube-controller-manager服务没有
+设置启动参数--use-service-account-credentials，就会使用它自身的凭据
+运行所有Controller，这就要求管理员对kube-controller-manager凭据进行
+全部Controller所需规则的授权。
+系统内置控制器（Controller）的默认ClusterRole如表6.5所示。
+表6.5　系统内置控制器（Controller）的默认ClusterRole
+
+
+续表
+7.预防权限提升和授权初始化
+RBAC 
+API防止用户通过编辑Role或者RoleBinding获得权限的提
+升。这一限制是在API级别生效的，因此即使没有启用RBAC，也仍然
+有效。
+1）创建或更新Role或ClusterRole的限制
+用户要对角色（Role或ClusterRole）进行创建或更新操作，需要满
+足下列至少一个条件：
+（1）用户已拥有Role中包含的所有权限，且与该角色的生效范围
+一致（如果是集群角色，则是集群范围；如果是普通角色，则可能是同
+一个命名空间或者整个集群）。
+（2）用户被显式授予针对Role或ClusterRole资源的提权
+（Escalate）操作权限。
+例如，用户user-1没有列出集群中所有Secret资源的权限，就不能创
+建具有这一权限的集群角色。要让一个用户能够创建或更新角色，则需
+要：
+
+（1）为其授予一个允许创建或更新Role或ClusterRole资源对象的角
+色。
+（2）为其授予允许创建或更新角色的权限，有隐式和显式两种方
+法。
+◎　隐式：为用户授予这些权限。用户如果尝试使用尚未被授予的
+权限来创建或修改Role或ClusterRole，则该API请求将被禁止。
+◎　显式：为用户显式授予rbac.authorization.k8s.io API Group中的
+Role或ClusterRole的提权（Escalate）操作权限。
+2）创建或更新RoleBinding或ClusterRoleBinding的限制
+仅当我们已经拥有被引用的角色（Role或ClusterRole）中包含的所
+有权限（与角色绑定的作用域相同）或已被授权对被引用的角色执行绑
+定（bind）操作时，才能创建或更新角色绑定（RoleBinding或
+ClusterRoleBinding）。例如，如果用户user-1没有列出集群中所有Secret
+资源的权限，就无法为一个具有这样权限的角色创建
+ClusterRoleBinding。要使用户能够创建或更新角色绑定，则需要进行以
+下操作。
+（1）为其授予一个允许创建和更新RoleBinding或
+ClusterRoleBinding的角色。
+（2）为其授予绑定特定角色的权限，有隐式或显式两种方法。
+◎　隐式：授予其该角色中的所有权限。
+◎　显式：授予在特定角色或集群角色中执行绑定（bind）操作的
+权限。
+例如，通过下面的ClusterRole和RoleBinding设置，将允许用户user-
+1为其他用户在user-1-namespace命名空间中授予admin、edit及view角色
+的权限：
+
+
+在系统初始化过程中启用第1个角色和角色绑定时，必须让初始用
+户具备其尚未被授予的权限。要进行初始的角色和角色绑定设置，有以
+下两种办法。
+（1）使用属于system：masters组的凭据，这个组默认具有cluster-
+admin这个超级用户的权限。
+（2）如果API Server以--insecure-port参数运行，则客户端通过这个
+非安全端口进行接口调用，通过这个非安全端口的访问没有认证鉴权的
+限制。
+8.使用kubectl命令行工具管理RBAC
+除了使用YAML文件创建RBAC角色和角色绑定资源对象，也可以
+使用kubectl命令行工具管理RBAC相关资源，下面通过示例进行说明。
+1）创建Role：kubectl create role
+在Namespace范围内设置授权规则，示例如下。
+（1）创建名为“pod-reader”的Role，允许对Pod进行get、watch、list
+操作：
+（2）创建名为“pod-reader”的Role，允许对特定名称
+（resourceNames）的Pod进行get操作：
+（3）创建名为“foo”的Role，允许对API Group“apps”中的replicaset
+进行get、watch、list操作：
+
+（4）创建名为“foo”的Role，允许对Pod及其子资源“status”进行
+get、watch、list操作：
+（5）创建名为“my-component-lease-holder”的Role，允许对特定名
+称（resourceNames）的lease资源进行get、list、watch、update操作：
+2）创建ClusterRole：kubectl create clusterrole
+在集群范围内设置授权规则，示例如下。
+（1）创建名为“pod-reader”的ClusterRole，允许对所有命名空间中
+的Pod进行get、watch、list操作：
+（2）创建名为“pod-reader”的ClusterRole，允许对特定名称
+（resourceNames）的Pod进行get操作：
+（3）创建名为“foo”的ClusterRole，允许对API 
+Group“apps”中的
+replicaset进行get、watch、list操作：
+
+（4）创建名为“foo”的ClusterRole，允许对Pod及其子资
+源“status”进行get、watch、list操作：
+（5）创建名为“foo”的ClusterRole，允许对非资源类型的URL进行
+get操作：
+（6）创建名为“monitoring”的ClusterRole，通过aggregationRule设
+置其聚合规则：
+3）创建RoleBinding：kubectl create rolebinding
+在特定的命名空间中进行授权（为Subject绑定Role），示例如下。
+（1）在命名空间acme中为用户“bob”授权ClusterRole“admin”：
+（2）在命名空间acme中为ServiceAccount“myapp”授权
+
+ClusterRole“view”：
+（3）在命名空间acme中为命名空间myappnamespace中的
+ServiceAccount“myapp”授权ClusterRole“view”：
+4）创建ClusterRoleBinding：kubectl create clusterrolebinding
+在集群范围内进行授权（为Subject绑定ClusterRole），示例如下。
+（1）在集群范围内为用户root授权ClusterRole“cluster-admin”：
+（2）在集群范围内为用户“system：kube-proxy”授权
+ClusterRole“system：node-proxier”：
+（3）在集群范围内为命名空间acme中的ServiceAccount“myapp”授
+权ClusterRole“view”：
+
+5）kubectl auth reconcile
+基于YAML文件创建或更新rbac.authorization.k8s.io/v1版本的RBAC
+相关API资源对象。如有必要，系统则将创建缺失的资源对象，并为设
+置了命名空间的资源创建缺失的命名空间资源。
+已存在的Role将更新为包含输入对象中的全部权限，并且移除多余
+的权限（需要设置--remove-extra-permissions参数）。
+已存在的RoleBinding将更新为包含输入对象中的全部主体
+（Subject），并且移除多余的主体（需要设置--remove-extra-subjects参
+数）。
+示例如下。
+（1）测试运行RBAC规则，显示将要执行的更改：
+（2）应用输入配置中的内容，保留任何额外权限（Role）和任何
+额外主体（Binding）：
+（3）应用输入配置中的内容，删除任何额外权限和任何额外主
+体：
+
+此外，可以通过kubectl--help命令在帮助信息中查看使用说明。
+9.对ServiceAccount的授权管理
+默认的RBAC策略为控制平面组件、节点和控制器授予有限范围的
+权限，但是不会为命名空间kube-system之外的ServiceAccount授予任何
+权限（除了所有已认证用户都具有的Discovery权限）。这使得管理员可
+以为特定的ServiceAccount授予所需的权限。细粒度的权限管理能够提
+供更高的安全性，但也会提高管理成本。粗放的授权方式可能会给
+ServiceAccount提供不必要的权限，但更易于管理。
+按照从最安全到最不安全的顺序，授权的方法如下。
+1）为应用专属的ServiceAccount赋权（最佳实践）
+这个应用需要在Pod的定义中指定一个serviceAccountName，并为其
+创建ServiceAccount（可以通过API、YAML文件、kubectl 
+create
+serviceaccount命令等方式创建）。例如为my-namespace中的
+ServiceAccount“my-sa”授予只读权限：
+2）为一个命名空间中名为default的ServiceAccount授权
+如果一个应用没有指定serviceAccountName，系统则将为其设置名
+为“default”的ServiceAccount。需要注意的是，授予
+ServiceAccount“default”的权限会让所有没有指定serviceAccountName的
+Pod都具有这些权限。
+例如，在my-namespace命名空间中为ServiceAccount“default”授予只
+读权限：
+
+另外，许多Kubernetes系统组件都在kube-system命名空间中使用默
+认的ServiceAccount运行。要让这些管理组件拥有超级用户权限，则可
+以把集群级别的cluster-admin权限赋予kube-system命名空间中名为
+default的ServiceAccount。注意，这一操作意味着kube-system命名空间
+中的应用默认都有超级用户的权限：
+3）为命名空间中的所有ServiceAccount都授予同一个权限
+如果希望一个命名空间中的所有应用程序都具有一个角色，那么无
+论它们使用什么ServiceAccount，都可以为这一命名空间中的
+ServiceAccount组进行授权。
+例如，为my-namespace命名空间中的所有ServiceAccount都赋予只
+读权限：
+
+4）为集群范围内的所有ServiceAccount都授予一个有限的权限（不
+推荐）
+如果不想为每个命名空间都管理授权，则可以把一个集群级别的角
+色授权给所有ServiceAccount。例如，为所有命名空间中的所有
+ServiceAccount都授予只读权限：
+5）为所有ServiceAccount都授予超级用户权限（强烈不推荐）
+如果用户可以完全不关心权限，则可以把超级用户权限分配给每个
+ServiceAccount。注意，这让所有应用都具有集群超级用户的权限，同
+时为能够读取Secret或创建Pod权限的用户也授予集群超级用户的权限：
+10.从ABAC更新为RBAC的建议
+在Kubernetes 1.6版本之前通常使用的是宽松的ABAC策略，包含为
+所有ServiceAccount授予完全的API访问权限。
+
+默认的RBAC策略为控制平面组件、节点和控制器授予有限范围的
+权限，但是不会为命名空间kube-system之外的ServiceAccount授予任何
+权限。
+这样一来，尽管更加安全，却可能会对某些希望自动获得API权限
+的现有工作负载造成影响，以下是管理过渡的两种方法。
+1）并行认证
+RBAC和ABAC同时运行，并包含已使用的ABAC策略文件，将
+kube-apiserver的启动参数设置如下：
+先由RBAC尝试对请求进行鉴权，如果结果是拒绝访问，系统就继
+续使用ABAC授权机制，这意味着请求只需要满足RBAC或ABAC之一
+即可工作。
+当kube-apiserver服务对RBAC模块设置的日志级别为5或更高（--
+vmodule=rbac*=5或--v=5）时，就可以在API Server的日志中看到RBAC
+的拒绝行为（前缀为RBAC）。可以利用这一信息来确定需要为哪些用
+户、用户组或ServiceAccount授予哪些权限。
+等到集群管理员按照RBAC的方式对相关组件进行了授权，并且在
+日志中不再出现RBAC的拒绝信息时，就可以移除ABAC认证方式了。
+2）粗放管理
+可以使用RBAC的角色绑定，复制一个粗放的ABAC策略。
+警告：下面的策略让集群中的所有ServiceAccount都具备了集群管
+理员权限，所有容器运行的应用都会自动接收ServiceAccount的认证，
+能够对任意API执行任意操作，包括查看Secret和修改授权。它不是一个
+推荐的过渡策略。
+
+过渡到使用RBAC授权模式之后，管理员应该调整集群的访问控制
+策略，以确保它们满足信息安全的相关需求。
+6.2.4　Node授权模式详解
+Node授权模式针对的Subject是Node，不是user或者应用的Service
+Account，是专门对kubelet发起的API请求进行授权的管理模式。
+Node授权者（node authorizer）允许kubelet发起API操作的资源对象
+如下。
+（1）读取操作：Service、Endpoint、Node、Pod、Secret、
+ConfigMap、PVC，以及绑定到Node的与Pod相关的持久卷。
+（2）写入操作：
+◎　Node和Node Status（启用NodeRestriction准入控制器，以限制
+kubelet只能修改自己节点的信息）；
+◎　Pod和Pod 
+Status（启用NodeRestriction准入控制器，以限制
+kubelet只能修改绑定到本节点的Pod信息）；
+◎　Event。
+（3）授权相关操作：
+◎　基于TLS启动引导过程中使用的certificationsigningrequest资源
+对象的读写操作；
+◎　在代理鉴权或授权检查过程中创建tokenreview和
+
+subjectaccessreview资源对象。
+为了开启Node授权模式，需要为kube-apiserver设置启动参数--
+authorization-mode=Node。为了限制kubelet可写的API资源对象，需要为
+kube-apiserver服务启用NodeRestriction准入插件：--enable-admission-
+plugins=...，NodeRestriction。
+为了获取Node授权者的授权，kubelet需要使用一个凭据，以标识它
+在system：nodes组内，用户名为system：node：<nodeName>，并且该
+组名和用户名的格式需要与kubelet TLS启动过程中为kubelet创建的标识
+匹配。
+在将来的版本中，Node授权者可能会添加或删除权限，以确保
+kubelet具有正确操作所需的最小权限集。总之，Node授权模式正在一步
+步地收紧集群中每个Node的权限，这也是Kubernetes进一步提升集群安
+全性的一个重要改进措施。
+6.3　Admission Control
+突破了之前所说的认证和鉴权两道关卡之后，客户端的调用请求就
+能够得到API Server的真正响应了吗？答案是：不能！这个请求还要通
+过Admission 
+Control（准入控制）所控制的一个准入控制链的层层考
+验，才能获得成功的响应。Kubernetes官方标准的“关卡”有30多个，还
+允许用户自定义扩展。
+Admission 
+Control配备了一个准入控制器的插件列表，发送给API
+Server的任何请求都需要通过列表中每个准入控制器的检查，检查不通
+过，API Server就会拒绝此调用请求。此外，准入控制器插件能够修改
+请求参数以完成一些自动化任务，比如ServiceAccount这个控制器插
+件。当前可配置的准入控制器插件如下。
+◎　AlwaysAdmit：已弃用，允许所有请求。
+◎　AlwaysPullImages：在启动容器之前总是尝试重新下载镜像。
+这对于多租户共享一个集群的场景非常有用，系统在启动容器之前可以
+保证总是使用租户的密钥去下载镜像。如果不设置这个控制器，则在
+
+Node上下载的镜像的安全性将被削弱，只要知道该镜像的名称，任何人
+便都可以使用它们了。
+◎　AlwaysDeny：已弃用，禁止所有请求，用于测试。
+◎　DefaultStorageClass：会关注PersistentVolumeClaim资源对象的
+创建，如果其中没有包含任何针对特定Storage 
+class的请求，则为其指
+派指定的Storage class。在这种情况下，用户无须在PVC中设置任何特定
+的Storage 
+class就能完成PVC的创建了。如果没有设置默认的Storage
+class，该控制器就不会进行任何操作；如果设置了超过一个的默认
+Storage class，该控制器就会拒绝所有PVC对象的创建申请，并返回错误
+信息。管理员必须检查StorageClass对象的配置，确保只有一个默认
+值。该控制器仅关注PVC的创建过程，对更新过程无效。
+◎　DefaultTolerationSeconds：针对没有设置容忍
+node.kubernetes.io/not-ready：NoExecute或者
+node.alpha.kubernetes.io/unreachable：NoExecute的Pod，设置5min的默认
+容忍时间。
+◎　DenyExecOnPrivileged：已弃用，拦截所有想在Privileged
+Container上运行命令的请求。如果集群支持Privileged 
+Container，又希
+望限制用户在这些Privileged 
+Container上运行命令，那么强烈推荐使用
+它。其功能已被合并到DenyEscalatingExec中。
+◎　DenyEscalatingExec：拦截所有exec和attach到具有特权的Pod上
+的请求。如果集群支持运行有escalated privilege权限的容器，又希望限
+制用户在这些容器内运行命令，那么强烈推荐使用它。
+◎　EventReateLimit：Alpha版本，用于应对事件密集情况下对API
+Server造成的洪水攻击。
+◎　ExtendedResourceToleration：如果运维人员要创建带有特定资
+源（例如GPU、FPGA等）的独立节点，则可能会对节点进行Taint处理
+来进行特别配置。该控制器能够自动为申请这些特别资源的Pod加入
+Toleration定义，无须人工干预。
+◎　ImagePolicyWebhook：Alpha版本，该插件将允许后端的一个
+Webhook程序来完成admission controller的功能。ImagePolicyWebhook需
+要使用一个配置文件（通过kube-apiserver的启动参数--admission-control-
+
+config-file设置）定义后端Webhook的参数。
+◎　Initializers：Alpha版本，用于为动态准入控制提供支持，通过
+修改待创建资源的元数据来完成对该资源的修改。
+◎　LimitPodHardAntiAffinityTopology：该插件启用了Pod的反亲
+和性调度策略设置，在设置亲和性策略参数
+requiredDuringSchedulingRequiredDuringExecution时要求将topologyKey
+的值设置为“kubernetes.io/hostname”，否则Pod会被拒绝创建。
+◎　LimitRanger：该插件会监控进入的请求，确保请求的内容符合
+在Namespace中定义的LimitRange对象里的资源限制。如果要在
+Kubernetes集群中使用LimitRange对象，则必须启用该插件才能实施这
+一限制。LimitRanger还能用于为没有设置资源请求的Pod自动设置默认
+的资源请求，会为default命名空间中的所有Pod都设置0.1CPU的资源请
+求。
+◎　MutatingAdmissionWebhook：Beta版本，会变更符合要求的请
+求的内容，Webhook以串行的方式顺序执行。
+◎　NamespaceAutoProvision：该插件会检测所有进入的具备命名
+空间的资源请求，如果其中引用的命名空间不存在，就会自动创建命名
+空间。
+◎　NamespaceExists：该插件会检测所有进入的具备命名空间的资
+源请求，如果其中引用的命名空间不存在，就会拒绝这一创建过程。
+◎　NamespaceLifecycle：如果尝试在一个不存在的命名空间中创
+建资源对象，则该创建请求将被拒绝。删除一个命名空间时，系统将删
+除该命名空间中的所有对象，包括Pod、Service等，并阻止删除
+default、kube-system和kube-public这三个命名空间。
+◎　NodeRestriction：该插件会限制kubelet对Node和Pod的修改。
+为了实现这一限制，kubelet必须使用system：nodes组中用户名为
+system：node：<nodeName>的Token来运行。符合条件的kubelet只能修
+改自己的Node对象，也只能修改分配到各自Node上的Pod对象。在
+Kubernetes 
+1.11以后的版本中，kubelet无法修改或者更新自身Node的
+taint属性。在Kubernetes 
+1.13以后，该插件还会阻止kubelet删除自己的
+Node资源，并限制对有kubernetes.io/或k8s.io/前缀的标签的修改。
+
+◎　OwnerReferencesPermissionEnforcement：在该插件启用后，一
+个用户要想修改对象的metadata.ownerReferences，就必须具备delete权
+限。该插件还会保护对象的
+metadata.ownerReferences[x].blockOwnerDeletion字段，用户只有在对
+finalizers子资源拥有update权限时才能进行修改。
+◎　PersistentVolumeLabel：已弃用。该插件自动根据云供应商
+（例如GCE或AWS）的定义，为PersistentVolume对象加入region或zone
+标签，以此来保障PersistentVolume和Pod同处一个区域。如果插件不为
+PV自动设置标签，则需要用户手动保证Pod和其加载卷的相对位置。该
+插件正在被Cloud controller manager替换，从Kubernetes 1.11版本开始默
+认被禁止。
+◎　PodNodeSelector：该插件会读取命名空间的annotation字段及
+全局配置，来对一个命名空间中对象的节点选择器设置默认值或限制其
+取值。
+◎　PersistentVolumeClaimResize：该插件实现了对
+PersistentVolumeClaim发起的resize请求的额外校验。
+◎　PodPreset：该插件会使用PodSelector选择Pod，为符合条件的
+Pod进行注入。
+◎　PodSecurityPolicy：在创建或修改Pod时决定是否根据Pod的
+security context和可用的PodSecurityPolicy对Pod的安全策略进行控制。
+◎　PodTolerationRestriction：该插件首先会在Pod和其命名空间的
+Toleration中进行冲突检测，如果其中存在冲突，则拒绝该Pod的创建。
+它会把命名空间和Pod的Toleration合并，然后将合并的结果与命名空间
+中的白名单进行比较，如果合并的结果不在白名单内，则拒绝创建。如
+果不存在命名空间级别的默认Toleration和白名单，则会采用集群级别的
+默认Toleration和白名单。
+◎　Priority：该插件使用priorityClassName字段来确定优先级，如
+果没有找到对应的Priority Class，该Pod就会被拒绝。
+◎　ResourceQuota：用于资源配额管理，作用于命名空间。该插件
+拦截所有请求，以确保命名空间中的资源配额使用不会超标。推荐在
+Admission Control参数列表中将该插件排在最后一个，以免可能被其他
+
+插件拒绝的Pod被过早分配资源。在10.4节将详细介绍ResourceQuota的
+原理和用法。
+◎　SecurityContextDeny：该插件将Pod中定义的SecurityContext选
+项全部失效。SecurityContext在Container中定义了操作系统级别的安全
+设定（uid、gid、capabilities、SELinux等）。在未设置PodSecurityPolicy
+的集群中建议启用该插件，以禁用容器设置的非安全访问权限。
+◎　ServiceAccount：该插件让ServiceAccount实现了自动化，如果
+想使用ServiceAccount对象，那么强烈推荐使用它。
+◎　StorageObjectInUseProtection：该插件会在新创建的PVC或PV
+中加入kubernetes.io/pvc-protection或kubernetes.io/pv-protection的
+finalizer。如果想删除PVC或者PV，则直到所有finalizer的工作都完成，
+删除动作才会执行。
+◎　ValidatingAdmissionWebhook：在Kubernetes 1.8版本中为Alpha
+版本，在Kubernetes 1.9版本中为Beta版本。该插件会针对符合其选择要
+求的请求调用校验Webhook。目标Webhook会以并行方式运行；如果其
+中任何一个Webhook拒绝了该请求，该请求就会失败。
+在API Server上设置参数即可定制我们需要的准入控制链，如果启
+用了多种准入控制选项，则建议这样设置：在Kubernetes 1.9及之前的版
+本中使用的参数是--admission-control，其中的内容是顺序相关的；在
+Kubernetes 
+1.10及之后的版本中使用的参数是--enable-admission-
+plugins，并且与顺序无关。
+对Kubernetes 1.10及以上版本设置如下：
+除了静态编译的Admission插件，也可以通过Webhook方式对接外
+部的Admission 
+Webhook服务，实现与Admission插件一样的功能。但
+Webhook方式更加灵活，能够在API 
+Server运行时修改和配置动态更新
+
+控制策略。Admission Webhook的实现方式是常见的HTTP回调，该回调
+方法首先接收一个Admission请求参数，然后对此参数做出修改或者准
+入判断的逻辑，前一种类型的Webhook被称为Mutating 
+Admission
+Webhook，后一种被称为Validating Admission Webhook。如果需要修改
+Admission请求参数，则可以用Mutating Admission Webhook进行修改，
+并把它配置到准入控制链的靠前位置。
+使用Admission Webhook实现准入控制的方式还有一个明显优势，
+即我们可以灵活指定访问哪些版本的资源对象需要通过Admission
+Webhook进行判断。比如下面这段配置表明 my-webhook.example.com这
+个Webhook只针对apps/v1及apps/v1beta1版本下的Deployments与
+Replicasets资源对象的CREATE与UPDATE操作进行控制。
+不过，相对于Admission Control插件来说，使用Admission Webhook
+要复杂得多，除了需要开发一个Admission Webhook Server实现HTTP回
+调的逻辑，还需要创建一个对应的ValidatingWebhookConfiguration配置
+文件，如果Admission Webhook需要与API Server进行认证，则还需要创
+
+建对应的AdmissionConfiguration配置文件。
+6.4　Service Account
+Service Account也是一种账号，但它并不是给Kubernetes集群的用户
+（系统管理员、运维人员、租户用户等）用的，而是给运行在Pod里的
+进程用的，它为Pod里的进程提供了必要的身份证明。
+在继续学习之前，请回顾6.1节API Server认证的内容。
+在正常情况下，为了确保Kubernetes集群的安全，API Server都会对
+客户端进行身份认证，认证失败的客户端无法进行API调用。此外，在
+Pod中访问Kubernetes 
+API 
+Server服务时，是以Service方式访问名为
+Kubernetes的这个服务的，而Kubernetes服务又只在HTTPS安全端口443
+上提供，那么如何进行身份认证呢？这的确是个谜，因为Kubernetes的
+官方文档并没有清楚说明这个问题。
+通过查看官方源码，我们发现这是在用一种类似HTTP 
+Token的新
+认证方式—Service Account Auth，Pod中的客户端调用Kubernetes API
+时，在HTTP 
+Header中传递了一个Token字符串，这类似于之前提到的
+HTTP Token认证方式，但有以下几个不同之处。
+◎　这个Token的内容来自Pod里指定路径下的一个文件
+（/run/secrets/kubernetes.io/serviceaccount/token），该Token是动态生成
+的，确切地说，是由Kubernetes Controller进程用API Server的私钥（--
+service-account-private-key-file指定的私钥）签名生成的一个JWT
+Secret。
+◎　在官方提供的客户端REST框架代码里，通过HTTPS方式与API
+Server建立连接后，会用Pod里指定路径下的一个CA证书
+（/run/secrets/kubernetes.io/serviceaccount/ca.crt）验证API 
+Server发来的
+证书，验证是否为CA证书签名的合法证书。
+◎　API Server在收到这个Token以后，会采用自己的私钥（实际上
+是使用service-account-key-file参数指定的私钥，如果没有设置此参数，
+则默认采用tls-private-key-file指定的参数，即自己的私钥）对Token进行
+
+合法性验证。
+明白了认证原理，我们接下来继续分析在上面的认证过程中所涉及
+的Pod中的以下三个文件。
+◎　/run/secrets/kubernetes.io/serviceaccount/token。
+◎　/run/secrets/kubernetes.io/serviceaccount/ca.crt。
+◎　/run/secrets/kubernetes.io/serviceaccount/namespace（客户端采用
+这里指定的namespace作为参数调用Kubernetes API）。
+这三个文件由于参与到Pod进程与API Server认证的过程中，起到了
+类似secret（私密凭据）的作用，所以被称为Kubernetes 
+Secret对象。
+Secret从属于Service Account资源对象，属于Service Account的一部分，
+在一个Service Account对象里面可以包括多个不同的Secret对象，分别用
+于不同目的的认证活动。
+下面通过运行一些命令来加深我们对Service Account与Secret的直观
+认识。
+首先，查看系统中的Service Account对象，看到有一个名为default
+的Service 
+Account对象，包含一个名为default-token-77oyg的Secret，这
+个Secret同时是Mountable secrets，表明它是需要被挂载到Pod上的：
+接下来看看default-token-77oyg都有什么内容：
+
+
+从上面的输出信息中可以看到，default-token-77oyg包含三个数据
+项，分别是token、ca.crt、namespace。联想到Mountable secrets的标记，
+以及之前看到的Pod中的三个文件的文件名，我们恍然大悟：在每个命
+名空间中都有一个名为default的默认Service 
+Account对象，在这个
+Service 
+Account里面有一个名为Tokens的可以作为Volume被挂载到Pod
+里的Secret，Pod启动时，这个Secret会自动被挂载到Pod的指定目录下，
+用来协助完成Pod中的进程访问API Server时的身份鉴权。
+如图6.3所示，一个Service Account可以包括多个Secret对象。
+图6.3　Service Account中的Secret
+其中，名为Tokens的Secret用于访问API Server的Secret，也被称为
+Service Account Secret；名为imagePullSecrets的Secret用于下载容器镜像
+时的认证，镜像库通常运行在Insecure模式下，所以这个Secret为空；用
+
+户自定义的其他Secret用于用户的进程中。
+如果一个Pod在定义时没有指定spec.serviceAccountName属性，则系
+统会自动将其赋值为default，即大家都使用同一个命名空间中的默认
+Service Account。如果某个Pod需要使用非default的Service Account，则
+需要在定义时指定：
+Kubernetes之所以要创建两套独立的账号系统，原因如下。
+◎　User账号是给人用的，Service Account是给Pod里的进程用的，
+面向的对象不同。
+◎　User账号是全局性的，Service Account则属于某个具体的命名
+空间。
+◎　通常来说，User账号是与后端的用户数据库同步的，创建一个
+新用户时通常要走一套复杂的业务流程才能实现，Service Account的创
+建则需要极轻量级的实现方式，集群管理员可以很容易地为某些特定任
+务创建一个Service Account。
+◎　对于这两种不同的账号，其审计要求通常不同。
+◎　对一个复杂的系统来说，多个组件通常拥有各种账号的配置信
+
+息，Service Account是在命名空间级别隔离的，可以针对组件进行一对
+一的定义，同时具备很好的“便携性”。
+接下来深入分析Service Account与Secret相关的一些运行机制。
+Service 
+Account的正常工作离不开以下控制器：Service 
+Account
+Controller、Token Controller、Admission Controller。
+Service 
+Account 
+Controller的工作相对简单，它会监听Service
+Account和Namespace这两种资源对象的事件，如果在一个Namespace中
+没有默认的Service 
+Account，那么它会为该Namespace创建一个默认的
+Service Account对象，这就是在每个Namespace下都有一个名为default的
+Service Account的原因。
+Token Controller也监听Service Account的事件，如果发现在新建的
+Service Account里没有对应的Service Account Secret，则会用API Server
+私钥（--service-account-private-key-file指定的文件）创建一个Token，并
+用该Token、API Server的CA证书等三个信息产生一个新的Secret对象，
+然后放入刚才的Service 
+Account中。如果监听到的事件是Service
+Account删除事件，则自动删除与该Service Account相关的所有Secret。
+此外，Token Controller对象也会同时监听Secret的创建和删除事件，确
+保与对应的Service Account的关联关系正确。
+接下来就是Admission Controller的重要作用了，当我们在API Server
+的准入控制链中启用了Service Account类型的准入控制器时（这也是默
+认的设置），即在kube-apiserver启动参数中包括下面的内容时：
+则针对Pod新增或修改的请求，Admission Controller会验证Pod里的
+Service Account是否合法，并做出如下控制操作：
+◎　如果spec.serviceAccount域没有被设置，则Kubernetes默认为其
+指定名称为default的Service accout。
+◎　如果Pod的spec.serviceAccount域指定了不存在的Service
+Account，则该Pod操作会被拒绝。
+
+◎　如果在Pod中没有指定ImagePullSecrets，那么这个
+spec.serviceAccount域指定的Service Account的ImagePullSecrets会被加入
+该Pod中。
+◎　给Pod添加一个特殊的volumeSource，在该Volume中包含
+Service Account Secret中的Token。
+◎　给Pod里的每个容器都增加对应的VolumeSource，将包含Secret
+的Volume挂载到Pod中所有容器的指定目录下
+（/var/run/secrets/kubernetes.io/serviceaccount）。
+在Kubernetes 1.6版本以后，我们可以禁止自动创建Service Account
+对应的Secret了，在Service 
+Account的YAML文件中增加
+automountServiceAccountToken：false属性即可，同时可以在某个Pod的
+YAML文件中增加此属性，以实现同样的效果。
+在6.1节提到Kubernetes中用户的鉴权可采用基于OAuth 2.0的ODIC
+来实现，即由外部的OIDC Server（Identity Provider）提供Jwt格式的加
+密Token，而Service Account Token是由Kubernetes自身生成的符合Jwt格
+式的加密Token，因此Kubernetes也可以被视为具备了ODIC Server身份
+认证功能的服务。所以我们也可以把Kubernetes作为一个ODIC Server，
+与外部其他第三方的ODIC 
+Server组成联邦，实现相互认证。这样一
+来，Kubernetes也可能凭借完善的BRAC用户权限机制，成为整个企业
+内部用户鉴权和授权的基础服务设施了。因此，Kubernetes从1.18版本
+开始便增加了一个名为Service Account Issuer Discovery的新特性（目前
+为Alpha阶段），允许Kubernetes集群作为一个ODIC 
+Server发布出去，
+与外部的第三方可信系统组成联邦，第三方可信系统可以调用
+Kubernetes验证Service Account Token的合法性。
+6.5　Secret私密凭据
+6.4节提到了Secret对象，Secret的主要作用是保管私密数据，比如
+密码、OAuth Tokens、SSH Keys等信息。将这些私密信息放在Secret对
+象中比直接放在Pod或Docker Image中更安全，也更便于使用和分发。
+下面的例子用于创建一个Secret：
+
+在上面的例子中，data域各子域的值必须为BASE64编码值，其中
+password域和username域BASE64编码前的值分别为value-1和value-2。
+一旦Secret被创建，就可以通过下面三种方式使用它。
+（1）创建Pod时，通过为Pod指定Service 
+Account来自动使用该
+Secret。
+（2）通过挂载该Secret到Pod来使用它。
+（3）在Docker镜像下载时使用，通过指定Pod的
+spc.ImagePullSecrets来使用它。
+第1种使用方式主要用在API Server鉴权方面，之前提到过。
+下面的例子展示了第2种使用方式，即将一个Secret通过挂载的方式
+添加到Pod的Volume中：
+
+其结果如图6.4所示。
+
+图6.4　挂载Secret到Pod
+第3种使用方式的应用流程如下。
+（1）运行login命令，登录私有Registry：
+输入用户名和密码，如果是第1次登录系统，则会创建新用户，相
+关信息被会写入~/.dockercfg文件中。
+（2）用BASE64编码dockercfg的内容：
+
+（3）将上一步命令的输出结果作为Secret的data.dockercfg域的内
+容，由此来创建一个Secret：
+（4）在创建Pod时引用该Secret：
+
+其结果如图6.5所示。
+
+图6.5　imagePullSecret引用Secret
+每个单独的Secret大小都不能超过1MB，Kubernetes不鼓励创建大的
+Secret，因为如果使用大的Secret，则将大量占用API Server和kubelet的
+内存。当然，创建许多小的Secret也能耗尽API Server和kubelet的内存。
+在使用Mount方式挂载Secret时，Secret的data各个域的Key值将被设
+置为目录中的文件名，Value值被BASE64编码后存储在相应的文件中。
+在前面的例子中创建的Secret，被挂载到一个叫作mycontainer的容器
+中，在该容器中可通过相应的查询命令查看所生成的文件和文件中的内
+容，代码如下：
+
+通过上面的例子可以得出如下结论：我们可以通过Secret保管其他
+系统的敏感信息（比如数据库的用户名和密码），并以Mount的方式将
+Secret挂载到Container中，然后通过访问目录中文件的方式获取该敏感
+信息。当Pod被API 
+Server创建时，API 
+Server不会校验该Pod引用的
+Secret是否存在。一旦这个Pod被调度，则kubelet将试着获取Secret的
+值。如果Secret不存在或暂时无法连接到API Server，则kubelet将按一定
+的时间间隔定期重试获取该Secret，并发送一个Event来解释Pod没有启
+动的原因。一旦Secret被Pod获取，则kubelet将创建并挂载包含Secret的
+Volume。只有所有Volume都挂载成功，Pod中的Container才会被启动。
+在kubelet启动Pod中的Container后，Container中与Secret相关的Volume将
+不会被改变，即使Secret本身被修改。为了使用更新后的Secret，必须删
+除旧Pod，并重新创建一个新Pod。
+当Secret通过Volume方式被使用时，对Secret数据的任何修改都会
+引发Volume的同步更新，如果在一个业务系统中有大量Secret数据以
+Volume方式被使用，则可能带来性能问题。另外，Secret数据也可能被
+意外修改从而导致系统出现问题，为此，kubernetes 
+1.19版本默认开启
+了ImmutableEphemeralVolumes新特性，我们可以通过设置Secret的
+immutable属性为true创建一个不可变的Secret对象。
+6.6　Pod安全策略
+为了更精细地控制Pod启动或更新时的安全管理，Kubernetes从1.5
+版本开始引入PodSecurityPolicy资源对象对Pod安全策略进行管理，到
+1.18版本时达到Beta阶段。通过对PodSecurityPolicy的设置，管理员可以
+控制Pod的运行条件，以及可以使用系统的哪些功能。PodSecurityPolicy
+
+是集群范围内的资源对象，不属于命名空间范围。
+6.6.1　PodSecurityPolicy的工作机制
+若需要启用PodSecurityPolicy机制，则首先需要设置kube-apiserver
+服务的启动参数--enable-admission-plugins来开启PodSecurityPolicy准入
+控制器：
+注意，在开启PodSecurityPolicy准入控制器后，系统中还没有任何
+PodSecurityPolicy策略配置时，Kubernetes默认不允许创建任何Pod，需
+要管理员创建适合的PodSecurityPolicy策略和相应的RBAC授权策略，
+Pod才能创建成功。
+例如，尝试创建如下Pod：
+使用kubectl命令创建时，系统将提示“禁止创建”的报错信息：
+
+接下来创建一个PodSecurityPolicy资源对象，其配置文件psp-non-
+privileged.yaml的内容如下：
+
+使用kubectl create命令创建该PodSecurityPolicy：
+查看PodSecurityPolicy：
+再次创建Pod就能成功：
+上面的PodSecurityPolicy“psp-non-privileged”设置了privileged：
+false，表示禁止Pod或者容器以特权模式运行。设置了特权模式Pod的配
+置文件pod-priv.yaml的内容如下：
+
+创建Pod时，系统将提示“禁止特权模式”的报错信息：
+6.6.2　PodSecurityPolicy配置详解
+PodSecurityPolicy资源对象通过许多字段来控制Pod运行时安全策略
+的方方面面。这里对这些字段及其作用按功能分组说明如下。
+1.特权模式
+
+privileged：是否允许容器以特权模式运行。
+2.宿主机命名空间（namespace）相关
+（1）hostPID：是否允许容器共享宿主机的进程ID命名空间（PID
+Namespace）。
+（2）hostIPC：是否允许容器共享宿主机的IPC命名空间（IPC
+Namespace）。
+（3）hostNetwork：是否允许Pod使用宿主机的网络命名空间
+（Network Namespace），使用hostNetwork的Pod将可以访问宿主机的各
+个网卡。
+（4）hostPorts：是否允许Pod使用宿主机的端口号，可以通过
+hostPortRange字段设置允许使用的端口号范围，以[min，max]设置最小
+端口号和最大端口号。
+3.存储卷（Volume）和文件系统相关
+（1）Volumes：允许Pod使用的存储卷Volume类型，设置为“*”表
+示允许使用任意Volume类型，建议至少允许Pod使用的Volume类型有
+configMap、downwardAPI、emptyDir、
+persistentVolumeClaim（PVC）、secret和projected。
+注意，PodSecurityPolicy并不会对PVC引用的
+PersistentVolume（PV）进行限制，hostPath类型的PV也不支持只读访问
+模式，所以管理员应该仅允许授权用户创建PV。
+（2）FSGroup：设置允许访问某些Volume的Group 
+ID范围，规则
+（rule字段）可被设置为MustRunAs、MayRunAs或RunAsAny。
+◎　MustRunAs：需要设置Group ID的范围，例如1～65535，要求
+Pod或Container的securityContext.fsGroup设置的值必须属于该Group 
+ID
+的范围，如未设置，则系统将自动设置securityContext.fsGroup的值为
+Group ID范围的最小值。
+◎　MayRunAs：需要设置Group ID的范围，例如1～65535，要求
+Pod或Container的securityContext.fsGroup设置的值必须属于该Group 
+ID
+的范围，如未设置，则系统将不会自动设置默认值。
+
+◎　RunAsAny：不限制Group 
+ID的范围，Pod或Container的
+securityContext.fsGroup可被设置为任意Group ID。
+（3）AllowedHostPaths：允许Pod使用宿主机的hostPath路径名称，
+可以通过pathPrefix字段设置路径的前缀，并设置是否仅允许以只读模式
+挂载，示例如下：
+结果为允许Pod访问宿主机上以“/foo”为前缀的路径，包
+括“/foo”“/foo/”“/foo/bar”等，但不能访问“/fool”“/etc/foo”等路径，也不允
+许通过“/foo/../”表达式访问/foo的上层目录。
+（4）ReadOnlyRootFilesystem：要求容器运行的根文件系统（root
+filesystem）必须是只读的。
+4.FlexVolume驱动相关
+allowedFlexVolumes用于对类型为flexVolume的存储卷设置允许使
+用的驱动类型，空值表示没有限制。在下例中设置了允许使用lvm和cifs
+驱动：
+
+5.用户和组相关配置
+（1）RunAsUser：设置运行容器的用户ID（User ID）范围，规则
+字段（rule）的值可被设置为MustRunAs、MustRunAsNonRoot或
+RunAsAny。
+◎　MustRunAs：需要设置User ID的范围，要求Pod或Container的
+securityContext.runAsUser设置的值必须属于该User 
+ID的范围，如未设
+置，则系统将自动设置securityContext.runAsUser的值为User ID范围的最
+小值。
+◎　MustRunAsNonRoot：必须以非root用户运行容器，要求在Pod
+或Container的securityContext.runAsUser中设置一个非0的用户ID，或在
+镜像的USER字段设置了用户ID。如果Pod既未设置runAsNonRoot，也
+未设置runAsUser，则系统将自动设置runAsNonRoot=true，默认要求在
+镜像中必须设置非0的USER。在该策略生效时，建议同时设置
+allowPrivilegeEscalation=false，以免不必要的权限提升行为。
+
+◎　RunAsAny：不限制User 
+ID的范围，Pod或Container的
+securityContext.runAsUser可被设置为任意User ID。
+（2）RunAsGroup：设置运行容器的用户组Group ID范围，可以将
+规则字段（rule）的值设置为MustRunAs、MustRunAsNonRoot或
+RunAsAny。
+◎　MustRunAs：需要设置Group ID的范围，要求Pod或Container的
+securityContext.runAsGroup设置的值必须属于该Group ID的范围，如未
+设置，则系统将自动设置securityContext.runAsGroup的值为Group ID范
+围内的最小值。
+◎　MayRunAs：不强制要求Pod或Container设置
+securityContext.runAsGroup，如果设置了Group ID的范围，则仍然要求
+Pod或Container的securityContext.runAsGroup设置的值必须属于该Group
+ID的范围，如未设置，则系统将不会自动设置默认值。
+◎　RunAsAny：不限制Group 
+ID的范围，Pod或Container的
+securityContext.runAsGroup可被设置为任意Group ID。
+（3）SupplementalGroups：设置运行容器的用户允许属于的额外
+Group 
+ID范围，规则字段（rule）的值可被设置为MustRunAs、
+MayRunAs或RunAsAny。
+◎　MustRunAs：需要设置Supplemental Group ID的范围，要求Pod
+或Container的securityContext.supplementalGroups设置的值必须属于该
+Supplemental 
+Group 
+ID的范围，如未设置，则系统将自动设置
+securityContext.supplementalGroups的值为Supplemental Group ID范围内
+的最小值。
+◎　MayRunAs：不强制要求Pod或Container设置
+securityContext.supplementalGroups，即使设置了Supplemental Group ID
+的范围，也仍然要求Pod或Container的
+securityContext.supplementalGroups设置的值必须属于该Supplemental
+Group ID的范围，如未设置，则系统将不会自动设置默认值。
+◎　RunAsAny：不限制Supplemental 
+Group 
+ID的范围，Pod或
+Container的securityContext.supplementalGroups可被设置为任意
+Supplemental Group ID。
+
+6.提升权限（Privilege Escalation）相关配置
+提升权限字段用于控制是否允许容器内的进程提升权限。提升权限
+配置直接影响对容器进程的“no_new_privs”标志位的设置，如果设置了
+该标志位，则将阻止通过setuid程序修改进程User ID的行为，并阻止文
+件启用额外的功能（例如阻止运行ping命令）。通常在设置了以非root
+用户运行（MustRunAsNonRoot）时设置是否允许提升权限。
+（1）AllowPrivilegeEscalation：该字段用于表示是否允许容器
+securityContext设置allowPrivilegeEscalation为true，默认值为true。当该
+字段被设置为false时，容器内的子进程将无法提升权限。
+（2）DefaultAllowPrivilegeEscalation：设置AllowPrivilegeEscalation
+字段的默认值，在无默认值设置的情况下，系统将允许提升权限。当该
+字段被设置为disallow时，仍可以通过设置AllowPrivilegeEscalation来指
+定是否允许提升权限。
+7.Linux能力相关配置
+Linux能力（Capabilities）提供了与传统超级用户关联权限的细粒度
+管理机制。下面是Linux能力字段可以设置的内容，以不带“CAP_”的名
+称进行表示，可以设置多个能力。
+（1）AllowedCapabilities：设置容器可以使用的Linux能力列表，设
+置为“*”表示允许使用Linux的所有能力（如NET_ADMIN、SYS_TIME
+等）。
+（2）RequiredDropCapabilities：设置必须从容器中删除的Linux能
+力列表。这些能力将从默认列表中删除，并且不得再进行添加。通过该
+字段设置的需删除的能力列表不能被设置在AllowedCapabilities和
+DefaultAddCapabilities字段中。
+（3）DefaultAddCapabilities：设置默认为容器添加的Linux能力列
+表，例如SYS_TIME等。Docker会为容器提供一组默认的允许使用的能
+力列表，包括SETPCAP、MKNOD、AUDIT_WRITE、CHOWN等。
+8.SELinux相关配置
+通过seLinux字段设置SELinux参数，规则字段（rule）的值可被设
+置为MustRunAs或RunAsAny。
+
+◎　MustRunAs：要求Pod或Container设置
+securityContext.seLinuxOptions，系统将对Pod或Container的
+securityContext.seLinuxOptions值进行校验。
+◎　RunAsAny：不校验Pod或Container的
+securityContext.seLinuxOptions的设置。
+9.其他Linux安全相关配置
+（1）AllowedProcMountTypes：设置允许的ProcMountTypes类型列
+表，可以设置allowedProcMountTypes或DefaultProcMount。
+（2）AppArmor：设置对容器可执行程序的访问控制权限。
+（3）Seccomp：设置允许容器使用的系统调用（System Calls）的
+profile，可以通过设置PodSecurityPolicy的Annotation进行控制，在
+Kubernetes中目前是Alpha阶段。可以设置的Annotation如下。
+◎　seccomp.security.alpha.kubernetes.io/defaultProfileName：设置作
+用于容器的默认Seccomp Profile名称，可以设置的值包括unconfined（不
+使用Seccomp）、runtime/default（使用默认的容器运行时Profile）、
+docker/default（使用Docker默认的Seccomp Profile，从Kubernetes 1.11版
+本开始弃用，改用runtime/default）、localhost/<path>（使用Node的
+<seccomp_root>/<path>目录下的Profile文件）、<seccomp_root>由
+kubelet启动参数--seccomp-profile-root进行指定）。
+◎　seccomp.security.alpha.kubernetes.io/allowedProfileNames：设置
+允许的Pod Seccomp Profile名称，多个值以逗号分隔，设置为“*”表示允
+许所有Profile。
+（4）Sysctl：设置允许调整的内核参数，默认情况下全部安全的
+sysctl都被允许。可以设置的字段如下。
+◎　forbiddenSysctls：禁止的sysctl列表，设置为“*”表示禁止全部
+sysctl。
+◎　allowedUnsafeSysctls：设置允许的不安全sysctl列表（默认禁
+用），不应该在forbiddenSysctls中设置。
+例如下面设置了允许的不安全的以“kernel.msg”开头的内核参数，
+并且禁止kernel.shm_rmid_forced：
+
+6.6.3　PodSecurityPolicy策略示例
+下面是几种常用的PodSecurityPolicy安全策略配置示例。
+（1）特权策略：
+
+
+在这种Pod安全策略下，系统将允许创建任意安全设置的Pod，几乎
+等于没有开启PodSecurityPolicy。
+（2）受限策略：
+
+
+经过这个PodSecurityPolicy的限制，系统将要求：Pod或容器的运行
+用户必须为非特权用户；禁止容器内进程提升权限；不允许使用宿主机
+网络、hostPort等资源；限制可以使用的Volume类型，等等。
+（3）基线（baseline）策略：
+
+
+
+
+该PodSecurityPolicy设置了容器常用的Linux能力、允许使用的
+Volume类型等，可作为基线（baseline）配置。
+6.6.4　PodSecurityPolicy的RBAC授权
+Kubernetes建议使用RBAC授权机制来设置针对Pod安全策略
+PodSecurityPolicy的授权，实现方式是通过创建Role（或ClusterRole）和
+RoleBinding（或ClusterRoleBinding）对使用PodSecurityPolicy进行授
+权。
+下面是一个ClusterRole示例，授权的目标资源对象
+为“podsecuritypolicies”，动词为“use”，并通过resourceNames设置允许使
+用的PodSecurityPolicy列表：
+
+然后创建一个ClusterRoleBinding将ServiceAccount或用户和
+ClusterRole绑定：
+
+也可以创建RoleBinding对相同命名空间中的Pod进行授权，通常可
+以对组（Group）进行设置，例如：
+
+下面通过一个完整的示例对如何通过设置RBAC权限管理
+ServiceAccount使用PodSecurityPolicy策略进行说明。前提条件是
+Kubernetes集群开启PodSecurityPolicy Admission Controller和RBAC授权
+模式，并且kubectl使用具有集群管理员角色的kubeconfig进行操作。
+下面的示例都将在名为“psp-example”的命名空间中进行操作：
+
+在命名空间psp-example中创建一个ServiceAccount“fake-user”：
+为ServiceAccount“fake-user”授权ClusterRole“edit”，使其有权限创建
+Pod（注意，这是命名空间范围的edit权限，无集群管理员权限）：
+接下来创建一个有一定限制（禁止特权模式）的PodSecurityPolicy
+策略：
+
+通过kubectl create命令创建这个PodSecurityPolicy策略：
+然后尝试用ServiceAccount“fake-user”身份创建一个Pod，可以在
+
+kubectl命令中使用--as参数设置使用的身份，例如：
+Pod的YAML配置如下：
+使用kubectl 
+create命令创建这个Pod时，系统将提示“无法验证pod
+security policy”的错误信息，创建Pod失败：
+这是因为系统还没有对ServiceAccount“fake-user”授权使用
+
+PodSecurityPolicy，可以使用kubectl auth can-i use命令进行验证，结果为
+no说明没有权限：
+接下来通过一个Role和RoleBinding进行授权，psp-restricted-
+rbac.yaml配置文件的内容如下：
+
+
+在Role的定义中，设置的是对PodSecurityPolicy“restricted”的use操
+作。
+在RoleBinding的定义中，将ServiceAccount“fake-user”与Role进行绑
+定，完成对其允许使用PodSecurityPolicy的授权。
+使用kubectl create命令创建：
+再次使用kubectl auth can-i use命令进行验证，结果为yes，说明授权
+成功：
+
+再次创建Pod即可成功：
+查看Pod的YAML配置，可以看到系统为其在Annotation中设置使用
+的PodSecurityPolicy为“restricted”：
+虽然RBAC授权是成功的，但是由于PodSecurityPolicy设置了禁止特
+
+权模式，所以尝试创建使用特权模式的容器仍会被系统禁止：
+创建Pod时，系统将提示“禁止特权模式”的报错信息：
+通过上面的示例，我们可以了解Kubernetes是如何通过RBAC对
+PodSecurityPolicy的使用进行权限管理的。
+6.6.5　Pod安全设置（Security Context）详解
+
+Kubernetes可以为Pod设置应用程序运行所需的权限或者访问控制等
+安全设置，涉及多种Linux 
+Kernel安全相关的系统参数，这些安全设置
+被称为Security Context，在Pod或Container级别通过securityContext字段
+进行设置（如果在Pod和Container级别都设置了相同的安全字段，则容
+器将使用Container级别的设置）。
+管理员设置的集群范围的PodSecurityPolicy策略会对Pod的Security
+Context安全设置进行校验，对于不满足PodSecurityPolicy策略的Pod，系
+统将禁止创建。
+Pod的Security 
+Context安全策略包括但不限于以下内容（将来可能
+会扩展）。
+◎　访问控制相关：基于User 
+ID和Group 
+ID进行控制，例如
+runAsUser、runAsGroup、runAsNonRoot、Supplementary Group等。
+◎　seLinuxOptions：SELinux相关设置。
+◎　特权模式（privileged）：是否以特权模式运行。
+◎　Linux能力（capabilities）相关：设置应用程序允许使用的
+Linux能力。
+◎　AppArmor：设置对应用程序访问进行权限控制的profile。
+◎　Seccomp：设置允许容器使用的系统调用（System 
+Calls）的
+profile。
+◎　allowPrivilegeEscalation：是否允许提升权限。
+◎　readOnlyRootFilesystem：根文件系统是否为只读属性。
+下面通过几个例子对Pod的Security Context安全设置进行说明。
+1.Pod级别的Security Context安全设置，作用于该Pod内的全部容
+器
+YAML文件的示例如下：
+
+
+在spec.securityContext中设置了如下参数。
+◎　runAsUser=1000：所有容器都将以User ID 1000运行程序，所
+有新生成文件的User ID也被设置为1000。
+◎　runAsGroup=3000：所有容器都将以Group ID 3000运行程序，
+所有新生成文件的Group ID也被设置为3000。
+◎　fsGroup=2000：挂载的卷“/data/demo”及其中创建的文件都将属
+于Group ID 2000。
+使用kubectl create命令创建Pod：
+进入容器环境，查看到运行进程的用户ID为1000：
+查看Volume挂载到容器内的/data/demo目录权限，其Group 
+ID为
+2000（fsGroup字段设置）：
+
+在该目录下创建一个新文件，可见文件owner的User 
+ID为
+1000（runAsUser字段设置），Group ID为2000（fsGroup字段设置）：
+查看用户ID信息，可见其Group 
+ID为3000（runAsGroup字段设
+置）：
+如果未设置runAsGroup字段，则gid将被系统设置为0，即root组，
+这表示通过User ID 1000运行的进程可与同组（god=0）的其他进程通
+信。
+2.Pod的Volume权限修改策略
+如果Pod设置了securityContext.fsGroup，则在kubelet进行挂载
+Volume到容器内的操作时，系统会对挂载目录及其子目录和全部文件
+检查权限并设置Group ID，这对于子目录和文件数量非常多的Volume来
+说非常耗时，会导致Pod启动很长时间。为了减少修改目录和文件权限
+的时间，Kubernetes从1.18版本开始引入fsGroupChangePolicy机制，用于
+
+管理是否需要对Volume的用户权限进行校验，以加快Pod的启动速度，
+目前该特性为Alpha阶段。
+该特性通过securityContext.fsGroupChangePolicy字段进行设置，可
+以设置的值如下。
+◎　OnRootMismatch：当根目录的权限（Permission和Ownership）
+与预期权限不同时，仅修改根目录的权限，这将有助于减少修改所有子
+目录和文件权限的时间。
+◎　Always：始终进行修改。
+如需启用该特性，则需要在kube-apiserver、kube-controller-manager
+和kubelet的启动参数中开启--feature-
+gates="ConfigurableFSGroupPolicy=true"。配置示例如下：
+
+注意，该特性对Secret、ConfigMap、emptyDir这几种类型的Volume
+不起作用。
+3.Container级别的安全设置，作用于特定的容器
+如果在Pod级别也设置了相同的securityContext，则容器将使用
+Container级别的设置，本例中在Pod和Container级别都设置了
+runAsUser：
+使用kubectl create命令创建Pod：
+
+进入容器环境，查看到运行进程的用户ID为2000：
+4.为Container设置可用的Linux能力（Capabilities）
+本例为容器设置允许使用的Linux能力包括NET_ADMIN和
+SYS_TIME。
+我们先看一个没有添加这些能力的容器环境的默认能力设置：
+
+使用kubectl create命令创建Pod：
+进入容器环境，查看1号进程的Capabilities信息：
+
+
+
+
+Linux能力相关参数的命名以Cap开头，例如CapInh、CapPrm、
+CapEff等。
+接下来为容器设置允许使用的Linux能力增加两个：
+CAP_NET_ADMIN和CAP_SYS_TIME，通过securityContext.capabilities
+字段进行设置，YAML文件的内容如下：
+使用kubectl create命令创建Pod：
+
+进入容器环境，查看1号进程的Capabilities信息：
+对比没有设置这两个能力的配置：CapPrm：00000000a80425fb，可
+以看到系统在Linux Capabilities的第12位添加了CAP_NET_ADMIN，在
+第25位添加了CAP_SYS_TIME这两个Linux能力。对比如下：
+需要注意的是，Linux 
+Capabilities的命名都以CAP_开头，但是在
+Kubernetes的securityContext.capabilities中设置时需要删除CAP_前缀，例
+
+如上例中设置的值为NET_ADMIN和SYS_TIME，对应Linux中的
+CAP_NET_ADMIN和CAP_SYS_TIME。
+5.为Pod或Container设置SELinux标签
+Security Context还可以通过seLinuxOptions字段为Pod或Container设
+置SELinux标签level="s0：c123，c456"，例如：
+securityContext.seLinuxOptions可以设置的SELinux标签包括：
+level、role、type、user。
+注意，要使seLinuxOptions设置的SELinux标签生效，需要宿主机
+Linux操作系统开启SELinux安全功能。
+通过为Pod或容器进行应用程序运行所需的权限或者访问控制等安
+全设置，管理员就能够对容器应用进程的安全管理进行更加精细的控
+制，同时配合集群范围的PodSecurityPolicy策略设置，使整个Kubernetes
+集群中的服务运行更加安全。

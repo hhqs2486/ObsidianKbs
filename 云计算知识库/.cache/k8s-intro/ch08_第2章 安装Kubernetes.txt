@@ -1,0 +1,716 @@
+第2章　安装Kubernetes
+在第1章中，读者已经对Kubernetes有了初步的了解。接下来，
+本章将介绍Kubernetes的安装方法。Kubernetes的安装方式非常灵
+活，用户可以通过软件包管理工具进行安装，也可以通过
+kubeadmin管理工具进行安装，或者通过二进制文件进行安装，甚
+至可以通过源代码自己编译安装。本章将对Kubernetes的主要安装
+方式进行介绍。
+本章涉及的知识点有：
+通过软件包管理工具安装Kubernetes：主要介绍如何通过
+CentOS的yum软件包管理工具安装Kubernetes。
+通过二进制文件安装Kubernetes：介绍如何通过Kubernetes官
+方提供的二进制文件进行Kubernetes的安装部署。
+通过源代码安装Kubernetes：介绍如何获取Kubernetes源代
+码，以及如何进行编译和安装部署。
+2.1　通过软件包管理工具安装Kubernetes
+Kubernetes为绝大部分的操作系统平台都提供了相应的软件
+包。通过软件包来安装Kubernetes是一种最简单的安装方式。对于
+初学者来说，通过这种方式可以快速搭建起Kubernetes的运行环
+境。本节将以CentOS 为例，介绍如何通过软件包来安装
+Kubernetes。
+2.1.1　软件包管理工具
+
+大多数现代的Linux发行版都提供了一种中心化的机制，用来搜
+索和安装软件。软件通常都是存放在中心存储库中，并通过包的形式
+进行分发。处理包的工作被称为包管理。包提供了操作系统的基本组
+件，以及共享的库、应用程序、服务和文档。
+目前，在Linux系统下常见的软件包格式主要有：RPM包、TAR
+包、bz2包、gz包以及deb包等。其中RPM包是最常见的Linux软件
+包形式，由美国RedHat公司开发，最初在其发布的RedHat Linux发
+行版中使用。目前RPM已经是Linux的软件包管理标准。TAR包是
+Linux的一种文件归档形式，非常多的文件都以TAR包形式压缩打
+包。bz2和gz都是比较常见的压缩包格式。deb则是Debian的制订的
+软件包管理形式。
+在CentOS中，用户可以通过rpm命令或者yum命令来安装软件
+包，而yum则是最常用的软件包管理工具。yum命令的基本语法如
+下：
+ 
+   yum [options] command 
+yum命令的选项比较多，其中最常用的主要有两个，其中一个
+是-skip-broken，该选项的功能是在安装指定软件包的时候，忽略依
+赖检查。尽管在某些特殊情况下，使用该选项可以将软件包安装上
+去，但是往往会导致软件包不能正常工作。因此，用户应该尽量避免
+使用该选项。另外一个选项为-y，由于在默认情况下，yum采用交互
+式安装软件包，因此，在安装过程中会不断询问用户一些问题，要求
+用户回答yes或者no。如果遇到问题比较多，的确会令人觉得非常烦
+琐。此时，用户可以使用-y选项，这意味着对于所有需要回答yes或者
+no的问题，一律自动选择yes。
+
+常用的命令有erase、install以及search等。其中，erase命令用
+来将软件包从当前系统中删除，install命令用来安装指定的软件包，
+search命令用来搜索指定的软件包。这3个命令的语法相同，后面加
+上软件包名称即可。
+2.1.2　节点规划
+在本例中，部署了3台主机，其中1台为Master节点，另外2台为
+Node节点，其网络拓扑如图2-1所示。
+图2-1　网络拓扑图
+其中Master节点上面安装kubernetes-master和etcd软件包，
+Node节点上面安装kubernetes-node、etcd、Flannel以及Docker
+等软件包。kubernetes-master软件包包括kube-apiserver、kube-
+controller-manager以及kube-scheduler等组件及其管理工具。
+kubernetes-node包括kubelet以及管理工具。2个Node节点上面都
+安装etcd软件包，这样3个节点组成一个etcd集群。Flannel为网络组
+件，Docker运行容器。
+
+2.1.3　安装前准备
+在安装软件包之前，首先对所有节点的软件环境进行相应的配置
+和更新。
+1．禁用SELinux
+SELinux是2.6版本的Linux内核中提供的强制访问控制系统，
+在这种访问控制体系的限制下，进程只能访问某些指定的文件。尽管
+SELinux可以在很大程度上加强Linux的安全性，但是它会影响
+Kubernetes某些组件的功能，所以需要将其禁用，命令如下：
+ 
+   [root@localhost ~]# setenforce 0
+以上命令仅仅暂时禁用了SELinux，在系统重启之后，SELinux
+又会重新发挥作用。为了彻底禁用SELinux，用户需要修改其配置文
+件/etc/selinux/config。将其中的
+ 
+   SELINUX=enforcing 
+修改为
+ 
+   SELINUX=disabled 
+2．禁用firewalld
+
+firewalld是CentOS 7开始采用的防火墙系统，代替之前的
+iptables。用户可以通过firewalld来加强系统的安全，关闭或者开放
+某些端口。firewalld会影响Docker的网络功能，所以在安装部署前
+需要将其禁用，命令如下：
+ 
+   [root@localhost ~]# systemctl stop firewalld 
+   [root@localhost ~]# systemctl disable firewalld
+3．更新软件包
+在安装部署Kubernetes之前，用户应该更新当前系统的软件
+包，保持所有的软件包都是最新版本，命令如下：
+ 
+   [root@localhost ~]# yum -y update
+4．同步系统时间
+用户需要先将三台服务器的时间通过NTP进行同步，否则，在后
+面的运行中可能会提示错误，命令如下：
+ 
+   [root@localhost ~]# ntpdate -u cn.pool.ntp.org
+其中cn.pool.ntp.org为中国的网络时间协议（NTP）服务器。
+2.1.4　etcd集群配置
+
+前面已经介绍过，etcd是一个高可用的分布式键值数据库。
+Kubernetes利用etcd来存储某些数据。为了提高可用性，在本例中
+我们在3台服务器上面都部署etcd，形成一个拥有3个节点的集群。
+在Master节点上面执行以下命令：
+ 
+   [root@localhost ~]# yum -y install kubernetes-master 
+etcd
+然后修改etcd配置文件/etc/etcd/etcd.conf，内容如下：
+
+在上面的配置文件中，主要需要修改的选项如下：
+1．ETCD_LISTEN_PEER_URLS
+该选项用来指定etcd节点监听的URL，用于与其他分布式etcd节
+点通信，实现各个etcd节点的数据通信、交互、选举以及数据同步等
+功能。该URL采用协议、IP和端口相组合的形式，可以是：
+
+ 
+   http://ip:port 
+或者：
+ 
+   https://ip:port 
+在本例中，节点的IP地址为192.168.1.121，默认的端口为
+2380。用户可以通过该选项同时指定多个URL，各URL之间通过逗
+号隔开。
+2．ETCD_LISTEN_CLIENT_URLS
+该选项用于指定对外提供服务的地址，即etcd API的地址，etcd
+客户端通过该URL访问etcd服务器。该选项同样采用协议、IP地址和
+端口组合的形式，其默认端口为2379。
+3．ETCD_NAME
+该选项用来指定etcd节点的名称，该名称用于在集群中标识本
+etcd节点。
+4．ETCD_INITIAL_ADVERTISE_PEER_URLS
+该选项指定节点同伴监听地址，这个值会告诉etcd集群中其他
+etcd节点，该地址用来在etcd集群中传递数据。
+5．ETCD_ADVERTISE_CLIENT_URLS
+
+该选项用来指定当前etcd节点对外公告的客户端监听地址，这个
+值会告诉集群中其他节点。
+6．ETCD_INITIAL_CLUSTER
+该选项列出当前etcd集群中的所有的etcd节点的节点通信地址。
+在Node1节点上面执行以下命令，安装Kubernetes节点组件、
+etcd、flannel以及docker：
+ 
+   [root@localhost ~]# yum -y install kubernetes-node etcd 
+flannel docker
+安装完成之后，编辑/etc/etcd/etcd.conf配置文件，修改内容
+如下：
+
+
+在Node2节点上面执行同样的命令，安装相同的组件，只不
+过/etc/etcd/etcd.conf文件中的内容与Node1节点稍有不同，需要
+修改的部分如下所示：
+
+配置完成之后，在3个节点上面分别执行以下命令，以启用和启
+动etcd服务：
+
+启动完成之后，通过以下命令查看etcd服务状态：
+如果上面的输出中的圆点是绿色的，并且Active的值为active
+(running)，则表示服务启动成功。
+etcd提供的etcdctl命令可以查看etcd集群的健康状态，如下所
+示：
+从上面的输出结果可以得知，集群中的3个etcd节点都是处于健
+康状态。
+2.1.5　Master节点配置
+接下来介绍如何配置Kubernetes的Master节点。前面已经介绍
+过，在Master节点上面主要运行着apiserver、controller-manager
+以及scheduler 等主要的服务进程。以上服务的配置文件都位
+于/etc/kubernetes目录中。其中，通常需要配置的为apiserver，
+
+其配置文件为/etc/kubernetes/apiserver。修改该文件内容，如下
+所示：
+KUBE_API_ADDRESS选项表示apiserver进程绑定的IP地址，
+在本例中将其修改为--address=0.0.0.0，表示绑定本机所有的IP地
+址。KUBE_API_PORT 选项用来指定apiserver 监听的端口。
+KUBELET_PORT 表示kubelet 监听的服务端口。
+KUBE_ETCD_SERVERS选项指定etcd集群中的每个节点的地址。
+KUBE_SERVICE_ADDRESSES选项指定Kubernetes中的服务的IP
+
+地址范围。默认情况下，KUBE_ADMISSION_CONTRO选项会包含
+SecurityContextDeny和ServiceAccount，这2个值与权限有关，在
+测试的时候，可以将其去掉。
+配置完成之后，使用以下命令启动Master节点上面的各项服务：
+ 
+   [root@localhost ~]# systemctl start kube-apiserver 
+   [root@localhost ~]# systemctl start kube-controller-
+manager 
+   [root@localhost ~]# systemctl start kube-scheduler
+然后通过systemctl命令来确定各项服务是否启动成功，例如，
+可以使用下面的命令查看apiserver的状态：
+
+
+从上面的输出结果可以得知apiserver服务进程已经处于运行状
+态。
+为了使得各项服务在Linux系统启动时自动启动，用户可以使用
+以下命令启用各项服务：
+ 
+   [root@localhost ~]# systemctl enable kube-apiserver 
+   [root@localhost ~]# systemctl enable kube-controller-
+manager 
+   [root@localhost ~]# systemctl enable kube-scheduler
+Kubernetes的apiserver提供的各个接口都是RESTful的，用户
+可以通过浏览器访问Master节点的6443端口，apiserver会以JSON
+对象的形式返回各个API的地址，如图2-2所示。
+
+图2-2　Kubernetes apiserver提供的API接口
+2.1.6　Node节点配置
+Node节点上面主要运行kube-proxy以及kubelet等进程。用户
+需
+要
+修
+改
+的
+配
+置
+文
+件
+主
+要
+有
+/etc/kubernetes/config
+、
+/etc/kubernetes/proxy
+以
+及/etc/kubernetes/kubelet，这3个文件分别为Kubernetes全局
+配置文件、kube-proxy配置文件以及kubelet配置文件。在所有的
+Node节点中，这些配置文件大同小异，主要区别在于各个节点的IP地
+址会有所不同。下面以Node1为例，说明其配置方法。
+首先修改/etc/kubernetes/config，主要修改KUBE_MASTER
+选项，指定apiserver的地址，如下所示：
+
+然后修改kubelet的配置文件，内容如下：
+
+其中，KUBELET_ADDRESS指定kubelet绑定的IP地址，如果
+想要绑定本机所有的网络接口，可以将其指定为0.0.0.0 。
+KUBELET_PORT
+指
+定
+kubelet
+监
+听
+的
+端
+口
+，
+KUBELET_HOSTNAME指定本节点的主机名，该选项的值可以是主
+机名，也可以是本机的IP地址。在本例中，Node1节点的IP地址为
+192.168.1.122。KUBELET_API_SERVER选项指定apiserver的地
+址。
+注意
+如果KUBELET_HOSTNAME选项的值为主机名，则需要在hosts文件中
+配置主机名和IP地址的对应关系。
+
+最后，修改/etc/kubernetes/proxy文件，将其内容修改如下：
+配置完成之后，执行以下命令配置开机启动：
+然后使用以下命令启动kube-proxy和kubelet服务：
+ 
+   [root@localhost ~]# systemctl start kube-proxy 
+   [root@localhost ~]# systemctl start kubelet
+按照上面的方法在Node2节点上面进行配置。在配置的过程中，
+注意要把相应的IP地址修改为Node2的IP地址192.168.1.123。配置
+完成之后，分别启动kube-proxy和kubelet。
+最后再测试一下集群是否正常。在Master节点上面执行以下命
+令：
+
+如果上面的命令输出各Node节点，并且其状态为Ready，则表示
+当前集群已经正常工作了。
+2.1.7　配置网络
+Flannel是Kubernetes中常用的网络配置工具，用于配置第三层
+（网络层）网络结构。Flannel需要在集群中的每台主机上运行一个
+名为flanneld的代理程序，负责从预配置地址空间中为每台主机分配
+一个网段。Flannel直接使用Kubernetes API或etcd存储网络配置、
+分配的子网以及任何辅助数据。
+在配置Flannel之前，用户需要预先设置分配给Docker网络的网
+段。在Master 节点上面执行以下命令，在etcd 中添加一个名
+为/atomic.io/network/config 的主键，通过该主键设置提供给
+Docker容器使用的网段以及子网。
+ 
+   [root@localhost ~]# etcdctl mk /atomic.io/network/config 
+'{"Network":
+"172.17.0.0/16", "SubnetMin": "172.17.1.0", "SubnetMax": 
+"172.17.254.0"}'
+然后在Node1 和Node2 这2 个Node 节点上面修
+改/etc/sysconfig/flanneld配置文件，使其内容如下：
+
+其中，FLANNEL_ETCD_ENDPOINTS用来指定etcd集群的各
+个节点的地址。FLANNEL_ETCD_PREFIX指定etcd中网络配置的主
+键，该主键要与前面设置的主键值完全一致。FLANNEL_OPTIONS
+中的--iface选项指定Flannel网络使用的网络接口。
+设置完成之后，分别在Node1和Node2节点上面，通过以下2条
+命令启用和启动flanneld：
+ 
+   [root@localhost ~]# systemctl enable flanneld 
+   [root@localhost ~]# systemctl start flanneld
+启动成功之后，通过ip命令查看系统中的网络接口，会发现多出
+一个名为flannel0的网络接口，如下所示：
+从上面的输出可以得知，虚拟接口flannel0的IP地址是前面指定
+的172.17.0.0/16。
+
+此外，flannel 还生成了2 个配置文件，分别
+是/run/flannel/subnet.env 和/run/flannel/docker 。其中
+subnet.env的内容如下所示：
+docker的内容如下所示：
+关于Flannel的基本原理和详细使用方法，将在后面的章节中介
+绍。
+2.2　通过二进制文件安装Kubernetes
+在前面一节中，介绍了通过软件包管理工具安装Kubernetes。
+实际上，Kubernetes还为多种软硬件平台提供了编译好的二进制文
+件。用户可以直接从官方网站上面下载这些二进制文件，然后稍加配
+置即可使用。本节将详细介绍二进制文件安装Kubernetes的方法。
+2.2.1　安装前准备
+在本例中，我们同样部署3个节点，其中一个为Master节点，另
+外两个为Node节点。其网络拓扑结构与图2-1完全相同。
+
+1．下载安装包
+Kubernetes
+二
+进
+制
+文
+件
+的
+下
+载
+地
+址
+为
+：
+https://github.com/kubernetes/kubernetes/releases，其中，
+最新的正式版为v1.19.5，如图2-3所示。
+图2-3　Kubernetes二进制文件下载
+如果用户想要下载其他软硬件平台的二进制文件，可以单击其中
+的the CHANGELOG链接，跳转到另外一个下载页面，如图2-4所
+示。从图中可以得知，Kubernetes为每个版本都提供了许多平台的
+二进制软件包。
+
+图2-4　v1.19.5下载页面
+从网页上面可以得知，Kubernetes 将二进制包分为Client
+Binaries、Server Binaries以及Node Binaries，分别对应着客户端
+二进制包、Master节点二进制包以及Node节点二进制包。每个文件
+又分为Darwin、Linux以及Windows等操作系统平台。除此之外，
+还有386、amd64、ppc64以及s390等硬件平台。
+在本例中，我们将在64位的CentOS上面安装，所以需要下载
+kubernetes-server-linux-amd64.tar.gz
+、
+kubernetes-node-
+linux-amd64.tar.gz
+以
+及
+kubernetes-client-linux-
+amd64.tar.gz。实际上kubernetes-client-linux-amd64.tar.gz只
+包含一个文件kubectl，而这个文件已经包含在其他的两个压缩文件
+中，所以在安装的时候，可以不单独下载该文件。
+通常情况下，用户应该将第三方的软件包保存在/opt目录中。所
+以，首先执行以下命令，切换到该目录中：
+ 
+   [root@localhost ~]# cd /opt/
+
+然后执行以下两条命令，分别下载Master和Node节点的二进制
+文件。对于Master节点，用户只需要下载kubernetes-server-linux-
+amd64.tar.gz即可，对于Node节点，用户只需要下载kubernetes-
+node-linux-amd64.tar.gz文件。
+etcd的二进制文件并没有包含在Kubernetes的二进制压缩包
+中，用户需要单独下载。与Kubernetes一样，etcd也提供了多种软
+硬件平台的二进制文件，其网址为：https://github.com/etcd-
+io/etcd/releases。在所有节点上面，执行以下命令下载etcd的二进
+制文件：
+ 
+    [root@localhost opt]# wget https://github.com/etcd-
+io/etcd/releases/
+download/v3.4.14/etcd-v3.4.14-linux-amd64.tar.gz
+2．关闭防火墙和SELinux
+在所有节点上面执行以下命令设置防火墙和SELinux：
+ 
+   [root@localhost opt]# systemctl stop firewalld && 
+systemctl disable firewalld 
+   [root@localhost opt]# setenforce 0
+编辑/etc/selinux/config文件，将SELINUX设置为disabled，
+如下所示：
+
+ 
+   SELINUX=disabled 
+3．禁用交换分区
+在所有节点上面使用以下命令禁用CentOS的交换分区：
+ 
+   [root@localhost opt]# swapoff -a && sysctl -w 
+vm.swappiness=0 
+   vm.swappiness = 0
+然后修改/etc/fstab文件，将交换分区对应的文件系统注释掉，
+如下所示：
+4．设置Docker所需要的网络参数
+由于在本例中，Docker只安装在Node节点上，因此在所有Node
+节点上修改/etc/sysctl.d/k8s.conf，增加以下行：
+ 
+   net.ipv4.ip_forward = 1 
+然后使用以下命令使得以上设置生效：
+ 
+   [root@localhost ~]# sysctl -p /etc/sysctl.d/k8s.conf
+5．配置Docker的yum安装源
+
+默认情况下，CentOS没有配置Docker的yum安装源，读者可以
+使用以下命令自行添加：
+ 
+   [root@localhost ~]# yum-config-manager --add-repo
+https://download.docker.com/linux/centos/docker-ce.repo
+在上面的命令中，yum-config-manager 用来管理和配置
+CentOS的软件仓库。如果当前系统中没有该命令，那么可以使用以
+下命令安装：
+ 
+   [root@localhost ~]# yum install yum-utils
+6．安装Docker
+设置好软件源之后，就可以直接使用yum命令来安装Docker CE
+了，命令如下：
+ 
+   [root@localhost ~]# yum -y install docker-ce
+安装完成之后，使用以下命令启用和启动Docker服务：
+ 
+   [root@localhost ~]# systemctl enable docker 
+   [root@localhost ~]# systemctl start docker
+7．创建安装目录
+
+在本例中，我们计划将Kubernetes安装在/k8s目录中，所以使
+用以下命令分别创建几个相关的目录：
+2.2.2　部署etcd
+使用以下命令解压前面下载的etcd-v3.4.14-linux-
+amd64.tar.gz：
+ 
+   [root@localhost opt]# tar -xvf etcd-v3.4.14-linux-
+amd64.tar.gz
+然后将解压后的目录中的etcd 和etcdctl 这两个文件复制
+到/k8s/etcd/bin目录中：
+ 
+   [root@localhost opt]# cp etcd-v3.4.14-linux-amd64/etcd
+etcd-v3.4.14-linux-amd64/etcdctl /k8s/etcd/bin/
+接下来配置etcd。由于我们要在3个节点上都部署etcd，形成一
+个etcd集群，因此接下来需要分别在3个主机上创建etcd的配置文
+件。跟前一节中介绍的一样，所有的etcd节点的配置文件基本相同，
+区别在于绑定的IP地址有所不同。
+首先是Master节点，使用以下命令创建配置文件：
+ 
+   [root@localhost ~]# vi /k8s/etcd/cfg/etcd
+
+其内容如下：
+接下来是Node1，创建配置文件的命令如下：
+ 
+   [root@localhost ~]# vi /k8s/etcd/cfg/etcd
+其内容如下：
+接下来是Node2，创建配置文件的命令如下：
+
+ 
+   [root@localhost opt]# vi /k8s/etcd/cfg/etcd
+其内容如下：
+然后创建etcd的系统服务单元文件，由于在3个节点中，etcd的
+安装位置完全相同，因此这3个节点的etcd的系统服务单元文件完全
+相同。在所有的节点上执行以下命令创建该文件：
+ 
+   [root@localhost ~]# vi /lib/systemd/system/etcd.service
+其内容如下：
+
+最后，在3个节点上使用以下命令启动etcd服务：
+ 
+   [root@localhost ~]# systemctl enable etcd 
+   [root@localhost ~]# systemctl start etcd
+配置完成之后，用户可以使用以下命令验证集群是否正常运行：
+
+从上面的输出结果可知，3个节点都正常运行，整个集群也是正
+常的。
+注意
+启动etcd集群时需要同时启动所有的节点。
+2.2.3　部署flannel网络
+分别在两个Node节点上从以下网址下载flannel的二进制文件：
+https://github.com/coreos/flannel/releases
+下载后的文件名为flannel-v0.13.0-linux-amd64.tar.gz。
+使用以下命令解压该文件：
+ 
+   [root@localhost opt]# tar zxvf flannel-v0.13.0-linux-
+amd64.tar.gz
+然后将解压得到的flanneld和mk-docker-opts.sh这两个文件复
+制到/k8s/Kubernetes/bin目录中：
+ 
+   [root@localhost opt]# cp flanneld mk-docker-opts.sh 
+
+/k8s/kubernetes/bin/
+创建flannel配置文件/k8s/kubernetes/cfg/flanneld，其内容
+如下：
+ 
+   FLANNEL_OPTIONS="--etcd-
+endpoints=http://192.168.1.121:2379,http://192.16 
+8.1.122:2379,http://192.168.1.123:2379" 
+在etcd集群中写入Pod的网络信息，如下所示：
+ 
+   [root@localhost bin]# /k8s/etcd/bin/etcdctl set 
+/coreos.com/network/config
+'{ "Network": "172.18.0.0/16", "Backend": {"Type": 
+"vxlan"}}'
+创
+建
+flannel
+的
+系
+统
+服
+务
+单
+元
+文
+件/lib/systemd/system/flanneld.service，其内容如下：
+
+最后启用并启动flannel服务：
+ 
+   [root@localhost ~]# systemctl enable flanneld 
+   [root@localhost ~]# systemctl start flanneld
+2.2.4　部署Master节点
+前面已经介绍过，Kubernetes的Master节点主要运行kube-
+apiserver、kube-scheduler、kube-controller-manager等组件。
+下面分别介绍这些组件的配置方法。
+首先将前面下载的kubernetes-server-linux-amd64.tar.gz文
+件解压，然后将解压得到的目录中的server/bin 下面的kube-
+apiserver 、kube-controller-manager 、kube-scheduler 以及
+kubectl这4个文件复制到/k8s/kubernetes/bin目录下：
+ 
+   [root@localhost opt]# cd kubernetes/server/bin/ 
+   [root@localhost bin]# cp kube-apiserver kube-controller-
+manager
+kube-scheduler kubectl/k8s/kubernetes/bin/
+1．配置kube-apiserver
+创建kube-apiserver的配置文件/k8s/kubernetes/cfg/kube-
+apiserver，其内容如下：
+
+然后创建kube-apiserver 的系统服务单元文
+件/lib/systemd/system/kube-apiserver.service，内容如下：
+执行以下命令启动kube-apiserver服务：
+ 
+   [root@localhost ~]# systemctl enable kube-apiserver 
+   [root@localhost ~]# systemctl start kueb-apiserver
+查看服务状态：
+
+2．配置kube-scheduler
+创建kube-scheduler配置文件/k8s/kubernetes/cfg/kube-
+scheduler，其内容如下：
+ 
+   KUBE_SCHEDULER_OPTS="--logtostderr=true --v=4 --
+master=127.0.0.1:8080
+--leader-elect"
+创
+建
+kube-scheduler
+系
+统
+服
+务
+单
+元
+文
+件/lib/systemd/system/kube-scheduler.service，内容如下：
+启动服务，并查看服务状态：
+
+3．配置kube-controller-manager
+创建配置文件/k8s/kubernetes/cfg/kube-controller-
+manager，内容如下：
+创
+建
+kube-controller-manager
+系
+统
+服
+务
+单
+元
+文
+件/lib/systemd/system/kube-controller-manager.service ，内
+容如下；
+
+启动服务，并检查状态：
+可以通过kubectl命令查看集群中的各个组件的状态，如下所
+示：
+
+2.2.5　部署Node节点
+Node 节点上主要运行kubelet 和kube-proxy 等组件。其中
+kubelet运行在每个工作节点上，接收kube-apiserver发送的请求，
+管理Pod 容器，执行交互式命令。kubelet 启动时自动向kube-
+apiserver注册节点信息。kube-proxy监听kube-apiserver中服务和
+端点的变化情况，创建路由规则来进行服务负载均衡。
+在2个Node节点上解压前面下载的kubernetes-node-linux-
+amd64.tar.gz文件，然后将得到的目录中的node/bin目录中的文件
+复制到/k8s/Kubernetes/bin目录中，如下所示：
+ 
+   [root@localhost opt]# tar zxvf kubernetes-node-linux-
+amd64.tar.gz 
+   [root@localhost opt]# cp kubernetes/node/bin/* 
+/k8s/kubernetes/bin/
+由于所有的Node节点的配置基本一致，不同之处在于各个节点的
+IP地址不同，因此下面以Node1为例来介绍Node节点的部署。
+1．配置kubelet
+首
+先
+创
+建
+kubelet
+参
+数
+配
+置
+模
+板
+文
+件/k8s/kubernetes/cfg/kubelet.config，代码如下：
+
+然后创建kubelet配置文件/k8s/kubernetes/cfg/kubelet，其
+内容如下：
+接着创建kubelet系统服务单元文件，如下所示：
+
+最后启动kubelet服务，命令如下：
+ 
+   [root@localhost ~]# systemctl enable kubelet 
+   [root@localhost ~]# systemctl start kubelet
+2．部署kube-proxy
+正如前面介绍的一样，kube-proxy运行在所有的Node节点上。
+Kube-proxy监听apiserver中的服务和端点的变化情况，创建路由规
+则来进行服务负载均衡。
+创建kube-proxy 配置文件/k8s/kubernetes/cfg/kubelet-
+proxy，内容如下：
+ 
+   KUBE_PROXY_OPTS="--logtostderr=true \ 
+   --hostname-override=192.168.1.122 \ 
+   --master=http://192.168.1.121:8080" 
+创
+建
+kube-proxy
+系
+统
+服
+务
+单
+元
+文
+件/lib/systemd/system/kube-proxy.service，内容如下：
+然后启用和启动kube-proxy，命令如下：
+
+ 
+   [root@localhost ~]# systemctl enable kube-proxy 
+   [root@localhost ~]# systemctl start kube-proxy
+部署完成之后，在Master节点上通过kubectl命令查看节点和组
+件状态，如下所示：
+注意
+在部署Kubelet时，一定要禁用主机的交换分区，否则会导致
+Kubelet启动失败。
+2.3　通过源代码安装Kubernetes
+Kubernetes是一个非常棒的容器集群管理系统。通常情况下，
+我们并不需要修改Kubernetes的代码即可直接使用。但如果我们在
+环境中发现了某个问题或者缺陷，或者按照特定业务需求需要修改
+Kubernetes代码时，为了让修改生效，那么就需要编译Kubernetes
+的代码了。本节将详细介绍Kubernetes的源代码安装方法。
+
+大致上，Kubernetes的源代码编译有两种方式，其中一种方式
+为本地二进制文件编译，直接将源代码编译成本地二进制可执行文
+件；另外一种方式为Docker镜像编译Kubernetes，可以编译出各核
+心组件的二进制文件以及对应的镜像文件。我们首先介绍本地二进制
+文件编译，然后再介绍Docker镜像编译。
+2.3.1　本地二进制文件编译
+本地二进制可执行文件编译需要安装Go运行环境，命令如下：
+ 
+   [root@localhost opt]# wget -c https://dl.google.com/go/
+go1.11.4.linux-amd64.tar.gz -P /opt/
+上面的命令将Go可执行文件下载到/opt目录中。下载完成之后，
+进入到该目录，命令如下：
+ 
+   [root@localhost ~]# cd /opt/
+接下来将Go软件包释放到/usr/local目录下，命令如下：
+ 
+   [root@localhost opt]# tar -C /usr/local -xzf 
+go1.11.4.linux-amd64.tar.gz
+最后配置PATH变量，将Go可执行文件的路径加入进去：
+ 
+   [root@localhost opt]# echo "export 
+PATH=$PATH:/usr/local/go/bin" >>
+/etc/profile && source /etc/profile
+
+准备好编译Kubernetes 所需要的依赖之后，就可以下载
+Kubernetes的源代码了。通常情况下，用户应该为Kubernetes的源
+代码创建一个专门的目录。在本例中，在/opt目录中创建一个名为
+k8s的目录，命令如下：
+ 
+   [root@localhost ~]# mkdir /opt/k8s
+切换到该目录之后，通过git命令将Kubernetes的源代码克隆到
+本地，并且指定版本为1.13，如下所示：
+ 
+   [root@localhost k8s]# git clone 
+https://github.com/kubernetes/kubernetes -b
+release-1.19
+git命令会在当前目录中自动创建一个名为kubernetes的目录，
+所有的源代码都在改目录中。切换到该目录，然后执行以下命令进行
+编译：
+ 
+   [root@localhost kubernetes]# make all
+编译完成之后，如果没有出错，则将生成Kubernetes的各种可
+执行文件，文件位于_output/bin目录中，如下所示：
+
+从上面的输出可以看到，通过编译，已经生成了kubeadmin、
+kube-apiserver、kubectl以及kubelet等前面已经介绍过的可执行
+文件。
+接下来，用户就可以按照2.2 节介绍的方法安装、部署
+Kubernetes了。
+注意
+源代码编译Kubernetes时需要较大的内存，建议主机拥有16GB以上
+的物理内存，否则会出现内存溢出而导致编译失败。
+2.3.2　Docker镜像编译
+
+Docker镜像编译比较简单，用户只要先将Kubernetes的源代码
+克隆到本地，然后执行make quick-release命令即可：
+ 
+   $ git clone https://github.com/kubernetes/kubernetes 
+   $ cd kubernetes 
+   $ make quick-release 

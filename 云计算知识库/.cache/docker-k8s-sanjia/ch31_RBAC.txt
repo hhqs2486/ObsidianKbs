@@ -1,0 +1,272 @@
+RBAC
+前⾯两节课我们学习了 Kubernetes 中的两个⽤于配置信息的重要资源对象： ConfigMap 和 Secret ，
+其实到这⾥我们基本上学习的内容已经覆盖到 Kubernetes 中⼀些重要的资源对象了，来部署⼀个应⽤
+程序是完全没有问题的了。在我们演示⼀个完整的示例之前，我们还需要给⼤家讲解⼀个重要的概
+念： RBAC  - 基于⻆⾊的访问控制。
+ RBAC 使⽤ rbac.authorization.k8s.io  API Group 来实现授权决策，允许管理员通过 Kubernetes
+API 动态配置策略，要启⽤ RBAC ，需要在 apiserver 中添加参数 --authorization-mode=RBAC ，如果
+使⽤的 kubeadm 安装的集群，1.6 版本以上的都默认开启了 RBAC ，可以通过查看 Master 节点上
+apiserver 的静态 Pod 定义⽂件：
+$ cat /etc/kubernetes/manifests/kube-apiserver.yaml 
+...
+    - --authorization-mode=Node,RBAC
+...
+如果是⼆进制的⽅式搭建的集群，添加这个参数过后，记得要重启 apiserver 服务。
+RBAC API 对象
+ Kubernetes 有⼀个很基本的特性就是它的所有资源对象都是模型化的 API 对象，允许执⾏
+CRUD(Create、Read、Update、Delete)操作(也就是我们常说的增、删、改、查操作)，⽐如下⾯的这
+下资源：
+Pods
+ConfigMaps
+Deployments
+Nodes
+Secrets
+Namespaces
+上⾯这些资源对象的可能存在的操作有：
+create
+get
+delete
+list
+update
+edit
+watch
+exec
+RBAC
+179
+
+在更上层，这些资源和 API Group 进⾏关联，⽐如 Pods 属于 Core API Group，⽽ Deployements 属
+于 apps API Group，要在 Kubernetes 中进⾏ RBAC 的管理，除了上⾯的这些资源和操作以外，我们
+还需要另外的⼀些对象：
+Rule：规则，规则是⼀组属于不同 API Group 资源上的⼀组操作的集合
+Role 和 ClusterRole：⻆⾊和集群⻆⾊，这两个对象都包含上⾯的 Rules 元素，⼆者的区别在
+于，在 Role 中，定义的规则只适⽤于单个命名空间，也就是和 namespace 关联的，⽽
+ClusterRole 是集群范围内的，因此定义的规则不受命名空间的约束。另外 Role 和 ClusterRole
+在 Kubernetes 中都被定义为集群内部的 API 资源，和我们前⾯学习过的 Pod、ConfigMap 这些
+类似，都是我们集群的资源对象，所以同样的可以使⽤我们前⾯的 kubectl 相关的命令来进⾏操
+作
+Subject：主题，对应在集群中尝试操作的对象，集群中定义了3种类型的主题资源：
+User Account：⽤户，这是有外部独⽴服务进⾏管理的，管理员进⾏私钥的分配，⽤户可以
+使⽤ KeyStone或者 Goolge 帐号，甚⾄⼀个⽤户名和密码的⽂件列表也可以。对于⽤户的管
+理集群内部没有⼀个关联的资源对象，所以⽤户不能通过集群内部的 API 来进⾏管理
+Group：组，这是⽤来关联多个账户的，集群中有⼀些默认创建的组，⽐如cluster-admin
+Service Account：服务帐号，通过 Kubernetes  API 来管理的⼀些⽤户帐号，和 namespace
+进⾏关联的，适⽤于集群内部运⾏的应⽤程序，需要通过 API 来完成权限认证，所以在集群
+内部进⾏权限操作，我们都需要使⽤到 ServiceAccount，这也是我们这节课的重点
+RoleBinding 和 ClusterRoleBinding：⻆⾊绑定和集群⻆⾊绑定，简单来说就是把声明的 Subject
+和我们的 Role 进⾏绑定的过程(给某个⽤户绑定上操作的权限)，⼆者的区别也是作⽤范围的区
+别：RoleBinding 只会影响到当前 namespace 下⾯的资源操作权限，⽽ ClusterRoleBinding 会影
+响到所有的 namespace。
+接下来我们来通过⼏个示例来演示下 RBAC 的配置⽅法。
+创建⼀个只能访问某个 namespace 的⽤户
+我们来创建⼀个 User Account，只能访问 kube-system 这个命名空间：
+username: haimaxy
+group: youdianzhishi
+第1步：创建⽤户凭证
+我们前⾯已经提到过， Kubernetes 没有 User Account 的 API 对象，不过要创建⼀个⽤户帐号的话也
+是挺简单的，利⽤管理员分配给你的⼀个私钥就可以创建了，这个我们可以参考官⽅⽂档中的⽅法，
+这⾥我们来使⽤ OpenSSL 证书来创建⼀个 User，当然我们也可以使⽤更简单的 cfssl ⼯具来创建：
+给⽤户 haimaxy 创建⼀个私钥，命名成：haimaxy.key：
+$ openssl genrsa -out haimaxy.key 2048
+使⽤我们刚刚创建的私钥创建⼀个证书签名请求⽂件：haimaxy.csr，要注意需要确保在 -subj 参
+数中指定⽤户名和组(CN表示⽤户名，O表示组)：
+RBAC
+180
+
+$ openssl req -new -key haimaxy.key -out haimaxy.csr -subj "/CN=haimaxy/O=youdianzhis"
+然后找到我们的 Kubernetes 集群的 CA ，我们使⽤的是 kubeadm 安装的集群， CA 相关证书位
+于 /etc/kubernetes/pki/ ⽬录下⾯，如果你是⼆进制⽅式搭建的，你应该在最开始搭建集群的时
+候就已经指定好了 CA 的⽬录，我们会利⽤该⽬录下⾯的 ca.crt 和 ca.key 两个⽂件来批准上⾯
+的证书请求
+⽣成最终的证书⽂件，我们这⾥设置证书的有效期为500天：
+$ openssl x509 -req -in haimaxy.csr -CA /etc/kubernetes/pki/ca.crt -CAkey /etc/kuberne
+tes/pki/ca.key -CAcreateserial -out haimaxy.crt -days 500
+现在查看我们当前⽂件夹下⾯是否⽣成了⼀个证书⽂件：
+$ ls
+haimaxy.csr haimaxy.key haimaxy.crt
+现在我们可以使⽤刚刚创建的证书⽂件和私钥⽂件在集群中创建新的凭证和上下⽂(Context):
+$ kubectl config set-credentials haimaxy --client-certificate=haimaxy.crt  --client-key
+=haimaxy.key
+我们可以看到⼀个⽤户 haimaxy 创建了，然后为这个⽤户设置新的 Context:
+$ kubectl config set-context haimaxy-context --cluster=kubernetes --namespace=kube-system 
+--user=haimaxy
+到这⾥，我们的⽤户 haimaxy 就已经创建成功了，现在我们使⽤当前的这个配置⽂件来操
+作 kubectl 命令的时候，应该会出现错误，因为我们还没有为该⽤户定义任何操作的权限呢：
+$ kubectl get pods --context=haimaxy-context
+Error from server (Forbidden): pods is forbidden: User "haimaxy" cannot list pods in the n
+amespace "default"
+第2步：创建⻆⾊
+⽤户创建完成后，接下来就需要给该⽤户添加操作权限，我们来定义⼀个 YAML ⽂件，创建⼀个允许
+⽤户操作 Deployment、Pod、ReplicaSets 的⻆⾊，如下定义：(haimaxy-role.yaml)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: haimaxy-role
+  namespace: kube-system
+rules:
+- apiGroups: ["", "extensions", "apps"]
+  resources: ["deployments", "replicasets", "pods"]
+RBAC
+181
+
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"] # 也可以使⽤['*']
+其中 Pod 属于 core 这个 API Group，在 YAML 中⽤空字符就可以，⽽ Deployment 属于 apps 这个
+API Group， ReplicaSets 属于 extensions 这个 API Group(我怎么知道的？点这⾥查⽂档)，所以
+rules 下⾯的 apiGroups 就综合了这⼏个资源的 API Group：["", "extensions", "apps"]，其中 verbs 就
+是我们上⾯提到的可以对这些资源对象执⾏的操作，我们这⾥需要所有的操作⽅法，所以我们也可以
+使⽤['*']来代替。
+然后创建这个 Role ：
+$ kubectl create -f haimaxy-role.yaml
+注意这⾥我们没有使⽤上⾯的 haimaxy-context 这个上下⽂了，因为⽊有权限啦
+第3步：创建⻆⾊权限绑定
+Role 创建完成了，但是很明显现在我们这个 Role 和我们的⽤户 haimaxy 还没有任何关系，对吧？这
+⾥我就需要创建⼀个 RoleBinding 对象，在 kube-system 这个命名空间下⾯将上⾯的 haimaxy-role ⻆
+⾊和⽤户 haimaxy 进⾏绑定:(haimaxy-rolebinding.yaml)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: haimaxy-rolebinding
+  namespace: kube-system
+subjects:
+- kind: User
+  name: haimaxy
+  apiGroup: ""
+roleRef:
+  kind: Role
+  name: haimaxy-role
+  apiGroup: ""
+上⾯的 YAML ⽂件中我们看到了 subjects 关键字，这⾥就是我们上⾯提到的⽤来尝试操作集群的对
+象，这⾥对应上⾯的 User 帐号 haimaxy，使⽤ kubectl 创建上⾯的资源对象：
+$ kubectl create -f haimaxy-rolebinding.yaml
+第4步. 测试
+现在我们应该可以上⾯的 haimaxy-context 上下⽂来操作集群了：
+$ kubectl get pods --context=haimaxy-context
+....
+我们可以看到我们使⽤ kubectl 的使⽤并没有指定 namespace 了，这是因为我们已经为该⽤户分配
+了权限了，如果我们在后⾯加上⼀个 -n default 试看看呢？
+RBAC
+182
+
+$ kubectl --context=haimaxy-context get pods --namespace=default
+Error from server (Forbidden): pods is forbidden: User "haimaxy" cannot list pods in the n
+amespace "default"
+是符合我们预期的吧？因为该⽤户并没有 default 这个命名空间的操作权限
+创建⼀个只能访问某个 namespace 的ServiceAccount
+上⾯我们创建了⼀个只能访问某个命名空间下⾯的普通⽤户，我们前⾯也提到过 subjects 下⾯还有⼀
+直类型的主题资源：ServiceAccount，现在我们来创建⼀个集群内部的⽤户只能操作 kube-system 这
+个命名空间下⾯的 pods 和 deployments，⾸先来创建⼀个 ServiceAccount 对象：
+$ kubectl create sa haimaxy-sa -n kube-system
+当然我们也可以定义成 YAML ⽂件的形式来创建。
+然后新建⼀个 Role 对象：(haimaxy-sa-role.yaml)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: haimaxy-sa-role
+  namespace: kube-system
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "watch", "list"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+可以看到我们这⾥定义的⻆⾊没有创建、删除、更新 Pod 的权限，待会我们可以重点测试⼀下，创建
+该 Role 对象：
+$ kubectl create -f haimaxy-sa-role.yaml
+然后创建⼀个 RoleBinding 对象，将上⾯的 haimaxy-sa 和⻆⾊ haimaxy-sa-role 进⾏绑定：(haimaxy-
+sa-rolebinding.yaml)
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: haimaxy-sa-rolebinding
+  namespace: kube-system
+subjects:
+- kind: ServiceAccount
+  name: haimaxy-sa
+  namespace: kube-system
+roleRef:
+  kind: Role
+RBAC
+183
+
+  name: haimaxy-sa-role
+  apiGroup: rbac.authorization.k8s.io
+添加这个资源对象：
+$ kubectl create -f haimaxy-sa-rolebinding.yaml
+然后我们怎么去验证这个 ServiceAccount 呢？我们前⾯的课程中是不是提到过⼀个 ServiceAccount
+会⽣成⼀个 Secret 对象和它进⾏映射，这个 Secret ⾥⾯包含⼀个 token，我们可以利⽤这个 token 去
+登录 Dashboard，然后我们就可以在 Dashboard 中来验证我们的功能是否符合预期了：
+$ kubectl get secret -n kube-system |grep haimay-sa
+haimay-sa-token-nxgqx                  kubernetes.io/service-account-token   3         47m
+$ kubectl get secret haimay-sa-token-nxgqx -o jsonpath={.data.token} -n kube-system |base6
+4 -d
+# 会⽣成⼀串很⻓的base64后的字符串
+使⽤这⾥的 token 去 Dashboard ⻚⾯进⾏登录： 
+RBAC
+184
+
+我们可以看到上⾯的提示信息，这是因为我们登录进来后默认跳转到 default 命名空间，我们切换到
+kube-system 命名空间下⾯就可以了： 
+我们可以看到可以访问pod列表了，但是也会有⼀些其他额外的提示：events is forbidden: User
+“system:serviceaccount:kube-system:haimaxy-sa” cannot list events in the namespace “kube-
+system”，这是因为当前登录⽤只被授权了访问 pod 和 deployment 的权限，同样的，访问下
+deployment看看可以了吗？
+同样的，你可以根据⾃⼰的需求来对访问⽤户的权限进⾏限制，可以⾃⼰通过 Role 定义更加细粒度的
+权限，也可以使⽤系统内置的⼀些权限……
+创建⼀个可以访问所有 namespace 的ServiceAccount
+刚刚我们创建的 haimaxy-sa 这个 ServiceAccount 和⼀个 Role ⻆⾊进⾏绑定的，如果我们现在创建⼀
+个新的 ServiceAccount，需要他操作的权限作⽤于所有的 namespace，这个时候我们就需要使⽤到
+ClusterRole 和 ClusterRoleBinding 这两种资源对象了。同样，⾸先新建⼀个 ServiceAcount 对象：
+(haimaxy-sa2.yaml)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: haimaxy-sa2
+  namespace: kube-system
+RBAC
+185
+
+创建：
+$ kubectl create -f haimaxy-sa2.yaml
+然后创建⼀个 ClusterRoleBinding 对象(haimaxy-clusterolebinding.yaml):
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+  name: haimaxy-sa2-clusterrolebinding
+subjects:
+- kind: ServiceAccount
+  name: haimaxy-sa2
+  namespace: kube-system
+roleRef:
+  kind: ClusterRole
+  name: cluster-admin
+  apiGroup: rbac.authorization.k8s.io
+从上⾯我们可以看到我们没有为这个资源对象声明 namespace，因为这是⼀个 ClusterRoleBinding 资
+源对象，是作⽤于整个集群的，我们也没有单独新建⼀个 ClusterRole 对象，⽽是使⽤的 cluster-
+admin 这个对象，这是 Kubernetes 集群内置的 ClusterRole 对象，我们可以使⽤ kubectl get
+clusterrole  和 kubectl get clusterrolebinding 查看系统内置的⼀些集群⻆⾊和集群⻆⾊绑定，这
+⾥我们使⽤的 cluster-admin 这个集群⻆⾊是拥有最⾼权限的集群⻆⾊，所以⼀般需要谨慎使⽤该集群
+⻆⾊。
+创建上⾯集群⻆⾊绑定资源对象，创建完成后同样使⽤ ServiceAccount 对应的 token 去登录
+Dashboard 验证下：
+$ kubectl create -f haimaxy-clusterolebinding.yaml
+$ kubectl get secret -n kube-system |grep haimay-sa2
+haimay-sa2-token-nxgqx                  kubernetes.io/service-account-token   3         47
+m
+$ kubectl get secret haimay-sa2-token-nxgqx -o jsonpath={.data.token} -n kube-system |base
+64 -d
+# 会⽣成⼀串很⻓的base64后的字符串
+我们在最开始接触到 RBAC 认证的时候，可能不太熟悉，特别是不知道应该怎么去编写 rules 规则，
+⼤家可以去分析系统⾃带的 clusterrole、clusterrolebinding 这些资源对象的编写⽅法，怎么分析？还
+是利⽤ kubectl 的 get、describe、 -o yaml 这些操作，所以 kubectl 最基本的⽤户⼀定要掌握好。
+ RBAC 只是 Kubernetes 中安全认证的⼀种⽅式，当然也是现在最重要的⼀种⽅式，后⾯我们再和⼤家
+⼀起聊⼀聊 Kubernetes 中安全设计。
+点击查看本⽂视频
+扫描下⾯的⼆维码(或微信搜索 k8s技术圈 )关注我们的微信公众帐号，在微信公众帐号中回复 加群 即
+可加⼊到我们的 kubernetes 讨论群⾥⾯共同学习。
+RBAC
+186
+
+k8s技术圈⼆维码
+Copyright © qikqiak.com 2018 all right reserved，powered by GitbookUpdated: 2019-03-12 13:02:46
+RBAC
+187

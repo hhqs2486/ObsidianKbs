@@ -1,0 +1,558 @@
+第11 章 
+自然语言处理 
+自然语言处理
+①是计算机科学领域与人工智能领域中的另一个重要方向，其中很重要的一
+点就是语音识别（speech recognition）。语音识别要解决的问题是让计算机能够“听懂”人类的
+语音，将语音中包含的文字信息“提取”出来。
+与语言相关的技术可以应用在很多地方。例如，日本的富国生命保险公司花费170 万美元
+安装人工智能系统，把客户的语言转换为文本，并分析这些词是正面的还是负面的。这些自动
+化工作将帮助人类更快地处理保险业务。除此之外，现在的人工智能公司也在把智能客服作为
+重点的研究方向。
+与图像识别不同，在自然语言处理中输入的往往是一段语音或者一段文字，输入数据的长
+短是不确定的，并且它与上下文有很密切的关系，所以常用的是循环神经网络（recurrent neural 
+network，RNN）模型。 
+11.1  模型的选择 
+下面我们就来介绍使用不同输入和不同数据时，分别适用哪种模型以及如何应用。
+在图11-1 中，每一个矩形是一个向量，箭头则表示函数（如矩阵相乘）。最下面一行为输
+入向量，最上面一行为输出向量，中间一行是RNN 的状态。 
+图11-1 中从左到右分别表示以下几种情况。 
+（1）一对一：没有使用RNN，如Vanilla 模型，从固定大小的输入得到固定大小输出（应
+用在图像分类）。
+（2）一对多：以序列输出（应用在图片描述，输入一张图片输出一段文字序列，这种往往
+需要CNN 和RNN 相结合，也就是图像和语言相结合，详见第12 章）。 
+①
+广广的自然语言处理包含语音处理及文本处理，狭广的的的理解和处理文本。本本均的广广的的的。
+
+第11 章 自然语言处理 ee 187 
+图11-1 
+（3）多对一：以序列输入（应用在情感分析，输入一段文字，然后将它分类成积极或者消
+极情感，如淘宝下某件商品的评论分类），如使用LSTM。 
+（4）多对多：异步的序列输入和序列输出（应用在机器翻译，如一个RNN 读取一条英文
+语句，然后将它以法语形式输出）。
+（5）多对多：同步的序列输入和序列输出（应用在视频分类，对视频中每一帧打标记）。 
+我们注意到，在上述讲解中，因为中间RNN 的状态的部分是固定的，可以多次使用，所
+以不需要对序列长度进行预先特定约束。更详细的讨论参见Andrej Karpathy 的文章《The 
+Unreasonable Effectiveness of Recurrent Neural Networks》
+①。 
+自然语言处理通常包括语音合成（将文字生成语音）、语音识别、声纹识别（声纹鉴权），
+以及它们的一些扩展应用，以及文本处理，如分词、情感分析、文本挖掘等。
+11.2  英文数字语音识别
+② 
+本节我们就用语音识别的例子来说明TensorFlow 在自然语言处理上的应用。这里我们将使
+用TensorFlow 机器学习库，用20 行Python 代码创建一个超简的的语音识别器。 
+在这个例子中，我们构建一个LSTM 循环神经网络，用TFLearn 第三方库来训练一个英文
+数字口语数据集。
+我们采用spoken numbers pcm 数据集
+③，这个数据集中包含许多人阅读的0～9 这几个数字
+的英文的音频。分为男声和女声，一段音频（wav 文件）中只有一个数字对应的英文的声音。
+标识方法是{数字}_人名_xxx。如下： 
+①
+http://karpathy.github.io/2015/05/21/rnn-effectiveness/
+② 本节代码参本https://github.com/pannous/tensorflow-speech-recognition/blob/master/speech2text-tflearn.py。 
+③ http://pannous.net/spoken_numbers.tar
+
+188 ff 第二篇 实战篇 
+9_Vicki_400.wav 
+9_Victoria_100.wav 
+下面我们就来训练一个简的的英文口语数字识别模型，在普通Mac 上训练，使其能够在一
+分钟内达到98%的准确率。 
+11.2.1 定义输入数据并预处理数据 
+首先，需要将语音处理成能够读取的矩阵形式。这里面用到了梅尔频率倒谱系数（Mel 
+frequency cepstral coefficents，MFCC）特征向量，MFCC 是一种在自动语音和说话人识别中广
+泛使用的特征。
+import tflearn 
+import speech_data 
+import tensorflow as tf 
+learning_rate = 0.0001 
+training_iters = 300000  # 迭代次数 
+batch_size = 64 
+width = 20  # MFCC 特征 
+height = 80  # 最大发音长度 
+classes = 10  # 数字类别 
+batch = word_batch = speech_data.mfcc_batch_generator(batch_size) # 生成每一批MFCC 语音 
+X, Y = next(batch) 
+trainX, trainY = X, Y 
+testX, testY = X, Y 
+对语言做分帧、取对数、逆矩阵等操作后，生成的MFCC 就代表这个语音的特征。 
+11.2.2 定义网络模型 
+读者会发现，用tflearn 真是很简洁，只用4 行代码就定广好了一个LSTM 模型： 
+net = tflearn.input_data([None, width, height]) 
+net = tflearn.lstm(net, 128, dropout=0.8) 
+net = tflearn.fully_connected(net, classes, activation='softmax') 
+net = tflearn.regression(net, optimizer='adam', learning_rate=learning_rate,  
+loss='categorical_crossentropy') 
+11.2.3 训练模型 
+接下来训练模型，并把模型存储下来：
+model = tflearn.DNN(net, tensorboard_verbose=0) 
+
+第11 章 自然语言处理 ee 189 
+while 1: #training_iters 
+  model.fit(trainX, trainY, n_epoch=10, validation_set=(testX, testY), 
+show_ metric=True,batch_size=batch_size) 
+  _y=model.predict(X) 
+model.save("tflearn.lstm.model") 
+11.2.4 预测模型 
+任意输入一个语音文件，进行预测：
+demo_file = "5_Vicki_260.wav" 
+demo=speech_data.load_wav_file(speech_data.path + demo_file) 
+result=model.predict([demo]) 
+result=numpy.argmax(result) 
+print("predicted digit for %s : result = %d "%(demo_file,result)) 
+结果输出如下：
+predicted digit for 5_Vicki_260.wav : result = 5 
+结果很准确，确实这个音频的数字就是“5”。 
+语音识别可以用在智能输入法、会议的快速录入、语音控制系统、智能家居等领域。除了
+语音识别之外，如果对方能给出应答就更好了，这就是下面要讲的“智能聊天机器人”。
+11.3  智能聊天机器人 
+现在很多公司都把未来方向压在了“自然语言的人机交互”上，而这其实就是“智能聊天
+机器人”。例如，苹果的Siri、微软的Cortana 与小冰、Google Now、百度的度秘、亚马逊的蓝
+牙音箱Amazon Echo 内置的语音助手Alexa、Facebook 推出的语音助手M 等。智能聊天机器人
+的商业价值有两个方面。
+●
+通过和用户的“语音机器人”的对话，将用户引导到对应的服务上面。
+●
+作为今后智能硬件和智能家居的嵌入式应用。例如，当用户和一个智能椅子进行对话
+时，用户说：“椅子，你调高一点，把靠背放平。”这个椅子的语音系统就可能搭载了
+上述大公司开发的智能聊天机器人系统。
+智能聊天机器人的发展经历了3 代不同的技术。 
+●
+第一代是基于特征工程。有大量的逻辑判断，如if then; else then。
+●
+第二代是基于检索库。给定一个问题或者聊天，从检索库中找到与已有答案最匹配的
+答案。
+●
+第三代是基于深度学习。采用seq2seq+Attention 模型，经过大量的训练，根据输入生
+
+190 ff 第二篇 实战篇 
+成相应的输出。
+下面我们就来看看基于深度学习的聊天机器人的seq2seq+Attention 模型原理和构建方法。 
+11.3.1 原理 
+seq2seq 模型是一个翻译模型，主要是把一个序列翻译成另一个序列。它的基本思想是用两
+个RNNLM，一个作为编码器，另一个作为解码器，组成RNN 编码器-解码器。 
+在文本处理领域，我们常用编码器-解码器（encoder-decoder）框架，如图11-2 所示。 
+图11-2 
+这是一种适合处理由一个上下文（context）生成一个目标（target）的通用处理模型。因此，
+对于一个句子对<X, Y>，当输入给定的句子X，通过编码器-解码器框架来生成目标句子Y。X
+和Y 可以是不同语言，这就是机器翻译；X 和Y 可以是对话的问句和答句，这就是聊天机器人；
+X 和Y 可以是图片和这个图片的对应描述（这就是第12 章要讲的看图说话）。 
+X 由x1、x2 等的词序列组成，Y 也由y1、y2 等的词序列组成。编码器对输入的X 进行编码，
+生成中间语广编码C，然后解码器对中间语广编码C 进行解码，在每个i 时刻，结合已经生成
+的y1, y2,…, yi-1 的历史信息生成Yi。但是，这个框架有一个缺点，就是生成的句子中每一个词采
+用的中间语广编码是相同的，都是C。因此，在句子比较短的时候，还能比较贴切，句子长时，
+就明显不合语广了。
+在实际实现聊天系统的时候，一般编码器和解码器都采用RNN 模型以及RNN 模型的改进
+模型LSTM。当句子长度超过30 以后，LSTM 模型的效果会急剧下降，一般此时会引入Attention
+模型，对长句子来说能够明显提升系统效果。
+Attention 机制是认知心理学层面的一个的的，它是的当人在做一件事情的时候，会专注地
+做这件事而忽略周围的其他事。例如，人在专注地看这本本，会忽略旁边人说话的声音。这种
+机制应用在聊天机器人、机器翻译等领域，就把源句子中对生成句子重要的关键词的权重提高，
+产生出更准确的应答。
+增加了Attention 模型的编码器-解码器框架如图11-3 所示。 
+现在的中间语广编码变成了不断变化的Ci，能够生产更准确的目标Yi。 
+
+第11 章 自然语言处理 ee 191 
+图11-3 
+11.3.2 最佳实践 
+下面就来做一个智能聊天机器人。
+① 
+这里我们使用康奈尔大学的Corpus 数据集
+②（Cornell Movie Dialogs Corpus），里面含有600
+多部电影的对白。对白示例如下：
+L1045 +++$+++ u0 +++$+++ m0 +++$+++ BIANCA +++$+++ They do not! 
+L1044 +++$+++ u2 +++$+++ m0 +++$+++ CAMERON +++$+++ They do to! 
+我们首先关注如何处理聊天数据，一般步骤如下。
+（1）先把数据集整理成“问”和“答”的文件，生成.enc（问句）和.dec（答句）文件，如下： 
+├──── test.dec # 测试集答句
+├──── test.enc # 测试集问句
+├──── train.dec # 训练集答句
+├──── train.enc # 训练集问句
+train.enc 问句示例如下： 
+Gosh, if only we could find Kat a boyfriend... 
+C'esc ma tete. This is my head 
+How is our little Find the Wench A Date plan progressing? 
+（2）创建词汇表，然后把问句和答句转换成对应的id 形式。词汇表的文件里面有2 万个词
+汇，如下：
+├──── vocab20000.dec # 答句的词汇表
+①
+本节代码参本https://github.com/suriyadeepan/easy_seq2seq。需要依赖TensorFlow 0.12.1 环境，请读者自行适配。
+② http://www.cs.cornell.edu/~cristian/Cornell_Movie-Dialogs_Corpus.html
+
+192 ff 第二篇 实战篇 
+└──── vocab20000.enc # 问句的词汇表
+词汇表的内容如下：
+_PAD 
+_GO 
+_EOS 
+_UNK 
+. 
+' 
+, 
+I 
+? 
+you 
+the 
+to 
+a 
+s 
+t 
+it 
+其中_GO、_EOS、_UNK、_PAD 是在seq2seq 模型中使用的特殊标记，用来填充标记对话：
+_GO 标记对话开始；_EOS 标记对话结束；_UNK 标记未出现在词汇表中的字符，用来替换稀
+有词汇；_PAD 是用来填充序列，保证批次中的序列有相同的长度。 
+转换成的ids 文件如下： 
+├──── test.enc.ids20000
+├──── train.dec.ids20000
+└──── train.enc.ids20000
+问句和答句转换成的ids 文件中，每一行是一个问句或答句，每一行中的每一个id 代表问
+句或答句中对应位置的词，格式如下：
+185 4 4 4 146 131 5 1144 39 313 53 102 1176 12042 4 2020 9 2691 9 
+792 15 4 
+7518 4 
+2993 49 88 109 54 13 765 466 252 4 4 4 
+（3）采用编码器-解码器框架进行训练。 
+1．定义训练参数 
+这里，我们将参数写到一个专门的文件seq2seq.ini 中，如下： 
+[strings] 
+# 模式: train，test，serve 
+mode = train 
+train_enc = data/train.enc 
+train_dec = data/train.dec 
+
+第11 章 自然语言处理 ee 193 
+test_enc = data/test.enc 
+test_dec = data/test.enc 
+# 模型文件和词汇表的存储路径 
+working_directory = working_dir/ 
+[ints] 
+# 词汇表大小 
+enc_vocab_size = 20000 
+dec_vocab_size = 20000 
+# LSTM 层数 
+num_layers = 3 
+# 每层大小，可以取值：128, 256, 512, 1024 
+layer_size = 256 
+max_train_data_size = 0 
+batch_size = 64 
+# 每多少次迭代存储一次模型  
+steps_per_checkpoint = 300 
+[floats] 
+learning_rate = 0.5 # 学习速率 
+learning_rate_decay_factor = 0.99 # 学习速率下降系数 
+max_gradient_norm = 5.0 
+2．定义网络模型 
+下面来定广seq2seq 模型，该模型的代码在seq2seq_model.py 中，这个代码基于TensorFlow 
+0.12 版本，读者可以重新安装试验。定广一个seq2seq+Attention 模型类
+①，里面主要包含3 个
+函数：
+（1）初始化模型的函数（__init__）； 
+（2）训练模型的函数（step）； 
+（3）获取下一批次训练数据的函数（get_batch）。 
+我们首先来看如何初始化模型，如下：
+class Seq2SeqModel(object): 
+  def __init__(self, source_vocab_size, target_vocab_size, buckets, size, 
+   num_layers, max_gradient_norm, batch_size, learning_rate, 
+  learning_rate_decay_factor, use_lstm=False, 
+    num_samples=512, forward_only=False): 
+    """构建模型 
+参数： 
+     source_vocab_size: 问句词汇表大小 
+     target_vocab_size: 答句词汇表大小 
+     buckets: (I,O), 其中I 的定最大输入长度，O 的定最大输出长度 
+①
+参本论文《Grammar as a Foreign Language》：http://arxiv.org/abs/1412.7449。 
+
+194 ff 第二篇 实战篇 
+     size: 每一层的神经元数量 
+     num_layers: 模型层数 
+     max_gradient_norm: 梯度将被削减到最大的规范 
+     batch_size: 批次大小。用于训练和预测的批次大小，可以不同 
+     learning_rate: 学习速率 
+     learning_rate_decay_factor: 调整学习速率 
+     use_lstm: 使用LSTM 的元来代替GRU 的元 
+     num_samples: 使用softmox 的样本数 
+     forward_only: 是否仅构建前向传播 
+   """ 
+   self.source_vocab_size = source_vocab_size 
+   self.target_vocab_size = target_vocab_size 
+   self.buckets = buckets 
+   self.batch_size = batch_size 
+   self.learning_rate = tf.Variable(float(learning_rate), trainable=False) 
+   self.learning_rate_decay_op = self.learning_rate.assign( 
+self.learning_rate * learning_rate_decay_factor) 
+   self.global_step = tf.Variable(0, trainable=False) 
+   output_projection = None 
+   softmax_loss_function = None 
+   # 如果样本量比词汇表的量小，那么要用抽样的softmax 
+   if num_samples > 0 and num_samples < self.target_vocab_size: 
+     w = tf.get_variable("proj_w", [size, self.target_vocab_size]) 
+     w_t = tf.transpose(w) 
+     b = tf.get_variable("proj_b", [self.target_vocab_size]) 
+     output_projection = (w, b) 
+     def sampled_loss(inputs, labels): 
+    labels = tf.reshape(labels, [-1, 1]) 
+    return tf.nn.sampled_softmax_loss(w_t, b, inputs, labels, num_samples, 
+    self.target_vocab_size) 
+    softmax_loss_function = sampled_loss 
+   # 构建RNN 
+   single_cell = tf.nn.rnn_cell.GRUCell(size) 
+   if use_lstm: 
+ single_cell = tf.nn.rnn_cell.BasicLSTMCell(size) 
+   cell = single_cell 
+   if num_layers > 1: 
+     cell = tf.nn.rnn_cell.MultiRNNCell([single_cell] * num_layers) 
+   # Attention 模型 
+   def seq2seq_f(encoder_inputs, decoder_inputs, do_decode): 
+ return tf.nn.seq2seq.embedding_attention_seq2seq( 
+    encoder_inputs, decoder_inputs, cell, 
+    num_encoder_symbols=source_vocab_size, 
+ num_decoder_symbols=target_vocab_size, 
+    embedding_size=size, 
+    output_projection=output_projection, 
+    feed_previous=do_decode) 
+
+第11 章 自然语言处理 ee 195 
+   # 给模型填充数据 
+   self.encoder_inputs = [] 
+   self.decoder_inputs = [] 
+   self.target_weights = [] 
+   for i in xrange(buckets[-1][0]): 
+     self.encoder_inputs.append(tf.placeholder(tf.int32, shape=[None], 
+name="encoder{0}".format(i))) 
+ for i in xrange(buckets[-1][1] + 1): 
+     self.decoder_inputs.append(tf.placeholder(tf.int32, shape=[None], 
+name="decoder{0}".format(i))) 
+     self.target_weights.append(tf.placeholder(tf.float32, shape=[None], 
+name="weight{0}".format(i))) 
+   # targets 的值是解码器偏移1 位 
+   targets = [self.decoder_inputs[i + 1] 
+for i in xrange(len(self.decoder_inputs) - 1)] 
+   # 训练模型的输出 
+   if forward_only: 
+     self.outputs, self.losses = tf.nn.seq2seq.model_with_buckets( 
+self.encoder_inputs, self.decoder_inputs, targets, 
+self.target_weights, buckets, lambda x, y: seq2seq_f(x, y, True), 
+softmax_loss_function=softmax_loss_function) 
+     if output_projection is not None: 
+ for b in xrange(len(buckets)): 
+self.outputs[b] = [ 
+tf.matmul(output, output_projection[0]) + output_projection[1] 
+for output in self.outputs[b] 
+] 
+   else: 
+     self.outputs, self.losses = tf.nn.seq2seq.model_with_buckets( 
+self.encoder_inputs, self.decoder_inputs, targets, 
+self.target_weights, buckets, 
+lambda x, y: seq2seq_f(x, y, False), 
+softmax_loss_function=softmax_loss_function) 
+   # 训练模型时，更新梯度 
+   params = tf.trainable_variables() 
+   if not forward_only: 
+     self.gradient_norms = [] 
+     self.updates = [] 
+     opt = tf.train.GradientDescentOptimizer(self.learning_rate) 
+     for b in xrange(len(buckets)): 
+gradients = tf.gradients(self.losses[b], params) 
+clipped_gradients, norm = tf.clip_by_global_norm(gradients, 
+max_gradient_norm) 
+self.gradient_norms.append(norm) 
+self.updates.append(opt.apply_gradients( 
+zip(clipped_gradients, params), global_step=self.global_step)) 
+
+196 ff 第二篇 实战篇 
+   self.saver = tf.train.Saver(tf.all_variables()) 
+接着，定广运行模型的每一步：
+  def step(self, session, encoder_inputs, decoder_inputs, target_weights, 
+bucket_id, forward_only): 
+   """运行模型的每一步 
+   参数: 
+     session: tensorflow session  
+     encoder_inputs: 问句向量序列 
+     decoder_inputs: 答句向量序列 
+     target_weights: target weights 
+     bucket_id: 输入的bucket_id 
+     forward_only: 是否只做前向传播 
+   """ 
+   encoder_size, decoder_size = self.buckets[bucket_id] 
+   if len(encoder_inputs) != encoder_size: 
+ raise ValueError("Encoder length must be equal to the one in bucket," 
+   " %d != %d." % (len(encoder_inputs), encoder_size)) 
+   if len(decoder_inputs) != decoder_size: 
+ raise ValueError("Decoder length must be equal to the one in bucket," 
+   " %d != %d." % (len(decoder_inputs), decoder_size)) 
+   if len(target_weights) != decoder_size: 
+ raise ValueError("Weights length must be equal to the one in bucket," 
+     " %d != %d." % (len(target_weights), decoder_size)) 
+   # 输入填充 
+   input_feed = {} 
+   for l in xrange(encoder_size): 
+     input_feed[self.encoder_inputs[l].name] = encoder_inputs[l] 
+   for l in xrange(decoder_size): 
+     input_feed[self.decoder_inputs[l].name] = decoder_inputs[l] 
+     input_feed[self.target_weights[l].name] = target_weights[l] 
+   last_target = self.decoder_inputs[decoder_size].name 
+   input_feed[last_target] = np.zeros([self.batch_size], dtype=np.int32) 
+   # 输出填充： 与是否有后向传播有关 
+   if not forward_only: 
+     output_feed = [self.updates[bucket_id],   
+self.gradient_norms[bucket_id],   
+self.losses[bucket_id]]   
+   else: 
+     output_feed = [self.losses[bucket_id]]   
+     for l in xrange(decoder_size):   
+output_feed.append(self.outputs[bucket_id][l]) 
+
+第11 章 自然语言处理 ee 197 
+   outputs = session.run(output_feed, input_feed) 
+   if not forward_only: 
+     return outputs[1], outputs[2], None  #有后向传播下的输出： 梯度，损失值, None 
+   else: 
+     return None, outputs[0], outputs[1:]  # 仅有前向传播下的输出：None，损失值, outputs 
+接下来是get_batch 函数，它的主要作用是为训练的每一步（step）产生一个批次的数据。 
+  def get_batch(self, data, bucket_id): 
+  """ 
+    这个函数的作用是从的定的桶中获取一个批次的随机数据，在训练的每步（step）中使用 
+    参数： 
+data：长度为（self.buckets）的元组，其中每个元素都包含用于创建批次的输入和输出数据对的列表 
+bucket_id：整数，从哪个bucket 获取本批次 
+    返回： 
+     一个包含三项的元组（encoder_inputs，decode_inputs，target_weights） 
+  """ 
+3．训练模型 
+修改seq2seq.ini 文件中的mode 值，当值为“train”时，可以运行execute.py 进行训练。关
+键逻辑代码如下：
+def train(): 
+  # 准备数据集 
+  print("Preparing data in %s" % gConfig['working_directory']) 
+  enc_train, dec_train, enc_dev, dec_dev, _, _ = data_utils.prepare_custom_data  
+(gConfig['working_directory'],gConfig['train_enc'],gConfig['train_dec'], 
+  gConfig['test_enc'],gConfig['test_dec'],gConfig['enc_vocab_size'], 
+ gConfig['dec_vocab_size']) 
+  config = tf.ConfigProto() 
+  config.gpu_options.allocator_type = 'BFC' 
+  with tf.Session(config=config) as sess: 
+   # 构建模型 
+ print("Creating %d layers of %d units." % (gConfig['num_layers'], gConfig 
+['layer_size'])) 
+   model = create_model(sess, False) 
+   # 把数据读入桶（bucket）中，并计算桶的大小 
+ print ("Reading development and training data (limit: %d)." 
+% gConfig['max_train_data_size']) 
+   dev_set = read_data(enc_dev, dec_dev) 
+   train_set = read_data(enc_train, dec_train, gConfig['max_train_data_size']) 
+   train_bucket_sizes = [len(train_set[b]) for b in xrange(len(_buckets))] 
+   train_total_size = float(sum(train_bucket_sizes)) 
+   train_buckets_scale = [sum(train_bucket_sizes[:i + 1]) / train_total_size 
+    for i in xrange(len(train_bucket_sizes))] 
+   # 开始训练循环 
+
+198 ff 第二篇 实战篇 
+   step_time, loss = 0.0, 0.0 
+   current_step = 0 
+   previous_losses = [] 
+   while True: 
+     # 随机生成一个0-1 的数，在生成bucket_id 中使用 
+     random_number_01 = np.random.random_sample() 
+     bucket_id = min([i for i in xrange(len(train_buckets_scale)) 
+if train_buckets_scale[i] > random_number_01]) 
+     # 获取一个批次的数据，并进行一步训练 
+     start_time = time.time() 
+     encoder_inputs, decoder_inputs, target_weights = model.get_batch( 
+ train_set, bucket_id) 
+     _, step_loss, _ = model.step(sess, encoder_inputs, decoder_inputs, 
+target_weights, bucket_id, False) 
+     step_time += (time.time() - start_time) / gConfig['steps_per_checkpoint'] 
+     loss += step_loss / gConfig['steps_per_checkpoint'] 
+     current_step += 1 
+     # 保存检查点文件，打印统计数据 
+     if current_step % gConfig['steps_per_checkpoint'] == 0: 
+ perplexity = math.exp(loss) if loss < 300 else float('inf') 
+ print ("global step %d learning rate %.4f step-time %.2f perplexity " 
+"%.2f" % (model.global_step.eval(), model.learning_rate.eval(), 
+step_time, perplexity)) 
+# 如果损失值在最近3 次内没有再降低，就减小学习率. 
+if len(previous_losses) > 2 and loss > max(previous_losses[-3:]): 
+sess.run(model.learning_rate_decay_op) 
+previous_losses.append(loss) 
+# 保存检查点文件，并把计数器和损失值归零 
+checkpoint_path = os.path.join(gConfig['working_directory'], "seq2seq.ckpt") 
+model.saver.save(sess, checkpoint_path, global_step=model.global_step) 
+step_time, loss = 0.0, 0.0 
+4．验证模型 
+修改seq2seq.ini 文件中的mode 值，当值为“test”时，可以运行execute.py 进行测试。关
+键逻辑代码如下：
+def decode(): 
+  with tf.Session() as sess: 
+   # 建立模型，并定广超参数batch_size 
+   model = create_model(sess, True) 
+   model.batch_size = 1  # 这里一次只解码一个句子 
+   # 加载词汇表文件 
+   enc_vocab_path = os.path.join(gConfig['working_directory'],"vocab%d.enc" % 
+
+第11 章 自然语言处理 ee 199 
+gConfig['enc_vocab_size']) 
+   dec_vocab_path = os.path.join(gConfig['working_directory'],"vocab%d.dec" % 
+gConfig['dec_vocab_size']) 
+   enc_vocab, _ = data_utils.initialize_vocabulary(enc_vocab_path) 
+   _, rev_dec_vocab = data_utils.initialize_vocabulary(dec_vocab_path) 
+   # 对标准输入的句子进行解码 
+   sys.stdout.write("> ") 
+   sys.stdout.flush() 
+   sentence = sys.stdin.readline() 
+   while sentence: 
+     # 得到输入句子的token-ids 
+     token_ids = data_utils.sentence_to_token_ids(tf.compat.as_bytes(sentence),  
+enc_vocab) 
+     # 计算这个token_ids 属于哪一个桶（bucket） 
+     bucket_id = min([b for b in xrange(len(_buckets)) 
+if _buckets[b][0] > len(token_ids)]) 
+     # 将句子送入到模型中 
+     encoder_inputs, decoder_inputs, target_weights = model.get_batch( 
+{bucket_id: [(token_ids, [])]}, bucket_id) 
+     _, _, output_logits = model.step(sess, encoder_inputs, decoder_inputs, 
+target_weights, bucket_id, True) 
+     # 这是一个贪心的解码器，输出只是output_logits 的argmaxes。 
+ outputs = [int(np.argmax(logit, axis=1)) for logit in output_logits] 
+     # 如果输出中有EOS 符号，在EOS 处切断 
+     if data_utils.EOS_ID in outputs: 
+ outputs = outputs[:outputs.index(data_utils.EOS_ID)] 
+     # 打印出与输出句子对应的法语句子 
+     print(" ".join([tf.compat.as_str(rev_dec_vocab[output]) for output in 
+outputs])) 
+     print("> ", end="") 
+     sys.stdout.flush() 
+     sentence = sys.stdin.readline() 
+我们训练了417 次后，生成了大小为209 MB 的seq2seq.ckpt-417.data-00000-of-00001 模型
+文件，开始进行测试，结果如下（行首有“>”的是我的输入，没有的是机器人的输出）： 
+> Hello 
+Hi . 
+> I love you. 
+Yeah . 
+> What 
+What? 
+> Sunny day
+What? 
+
+200 ff 第二篇 实战篇 
+如果再输入复杂的语句，机器人的表现就不尽如人意了。这只是个模型的简的演示实现，
+侧重于关注聊天机器人的原理。有兴趣的读者可以以优质的中文对话语料训练一个简易版的中
+文对话机器人。
+前面介绍了基于文字的智能聊天机器人，如果再结合上语音识别，就产生了可以直接对话
+的机器人。它的系统架构
+①如图11-4 所示。 
+图11-4 
+国内的智能聊天机器人有很多。例如，图灵机器人公司，着力于提高对话和语广准确度，
+提升中文语境下的智能程度；竹间智能科技也在研究有记忆、自学习的情感机器人，致力于机
+器人可以真正理解多模式多渠道的信息，并给予高度拟人化的回应，希望能以最理想的自然语
+言交流模式交流；此外，腾讯公司也有很多的社交对话数据，在聊天机器人方面可能会有更大
+的潜力。
+目前国内微信应用应该是有最庞大的自然语言交流的语料库，那么微信如果在这方面发
+力，利用它庞大真实的数据，结合它的小程序希望成为所有服务的入口的目的，有很多事情可
+以想象。例如，未来的场景可能是，我们对着“微信助手”说，定个石锅拌饭，它就直接跳到
+外卖的小程序，很容易完成下的，用完即走。
+11.4  小结 
+本章主要介绍了TensorFlow 在自然语言处理中的应用，以英文数字语言识别和智能聊天
+机器人为例，讲解了如何处理数据集，构建网络，进行训练和预测。关于自然语言处理还有
+很多方面，如文本情感分析、信息检索与问答系统、机器翻译、语言合成等，读者也可以多
+进行尝试。
+①
+参见《中国人工智能学会通讯》2016 年第6 卷第1 期。

@@ -1,0 +1,530 @@
+第6章 Kubernetes Service
+在前面的章节中，我们了解了一些被用来部署和运行应用的
+Kubernetes对象。其中Pod是最基本的用来部署微服务应用的单元，而
+Deployment增加了诸如扩缩容、自愈和滚动升级等特性。不过尽管
+Deployment有种种优点，仍有一点问题未解决——毕竟我们不能仅仅
+依靠各Pod的IP来访问它们。这时候就需要Kubernetes的Service对象
+出马了——它能够为一组动态的Pod提供稳定可靠的网络管理能力。
+本章将从以下几个部分来展开。
+●要点前瞻。
+●原理。
+●实战。
+●实例。
+6.1 要点前瞻
+在详细介绍之前，我们需要明确的是，Pod的IP地址是不可靠的。
+在某个Pod失效之后，它会被一个拥有新的IP的Pod代替。Deployment
+扩容也会引入拥有新IP的Pod；而缩容则会删除Pod。这会导致大量的
+IP流失，因而Pod的IP地址是不可靠的。
+关于Kubernetes Service有3点请读者注意。
+首先，明确一下术语。本书中以大写字母出现的Service，指的是
+Kubernetes中用来为Pod提供稳定的网络服务的Service对象。就像
+Pod、ReplicaSet或Deployment，一个Kubernetes Service是指我们在
+更多IT书籍请关注：www.cmsblogs.cn
+
+部署文件中定义的API中的一个REST对象，最终需要POST到API
+Server。
+其次，每一个Service都拥有固定的IP地址、固定的DNS名称，以
+及固定的端口。
+最后，Service利用Label来动态选择将流量转发至哪些Pod。
+6.2 原理
+图6.1所示为通过Kubernetes Deployment部署的一个简单的基于
+Pod的应用。可以看到客户端（也可能是应用的其他组件）无法通过一
+个可靠的网络端口来访问Pod。请记住，直接与独立的Pod进行通信是
+不明智的，因为这些Pod可能在进行扩容、升级、回滚或发生故障等过
+程中失效。
+图6.1
+更多IT书籍请关注：www.cmsblogs.cn
+
+图6.2所示为同样的一个应用，不过其中增加了一个Service。这
+个Service可以将各个Pod与客户端一侧，通过固定的IP、DNS和端口连
+接起来。同时还可以对请求进行负载均衡。
+图6.2
+由于Service的存在，这些Pod可以扩容或缩容，可以出现故障，
+也可以进行更新或回滚。当这些操作发生的时候，前方的Service能够
+监测到这些变化，并且更新其关联的健康Pod的列表。同时，可以保持
+IP、DNS和暴露的端口是固定不变的。
+我们可以将Service理解为具有固定的前端和动态的后端的中间
+层。所谓前端，主要由IP、DNS名称和端口组成，始终不变；而后端，
+则主要由一系列的Pod构成，会时常发生变化。
+更多IT书籍请关注：www.cmsblogs.cn
+
+6.2.1 Label与松耦合
+Service与Pod之间是通过Label和Label筛选器（selector）松耦
+合在一起的。Deployment和Pod之间也是通过这种方式进行关联的，这
+种松耦合方式是Kubernetes具备足够的灵活性的关键。正如图6.3的例
+子所示，Service的Label筛选器可以匹配到3个拥有zone=prod和
+version=1的Pod。
+图6.3
+对于图6.3的例子来说，Service为这3个Pod提供了稳定的网络连
+接方式：到达Service的请求会被转发到各个Pod，Service能够提供简
+单的负载均衡功能。
+对于Service与Pod的关联关系来说，所有匹配的Pod必须拥有
+Service Label筛选器中定义的所有Label。当然，所匹配的Pod也可以
+拥有其他不在Service Label筛选器中的Label。图6.4和图6.5可以帮
+助读者理解这句话。
+更多IT书籍请关注：www.cmsblogs.cn
+
+图6.4
+由图6.4的例子可见，Service并未匹配到任何一个Pod。这是因为
+Service需要的是拥有两个Label的Pod，而这些Pod却仅有一个Label。
+这里的逻辑是“与”的关系。
+而图6.5的例子是有效的。因为各个Pod都有Service需要的两个
+Label，Service并不关心其他额外的Label。这里最重要的是，被匹配
+的Pod要拥有Service所查找的所有Label。
+更多IT书籍请关注：www.cmsblogs.cn
+
+图6.5
+下面是分别来自Service和Deployment的YAML文件中的代码，阐释
+了Label及其筛选器是如何实现的。我在相应的部分进行了注释。
+svc.yml代码如下。
+apiVersion: v1  
+kind: Service  
+metadata:  
+  name: hello-svc  
+spec:  
+  ports:  
+  - port: 8080  
+  selector:  
+    app: hello-world    # Label筛选器  
+    # Service正在查找带有app=hello-world的Pod
+deploy.yml代码如下。
+更多IT书籍请关注：www.cmsblogs.cn
+
+apiVersion: apps/v1  
+kind: Deployment  
+metadata:  
+  name: hello-deploy 
+spec:  
+  replicas: 10  
+  selector:  
+    matchLabels:  
+      app: hello-world  
+  template:  
+    metadata:  
+      labels:  
+        app: hello-world    # Pod的Label  
+        # 这个Label与Service的Label筛选器是匹配的  
+    spec:  
+      containers:  
+      - name: hello-ctr  
+        image: nigelpoulton/k8sbook:latest  
+        ports:  
+        - containerPort: 8080
+在上面的例子中，Service有一个Label筛选器
+（spec.selector），它包含一个值：app=hello-world。这就是
+Service在集群中查找所匹配的Pod时所用的Label。Deployment在定义
+Pod模板的时候使用了相同的（app=hello-world）
+Label（spec.template.metadata.labels）。这就意味着该
+Deployment所部署的所有Pod都拥有这个app=hello-world的Label。正
+是这两个属性将Service和Deployment的Pod联系在一起。
+在Deployment和Service部署之后，Service会匹配到全部的10个
+Pod副本，并为它们提供一个固定的网络端口，以及对流量的负载均
+衡。
+6.2.2 Service和Endpoint对象
+更多IT书籍请关注：www.cmsblogs.cn
+
+随着Pod的时常进出（扩容和缩容、故障、滚动升级等），
+Service会动态更新其维护的相匹配的健康Pod列表。具体来说，其中
+的匹配关系是通过Label筛选器和名为Endpoint对象的结构共同完成
+的。
+每一个Service在被创建的时候，都会得到一个关联的Endpoint对
+象。整个Endpoint对象其实就是一个动态的列表，其中包含集群中所
+有的匹配Service Label筛选器的健康Pod。
+Kubernetes会不断地检查Service的Label筛选器和当前集群中健
+康Pod的列表。如果有新的能够匹配Label筛选器的Pod出现，它就会被
+加入Endpoint对象，而消失的Pod则会被剔除。也就是说，Endpoint对
+象始终是保持更新的。这时，当Service需要将流量转发到Pod的时
+候，就会到Endpoint对象中最新的Pod的列表中进行查找。
+当要通过Service转发流量到Pod时，通常会先在集群的内部DNS中
+查询Service的IP地址。流量被发送到该IP地址后，会被Service转发
+到其中一个Pod。不过，Kubernetes原生应用（知悉Kubernetes集群并
+且能够访问Kubernetes API的应用）是可以直接查询Endpoint API，
+而无须查找DNS和使用Service IP的。
+以上就是关于Service如何工作的基本介绍。下面介绍几个具体场
+景。
+6.2.3 从集群内部访问Service
+Kubernetes支持几种不同类型的Service。默认类型是
+ClusterIP。
+ClusterIP Service拥有固定的IP地址和端口号，并且仅能够从集
+群内部访问得到。这一点被内部网络所实现，并且能够确保在Service
+的整个生命周期中是固定不变的。所谓“被内部网络所实现”，意思
+更多IT书籍请关注：www.cmsblogs.cn
+
+是集群网络能够知道，而用户不需要关系具体细节（类似于底层的
+IPTABLES和IPVS规则等）。
+总之，ClusterIP与对应的Service名称一起被注册在集群内部的
+DNS服务中。集群中的所有Pod都“知道”集群的DNS服务，故而所有的
+Pod都能够解析Service名称。
+下面通过一个简单的例子来阐释。
+假设我们创建了一个新的名为“magic-sandbox”的Service，那
+么就会触发以下动作。Kubernetes会将Service的名字“magic-
+sandbox”和ClusterIP及端口一起注册列集群的DNS服务中。这个名
+字、ClusterIP和端口号被确保长期不变，集群中所有的Pod都可以发
+送“服务发现请求”（Service discovery request）到内部DNS，并
+完成从“magic-sandbox”到ClusterIP的解析。集群中的IPTABLES或
+IPVS规则将确保发送至ClusterIP的流量被正确路由至相应的Pod。
+总而言之，只要Pod（应用的微服务）知道Service的名称，就能
+够解析对应的ClusterIP，进而连接到所需的Pod。
+由于需要访问集群的DNS服务，因此只对Pod和集群中的其他对象
+奏效。对于集群之外的解析则无能为力。
+6.2.4 从集群外部访问Service
+Kubernetes的另一种类型的Service叫作NodePort Service。它在
+ClusterIP的基础上增加了从集群外部访问的可能。
+前面说到ClusterIP是默认的Service类型，并且它会在集群DNS中
+注册一个DNS名称、一个虚拟IP和端口号。而NodePort Service在此基
+础上增加了另一个端口，这个用来从集群外部访问到Service的端口叫
+作NodePort。
+以下的例子表示一个NodePort Service。
+更多IT书籍请关注：www.cmsblogs.cn
+
+●Name:magic-sandbox。
+●ClusterIP:172.12.5.17。
+●port:8080。
+●NodePort:30050。
+从集群内部，可以通过前3个值（Name、ClusterIP、port）来直
+接访问这个名为magic sandbox的服务。此外，也可以从集群外部，通
+过发送请求到集群中的任何一个节点的IP上的端口30050来访问它。
+技术栈的最下一层就是运行Pod的集群节点。在使用Label将
+Service和Pod关联起来之后，该Service对象有一个可靠的NodePort与
+集群中的每一个节点映射：NodePort的值在每一个节点上都是相同
+的。这意味着，从集群外部，到达集群中的任何一个节点的NodePort
+的流量都可以直接到达应用（Pod）。
+如图6.6所示，3个Pod经由NodePort Service通过每个节点上的端
+口30050对外提供服务。第①步，来自一个外部客户端的请求到达
+Node2的30050端口。第②步，请求被转发至Service对象（即使Node2
+上压根没有运行该Service关联的Pod）。第③步，与该Service对应的
+Endpoint对象维护了实时更新的与Label筛选器匹配的Pod列表。第④
+步，请求被转发至Node1上的Pod1。
+更多IT书籍请关注：www.cmsblogs.cn
+
+图6.6
+Service也可能将请求转发至Pod2或Pod3。事实上，由于Service
+会提供基础的负载均衡能力，因此后续的请求可能就会被转发至其他
+Pod。
+Kubernetes还有其他类型的Service，比如LoadBalancer和
+ExternalName。
+LoadBalancer Service能够与诸如AWS、Azure、DO、IBM云和GCP
+等云服务商提供的负载均衡服务集成。它基于NodePort Service（它
+又基于ClusterIP Service）实现，并在此基础上允许互联网上的客户
+端能够通过云平台的负载均衡服务到达Pod。它非常易于设置和使用，
+不过只能在受支持的云平台上的Kubernetes集群中才能生效。比如，
+我们不能让运行在Microsoft Azure云上的Kubernetes集群利用AWS上
+才有的ELB负载均衡服务。
+更多IT书籍请关注：www.cmsblogs.cn
+
+ExternalName Service能够将流量路由至Kubernetes集群之外的
+系统中去（所有其他类型的Service都是在集群内部进行流量的路
+由）。
+6.2.5 服务发现
+Kubernetes通过以下方式来实现服务发现（Service
+discovery）。
+●DNS（推荐）。
+●环境变量（绝对不推荐）。
+基于DNS的服务发现需要DNS集群插件（cluster-add-on）——它
+其实就是Kubernetes的DNS原生服务的另一种说法。我似乎不记得有任
+何Service是没有用到它的，如果是按照本书第3章的方法来安装的集
+群，那么读者就已经拥有该服务了。在其内部实现了以下功能。
+●运行DNS服务的控制层Pod。
+●一个面向所有Pod的名为kube-dns的服务。
+●Kubelet为每一个容器都注入了该DNS（通
+过/etc/resolv.conf）。
+这个DNS插件会持续监测API Server中新Service的动向，并且自
+动注册到DNS中。因此，每一个Service都有一个可以在整个集群范围
+内都能解析的DNS名称。
+另一种实现服务发现的方式是借助环境变量。每一个Pod中都有能
+够解析集群中所有Service的一组环境变量。不过，这种方式极其受
+限，仅仅在不使用集群中的DNS服务时才会被考虑。
+关于环境变量方式的最大问题在于，环境变量只有在Pod最初创建
+的时候才会被注入。这就意味着，Pod在创建之后是并不知道新
+更多IT书籍请关注：www.cmsblogs.cn
+
+Service的。这种方式并不理想，也因此更加推荐DNS方式。况且当集
+群中有大量Service的时候，这种方式也比较吃力。
+6.2.6 小结
+Service的核心作用就是为Pod提供稳定的网络连接。除此之外，
+还提供负载均衡和从集群外部访问Pod的途径。
+Service对外提供固定的IP、DNS名称和端口，并确保这些信息在
+Service的整个生命周期中是不变的。Service对内则使用Label来将流
+量均衡转发至应用的各个（通常是动态变化的）Pod中。
+6.3 Service实战
+下面我们通过上手操作来验证一下6.2节介绍的原理。
+我们会与一个简单的单Pod应用增加一个Kubernetes Service，包
+括两种方式。
+●命令式（不推荐）。
+●声明式。
+6.3.1 命令式
+注意！命令式并非Kubernetes的推荐方式。因为这种方式会引入
+由于命令式操作所带来的变化没有随即更新到声明式的部署文件中，
+而导致出现不一致的风险。尤其是，当未更新的部署文件被再次拿来
+进行部署操作的时候，会不经意间覆盖命令式操作所作出的改动。
+更多IT书籍请关注：www.cmsblogs.cn
+
+首先使用kubectl来声明式地部署以下的Deployment（后续的步骤
+会采用命令式）。
+以下所示的名为deploy.yml的YAML文件可以在本书GitHub代码库
+中的Services目录下找到。
+apiVersion: apps/v1  
+kind: Deployment  
+metadata:  
+  name: web-deploy  
+spec:  
+  replicas: 10  
+  selector:  
+    matchLabels:  
+      app: hello-world  
+  template:  
+    metadata:  
+      labels:  
+        app: hello-world  
+    spec:  
+      containers:  
+      - name: hello-ctr  
+        image: nigelpoulton/k8sbook:latest 
+        ports:  
+        - containerPort: 8080  
+  
+$ kubectl apply -f deploy.yml  
+deployment.apps/web-deploy created
+现在Deployment已经运行起来了，下面改用命令式的方法为它部
+署一个Service。
+命令式创建Kubernetes Service的命令是kubectl expose。执行
+以下命令来创建一个新的Service，它能够为上面部署的Pod提供网络
+和负载均衡。
+$ kubectl expose deployment web-deploy \ 
+  --name=hello-svc \  
+  --target-port=8080 \  
+更多IT书籍请关注：www.cmsblogs.cn
+
+  --type=NodePort  
+  
+Service/hello-svc exposed 
+这里解释一下以上命令做了什么。kubectl expose命令用来创建
+一个新的Service对象。deployment web-deploy是告诉Kubernetes要
+对外提供服务的是前面创建的名为web deploy的Deployment对象。--
+name=hello-svc为Service指定名字hello-svc，--target-port=8080
+则用来执行要监听的端口（这不是用来访问Service的NodePort）。最
+后，--type=NodePort告诉Kubernetes我们需要一个集群范围的
+Service端口。
+一旦Service被创建，我们就可以用kubectl describe svc
+hello-svc命令来查看它了。
+$ kubectl describe svc hello-svc  
+Name:                     hello-svc  
+Namespace:                default  
+Labels:                   <none>  
+Annotations:              <none>  
+Selector:                 app=hello-world  
+Type:                     NodePort  
+IP:                       192.168.201.116  
+Port:                     <unset>  8080/TCP  
+TargetPort:               8080/TCP  
+NodePort:                 <unset>  30175/TCP  
+Endpoints:                
+192.168.128.13:8080,192.168.128.249:8080, + more... 
+Session Affinity:         None  
+External Traffic Policy:  Cluster  
+Events:                   <none> 
+输出的内容中有些值得注意的值。
+●Selector是Service的Label筛选器中定义的一系列Label。
+●IP是Service的终身内部ClusterIP（VIP）。
+●Port是Service在集群内部监听的端口。
+更多IT书籍请关注：www.cmsblogs.cn
+
+●TargetPort是应用正在监听的端口。
+●NodePort是可在集群外部访问该Service的端口。
+●Endpoints是当前能够匹配该Service的Label筛选器的所有健康
+Pod的IP的动态列表。
+可见，该Service从集群外可访问的端口是30175，此时可以打开
+浏览器来访问应用了。不过，必须知道集群中至少一个节点的IP地
+址，如果是通过互联网提供服务，那么就需要一个可以在公网路由到
+的IP。
+图6.7所示的界面是通过IP地址54.246.255.52和端口30175来访问
+得到的。
+图6.7
+刚刚部署的是一个简单的Web应用。它被构建为监听8080端口，不
+过通过我们的配置，Kubernetes的Service可以将集群中每一个节点的
+30175端口映射至应用的8080端口。默认情况下，集群范围的端口
+更多IT书籍请关注：www.cmsblogs.cn
+
+（NodePort）是介于30000～32767之间的。上面的例子是其自动分配
+的，我们也可以指定一个端口号。
+下面将要介绍的是如何用一种更适合的方式——声明式——来达
+到同样的效果。在此之前，我们先将刚刚创建的Service删除掉。执行
+kubectl delete svc命令即可。
+$ kubectl delete svc hello-svc 
+Service "hello-svc" deleted
+6.3.2 声明式
+下面要介绍的是Kubernetes推荐的更加合适的方式。
+1.Service部署文件
+以下Service部署文件可以用来部署与前面相同的Service。不过
+这次我们会明确指定系统范围的端口。
+apiVersion: v1  
+kind: Service  
+metadata:  
+  name: hello-svc  
+spec:  
+  type: NodePort  
+  ports:  
+  - port: 8080  
+    nodePort: 30001  
+    targetPort: 8080  
+    protocol: TCP  
+  selector:  
+    app: hello-world
+更多IT书籍请关注：www.cmsblogs.cn
+
+下面解释一下部分内容。
+Service是一种成熟的对象，并且在v1 core的API组
+（apiVersion）中被完整定义。
+kind用来告诉Kubernetes这是一个Service的对象。
+metadata部分定义了Service的名称。当然，也可以指定Label，
+这里增加的Label可以被用来识别Service，而不是用来筛选Pod的。
+spec是真正用来定义Service的部分。比如上面的例子，会让
+Kubernetes来部署一个NodePort的Service。port的值表示Service对
+内部请求监听8080端口，而nodePort的值表示对外部请求监听30001端
+口。targetPort的值则是Service后端应用的端口，用来让Kubernetes
+将流量转发至Pod的8080端口。另外，还指定了所使用的协议为
+TCP（默认值）。
+最后，spec.selector表示Service会将流量转发至集群中拥有
+app=hello-world的Label的Pod。也就是说该Service会为拥有这个
+Label的所有Pod提供稳定的网络访问方式。
+在开始部署和测试这个Service之前，我们再次回顾一下几个主要
+的Service类型。
+2.常见的Service类型
+Kubernetes有3个常用的Service类型。
+●ClusterIP。这是默认的类型，这种Service面向集群内部有固
+定的IP地址。但是在集群外是不可访问的。
+●NodePort。它在ClusterIP的基础之上增加了一个集群范围的
+TCP或UDP的端口，从而使Service可以从集群外部访问。
+更多IT书籍请关注：www.cmsblogs.cn
+
+●LoadBalancer。这种Service基于NodePort，并且集成了基于云
+的负载均衡器。
+还有一种名为ExternalName的Service类型，可以用来将流量直接
+导入Kubernetes集群外部的服务。
+前面的配置文件需要被POST到API Server。最简单的方式当然是
+kubectl apply。
+这个名为svc.yml的YAML文件可以在本书GitHub库的Services目录
+下找到。
+$ kubectl apply -f svc.yml 
+Service/hello-svc created
+3.查看Service
+部署Service之后，我们可以通过kubectl get和kubectl
+describe命令来查看它。
+$ kubectl get svc hello-svc  
+NAME        TYPE       CLUSTER-IP   EXTERNAL-IP  PORT(S)    
+AGE  
+hello-svc   NodePort   100.70.40.2  <none>       
+8080:30001/TCP   8s  
+  
+$ kubectl describe svc hello-svc  
+Name:                     hello-svc  
+Namespace:                default  
+Labels:                   <none>  
+Annotations:              kubectl.kubernetes.io/last-
+applied-configuration...  
+Selector:                 app=hello-world  
+Type:                     NodePort  
+IP:                       100.70.40.2  
+Port:                     <unset>  8080/TCP  
+更多IT书籍请关注：www.cmsblogs.cn
+
+TargetPort:               8080/TCP  
+NodePort:                 <unset>  30001/TCP 
+Endpoints:                100.96.1.10:8080, 
+100.96.1.11:8080, + more... 
+Session Affinity:         None  
+External Traffic Policy:  Cluster  
+Events:                   <none> 
+在上例中，我们将Service作为一个NodePort暴露在整个集群的
+30001端口。从而可以通过浏览器输入任意一个节点的IP以及端口
+30001来访问该Service，及其代理的Pod。当然，我们要确保所连接的
+节点的IP是可达的，并且防火墙和其他安全规则是放开的。
+如图6.8所示，浏览器通过节点IP地址54.246.255.52和端口30001
+即可访问该应用。
+图6.8
+4.Endpoint对象
+更多IT书籍请关注：www.cmsblogs.cn
+
+本章前面提到，每一个Service都有一个与其同名的Endpoint对
+象。这个对象维护着所有与该Service匹配的动态的Pod列表。使用
+kubectl命令就可以查看其Endpoint。
+以下命令中的ep为Endpoint的缩写。
+$ kubectl get ep hello-svc  
+NAME        ENDPOINTS                                       
+AGE 
+hello-svc  100.96.1.10:8080, 100.96.1.11:8080 + 8 more...   
+1m  
+  
+$ Kubectl describe ep hello-svc  
+Name:         hello-svc   
+Namespace:    default   
+Labels:       <none>  
+Annotations:  endpoints.kubernetes.io/last-change... 
+Subsets:   
+  Addresses:  100.96.1.10,100.96.1.11,100.96.1.12... 
+  NotReadyAddresses:   <none>  
+  Ports:  
+    Name      Port     Protocol   
+    ----      ----     --------   
+    <unset>   8080     TCP   
+Events: <none> 
+5.小结
+与所有的Kubernetes对象一样，部署和管理Service首推声明式的
+方式。Label用来约束流量应该被转发至哪些Pod。这意味着，我们可
+以对已经运行和使用中的Pod和Deployment部署新的Service。每一个
+Service对应一个维护着其匹配的Pod列表的Endpoint对象。
+6.4 实例
+更多IT书籍请关注：www.cmsblogs.cn
+
+虽然本章介绍的内容很酷也很有趣，却会引出更重要的问题：
+Service的价值在哪？以及Service如何让业务应用的运行和管理更加
+敏捷和具有弹性？
+下面我们花费少量的时间介绍一个常见的现实世界中的例子——
+对应用进行更新。
+众所周知，对应用的更新是运维常态：修复Bug、新的功能、性能
+提升等。
+图6.9中是一个部署在Kubernetes中的简单应用，它由一系列通过
+Deployment管理的Pod构成。其中，有一个Service筛选的是能够同时
+匹配app=biz1和zone=prod的Pod（请注意图中的Pod是如何匹配Label
+筛选器的）。应用目前是运行状态。
+图6.9
+更多IT书籍请关注：www.cmsblogs.cn
+
+现在假设我们需要上线新的版本，并且不能导致服务停用。
+为了达到目的，我们可以增加一批运行着新版应用的Pod，如图
+6.10所示。
+图6.10
+新版的Pod也拥有与Label筛选器所匹配的Label。此时，Service
+是能够对两个版本（version=4.1和version=4.2）的应用进行负载均
+衡的。这是由于Service的Label筛选器是会持续检查的，其Endpoint
+对象会跟进更新所匹配的Pod列表。
+当确认新版本没有问题之后，可以通过对Service的Label筛选器
+追加version=4.2来强制所有的流量转向新版本。这样，旧版本的Pod
+就不再匹配了，Service只会对新版本转发流量（见图6.11）。
+更多IT书籍请关注：www.cmsblogs.cn
+
+图6.11
+不过此时旧版本的Pod依然在运行，只是不再接受任何流量。也就
+是说，此时如果发现新版有任何问题，仍然可以仅仅通过将Label筛选
+器的version=4.1修改为version=4.2来切换回原来的版本。如图6.12
+所示。
+图6.12
+更多IT书籍请关注：www.cmsblogs.cn
+
+现在已经切回旧版本了。
+这一功能可被用于多种运维操作：蓝绿发布、金丝雀发布等。简
+单而强大。
+最后通过以下命令清理以上练习中所使用的Deployment和
+Service。
+$ kubectl delete -f deploy.yml 
+$ kubectl delete -f svc.yml
+6.5 总结
+本章提到，Service能够为部署在Kubernetes中的应用提供稳定可
+靠的网络访问方式。此外，还能够进行负载均衡，并让应用为外部世
+界（Kubernetes集群之外）提供服务。
+Service对外为其所匹配的Pod提供固定的网络访问方式。而对内
+则允许所匹配的Pod动态增减，同时不影响其负载均衡能力。
+Service在Kubernetes的API中是“一等”对象，可以用标准的
+YAML部署文件来定义。它利用Label筛选器来动态地匹配Pod。推荐采
+用声明式的方式来使用Service。
+更多IT书籍请关注：www.cmsblogs.cn

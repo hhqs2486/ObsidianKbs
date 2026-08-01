@@ -1,0 +1,905 @@
+……•a…·· 
+．．．．．．．．．． 
+．
+．．．．． 
+．．．．．
+II 
+•嚣
+•• •
+．．．．
+第2 章；αw忡，
+·．．．．．．．．．．．．．．．．．．．．．．．，．．．．．．．．．．．．．．．． 
+容器引擎
+容器引擎是容器的核心内容，主要是通过容器提供的命令进行容器相关的操作及容器
+状态的转换。通过Docker的API或Docker的Event可以获取容器生命周期中各个状态的
+变化。具体的容器状态变化及执行的命令如图2-1所示。
+docker unpause 
+图2-1
+Docker生命周期转换图
+本章首先大致描述容器引擎的实现原理，然后对这些命令及状态转换进行简单说明，
+帮助读者了解如何创建容器、显示容器状态、访问运行状态容器以及暂停、终止和删除容
+器等操作。这里是基于Docker-ce 18.04版本来介绍具体命令的，这些命令通过Restful形式
+
+22 
+·〉基于Kubernetes的容器云平台实战
+的接口访问Docker 引擎来实现。
+2.1 
+容器引擎实现原理
+如果读者希望不仅了解Docker 所提供的命令以及API 的功能和各种选项，而且能够
+了解这些功能和选项的含义，那么就首先需要了解其实现机制。前面已经对当前Docker 在
+Linux 系统下的实现架构和利用的部分操作系统特性进行了介绍，而且提到了在此架构中由
+Dockerd、Containerd 和RunC 等多个组件配合完成整个容器生命周期的管理功能。那么，
+这些组件又是如何配合来完成各项功能的呢？由于每个组件都为其调用者提供了外部接口，
+那么从这些接口人手来介绍，无疑可以方便地构建出整个容器引擎的功能图景。
+直接为Docker 命令行工具服务的是Dockerd 守护进程，它调用Containerd 提供的接
+口，并进一步通过Containerd-shim 调用RunC 工具实现各种容器引擎功能。这几个功能组
+件之间形成了从上到下三层的相互调用关系，一共有四个功能接口需要加以介绍。很显然，
+要么从最上层的Dockerd API 接口开始介绍，要么从最底层的工具接口开始。考虑到如果从
+最顶层开始介绍，难免使得读者对底层的实现产生疑惑，因此这里采用自底向上的方式来
+介绍它们，首先介绍的是RunC 工具的功能接口。
+其实，
+RunC 工具并不是以后台守护进程的方式运行，它只是一个二进制可执行程序。
+外部程序是通过不同的命令行选项来触发它以执行不同的容器管理功能的。那么，对其外
+部接口介绍实际上就是对各个命令行子命令的功能介绍。如表2-1 所示。
+子命令
+checkpoint 
+create 
+表2-1
+各个RunC 命令行子命令的功能介绍
+说明
+利用criu 工具，根据命令行参数创建容器检查点镜像。只能对当前处于运行或者暂停态的容器执行
+创建检查点，目前只支持对以root用户权限创建的容器执行创建检查点，要求criu 工具版本至少大于
+1.5.2 
+可用命令行参数：保存的criu 镜像文件路径；工作文件和日志路径；前一个criu 镜像文件路径；创
+建检查点后进程是否继续执行标识；允许有打开TCP 连接的标识；允许外部Unix Socket 的标识，允
+许shell 任务的标识；延迟恢复内存页商标识；延迟页面读同步文件符；页面服务器地址和端口；是否
+处理文件锁标识；只导出容器内存信息标识；CGroup 模式默认so位；创建命名空间标识；启用自动内
+存镜像排重标识
+根据bundle 中的config.json 文件，以及该文件中rootfs 指向的容器根文件系统目录，构建容栋隔离
+运行环境，包括执行各种命名空间创建、路径技载、根文件系统切换、CGroup 控制文件参数写人、各
+种安全相关限制条件的执行等，通过管道方式将容器进程的标准输入输出和标准错误流引出，并执行
+pre start 和poststart 钩子程序，最后通过FIFO 文件操作同步等待执行具体的容都进程。此时容器状态
+为Created
+子命令参数给出了容器bundle 目录；用于接收console 伪终端master 端文件符的UNIX Socket 路径；
+写入创建后容器进程P!D 的文件名；在ramdisk 上创建容器时不使用private_root 调用的特殊标识；指
+示继承父进程会话keyring 的特殊标识；为容器进程保留｜除标准输入输出和标准错误之外文件描述符的
+特殊标识。主要的创建参数都通过bundle 目录下的config.json 文件来描述，该文件中的json 数据格式
+已经通过OCI组织标准化了
+仅供二11,Jllj业用
+
+子命令
+delete 
+events 
+exec 
+init 
+kill 
+list 
+pause 
+ps 
+restore 
+resume 
+run 
+spec 
+start 
+state 
+update 
+仅供才｜商业用
+说明
+带有强制删除参数，用于向运行状态容器进程发送SIG阳LL信号
+第2章
+容器引擎
+•！•
+23 
+（续）
+根据ID 对应的容苦苦状态执行信号发送、清理控制组、清理根目录、执行poststop钩子程序等操作，
+容器状态为Stopped
+显示一次或者一段间隔时间里的处于非停止状态容器的统计，包括容器里的PID 、PIO数量限制、
+各级别CPU占用、CPU占用超限统计、各级别内存占用统计、各级别块νo 统计、是否被OOM清除
+掉等
+在E指定的容器的命名空间中以指定模式执行某个应用，应用进程在容器控制组界限内。容器不
+能处于Stopped状态
+专门用于create 或者m操作时的特殊命令，作为容器进程的父进程来创建，负责对各种操作系统
+APT调用的控制，在容器进程正常启动后退出
+向容器主进程或者全部进程发送指定信号，默认发送SIGTERM信号
+根据指定RunC 运行时根目录找到所有还未被清除的以容器皿命名的子目录，以表格或者json格
+式显示对应容器的基本状态信息，包括OCI版本、容器山、主进程号、当前状态、保存配置参数路
+径、根文件系统路径、创建时间、容器所有者和配置中用户定义注解。也可以只显示容器由列表
+针对Running和l Created状态的容器，利用CGroup 中的freezer控制器暂停该容器中所有进程，成功
+后容器状态迁移到Paused
+以表格或者json格式显示以root 用户权限创建的容器中所有进程的基本状态，基本状态用ps 命令
+来获取，用户可通过本命令的参数为ps 命令的执行添加选项，如果没有就使用
+“ －ef
+” 默认选项
+利用criu工具和检查点镜像恢复容器
+针对已经处于Paused状态的指定容器，利用CGroup 中的freezer控制器解冻该容器中所有进程，成
+功后容器状态迁移到Running
+相当于create和start 命令的组合
+可以为通常的root权限方式启动容器场景创建出样例的config扣。n文件，也可以根据参数选项调整
+到非root权限方式的样例文件。样例文件中容器启动运行sh命令
+对已经处于Created状态的容器根文件系统下专门FIFO文件操作触发容器进程实际执行exec调用
+以json格式给出指定容器的基本状态信息，包括OCI版本、容器ID、主进程号、当前状态、保存
+配置参数路径、根文件系统路径、创建时间、容器所有者和配置中用户定义注解。处于Stopped状态
+容器主进程号为0
+可以通过json和单独的命令行参数两种方式传递要修改的资源限制，用来修改非Stopped状态容器
+的CPU 、内存和块l/0权重以及容器进程数限制这几个资源限制值，
+具体通过直接写CGroup控制文
+件实现
+在对容器架构进行介绍的时候已经提到，实现Containerd-shirn 的目的主要是避免容
+器中出现僵尸进程并减轻容器处理系统信号的负担。该组件其实是可选的，但是在目前
+Do eke rd 自动生成的Containerd 的启动配置文件中，已经将该组件设为启用，因此这里要
+介绍其接口功能，以便读者了解Contain巳rd 是如何调用RunC 的。这里说该组件是可选的，
+并不是说不启用该接口时下面介绍的那些功能就消失了，而是说这些功能不再以gRPC 接
+口的形式提供，而是通过内部函数调用的方式完成，同时shim 的专门职责就需要其他程序
+来负责了。
+该组件以守护进程的方式执行，并且要为每个容器都启动一个，因此在实现时，以较
+仅供才｜商业用
+
+24 
+•！•
+基于Kubernetes的窑器云平台实战
+为节省内存的ttRPC来支持gRPC类型的接口，
+该实现目前可能不支持流。
+该组件的启动
+参数中包括日志输出的调试级别；启动该shim的namespace （指的是Containerd中租户对
+应的namespace）；启动服务的监昕socket路径；回调访问Containerd的socket路径；保存
+临时数据的工作目录；RunC的工作根目录；criu 可执行程序路径；是否通过systemd管理
+CGroup的标识。
+启动参数中还带有Containerd的可执行程序路径，
+用于执行containerd
+publish命令来发布事件，
+其中将回调访问Containerd的socket路径作为地址参数，
+事件
+发布由单独线程负责。
+gRPC 接口以某个服务的方法加上请求和响应消息的格式来定义，
+不过，请求和响应消
+息的定义实际上以满足传递前后端接口数据为准，
+从上下文中也不难理解。
+因此，
+这里直
+接以对每个方法的说明来介绍接口的功能，
+而没有再对请求和响应消息进行详细讨论，
+如
+表2-2所示。
+方法
+State 
+Create 
+Start 
+Delete 
+DeleteProcess 
+ListPids 
+Pause 
+Resume 
+Checkpoint 
+Kill 
+Exec 
+ResizePty 
+Close IO 
+Shimlnfo 
+Update 
+Wait 
+表2-2
+Containe时，shim gRPC接口方法及其说明
+说明
+调用rune state命令获取容器状态，对于使用Exec方法后再执行Start方法启动的进程状
+态，要在当前容苦苦状态基础上再额外判断，但是总的状态集合都是一样的，包括created 、running、
+pausing 、paused和stopped o 在获取容器或者正在执行的容器命令的状态的同时，返回对应的P田，
+配置根路径及原始请求中的各种中继流的文件路径。如果已经退出，带有何时退出、退出状态等
+信息
+一般情况下，调用rune create命令创建容器，将已经重定向的容器流中继到发起容器创建的
+请求中带来的FIFO文件中，从RunC创建容器时同时创建的PID 文件中读取容器进程的PID。在
+调用Rune工具的同时，构建内部处理对象，并保存该对象作为后续处理的依据。但是如果请求中
+带有checkpoint 的参数，则不调用RunC命令，而只是记录状态，为后续的Start命令做准备
+针对不同方式创建的内部处理对象，执行不同的RunC命令．对于一般创建的容器，执行rune
+start命令启动容器进程；对于为checkpoint 参数请求准备的对象，执行rune restore命令恢
+复容器；对于Exec方式准备的对象，针对容器执行rune exec命令
+调用rune delete命令完全删除容器，卸载根文件系统，清理内部对象，关闭对流的中继循环
+针对exec方式内部对象，执行清理操作，关闭读写流
+通过以json作为输出的rune
+ps命令得到容器中进程ID列表，并在返回结果中将每个进程E
+和创建时的ID 对应起来
+针对指定容器执行rune pause命令
+针对指定容器执行rune resume命令
+针对指定容器执行rune checkpoint命令
+针对指定容器或者指定任务执行rune kill命令。请求中可以带有要发送的信号名称以及是否
+针对所有子进程的标识
+为后续执行rune exec命令准备好内部处理对象
+对以启用console方式创建的任务执行窗口的resize 操作
+关闭指定任务的标准输入流
+返回当前containerd吐1im进程的PID
+针对指定容器执行rune update命令
+等待指定任务执行结束，并返回其退出时间以及退出代码
+仅供二11,Jllj业用
+
+仅供二ll0nli业用途或交流学习仪ITI
+第2 章窑器号｜擎
+令
+25
+Co ntainerd 组件的API 是以gRPC 形式来定义的。根据其定义文件，可以利用工具自
+动生成桩接口，提供给客户端和服务器端使用。在定义文件中，描述了API 中有哪些服务，
+每个服务又由哪些方法组成，以及每个方法的具体请求和响应消息。
+虽然Co ntainerd 组件定义了覆盖容器管理和镜像管理的API ，但是在使用Docke r 执行
+各种容器和镜像命令的场景中，只有容器管理相关服务才会被调用，而镜像管理相关服务
+在此场景下暂时还没有被用到。这里首先介绍在这种场景下会涉及的几个服务，
+以及服务
+中具体的方法，与前面的理由相似，这里略去了每个方法详细的请求和响应消息定义。
+在谈到Conta inerd 的API 接口时，还是需要再提一下这个组件在实现时的插件机制。
+也许是为了确保Containerd 支持足够灵活的功能集合，包括引入Li nux 下容器runtime 的当
+前参考实现Rune ，以及其他平台下的不同runtime,
+Containerd 内部的所有模块都是以插
+件形式来实现，包括实现API 接口的模块也是作为gRPC 类型的插件提供。而支持这些接
+口插件的是一系列后端模块，它们同样作为插件提供。除此之外，在该组件的API 设计中，
+对于接口消息内部使用的对象，在设计时还较多地采用了一种抽象的数据类型，即goog l e.
+p rotobuf.Any 。该数据类型实际上可以包裹任何其他内容，只要在实际传递时以类似于
+HTTP 头中的媒体类型的类型串描述其包裹的实际内容，接收端就可以据此进行准确解析，
+甚至将其直接填充到其他接口消息中，由最终接收者去关注数据的兼容性，而Containerd
+自身的API 可以保持中立。这是Contain erd AP I 接口的一个特点。
+Containerd 中大部分API 接口在处理时都是基于namespace 进行的，可以将其理解为
+租户的标识。
+目前由Dockerd 发送的请求都默认带有“ mo by ”这样的namespace 。
+Containerd 中内置了一个简单的key - value 性质数据库的开源实现b o lt ，虽然不能支持
+SQL 等功能，但是用于存取各种元数据还是比较高效的。该数据库实现以库的形式提供，
+每个实例的数据存储在单一文件中，存取其中的数据都是以函数调用形式进行的。如表2 - 3
+所示。
+表2-3
+Containerd gRPC 接口方法及其说明
+服务
+方法
+说明
+Version 
+Version 
+返回当前Contain erd 的版本信息
+返回当前系统中已经注册启用的所有捅件的信息，包括每个插件的类型、
+I D 、依
+Introspect10n 
+Plugins 
+赖的插件类型列表、能够支持的平台信息、插件的特性说明和属性说明、初始化错
+误信息等
+Create 
+由客户端指定ID 或者产生时间戳加随机数形式的唯一ID ，以客户端请求的
+namespace ＋“ l ease ＇’＋ID 为key 在数据库中添加记录，要求没有相同key 存在
+Leases 
+Delete 
+删除请求中namespace ＋田对应的租用记录
+List 
+根据过滤条件列出请求的namespace 中的租用ID
+Publish 
+将某个事件发送到指定的“主题”上，事件被包装的时候会带有时间戳和
+namespace 
+Events 
+Forward 
+将一个已经被包装好的事件原封不动地转发给订阅者
+Subscribe 
+这是一个流式的gRPC 接口，满足订阅请求中过滤条件的事件会被包装后发送给
+订阅者
+仅供｜｜商业用淦或交流学习佼用
+
+仅供才｜商业用
+26 
+•！•
+基于Kubernetes的窑器云平台实战
+（续）
+服务
+方法
+说明
+从本地数据库中以namespace ＋
+“ Containers
+” ＋ID读出数据记录，并包装后返回。
+Get 
+数据对象支持完全由发起端来描述以及通过本地镜像管理中标识描述两种模式。数
+据对象中包括了创建容器时的配置数据
+List 
+根据请求namespace和过滤条件列出本地数据库中的容器对象
+Containers 
+Create 
+在本地数据库中以namespace、“Containers
+” 和ID来创建容椿对象记录，以
+“ ／
+containers/create
+” 主题发布容器创建事件
+Update 
+修改本地数据库中指定容器对象记录，以
+“ ／containers/update
+” 为主题发布容器
+更新事件
+Delete 
+删除本地数据库中指定容器记录，以
+“ ／containers/delete
+” 为主题发布容器删除
+事件
+根据namespace和容器ID读取容器对象，启动shim，调用Create方法，发布
+Create 
+task创建事件，再调用shim的State方法，得到任务状态，最后返回容器ID和容
+器进程PID
+根据namespace和容器D读取容器对象，如果是执行通过方法创建的任务
+Start 
+Exec ，还要先执行一次shim的State方法，然后执行shim的Start方法，发布任务
+启动事件。最后，再调用shim的State方法，确认任务对应的PID Jj：返回
+Delete 
+根据namespace和容器ID读取容器对象，执行shim的Delete方法，完全删除容
+器，关闭shim ，发布任务删除事件，返回退出状态码、退出时间和退出的PID
+Delete Process 
+根据namespace和容器ID读取容器对象，根据请求中Exec任务的旧，执行
+shim的DeleteProcess方法，返回该ID、退出状态、退出时间和退出的PID
+根据namespace和容器ID读取容器对象，通过shim的State方法得到容器或者
+Get 
+是容器中执行的命令的对应状态，包括容器ID 或者Exec任务ID 、PID、状态、各
+种流对应路径、可能的退出代码和退出时间
+List 
+针对所有当前容器，逐个通过shim的State方法得到其对应的状态信息，最后返
+回全部的状态列表
+Tasks 
+Kill 
+根据namespace和容器ID读取容器对象，针对容器或者是其中的命令任务，执
+行shim的Kill方法
+Exec 
+要求请求参数中有该次任务的ID，根据namespace和容器ID读取容器对象，执
+行shim的Exec方法
+ResizePty 
+根据namespace和容器ID读取容器对象，不论是容器任务还是Exec任务，者↑I执
+行shim的ResizePty方法
+Close IO 
+根据namespace和容器ID读取容器对象，不论是容器任务还是Exec任务，都执
+行shim的CloselO方法
+Pause 
+根据namespace和容器ID读取容器对象，执行shim的Pause方法，发布任务暂
+停事件
+Resume 
+根据namespace和容器D读取容器对象，执行shim的Resume方法，发布任务
+恢复事件
+ListPids 
+根据namespace和容器[D读取容器对象，执行shim的ListPids方法，返回其中
+包含的信息
+根据namespace和容器D读取容器对象，执行shim的Checkpoint方法，发布为
+Checkpoint 
+任务创建了检查点的事件，同时将写入到临时目录中的内容作为可恢复的特殊层保
+存在本地
+
+仅供，11,nli业用途或交流学习侦！”
+第2 章窑器引擎
+•！•
+27 
+（续）
+服务
+方法
+说明
+Update 
+根据namespace 和容器ID 读取容器对象，执行sh im 的Update 方法
+Metrics 
+通过容都对应的CGroup 控制文件，根据请求的过滤条件，得到各个容器的运行
+Tasks 
+统计
+Wait 
+根据namespace 和容器ID 读取容器对象，不论是容器任务还是Exec 任务，都执
+行shim 的Wait 方法，返回退出状态和退出时间
+在了解了被Dockerd 调用的各个组件的接口功能之后，应该对容器管理功能的内部实
+现方式有一定的感性认识。上层组件通过对下层组件接口的组合调用来完成某项管理功能，
+而下层组件则专注于实现细粒度的功能点。
+同样，
+Dockerd 作为服务于命令行客户端的第一
+个组件，也是将自己的功能以接口的形式暴露出来，只不过这些功能的划分更加接近客户
+端命令的语义而已。
+Dockerd 的接口实现是基于HTTP Restful 形式的，符合swagger 2.0 规范，既能支持
+HTTP ，也可以支持HTTPS 。下面就通过访问接口时使用的HTTP 方法和访问路径，大致
+罗列后面将要提到的容器管理命令相关的一部分API 接口，其他部分的API 接口限于篇幅
+暂时没有涉及。每个访问路径之前基本都带有版本号前缀，这个版本号是通过访问／_p in g
+或者／info 这样的路径获取的。下面的介绍基于vl.37 版本的API 定义。另外，每个访问路
+径中｛id ｝部分可以是容器的ID 或者名称，
+ID 可以是长格式或者短格式。
+由于篇幅的原因，表2 -4 对部分API 接口的介绍中没有包括每个请求的参数描述。不
+过，这里的介绍主要是为了帮助读者了解Dockerd 的框架性功能，所以可忽略一些实现细
+节。如果逐一比较具体的管理命令选项和API 接口的话，也可以大致明白需要哪些接口
+参数。
+表2-4
+部分Docke 「API 接口的介绍
+方法
+访问路径
+说明
+GET 
+/_ping 
+返回服务端AP！版本号、
+Docker 版本号、是否启用实验性功能、操作
+系统类型等
+GET 
+/{v}/version 
+不仅返回Dockerd 的详细版本信息，还返回最低支持的AP！版本号，
+以及操作系统的版本信息
+根据请求参数中的文件或目录名称，利用HπP 头中的一个扩展域返
+HEAD 
+I {v }/containers/ {id}/archive 
+回包含了指定容器中文件或者目录属性的json 数据，包括大小、模式、
+修改时间、链接目标等。该服务用于docker
+cp 命令
+GET 
+I { v} /containers/ {id} /archive 
+以tar 文件形式返回指定容器中某个文件或者目录的内容。该服务用于
+docker cp 命令
+根据参数过滤条件返回json 数据格式的容器列表，给出每个容器的
+GET 
+I { v }/containers/json 
+ID 、名称、对应镜像、启动命令、创建时间、映射端口、尺寸、
+labels 、
+状态、网络模式、网络设置和l 定制挂载等信息，用于docker
+ps 等
+命令
+GET 
+I { v} /containers/ {id ｝心son
+返回指定容器的json 格式详细属性数据，用于docker
+inspec t 等
+命令
+仅供｜｜二商业用途jjJ(交流学习佼用
+
+仅供才lo商业用途DJi.交流~／习使用
+28
+令
+基于Kubernetes 的窑器云平台实战
+（续）
+方法
+访问路径
+说明
+GET 
+I { v }/containers/ {id }/top 
+返回指定容器json 格式的进程信息列表，用于docker
+top 等命令。
+该服务调用C ontainerd 的Tasks 服务的Li s tPids 方法
+GET 
+I ( v} /containers/ {id} /logs 
+根据请求参数从指定容郁的日志驱动中得到所需的日志数据，以流的
+形式返回给客户端。用于docker container logs 命令
+GET 
+I { v }/containers/ {id }/changes 
+从指定容器的读写层中得到全部文件：目录的增删改的列表，以json 格
+式返回给客户端。用于docker container dif f 命令
+GET 
+I { v }/containers/ {id} /export 
+将指定容器的根文件系统视图巾的全部内容以tar 文件二进制数据的形
+式返回给客户端。用于docker container export 命令
+以j so n 格式返回指定容器的资源使用统计数据，客户端要求连续显示
+GET 
+I { v} /containers/ {id} /stats 
+的时候可能会返回多次统计结果，结果中还带有本地读取和｜上次读取的
+精确时间，供客户端计算使用。该服务调用Containerd 的Tasks 服务的
+M e tric s 方法，用于docker container stats 命令
+GET 
+I { v }/exec/ {id }/json 
+以json 格式返回ID 指定的exec 命令的详细信息。用于docker
+container e xec 命令
+POST 
+I { v} /containers/ {id} /resize 
+根据请求参数，针对处于运行状态的容器，调用C ontainerd 的Tasks 服
+务的Res izePty 方法
+根据请求参数为已经创建的内部容器对象分配资源，
+i周用Containerd
+POST 
+I { v }/containers/ {id }/start 
+的Conta iners 服务的Create 方法、
+Tasks 服务的C reate 和l Start 等方法，
+启动运行容器。用于docke r container start 和run 等命令
+根据请求参数停止指定容器。主要调用Containerd 的Tasks 服务的
+POST 
+I { v} /containers/ {id} /stop 
+Kill 和Delete 方法以及Co ntain ers 服务的Delete 方法。
+用于docker
+container stop 命令
+POST 
+I { v }/containers/ {id} /restart 
+该服务功能等于是stop 和s tart 的组合。用于docker container 
+restart 命令
+POST 
+I { v }/containers/ {id} /ki II 
+根据请求参数关闭指定容苦苦。调用的Co ntainerd 服务与stop 功能类似。
+用于docker container kill 命令
+根据请求参数，更改指定容器的资源限制参数以及重启策略。调用
+POST 
+I { v }/containers/ {id} /update 
+Containerd 的Tasks 服务的Update 方法。
+用于docker container 
+update 命令
+POST 
+I { v }/containers/ {id }/rename 
+根据请求参数，更改指定容｛，if 的名称。用于docker container 
+rename 命令
+POST 
+I { v} /containers/ {id} /pause 
+调用Containerd 的Tasks 服务的Pau se 方法，暂停指定容器全部进程。
+用于docker container pause 命令
+POST 
+/ {v} /contain 巳时｛id } /unp ause
+调用Containe rd 的Tasks 服务的Resume 方法，解冻指定容器全部进
+程。用于docker container unpause 命令
+利用Web Socket 将指定容器的标准流关联到客户端，可以根据请求
+POST 
+I { v }/containers/ {id }/attach 
+参数确定是否代理用户输入的系统信号。用于docker container 
+attach 命令
+POST 
+I { v}/containers/ {id }/wait 
+针对指定容器等待并返回其巡IH 代码和退出原因，也可能由人为终止
+等待操作。用于docker
+contai口er
+wait 等命令
+POST 
+I { v} /containers/prune 
+实际删除已经停止的容糕的配置和l根文件系统等资源。用于docker
+container prune 命令
+
+仅供｜｜二商业用
+第2章
+窑器引擎
+•！•
+29 
+（续）
+方法
+访问路径
+i兑明
+POST 
+I { v} /containers/ {id} /exec
+根据请求中json＇数据创建用于exec 的内部结构，分配该次命令执行的
+ID。用于docker container exec命令
+启动ID指定的exec命令。该服务i周用Containerd的Tasks服务的
+POST 
+I { v} /exec/ { id} /start
+Exec 、Start 、Get和DeleteProcess等方法。
+用于docker container 
+exec命令
+POST 
+I { v}/exec/ {id }/resize 
+针对指定的exec命令调用Containerd的Tasks服务的ResizePty方法
+POST 
+I { v }/containers/create 
+根据请求参数为后续需要创建的容器准备各种资源配置，并返回归。
+用于docker container create和run等命令
+实际删除指定容器的配宜和根文件系统等资源。如果是强制删除处于
+DELETE I { v }/containers/ {id} 
+运行状态的容器，那么还会首先调用Containerd的服务方法以删除对应
+的容器。用于docker container rm命令
+PUT 
+I { v} /containers/ {id} /archive
+将tar文件内容上传覆盖到指定容器读写层的对应文件或者目录下，该
+服务用于docker cp命令
+2.2 
+容器生命周期管理
+容器生命周期管理是Docker引擎的核心功能，
+既包括对容器元数据的操作管理，
+也
+涵盖了对操作系统API的包装调用。这部分功能是由引擎守护程序、Containerd和标准化
+的运行时工具配合完成的，具体的命令有：run、create、start、rename、update、pause、
+unpause、stop、kill、restar
+rm、prune、wait等。
+1 运行容器
+docker container run (options] image ( : tag I @digest] ( crnd] ( arg ... ] 
+该命令用于启动容器进程，等于create和start的组合。当命令无选项时，
+容器以镜像
+模板加默认属性的方式创建。下面对docker container run 命令的主要选项分别进行介绍。
+( I ）基本选项
+…name指定容器名字。
+如不指定，引擎将随机分配一个。
+－d/--detach （默认
+模式），以后台模式运行，
+容器标准输出和错误流被送到日志驱动。
+容器结束或退出后不
+会从文件系统中删除，除非带有一rm，
+它才会被自动清除（附带清除匿名卷）。
+－ii-­
+interactive则将容器标准流都关联到当前终端（-a指定关联其中的几个），
+-t为容器
+分配伪终端，
+－－sig-proxy=false 关闭键盘输入系统信号（比如Ctrl-C）的转发功能。
+如容器从管道得到标准输入时，不能带
+－t选项。
+一cidfile，
+指示引擎将创建的容器的
+ID写入指定文件中。
+一init指定容器中PID 为1的进程，
+负责回收僵尸进程，
+正确处理系统信号，
+该选
+项不加参数时，使用引擎自带的docker-init可执行程序。
+--restart定义退出重启策略，默认no不重启。
+on-failure[:max-retries)
+
+途或交流学习仪ITI
+30 •！• 基于Kubernetes的窑器云平台实战
+表示返回码不为0时且重启次数在限定范围内， 则执行重启。always，在容器退出以及引
+擎启动时重启。unless-stopped，只在退出时重启。重启延迟时间从 lOOms 开始逐次
+加倍， 最长时间 lmin，启动后 I Os 重置。重启次数记录在元数据中， 可用 inspect 查看。一
+stop-signal，定制停止容器时发送的默认SIGTERM 信号。一stop-timeout，定制默
+认1Os 停止容器超时时间。
+--log-driver 为容器
+。指定与当前引擎不同的日志驱动。默认驱动是json-file，可选
+值有none、syslog 、journald、gelf、fluentd 、awslogs和splunk。配合－－log-opt 选项为
+具体驱动配置运行参数。
+( 2）用于覆盖image 创建时默认配置的选项
+该命令行上的cmd 和参数能够覆盖Dockerfile 里的CMD 指令，而一entrypoint 选
+项值能够覆盖Dockerfile 中的ENTRYPOINT 指令值。
+Dockerfile 中有端口映射，
+一expose=［］，表示补充新的暴露端口；
+－p＝［］，覆盖端
+口映射规则。它们的参数格式为ip:hPort:cP。rt I ip: : cPort I hPort: cP。rt
+I 
+cPort，其中主机hPort 和容器cPort 都可以是范围值，能带TCP/UDP 限定协议。－P 表
+示暴露全部。
+一env/-e 为补充设置环境变量，
+一env-file 为从文件中读取补充的环境变量。－
+w／…workdir ，覆盖WORKDIR 指令。－1/--label，补充元数据标签。
+一label-file,
+从文件中读取补充的元数据标签。
+-v/--volume 将宿主机路径和预定义卷绑定挂载到容器中的绝对路径，格式为
+[ src:] dest [ : <opts＞］。其中，src 为宿主机路径或卷名称，无此项使用匿名卷；
+opts 可带逗号分隔的多个属性，
+指定只i卖或读写挂载模式、源和目标之间的挂载传播属
+性、SELinux 安全标签是否修改，
+以及挂载命名卷时dest 原有文件是否复制，格式为
+[rwlro］、［[r]sharedl [r]slavel [r]private］、［z I z i 和［nocopy］。与此相关
+的选项还有一volume-driver，表示使用专门的卷驱动；
+一volumes-from，
+指从指定容
+器挂载全部卷对象；
+一read-only，表示以只读方式挂载根文件系统。一tmpfs=［］，挂
+载指定的tmpfs，格式参照mount -t tmpfs -o 命令。
+-u/--user 设置容器进程um和GID，可为用户名或ID，如用ID 则容器中可无此用
+户。格式为：user I user:group I uid I uid:gid I user:gid I uid:group。
+( 3 ）与健康检查相关的选项
+--health-cmd，覆盖镜像定义时健康检查配置，以exec 方式周期执行容器中命令，
+返回0 判定为健康。－－health-start-peri。d，在容器启动时设定的容忍间隔，避免误
+判。－－health-interval，周期检查间隔。－－health-retries，返回码不为0 时的
+重试次数。一health-timeout，检查超时时间。一no-healthcheck，关闭健康检查。
+( 4）与命名空间相关的选项
+与命名空间相关的选项有：
+一uts、－－pid 、
+－－ipc、－－network 和一userns。
+
+第2 章窑器引擎
+•！•
+31 
+空串值表示默认创建私有命名空间，‘ host ’表示共享宿主机对应命名空间。
+一pid 、一ipc 和一network 可带容器Name 或ID 以共享其命名空间，此时不能再
+设置独立主机名和MAC 地址等。
+－－pids-lirnit 设置PID 命名空间最大pid 数量。
+--network 还支持bri dge （默认值，此时可用端口映射）和none ，前者在私有空间中
+挂接虚拟网卡到全局网桥，后者则只有loopback 。
+d。cker
+network create 命令创建
+的网络对象名字或ID 也能用于此选项。
+--dns= ［］、一dns-search 和一dns-option 定制容器中／etc/resolv.conf 内容、
+dns 服务器列表和搜索选项。一add-host
+host:ip 在容器里的／etc/host 中添加localhost
+和已分配地址之外的映射。一mac-address 指定网卡的MAC 地址，否则将根据IP 地址
+生成。
+－－ip 和一ip6 指定网卡IPv4 或IPv6 地址，bridge 模式下默认自动分配。
+－－link­
+local-ip＝［］指定网卡链路本地IPv4/IPv6 地址。
+( 5 ）与安全相关的一些选项
+一security-opt 设置安全相关配置，值为key=value 形式，可打开或关闭
+SELinux, apparmor 、
+seccomp 和new priviliages 功能，
+可配置SELinux 的label 、
+seccomp
+的描述文件和apparmor 的profile 。
+－－cap 『add 和一cap-drop 为容器添加或删除
+capabilities 。
+ALL 表示添加或删除所有capabilities 。其他key 名字列在页面http://man7.org/
+linux/man-pages/man7 /capabilities. 7 .html 上。
+一privileged=truelfalse 设置容器在宿主机上是否有特权，默认元。一device
+为容器添加设备文件，设备名字后面可带“
+：rwm ” 这样的描述以限定读、写和mknod 能
+力。一device-cgroup-rule=' c 
+42 仆
+rrnw ’用于修改默认设备文件读写权限。对于
+容器进程执行时归属的补充组，可通过－－group-add 来添加。
+有很多命令选项用于设置自定义的CGroups 资源限制参数。
+容器默认使用新建的CGroup 节点，一cgroup-parent 指定使用其他节点。
+( 6 ）与内存资源相关的选项
+-rn/--rnernory 限制容器内存使用量，最小4MB ，单位可以是b 、
+k 、m 和g （对应B 、
+阻、MB 和GB ）。
+－－memory-swap 限制容器内存加交换区使用总量，应比内存限制大。
+－
+-memory-reservation 设置使用量软门限，应比－m 硬门限小，以触发内存回收。－
+kernel-memory 设置内核内存使用量。一oom-kill-disable ，设置是否对容器关闭
+oom killer 。… oom-score-adj 调整容器的OOM 优先级。
+－－memory-swappiness 调
+整容器的匿名页可交换比例，范围为10 ～10 0 。一shm-size 设置挂载的／dev/shm 大小，
+默认为64MB 。
+( 7 ）与CPU 资源相关的选项
+-c/--cpu-shares 设置CPU 使用权重，默认为1024 ，各容器根据比例使用CPU 。－
+-cpu-period 设置CFS 模式下调度间隔，单位为微秒，默认为lOOms 。一cpu-quota
+指定CFS 模式下每调度间隔中的限额，单位为微秒，与cpu-period 配合使用。一cpus
+
+32
+令
+基于Kubernetes 的窑器云平台实战
+设置可用CPU 数，可为小数，获得cpu-pe ri od 和c pu-quota 配合使用时的相同效
+果，默认0 为无限制。一cpuset-cpus 限制容器可执行CPU 核ID 的集合。一cpuset­
+me ms 在NUMA 系统上限制容器可用内存节点集合。一cpu-rt-period 和一cpu-rt­
+runtime 用微秒表示，上一级CGroup 中须设置有此参数，且比此值大。
+( 8 ）与块1/0 资源相关的选项
+--blkio-weight 设置块设备1/0 权重，默认为500 ，取值范围为10 ～
+1000 。
+一blkio-weight-device 以设备名指定块1/0 权重，格式为＜dev-path>:<weight＞。－
+-device-read-bps 设置对具体设备读操作的限速值，格式为＜dev-path>:<number>
+[<unit ＞］，单位为KB 、MB 或GB 。一device-write-bp s 设置对具体设备写操作的
+限速值，格式如前。
+－－device-read-iops 设置对具体设备每秒读次数的门限，格式为
+<dev-path>:<number＞。一device-write-iops 设置对具体设备每秒写次数的门限，
+格式如前。
+2. 新建容器
+docker container create [OPTIONS] IMAGE [COMMAND] 
+[ARG ••• ] 
+该命令用于创建容器配置并返回ID ，后续用start 来启动该容器。除－d 、一detach
+和一sig-proxy 几个选项外，与run 命令选项几乎一样。
+3 . 启动容器
+docker container start [OPTIONS ] 
+CONTA工NER
+[CONTAINER ••• ] 
+该命令除了用于启动巳创建的容器配置之外，还用于恢复己保存检查点（实验性功
+能）。－－interactive/-i ，交互式执行。一attach/-a ，挂接输出／错误流，转发信号。
+4 . 更新窑器配置
+docker container update [OPTIONS ] CONTAINER [ CONTAINER ••• ] 
+此命令更新容器CPU 、
+内存、
+1/0 资源限制和重启策略。选项参考run 命令：
+blkio-weight 、－－cpu-period 、－－cpu-quota 、－－cpu-rt-period 、－c/--cpu-shares 、－－
+cpu-rt-runtime 、－－cpus 、－－cpuset-cpus 、－－cpuset-mems 、－m/--memory 、－－kerne-
+1-memory 、
+－－mem。ry-reservation 、
+－－memory-s wap 和－－restart 。
+5 重命名容器
+docker container rename CONTAINER NEW NAME 
+该命令用于重命名一个容器。被更名的容器可以处于运行、暂停或者终止状态。
+6. 暂停／恢复容器
+docker container pause CONTAINER [CONTAINER ••• ] 
+
+docker container unpause CONTA工NER [CONTA工NER••• ] 
+第2章
+窑器引擎
+•！•
+33 
+在Linux下，使用CGroup 的freezer子系统控制器来暂停或者恢复容器进程。
+7.停止／重启容器
+docker container stop [OPTIONS] CONTA工NER [CONTA工NER••• ] 
+stop停止一个或多个容器。停止信号默认为SIGTERM，除非创建容器时指定，
+实际停
+止前默认等待1 Os （创建时可定制）。
+－t/--time指示等待时间。
+docker container kill [OPTIONS] CONTAINER [CONTAINER ••• ] 
+kill向容器主进程发送SIGKILL信号，
+或由－s/--signal选项给出的信号。
+docker container restart [OPTIONS] CONTA工NER [CONTA工NER••• J 
+restart用于先停止指定的一个或者多个容器，再启动它们。
+8.删除容器
+docker container rm [OPTIONS] CONTA工NER [CONTAINER ••• J 
+该命令可以删除一个或者多个指定的容器。如果容器处于运行状态，必须使用－f/-­
+force来强制删除。
+－v/--volumes会删除只与该容器关联的匿名卷。
+docker conta工口er prune [OPTIONS] 
+该命令删除所有停止状态的容器。
+－£／－－force在删除之前无提示。可使用一
+filter过滤需删除的容器，
+过滤条件有until和label，用法与docker ps中的一样。
+9.等待容器运行结束
+docker container wait CONTAINER [CONTAINER ••• ] 
+使用这个命令以阻塞方式等待一个或者多个容器执行结束，并打印其返回码。
+2.3 
+容器状态管理
+最常用的容器状态管理命令是ps、inspect和logs。另外，stats可查看容器的资源使用
+统计，top可查看容器中进程号等信息，而port可查看容器的端口映射信息。
+1.列出所有容器基本信息
+docker container ps [OPTIONS] 
+该命令列出本机运行状态容器的ID、对应镜像标识、Name、启动命令、创建时间和当
+前状态等信息。ls和list为此命令别名。
+
+仅供才｜商业用
+34 •！•
+基于Kubernetes的窑器云平台实战
+-q/--quiet只显示容器ID。－s/--size增加显示一列容器大小。－a/--all可显
+示非运行态容器信息。－－no-trunc 不截断各个信息列。－n／…last显示最后创建的n
+个容器的基本信息。－1/--latest显示最后创建的容器的基本信息。
+--format ( -f选项不是它的缩写形式）用于控制显示格式，遵循Go模板语法，有
+table前缀时显示表头。列占位符有：ID、image、command、createdAt、runningfor, ports、
+status、size、names、labels、label、mounts、networks。label 可带参数，显示指定key对
+应的valu巳，例子是：“.Label
+” docker.cpu” ｝｝。
+-f/--filter用于过滤显示列表，表达式是key=value形式，每个选项只能带
+有一个过滤条件。基本过滤条件key包括：ID、name、label、exited、status、ancestor、
+before、since、volume、publish、expose和health。
+2.查看容器详细信息
+docker container inspect [OPT工ONS] CONTA工NER [CONTAINER ••• ] 
+该命令用json 格式显示一个或者多个容器的详细信息。有『s/--size选项时，结果
+将增加两个key: SizeRw和SizeRootFs，对应读写层大小和根文件系统大小。
+-f/--format可只显示指定key的值。可使用各种Go模板语法，key直接取自完整
+的json输出中各个层次的键值及其组合。
+3.查看窑器日志
+docker container logs [OPTIONS] CONTAINER 
+该命令显示写入本地文件系统中的容器日志信息。假如启动Docker引擎或容器时，指
+定了非json-file和journald类日志驱动，命令可能无法正常工作。
+--follow/-f，连续显示日志；
+－－tail，指定从日志尾算起显示多少行，参数为
+all表示全部；
+－t/--timestamps，在每行日志之前加上时间戳。
+一since和一unti工，选取指定时间之后或者之前的日志，参数格式为
+盯C3339Nano，可以支持到纳秒精度，也能够支持到较粗精度。
+4.列出容器端口映射
+docker container port CONTAINER [PRIVATE PORT[/PROTO)] 
+该命令显示指定容器的全部端口映射或者部分端口映射信息。
+5.显示容器中运行进程
+docker container top CONTAINER [ps OPTIONS] 
+该命令显示容器中进程信息，包括：urn、PID、PPID、CPU使用率、启动时间、tty、
+运行时间和启动命令等列，PID和PPID是宿主机进程命名空间中的ID 值。Linux下等于执
+
+第2章
+窑器引擎
+•！•
+35 
+行ps 命令，并且默认带有－ef 选项，因此要求容器中有ps 命令。
+6.显示窑器资源占用统计
+docker container stats [OPTIONS] [CONTA工NER ••• ] 
+该命令以表格形式连续显示容器的运行统计：CPU 和内存占用百分比、内存使用量和
+允许使用量、容器网络流量、容器块设备读写量和容器创建的进程数。带－－no-stream
+时只显示一次退出。
+一format 控制显示格式，带table 前缀显示表头，列占位符有Container、name 、ID、
+CPUPe町、MemUsage、NetlO 、BlockIO 、MemPerc 和PIDs。
+-a/--all 可显示非运行态容器统计；
+一no-trunc，所有字段显示时不截断。
+2.4 
+访问运行状态容器
+如果要直接改变运行状态容器的标准输入输出流，或者在其中执行程序，可以使用如
+下命A
+亏。
+1挂接运行状态容器标准流
+docker container attach [OPTIONS] CONTAINER 
+将宿主机标准输入／标准输出流挂接到容器上，相当于切换到交互式运行。虽然支持多
+终端对同一容器挂接，但若某窗口阻塞时，其他窗口也无法操作。
+一no-stdin 不挂接容器的STDIN。
+一sig-proxy=false，不转发终端信号。比
+如在终端上输入Ctrl-C，只会退出attach 状态，不会使容器运行终止。
+2.在运行状态容器中执行命令
+docker container exec [OPT工ONS]
+CONTA工NER COMMAND [ARG ••• ] 
+命令须在容器中可访问且只能为可执行程序或者shell，不能是shell 命令串。
+-d/--detach 以后台方式执行，结果不回显；
+－i/--interactive以交互式执
+行命令，回显结果。
+－e/--env 为命令设置环境变量。
+－t/--tty 会分配伪终端。
+－
+privileged以特权方式执行命令。
+－u/--user以指定用户名或者urn执行命令，参数
+格式为＜narneluid>[:<grouplgid＞］。
+－w/--workdir 指定工作目录。
+3. nsenter 命令
+只要进入Docker 容器的命名空间中就可查看容器状态，在util-Linux 软件包2.23以上
+版本中包含的nsenter 工具就可以实现此功能。命令格式为：
+nsenter [options] <program> [<argument> ... ] 
+
+36 
+•！•
+基于Ku由bernetes的窑器云平台实战
+若不进入mount 命名空间，则待执行命令不必在容器文件视图中。
+有－t/--target
+<pid＞选项时，其他命名空间选项不必带有路径。－m/--mount; -
+u/--uts; -i/--ipc; -n/--net; -p/--pid; -U/--user选项指定要进入的命名空间。－
+Z/--follow-context 使用目标进程SELinux 上下文。
+-Fl …n。－fork 在执行命令之前不执行fork。
+－w/--wd 和－r/--root 指定工作目
+录和根目录。
+－S/--setuid 和－GI …setgid 分别为命令执行设定urn 和GID。
+获取容器进程ID 可用如下命令：
+docker container inspect -f＝” ｛｛.State.Pid｝｝”
+＜container> 
+2.5 
+访问容器内容
+使用下面的命令可以从宿主机上操作容器文件视图中的内容。
+1.复制容器内窑
+使用如下命令可在本地文件系统和容器文件视图之间复制文件或者目录内容。
+拷出命令：
+docker cp [OPTIONS] CONTAINER:SRC_PATH DEST_PATH[-
+拷入命令：
+docker cp [OPT工ONS] SRC_PATH[- CONTAINER:DEST_PATH 
+”’ 表示标准输入输出，目标路径的父目录需存在，以覆盖方式执行但不会用目录覆
+盖同名文件。不能复制／proc 、／sys 、／dev 以及tmpfs 下的文件。
+一archive/-a 保存全部UID/GID。
+－－follow-link/-L 追溯源路径符号链接。
+2.查看容器运行后更新内窑
+docker container diff CONTAINER 
+该命令显示容器读写层内容，输出内容中行首字母表示更新类型：A （新增）、D （删除）、
+c （更改）。

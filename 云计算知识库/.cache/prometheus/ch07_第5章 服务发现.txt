@@ -1,0 +1,236 @@
+第5章　服务发现
+在上一章，我们安装了exporter，并且抓取了主机和容器指标。对于指定的每个目标，我们在抓取
+配置中手动列出了它们的IP地址和端口。这种方法在主机较少时还可以，但不适用于规模较大的集
+群，尤其不适用于使用容器和基于云的实例的动态集群，这些实例经常会出现变化、创建或销毁的情
+况。
+Prometheus通过使用服务发现解决了这个问题：通过自动化的机制来检测、分类和识别新的和变
+更的目标。服务发现可以通过以下几种机制实现：
+·从配置管理工具生成的文件中接收目标列表。
+·查询API（例如Amazon AWS API）以获取目标列表。
+·使用DNS记录以返回目标列表。
+在本章中，我们将使用服务发现来学习如何发现主机和服务，并将它们暴露给Prometheus。我们
+将看到各种发现机制，包括基于文件的方式、基于API的方式和基于DNS的方式。
+
+5.1　静态配置的局限性
+要了解服务发现的工作原理，我们需要回顾数据抓取的生命周期（如图5-1所示）。当Prometheus
+开始作业时，第一步就是服务发现，这将生成作业将要抓取的目标和元数据标签列表。
+图5-1　数据抓取生命周期
+在现有的配置中，服务发现机制是在static_configs块中定义的：
+代码清单5-1　静态服务发现
+目标列表和关联标签都是采用手动服务发现的方式。不难看出，在繁杂的工作中维护一长串主机
+列表并不是一个可扩展的任务（HUP的Prometheus服务器也不是每次都可以优雅地启动）。尤其对于
+大多数环境的动态特性，以及被监控主机、应用程序和服务的规模来说，这种局限性更为明显。
+因此需要更成熟的服务发现方式，那么都有哪些方案可供选择呢？我们将探索以下几种服务发现
+方案：
+·基于文件的方式
+·基于云的方式
+·基于DNS的方式
+我们将从基于文件的服务发现开始。
+作业可以使用多种类型的服务发现。我们可以通过多种服务发现技术在作业中指定目标。
+
+5.2　基于文件的服务发现
+基于文件的发现只比静态配置更先进一小步，但它非常适合配置管理工具。借助基于文件的服务
+发现，Prometheus会使用文件中指定的目标。这些文件通常由另一个系统生成，例如Puppet、Ansible
+或Chef等配置管理系统，或者从其他源（如CMDB）查询。定期执行脚本或进行查询可以（重新）生
+成这些文件。Prometheus会按指定的时间计划从这些文件重新加载目标。
+这些文件可以是YAML或JSON格式，包含定义的目标列表，就像我们在静态配置中定义它们一
+样。让我们从将现有作业迁移到基于文件的服务发现开始。
+代码清单5-2　基于文件的服务发现
+我们用file_sd_configs块替换prometheus.yml文件中的static_configs块。在这些块中，已经指定了文
+件列表，并包含在files列表中。我们在父目录targets下为每个作业指定了对应的文件，并为每个作业创
+建了一个子目录。你可以创建适合你的任何文件结构。
+然后使用*.json的glob样式来指定文件。每当这些文件发生更改时，系统都将从此目录中所有
+以.json结尾的文件加载目标。我们选择了JSON格式，因为它是一种方便使用各种语言和集成来编写的
+流行格式。
+每次作业运行或这些文件发生变化时，Prometheus都会重新加载文件的内容。以防万一，我们还
+指定了refresh_interval选项，该选项将在每个间隔结束时加载文件列表中的目标——对这个示例来说是
+5分钟。
+还有一个名为prometheus_sd_file_mtime_seconds的指标将告诉你文件的上次更新时间。你可
+以监控这个指标以识别数据过期问题。
+让我们快速创建上述的目录结构。
+代码清单5-3　创建目标文件目录
+
+将节点和Docker守护进程列表移动到新的JSON文件，创建两个文件来保存这些目标。
+代码清单5-4　创建保存目标的JSON文件
+现在用我们现有的目标来填充它们，首先是node.json文件：
+代码清单5-5　node.json文件
+然后是daemons.json文件：
+代码清单5-6　daemons.json文件
+我们也可以通过YAML格式实现，和使用JSON的目标列表是一样的。
+代码清单5-7　采用YAML格式
+其会将现有的静态配置移动到这些文件中，我们也可以为这些目标添加标签。
+代码清单5-8　添加标签
+
+在这里，我们向Docker守护进程目标添加了值为nj的标签datacenter。基于文件的服务发现会在重
+新标记阶段自动给每个目标添加一个元数据标签__meta_filepath，它包含配置目标的文件路径和文件
+名。
+你可以访问https://localhost:9090/service-discovery，通过Web界面查看服务发现目标的完整列
+表及其元数据标签。
+编写文件
+由于编写的JSON文件已经非常明确地定义了抓取目标的来源，因此这里不再讨论任何细节，但我
+们将从另一个层面提供一些方法的概述。
+首先，如果你的配置管理工具可以生成它正在管理或配置的节点列表，那么这是一个理想的起
+点。我们在第3章介绍的几个配置管理工具都有这样的模板。
+如果这些工具有一个集中配置存储或配置管理数据库（CMDB），那么这可能是目标数据的潜在
+来源。例如，如果你使用的是PuppetDB，则可以使用基于文件的服务发现脚本[1]从数据库中提取节
+点。
+或者，如果你要自定义编写脚本，则可以遵循以下几条简单的规则：
+·使你的服务发现可配置——不要采用硬编码的方式。最好确保你的文件发现能够使用默认配置自
+动运行。例如，确保默认配置选项采用目标来源的默认安装状态。
+·不要在配置中暴露API密钥或密码等信息，应该依靠密钥保管库或环境变量[2]。
+·针对输出目标的文件的操作应该是原子的。
+以下是一些文件发现脚本和工具，以及可能帮到你的示例：
+·Amazon ECS：https://github.com/teralytics/prometheus-ecs-discovery。
+·Wikimedia结合CMBD的API驱动文件服务发现脚
+本：https://github.com/wikimedia/puppet/blob/production/modules/prometheus/files/usr/local/bin/prometheus-
+labs-targets。
+
+·Docker Swarm：https://github.com/ContainerSolutions/prometheus-swarm-discovery。
+在Prometheus文档中还有一个基于文件的服务发现集成列表[3]。
+[1] https://github.com/camptocamp/prometheus-puppetdb。
+[2] https://12factor.net/config。
+[3] https://prometheus.io/docs/operating/integrations/#file-service-discovery。
+
+5.3　基于API的服务发现
+原生的服务发现集成在某些工具和平台上提供，它们内置支持Prometheus。这些服务发现插件使
+用工具和平台现有的数据存储或API来返回目标列表。
+当前可用的本机服务发现插件包括以下平台：
+·Amazon EC2[1]
+·Azure[2]
+·Consul[3]
+·Google Compute Cloud[4]
+·Kubernetes[5]
+监控Kubernetes上运行的应用程序会用到Kubernetes的服务发现，我们将在第7章做更多的介
+绍。
+我们来看看Amazon EC2服务发现插件。
+Amazon EC2服务发现插件
+Amazon EC2服务发现插件使用Amazon Web Services EC2 API来获取EC2实例列表，以用作
+Prometheus目标。要使用服务发现插件，你需要拥有AWS账户。我们假设你已经拥有AWS账户，但如
+果你还没有AWS账户，则可以在AWS控制台上创建一个，然后按照入门教程进行操作[6]。
+作为入门教程的一部分，你将收到访问密钥（access key）ID和秘密访问密钥（secret access
+key）。如果你已经拥有Amazon Web Services（AWS）账户，那么你现在应该有这个密钥对。
+让我们在Prometheus配置中添加一个新作业，以获取EC2实例。
+代码清单5-9　EC2服务发现作业
+我们指定了一个新的amazon_instances作业，服务发现是通过ec2_sd_configs块提供的。在这个块
+
+中，我们指定了三个参数：AWS区域的region，以及Amazon凭据的access_key和secret_key。
+如果你不想在文件中指定密钥（请记住，你不应该在配置中对密钥进行硬编码），那么
+Prometheus支持Amazon的本地CLI配置方法。如果未指定密钥，那么Prometheus将在运行Prometheus主
+目录的用户中查找相应的环境变量或AWS凭据[7]。或者，你可以指定IAM角色ARN以使用IAM角
+色[8]。
+如果你在主机上指定了多个AWS账户，那么Prometheus还支持配置文件（profile）。
+代码清单5-10　使用配置文件的EC2服务发现作业
+这里，Prometheus将在发现实例时使用work配置。
+EC2服务发现插件将返回该区域中所有正在运行的实例。默认情况下，它将返回实例的私有IP地
+址目标和默认端口80，使用指标路径/metrics。因此，如果EC2实例的私有IP地址为10.2.1.1，那么它将
+返回抓取目标地址http://10.2.1.1:80/metrics。我们可以使用port参数来覆盖默认端口。
+代码清单5-11　使用配置端口的EC2服务发现作业
+这将用9100端口来覆盖默认端口80。但是，我们通常希望覆盖的不仅仅是端口。如果还没有暴露
+指标，那么我们可以在抓取之前通过重新标记进行调整。这种重新标记发生在抓取之前的第一个重新
+标记窗口中，并且使用relabel_configs块。
+假设每个EC2实例都配置了Node Exporter，我们想要抓取公网IP地址（而不是私有IP地址）并相应
+地重新标记目标。
+代码标签5-12　重新标记EC2服务发现作业
+
+作业可以使用多种类型的服务发现。例如，我们可以通过基于文件的服务发现和AWS的插件
+来发现一些目标，也可以静态地指定一些目标。尽管如此，任何重新标记都将适用于所有目标。如果
+你正在使用服务发现，那么有些元数据标签可能不适用于所有目标。
+重新标记的配置语法和结构在relabel_configs和metric_relabel_configs块中是相同的。唯一的区别是
+它们发生的时间：relabel_configs是在服务发现之后和抓取之前，而metrics_relabel_configs是在抓取之
+后。
+这里我们指定EC2服务发现插件收集的一个元数据标签__meta_ec2_public_ip作为source_labels的
+值。我们指定了正则表达式（.*）。从技术上讲，我们不需要指定它，因为这是regex参数的默认值，
+但在这里使用它，是为了理解发生了什么。此表达式的作用是捕获源标签的全部内容。
+然后，我们在target_label参数中指定替换目标。因为最后需要更新写入__address__标签的IP地址，
+replacement参数包含来自regex的正则表达式捕获的信息，并添加了Node Exporter默认端口9100的后
+缀。如果实例的公网IP地址是34.201.102.225，那么实例将被重新标记为34.201.102.225:9100的目标，
+并添加默认选项http和指标路径/metrics。最终目标会在http://34.201.102.225:9100/metrics上抓取数据。
+在第一个重新标记阶段（即relabel_configs）后，__meta标签被丢弃。
+EC2发现插件收集的其他元数据包括：
+·__meta_ec2_availability_zone：实例的可用区域。
+·__meta_ec2_instance_id：EC2实例ID。
+·__meta_ec2_instance_state：EC2实例状态。
+·__meta_ec2_instance_type：EC2实例类型。
+·__meta_ec2_private_ip：EC2实例的私有IP地址。
+·__meta_ec2_public_dns_name：实例的公有DNS名称。
+·__meta_ec2_subnet_id：以逗号分隔的其中有实例运行的子网ID列表。
+
+·__meta_ec2_tag_<tagkey>：实例的tag（每个tag都有一个标签）。
+·__meta_ec2_vpc_id：正在运行实例的VPC的ID。
+Prometheus配置文档[9]中提供了完整的元数据列表。
+EC2实例tag的元数据标签__meta_ec2_tag_<tagkey>允许我们使用重新标记来更好地命名目标。对
+于目标的instance标签（实际是目标的公有名称），可以使用tag的值，而不是IP地址。假设有一个名为
+Name的EC2 tag，其中包含实例的主机名（或者某种友好的名称），我们可以借助重新标记来使用这个
+值。
+代码清单5-13　在EC2服务发现作业中重新标记实例名称
+可以看到我们添加了第二个使用__meta_ec2_tag_Name标签的重新标记，使用tag Name的值作为源
+标签，然后将其写入instance标签。假设tag Name（如10.2.1.1）为bastion，那么我们的instance标签将
+由：
+重新标记为：
+这样我们就可以更轻松地解析该目标的指标。
+[1]
+https://prometheus.io/docs/prometheus/latest/configuration/configuration/#note_91Cec2_sd_confignote_91E。
+[2]
+https://prometheus.io/docs/prometheus/latest/configuration/configuration/#note_92Cazure_sd_confignote_92E。
+[3]
+https://prometheus.io/docs/prometheus/latest/configuration/configuration/#note_93Cconsul_sd_confignote_93E
+
+[4]
+https://prometheus.io/docs/prometheus/latest/configuration/configuration/#note_94Cgce_sd_confignote_94E。
+[5]
+https://prometheus.io/docs/prometheus/latest/configuration/configuration/#note_95Ckubernetes_sd_confignote_
+[6] https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/get-set-up-for-amazon-ec2.html。
+[7] https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-configure.html。
+[8] https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-role.html。
+[9]
+https://prometheus.io/docs/prometheus/latest/configuration/configuration/#note_99Cec2_sd_confignote_99E。
+
+5.4　基于DNS的服务发现
+如果基于文件的服务发现不适合你，或者你的源或服务不支持任何现有的服务发现工具，则可以
+选择基于DNS的服务发现。DNS服务发现允许你指定DNS条目列表，然后查询这些条目中的记录以发
+现目标列表。它依赖于A、AAAA或SRV DNS记录查询。
+DNS记录将由Prometheus服务器上本地定义的DNS服务器解析。例如，Linux上
+的/etc/resolv.conf。
+让我们看一下使用DNS服务发现的新作业。
+代码清单5-14　DNS服务发现作业
+我们定义了一个名为webapp的新作业，并指定了一个dns_sd_configs块。在该块中，我们指定了
+names参数，其中包含要查询的DNS条目列表。
+默认情况下，Prometheus的DNS服务发现假定你会查询SRV或服务记录。服务记录是一种在DNS配
+置中定义服务的方法，服务通常由运行服务的一个或多个目标主机和端口组合组成。DNS SRV条目的
+格式如下所示：
+代码清单5-15　SRV记录
+其中_service是要查询的服务的名称，_proto是服务的协议，通常是TCP或UDP。我们指定条目的
+名称，后面以“.”结尾，然后是记录的TTL（Time To Live）时间。IN是标准的DNS类（通常都会用
+IN）。我们指定目标主机的优先级（priority）：较低的值具有较高的优先级。权重（weight）控制具
+有相同优先级的目标的偏好：优选较高的值。最后，我们指定服务运行的端口以及提供服务的主机的
+主机名，以“.”结尾。因此，对于Prometheus，我们可能会定义如下记录：
+代码清单5-16　示例SRV记录
+
+有一整套用于DNS服务发现的RFC：RFC6763[1]，但是Prometheus的DNS服务发现暂时不支
+持它。
+当Prometheus查询目标时，它会通过DNS服务器查找example.com域。然后，它将在该域中搜索名
+为_prometheus._tcp.example.com的SRV记录，并返回该条目中的服务记录。在该条目中有三条记录，因
+此我们会看到返回了三个目标。
+代码清单5-17　SRV的DNS目标
+我们还可以使用DNS服务发现来查询单个A或AAAA记录。为此，我们需要为抓取明确指定查询
+类型和端口。之所以需要指定端口，是因为A和AAAA记录只返回主机，而不是像SRV记录那样返回主
+机和端口组合。
+代码清单5-18　DNS A记录服务发现作业
+这只会返回example.com域根目录下的所有A记录。如果想从特定的DNS条目返回记录，那么我们
+会使用：
+代码清单5-19　DNS子域A记录服务发现作业
+在这里，我们提取了一个子域web.example.com的A记录解析，并在后面加上9100端口后缀。
+DNS服务发现中只有一个元数据标签__meta_dns_name，它被设置为生成目标的特定DNS记
+录。
+[1] https://tools.ietf.org/html/rfc6763。
+
+5.5　小结
+在本章中，我们了解了服务发现，学习了几种发现Prometheus抓取目标的机制，包括：
+·基于文件的服务发现，由外部数据源生成。
+·基于平台的服务发现，使用AWS、Kubernetes或Google Cloud等平台的API和数据。
+·基于DNS的SRV、A或AAAA记录。
+你可以充分利用这三种服务发现方法来对被监控的资源进行识别。
+此外，我们还了解了有关重新标记的更多信息，查看了抓取前的重新标记阶段，并学习了如何使
+用元数据来为我们的指标添加更多上下文。
+现在我们已经拥有了很多进入Prometheus的指标，接下来看看如何更好地利用它们。在下一章，
+我们将重点介绍警报相关的内容。

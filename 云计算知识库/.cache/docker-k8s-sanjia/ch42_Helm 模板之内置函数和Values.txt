@@ -1,0 +1,283 @@
+44. Helm 模板之内置函数和Values
+上节课和⼤家⼀起学习了 Helm 的⼀些常⽤操作⽅法，这节课来和⼤家⼀起定义⼀个 chart 包，了解
+Helm 中模板的⼀些使⽤⽅法。
+定义 chart
+Helm 的 github 上⾯有⼀个⽐较完整的⽂档，建议⼤家好好阅读下该⽂档，这⾥我们来⼀起创建⼀
+个 chart 包。
+⼀个 chart 包就是⼀个⽂件夹的集合，⽂件夹名称就是 chart 包的名称，⽐如创建⼀个 mychart 的
+chart 包：
+$ helm create mychart
+Creating mychart
+$ tree mychart/
+mychart/
+├── charts
+├── Chart.yaml
+├── templates
+│   ├── deployment.yaml
+│   ├── _helpers.tpl
+│   ├── ingress.yaml
+│   ├── NOTES.txt
+│   └── service.yaml
+└── values.yaml
+2 directories, 7 files
+chart 包的⽬录上节课我们就已经学习过了，这⾥我们再来仔细看看 templates ⽬录下⾯的⽂件:
+NOTES.txt：chart 的 “帮助⽂本”。这会在⽤户运⾏ helm install 时显示给⽤户。
+deployment.yaml：创建 Kubernetes deployment 的基本 manifest
+service.yaml：为 deployment 创建 service 的基本 manifest
+ingress.yaml: 创建 ingress 对象的资源清单⽂件
+_helpers.tpl：放置模板助⼿的地⽅，可以在整个 chart 中重复使⽤
+这⾥我们明⽩每⼀个⽂件是⼲嘛的就⾏，然后我们把 templates ⽬录下⾯所有⽂件全部删除掉，这⾥
+我们⾃⼰来创建模板⽂件：
+$ rm -rf mychart/templates/*.*
+创建模板
+这⾥我们来创建⼀个⾮常简单的模板 ConfigMap，在 templates ⽬录下⾯新建⼀个 configmap.yaml ⽂
+件：
+Helm 模板之内置函数和Values
+277
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mychart-configmap
+data:
+  myvalue: "Hello World"
+实际上现在我们就有⼀个可安装的 chart 包了，通过 helm install 命令来进⾏安装：
+$ helm install ./mychart/
+NAME:   ringed-lynx
+LAST DEPLOYED: Fri Sep  7 22:59:22 2018
+NAMESPACE: default
+STATUS: DEPLOYED
+RESOURCES:
+==> v1/ConfigMap
+NAME               DATA  AGE
+mychart-configmap  1     0s
+在上⾯的输出中，我们可以看到我们的 ConfigMap 资源对象已经创建了。然后使⽤如下命令我们可以
+看到实际的模板被渲染过后的资源⽂件：
+$ helm get manifest ringed-lynx
+---
+# Source: mychart/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mychart-configmap
+data:
+  myvalue: "Hello World"
+现在我们看到上⾯的 ConfigMap ⽂件是不是正是我们前⾯在模板⽂件中设计的，现在我们删除当前
+的 release :
+$ helm delete ringed-lynx
+release "ringed-lynx" deleted
+添加⼀个简单的模板
+我们可以看到上⾯我们定义的 ConfigMap 的名字是固定的，但往往这并不是⼀种很好的做法，我们可
+以通过插⼊ release 的名称来⽣成资源的名称，⽐如这⾥ ConfigMap 的名称我们希望是：ringed-lynx-
+configmap，这就需要⽤到 Chart 的模板定义⽅法了。
+Helm Chart 模板使⽤的是 Go 语⾔模板编写⽽成，并添加了 Sprig 库中的50多个附件模板函数以及⼀
+些其他特殊的函。
+Helm 模板之内置函数和Values
+278
+
+需要注意的是 kubernetes 资源对象的 labels 和 name 定义被限制 63个字符，所以需要注意名称
+的定义。
+现在我们来重新定义下上⾯的 configmap.yaml ⽂件：
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-configmap
+data:
+  myvalue: "Hello World"
+我们将名称替换成了 {{ .Release.Name }}-configmap ，其中包含在 {{ 和 }} 之中的就是模板指
+令， {{ .Release.Name }}  将 release 的名称注⼊到模板中来，这样最终⽣成的 ConfigMap 名称就是
+以 release 的名称开头的了。这⾥的 Release 模板对象属于 Helm 内置的⼀种对象，还有其他很多内
+置的对象，稍后我们将接触到。
+现在我们来重新安装我们的 Chart 包，注意观察 ConfigMap 资源对象的名称：
+$ helm install ./mychart
+helm install ./mychart/
+NAME:   quoting-zebra
+LAST DEPLOYED: Fri Sep  7 23:20:12 2018
+NAMESPACE: default
+STATUS: DEPLOYED
+RESOURCES:
+==> v1/ConfigMap
+NAME                     DATA  AGE
+quoting-zebra-configmap  1     0s
+可以看到现在⽣成的名称变成了quoting-zebra-configmap，证明已经⽣效了，当然我们也可以使⽤命
+令 helm get manifest quoting-zebra 查看最终⽣成的清单⽂件的样⼦。
+调试
+我们⽤模板来⽣成资源⽂件的清单，但是如果我们想要调试就⾮常不⽅便了，不可能我们每次都去部
+署⼀个 release 实例来校验模板是否正确，所幸的时 Helm 为我们提供了 --dry-run --debug 这个可
+选参数，在执⾏ helm install 的时候带上这两个参数就可以把对应的 values 值和⽣成的最终的资源
+清单⽂件打印出来，⽽不会真正的去部署⼀个 release 实例，⽐如我们来调试上⾯创建的 chart 包：
+$ helm install . --dry-run --debug ./mychart
+[debug] Created tunnel using local port: '35286'
+[debug] SERVER: "127.0.0.1:35286"
+[debug] Original chart version: ""
+[debug] CHART PATH: /root/course/kubeadm/helm/mychart
+NAME:   wrapping-bunny
+REVISION: 1
+Helm 模板之内置函数和Values
+279
+
+RELEASED: Fri Sep  7 23:23:09 2018
+CHART: mychart-0.1.0
+USER-SUPPLIED VALUES:
+{}
+COMPUTED VALUES:
+...
+HOOKS:
+MANIFEST:
+---
+# Source: mychart/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wrapping-bunny-configmap
+data:
+  myvalue: "Hello World"
+现在我们使⽤ --dry-run 就可以很容易地测试代码了，不需要每次都去安装⼀个 release 实例了，但
+是要注意的是这不能确保 Kubernetes 本身就⼀定会接受⽣成的模板，在调试完成后，还是需要去安装
+⼀个实际的 release 实例来进⾏验证的。
+内置对象
+刚刚我们使⽤ {{.Release.Name}} 将 release 的名称插⼊到模板中。这⾥的 Release 就是 Helm 的内
+置对象，下⾯是⼀些常⽤的内置对象，在需要的时候直接使⽤就可以：
+Release：这个对象描述了 release 本身。它⾥⾯有⼏个对象：
+Release.Name：release 名称
+Release.Time：release 的时间
+Release.Namespace：release 的 namespace（如果清单未覆盖）
+Release.Service：release 服务的名称（始终是 Tiller）。
+Release.Revision：此 release 的修订版本号，从1开始累加。
+Release.IsUpgrade：如果当前操作是升级或回滚，则将其设置为 true。
+Release.IsInstall：如果当前操作是安装，则设置为 true。
+Values：从 values.yaml ⽂件和⽤户提供的⽂件传⼊模板的值。默认情况下，Values 是空的。
+Chart： Chart.yaml ⽂件的内容。所有的 Chart 对象都将从该⽂件中获取。chart 指南中Charts
+Guide列出了可⽤字段，可以前往查看。
+Files：这提供对 chart 中所有⾮特殊⽂件的访问。虽然⽆法使⽤它来访问模板，但可以使⽤它来
+访问 chart 中的其他⽂件。请参阅 "访问⽂件" 部分。
+Files.Get 是⼀个按名称获取⽂件的函数（.Files.Get config.ini）
+Files.GetBytes 是将⽂件内容作为字节数组⽽不是字符串获取的函数。这对于像图⽚这样的东
+⻄很有⽤。
+Capabilities：这提供了关于 Kubernetes 集群⽀持的功能的信息。
+Capabilities.APIVersions 是⼀组版本信息。
+Helm 模板之内置函数和Values
+280
+
+Capabilities.APIVersions.Has $version 指示是否在群集上启⽤版本（batch/v1）。
+Capabilities.KubeVersion 提供了查找 Kubernetes 版本的⽅法。它具有以下值：Major，
+Minor，GitVersion，GitCommit，GitTreeState，BuildDate，GoVersion，Compiler，和
+Platform。
+Capabilities.TillerVersion 提供了查找 Tiller 版本的⽅法。它具有以下值：SemVer，
+GitCommit，和 GitTreeState。
+Template：包含有关正在执⾏的当前模板的信息
+Name：到当前模板的⽂件路径（例如 mychart/templates/mytemplate.yaml）
+BasePath：当前 chart 模板⽬录的路径（例如 mychart/templates）。
+上⾯这些值可⽤于任何顶级模板，要注意内置值始终以⼤写字⺟开头。这也符合 Go 的命名约定。当
+你创建⾃⼰的名字时，你可以⾃由地使⽤适合你的团队的惯例。
+values ⽂件
+上⾯的内置对象中有⼀个对象就是 Values，该对象提供对传⼊ chart 的值的访问，Values 对象的值有
+4个来源：
+chart 包中的 values.yaml ⽂件
+⽗ chart 包的 values.yaml ⽂件
+通过 helm install 或者 helm upgrade 的 -f 或者 --values 参数传⼊的⾃定义的 yaml ⽂件(上节课
+我们已经学习过)
+通过 --set  参数传⼊的值
+chart 的 values.yaml 提供的值可以被⽤户提供的 values ⽂件覆盖，⽽该⽂件同样可以被 --set 提供
+的参数所覆盖。
+这⾥我们来重新编辑 mychart/values.yaml ⽂件，将默认的值全部清空，添加⼀个新的数据：
+(values.yaml)
+course: k8s
+然后我们在上⾯的 templates/configmap.yaml 模板⽂件中就可以使⽤这个值了：(configmap.yaml)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-configmap
+data:
+  myvalue: "Hello World"
+  course: {{ .Values.course }}
+可以看到最后⼀⾏我们是通过 {{ .Values.course }} 来获取 course 的值的。现在我们⽤ debug 模式
+来查看下我们的模板会被如何渲染：
+$ helm install --dry-run --debug ./mychart
+Helm 模板之内置函数和Values
+281
+
+helm install --dry-run --debug .
+[debug] Created tunnel using local port: '33509'
+[debug] SERVER: "127.0.0.1:33509"
+[debug] Original chart version: ""
+[debug] CHART PATH: /root/course/kubeadm/helm/mychart
+NAME:   nasal-anaconda
+REVISION: 1
+RELEASED: Sun Sep  9 17:37:52 2018
+CHART: mychart-0.1.0
+USER-SUPPLIED VALUES:
+{}
+COMPUTED VALUES:
+course: k8s
+HOOKS:
+MANIFEST:
+---
+# Source: mychart/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nasal-anaconda-configmap
+data:
+  myvalue: "Hello World"
+  course: k8s
+我们可以看到 ConfigMap 中 course 的值被渲染成了 k8s，这是因为在默认的 values.yaml ⽂件中该参
+数值为 k8s，同样的我们可以通过 --set 参数来轻松的覆盖 course 的值：
+$ helm install --dry-run --debug --set course=python ./mychart
+[debug] Created tunnel using local port: '44571'
+......
+---
+# Source: mychart/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: named-scorpion-configmap
+data:
+  myvalue: "Hello World"
+  course: python
+由于 --set  ⽐默认 values.yaml ⽂件具有更⾼的优先级，所以我们的模板⽣成为 course: python。
+values ⽂件也可以包含更多结构化内容，例如，我们在 values.yaml ⽂件中可以创建 course 部分，然
+后在其中添加⼏个键：
+course:
+  k8s: devops
+Helm 模板之内置函数和Values
+282
+
+  python: django
+现在我们稍微修改模板：
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-configmap
+data:
+  myvalue: "Hello World"
+  k8s: {{ .Values.course.k8s }}
+  python: {{ .Values.course.python }}
+同样可以使⽤ debug 模式查看渲染结果：
+$ helm install --dry-run --debug ./mychart
+[debug] Created tunnel using local port: '33801'
+......
+---
+# Source: mychart/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: exhaling-turtle-configmap
+data:
+  myvalue: "Hello World"
+  k8s: devops
+  python: django
+可以看到模板中的参数已经被 values.yaml ⽂件中的值给替换掉了。虽然以这种⽅式构建数据是可以
+的，但我们还是建议保持 value 树浅⼀些，平⼀些，这样维护起来要简单⼀点。
+到这⾥，我们已经看到了⼏个内置对象的使⽤⽅法，并⽤它们将信息注⼊到了模板之中。下节课我们
+来看看模板引擎中的其他⽤法，⽐如函数、管道、控制结构等等的⽤法。
+点击查看本⽂视频
+扫描下⾯的⼆维码(或微信搜索 k8s技术圈 )关注我们的微信公众帐号，在微信公众帐号中回复 加群 即
+可加⼊到我们的 kubernetes 讨论群⾥⾯共同学习。
+Helm 模板之内置函数和Values
+283
+
+k8s技术圈⼆维码
+Copyright © qikqiak.com 2018 all right reserved，powered by GitbookUpdated: 2019-03-12 13:04:21
+Helm 模板之内置函数和Values
+284

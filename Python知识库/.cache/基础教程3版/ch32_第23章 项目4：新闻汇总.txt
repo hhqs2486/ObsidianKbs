@@ -1,0 +1,468 @@
+23.1 问题描述  353 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+9 
+10 
+11 
+12 
+13 
+14 
+项目4：新闻汇总 
+网上充斥着形式多样的新闻源，包括报纸、视频频道、博客、播客等。有些新闻源还提供诸
+如RSS或Atom feed等服务，让你使用相对简单的代码就能获取最新的新闻，而无需对网页进行解
+析。在这个项目中，我们将探索一种比Web更早面世的机制：网络新闻传输协议（Network News 
+Transfer Protocol，NNTP）。我们将首先创建一个没有任何抽象（没有函数、没有类）的原型，再
+创建一个包含重要抽象的通用系统。为此，我们将使用能够让你与NNTP服务器交互的nntplib
+库，但添加其他的协议和机制应该很简单。 
+NNTP是一种标准网络协议，用于管理在Usenet讨论组中发布的消息。NNTP服务器组成了一
+个统一管理新闻组的全局网络，通过NNTP客户端（也称为新闻阅读器）可发布和阅读消息。NNTP
+服务器组成的主网络称为Usenet，创建于1980年（但NNTP协议到1985年才开始使用）。相比于最
+新的Web潮流，这算是一种很古老的技术了，但从某种程度上说，互联网的很大一部分都基于这
+样的古老技术
+①，而且尝试这些低级的技术没什么不好。另外，随时都可将本章使用的NNTP替换
+为你自己开发的新闻收集模块，如可能转而使用Facebook或Twitter等社交网站提供的Web API。 
+23.1 问题描述 
+本章要编写的程序是一个信息收集代理，能够替你收集信息（具体地说是新闻）并生成新闻
+汇总。基于你对网络功能的了解，这好像不太难——确实不难，但在这个项目中，需要做的并非
+仅仅使用urllib下载文件，你将使用另一个网络库，即nntplib，它使用起来要难些。另外，你
+还需重构程序以支持不同的新闻源和目的地，进而在中间层使用主引擎将前端和后端分开。 
+最终的程序要实现的主要目标如下。 
+能够从众多不同的新闻源收集新闻。
+可轻松地添加新闻源（乃至不同类型的新闻源）。
+能够以众多不同的格式将生成的新闻汇编分发到众多不同的目的地。
+能够轻松地添加新的目的地（乃至不同类型的目的地）。
+—————————— 
+① 你知道吗？http://groups.google.com的sci.math和rec.arts.sf.written等讨论组其实是Usenet新闻组。
+第23 章
+                          
+
+354  第23 章 项目4：新闻汇总 
+23.2 有用的工具 
+在这个项目中，你无需安装额外的软件，但要用到一些标准库模块，其中包括你以前没有见
+过的nntplib，它负责与NNTP服务器交互。这里不详细介绍这个模块的方方面面，而是通过建立
+原型来研究它。 
+23.3 准备工作 
+要使用nntplib，你必须能够访问NNTP服务器。如果不确定能否这样做，可向ISP或系统管
+理员咨询。在本章的代码示例中，我使用的是新闻组comp.lang.python.announce，因此必须确保
+你的新闻（NNTP）服务器有这个新闻组，或者寻找你要使用的其他新闻组。如果你无法访问NNTP
+服务器，有几个开放的服务器可供任何人使用。只要在网上搜索“免费NNTP服务器”就能找到
+这样的服务器，你可从中选择一个（nntplib官方文档中的代码示例使用的NNTP服务器为
+news.gmane.org）。假设你使用的新闻服务器为news.foo.bar（这不是真实存在的新闻服务器，不
+能使用），可像下面这样测试NNTP服务器： 
+>>> from nntplib import NNTP 
+>>> server = NNTP('news.foo.bar') 
+>>> server.group('comp.lang.python.announce')[0] 
+注意 连接到有些服务器时，可能需要提供其他用于身份验证的参数。有关构造函数nntp的可
+选参数的详情，请参阅“Python库参考手册”（https://docs.python.org/library/nntplib.html）。 
+最后一行代码的运行结果是一个字符串，这个字符串以'211'（意味着该服务器上有你请求
+的新闻组）或'411'（意味着服务器没有这样的新闻组）打头，如下所示： 
+'211 51 1876 1926 comp.lang.python.announce' 
+如果返回的字符串以'411'打头，就应使用新闻阅读器来查找可供使用的其他新闻组（还可
+能出现异常和相应的错误消息）。如果出现异常，可能是你输入的服务器名称不对。另一种可能
+性是，从创建服务器对象到调用方法group的时间超过了限定的时间，因为服务器可能只允许你
+连接很短的时间，如10秒钟。如果你无法快速输入这些代码，可将它们放在脚本中，再执行这个
+脚本（但需要添加print语句），也可将创建服务器和调用方法的代码放在一行内（并用分号分隔
+它们）。 
+23.4 初次实现 
+秉承原型设计的理念，我们直接来解决问题。首先要做的是从NNTP服务器上的新闻组下载
+最新的消息。为简单起见，使用print直接将结果打印到标准输出即可。请先浏览本节后面代码
+清单23-1所示的源代码，并执行这个程序看看它是如何工作的，然后再来研究实现细节。这个程
+                          
+
+23.4 初次实现  355 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+9 
+10 
+11 
+12 
+13 
+14 
+序的逻辑不太复杂，难点主要是nntplib的用法。我们将使用单个NNTP对象，正如你在前一节看
+到的，实例化这个类时，只需指定NNTP服务器的名称。你需要对NNTP实例调用3个方法。 
+group：将指定新闻组设置为当前新闻组，并返回一些有关该新闻组的信息，其中包括最
+后一条消息的编号。
+over：返回通过编号指定的一组消息的摘要。
+body：返回指定消息的正文。
+使用前面虚构的服务器名称，可像下面这样来完成设置工作： 
+servername = 'news.foo.bar' 
+group = 'comp.lang.python.announce' 
+server = NNTP(servername) 
+howmany = 10 
+其中变量howmany指定要获取多少篇文章。现在可以选择新闻组了。 
+resp, count, first, last, name = server.group(group) 
+返回的值为通用的服务器响应、新闻组包含的消息数、第一条和最后一条消息的编号以及新
+闻组的名称。我们感兴趣的主要是last，将使用它来创建要获取的文章的编号区间，该区间的起
+点为start = last - howmany + 1，终点为last。我们将这两个数字作为参数传递给方法over，这
+将返回一系列表示消息的(id, overview)。然后，我们从overview中提取主题，并使用ID从服务
+器获取消息正文。 
+消息正文行是以字节的方式返回的。如果使用默认编码UTF-8进行解码，可能得到非法的字
+节序列。理想的做法是提取编码信息，但为简单起见，我们直接使用编码Latin-1，它适用于ASCII
+字节，且遇到非ASCII字节时不会报错。打印所有的文章后，我们调用server.quit()。就这么简
+单。在bash等UNIX shell中，可像下面这样运行这个程序： 
+$ python newsagent1.py | less 
+通过使用less，可每次只阅读一篇文章。如果没有这样的分页程序可用，可修改程序的print
+部分，将生成的文本存储到文件中——再次实现时就会这样做（有关文件处理的详细信息，请参
+阅第11章）。这个简单的新闻收集代理的源代码如代码清单23-1所示。 
+代码清单23-1 一个简单的新闻收集代理（newsagent1.py） 
+from nntplib import NNTP 
+servername = 'news.foo.bar' 
+group = 'comp.lang.python.announce' 
+server = NNTP(servername) 
+howmany = 10 
+resp, count, first, last, name = server.group(group) 
+start = last - howmany + 1 
+resp, overviews = server.over((start, last)) 
+                          
+
+356  第23 章 项目4：新闻汇总 
+for id, over in overviews: 
+   subject = over['subject'] 
+   resp, info = server.body(id) 
+   print(subject) 
+   print('-' * len(subject)) 
+ for line in info.lines: 
+    print(line.decode('latin1')) 
+   print() 
+server.quit() 
+23.5 再次实现 
+初次实现管用，但很不灵活，因为使用它只能从Usenet讨论组获取新闻。在再次实现中，你
+将对代码稍作重构以修复这种问题。你将把各部分代码放在类和方法中，以提高程序的结构化程
+度和抽象程度，这样就可用其他类替换有些部分，这比替换初次实现的部分代码要容易得多。 
+同样，你可能想先浏览并执行代码清单23-2所示的代码，再来深入研究这种实现的细节。 
+注意 要让代码清单23-2所示的代码能够正常运行，必须将变量clpa_server设置为可用的NNTP
+服务器。 
+那么需要哪些类呢？我们按第7章提出的建议，快速浏览一些问题描述中的重要名词：信息、
+代理、新闻、汇总、网络、新闻源、目的地、前端、后端和主引擎。这个名词清单表明，需要下
+面这些主要的类：NewsAgent、NewsItem、Source和Destination。 
+各种新闻源构成了前端，目的地构成了后端，而新闻代理位于中间层。 
+在这些类中，最简单的是NewsItem，它只表示一段数据，其中包括标题和正文。因此可像下
+面这样实现它： 
+class NewsItem:  
+   def __init__(self, title, body): 
+ self.title = title 
+ self.body = body 
+为准确地确定要从新闻源和新闻目的地获取什么，先来编写代理本身是个不错的主意。代理
+必须维护两个列表：源列表和目的地列表。添加源和目的地的工作可通过方法addSource和
+addDestination来完成。 
+class NewsAgent:  
+   def __init__(self): 
+ self.sources = [] 
+ self.destinations = [] 
+   def addSource(self, source): 
+ self.sources.append(source) 
+                          
+
+23.5 再次实现  357 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+9 
+10 
+11 
+12 
+13 
+14 
+   def addDestination(self, dest): 
+ self.destinations.append(dest) 
+现在唯一缺失的是将新闻从源分发到目的地的方法。在分发期间，新闻源必须有一个返回其
+所有新闻的方法，而目的地必须有一个接收所有要分发的新闻的方法。分别将这两个方法命名为
+getItems和receiveItems。出于灵活性考虑，只要求getItems返回一个可用于获取NewsItem的迭代
+器。然而，为让目的地更容易实现，假设调用receiveItems时，可将一个序列作为参数。（这样
+可多次迭代这个参数。例如，先创建目录再列出各条新闻。）根据这些决策，NewsAgent的方法
+distribute将如下： 
+def distribute(self): 
+ items = [] 
+   for source in self.sources: 
+    items.extend(source.getItems()) 
+ for dest in self.destinations: 
+ dest.receiveItems(items) 
+这个方法遍历所有的新闻源，并创建一个新闻列表。然后，它遍历所有的目的地，并将完整
+的新闻列表提供给每个目的地。 
+现在余下的工作只有创建表示新闻源和目的地的类。为进行试验，可创建一个简单的目的地
+类，它像第一个原型那样将新闻打印出来。 
+class PlainDestination:  
+   def receiveItems(self, items): 
+ for item in items: 
+  print(item.title) 
+  print('-' * len(item.title)) 
+  print(item.body) 
+打印代码与前面相同，不同的是你将这些代码封装起来了：这些代码现在位于目的地类中，
+而不是以硬编码的方式放在主程序中。在后面的代码清单23-2中，使用了一个复杂些的目的地类
+（生成HTML的HTMLDestination）。它在PlainDestination的基础上添加了以下几项功能。 
+生成的文本为HTML。
+将文本写入文件而不是标准输出中。
+除新闻列表外，还创建了一个目录。
+就这么简单。目录是使用链接到页面相应部分的超链接创建的。为此，我们将使用形如<a 
+href="#nn">...</a>的链接（其中nn为数字），这将链接到包含锚点标签<a name="nn">...</a>（其
+中nn是与目录中相同的数字）的标题。目录和主新闻列表是使用两个不同的for循环创建的，最
+终的结果如图23-1所示（用到了即将介绍的NNTPSource类）。 
+在设计方面，我考虑过使用新闻源超类和新闻目的地超类，但不同的新闻源和新闻目的地在
+行为上没有任何共同之处，因此使用超类毫无意义。只要新闻源和新闻目的地类正确地实现了必
+要的方法（getItems和receiveItems），NewsAgent就会感到满意。（这是一个第9章介绍的理论的
+                          
+
+358  第23 章 项目4：新闻汇总 
+示例：与其使用超类，不如使用协议。） 
+图23-1 自动生成的新闻页面 
+创建NNTPSource类时，大部分代码都可从最初的原型中复制而来。从代码清单23-2可知，相
+比于最初的原型，主要不同之处如下。 
+代码封装在方法getItems中。原来的变量servername和group现在是构造函数的参数。另
+外，变量howmany也变成了构造函数的参数。
+调用了decode_header，它负责处理报头字段（如subject）使用的特殊编码。
+不是直接打印每条新闻，而是生成NewsItem对象（让getItems变成了生成器）。
+为证明这种设计的灵活性，我们再添加一个新闻源——可从网页提取新闻的新闻源。（这是
+使用正则表达式实现的。有关正则表达式的详细信息，请参阅第10章。）SimpleWebSource（参见
+代码清单23-2）的构造函数将一个URL和两个正则表达式（一个用于匹配标题，另一个用于匹配
+正文）作为参数。在getItems中，它使用正则表达式方法findall找出所有匹配的标题和正文，并
+使用zip将它们组合起来。然后，它迭代(title, body)列表，并根据每个(title, body)生成一个
+NewsItem。如你所见，添加新的新闻源（或目的地）并不太难。 
+为让代码能够正确地运行，我们实例化一个代理以及一些新闻源和新闻目的地。在函数
+runDefaultSetup中（这个函数将在其所属模块作为程序运行时被调用），实例化了几个这样的
+对象。 
+表示路透社网站的SimpleWebSource，它使用两个简单的正则表达式提取所需的信息。
+注意 路透社网站网页的HTML布局可能发生变化。在这种情况下，你需要修改正则表达式。
+当然，从其他网页提取信息时，也需要这样做。为此，可查看网页的HTML源代码，并
+找出适用的模式。 
+                          
+
+23.5 再次实现  359 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+9 
+10 
+11 
+12 
+13 
+14 
+表示comp.lang.python的NNTPSource。实例化这个对象时，将howmany设置成了10，因此其
+工作原理与最初的原型类似。
+一个PlainDestination对象，它打印收集的所有新闻。
+一个HTMLDestination对象，它生成新闻页面news.html。
+创建所有这些对象并将其添加到NewsAgent中后，调用了方法distribute。要运行这个程序，
+可像下面这样做： 
+$ python newsagent2.py 
+生成的页面news.html如图23-2所示。再次实现的完整源代码如代码清单23-2所示。 
+图23-2 包含多个新闻源中新闻的新闻页面 
+代码清单23-2 一个更灵活的新闻收集代理（newsagent2.py） 
+from nntplib import NNTP, decode_header 
+from urllib.request import urlopen 
+import textwrap 
+import re 
+class NewsAgent:  
+   """ 
+   可将新闻源中的新闻分发到新闻目的地的对象 
+   """ 
+   def __init__(self): 
+ self.sources = [] 
+ self.destinations = [] 
+                          
+
+360  第23 章 项目4：新闻汇总 
+   def add_source(self, source): 
+ self.sources.append(source) 
+   def addDestination(self, dest): 
+ self.destinations.append(dest) 
+def distribute(self): 
+   """ 
+   从所有新闻源获取所有的新闻，并将其分发到所有的新闻目的地 
+   """ 
+ items = [] 
+   for source in self.sources: 
+    items.extend(source.get_items()) 
+ for dest in self.destinations: 
+ dest.receive_items(items) 
+class NewsItem: 
+   """ 
+   由标题和正文组成的简单新闻 
+   """ 
+   def __init__(self, title, body): 
+ self.title = title 
+ self.body = body 
+class NNTPSource: 
+   """ 
+   从NNTP新闻组获取新闻的新闻源 
+   """ 
+   def __init__(self, servername, group, howmany): 
+ self.servername = servername 
+ self.group = group 
+ self.howmany = howmany 
+   def get_items(self): 
+ server = NNTP(self.servername) 
+ resp, count, first, last, name = server.group(self.group) 
+ start = last - self.howmany + 1 
+ resp, overviews = server.over((start, last)) 
+ for id, over in overviews: 
+  title = decode_header(over['subject']) 
+  resp, info = server.body(id) 
+  body = '\n'.join(line.decode('latin') 
+ for line in info.lines) + '\n\n' 
+  yield NewsItem(title, body) 
+ server.quit() 
+class SimpleWebSource: 
+   """ 
+   使用正则表达式从网页提取新闻的新闻源 
+   """ 
+   def __init__(self, url, title_pattern, body_pattern, encoding='utf8'): 
+ self.url = url 
+ self.title_pattern = re.compile(title_pattern) 
+ self.body_pattern = re.compile(body_pattern) 
+                          
+
+23.5 再次实现  361 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+9 
+10 
+11 
+12 
+13 
+14 
+ self.encoding = encoding 
+   def get_items(self): 
+ text = urlopen(self.url).read().decode(self.encoding) 
+ titles = self.title_pattern.findall(text) 
+ bodies = self.body_pattern.findall(text) 
+ for title, body in zip(titles, bodies): 
+  yield NewsItem(title, textwrap.fill(body) + '\n') 
+class PlainDestination: 
+   """ 
+   以纯文本方式显示所有新闻的新闻目的地 
+   """ 
+   def receive_items(self, items): 
+ for item in items: 
+  print(item.title) 
+  print('-' * len(item.title)) 
+  print(item.body) 
+class HTMLDestination: 
+   """ 
+   以HTML格式显示所有新闻的新闻目的地 
+   """ 
+   def __init__(self, filename): 
+ self.filename = filename 
+   def receive_items(self, items): 
+ out = open(self.filename, 'w') 
+ print(""" 
+ <html> 
+   <head> 
+  <title>Today's News</title> 
+   </head> 
+   <body> 
+   <h1>Today's News</h1> 
+ """, file=out) 
+ print('<ul>', file=out) 
+ id = 0 
+ for item in items: 
+  id += 1 
+  print(' <li><a href="#{}">{}</a></li>' 
+   .format(id, item.title), file=out) 
+ print('</ul>', file=out) 
+ id = 0 
+ for item in items: 
+  id += 1 
+  print('<h2><a name="{}">{}</a></h2>' 
+    .format(id, item.title), file=out) 
+  print('<pre>{}</pre>'.format(item.body), file=out) 
+ print(""" 
+   </body> 
+                          
+
+362  第23 章 项目4：新闻汇总 
+ </html> 
+ """, file=out) 
+def runDefaultSetup(): 
+   """ 
+   默认的新闻源和目的地设置，请根据偏好进行修改 
+   """ 
+ agent = NewsAgent() 
+   # 从路透社获取新闻的SimpleWebSource对象： 
+ reuters_url = 'http://www.reuters.com/news/world' 
+   reuters_title = r'<h2><a href="[^"]*"\s*>(.*?)</a>' 
+   reuters_body = r'</h2><p>(.*?)</p>' 
+   reuters = SimpleWebSource(reuters_url, reuters_title, reuters_body) 
+   agent.add_source(reuters) 
+   # 从comp.lang.python.announce获取新闻的NNTPSource对象： 
+   clpa_server = 'news.foo.bar' # 替换为实际服务器的名称 
+ clpa_server = 'news.ntnu.no' 
+   clpa_group = 'comp.lang.python.announce' 
+   clpa_howmany = 10 
+   clpa = NNTPSource(clpa_server, clpa_group, clpa_howmany) 
+   agent.add_source(clpa) 
+   # 添加纯文本目的地和HTML目的地： 
+   agent.addDestination(PlainDestination()) 
+   agent.addDestination(HTMLDestination('news.html')) 
+   # 分发新闻： 
+   agent.distribute() 
+if __name__ == '__main__': runDefaultSetup() 
+23.6 进一步探索 
+鉴于其可扩展性，这个项目提供了很大的探索空间。下面是一些建议。 
+使用第15章讨论的屏幕抓取技术创建一个更厉害的WebSource类。
+创建一个RSSSource，它执行第15章简要讨论过的RSS解析。
+改进HTMLDestination生成的HTML页面的布局。
+创建一个页面监视器，它在指定网页发生变化时生成新闻。（只需下载当前页面，并将其
+与以前的页面进行比较。请研究标准库中用于比较文件的模块filecmp。）
+创建这个新闻脚本的CGI版本（参见第15章）。
+创建一个EmailDestination类，它通过电子邮件将新闻发送给你。（请参阅标准库中用于
+发送电子邮件的模块smtplib。）
+添加指定要使用哪种新闻格式的开关。（参见标准库模块argparse。）
+                          
+
+23.6 进一步探索  363 
+16 
+17 
+18 
+19 
+20 
+15 
+21 
+22 
+23 
+9 
+10 
+11 
+12 
+13 
+14 
+向新闻目的地提供有关新闻来自何方的信息，以实现更漂亮的布局。
+尝试对新闻进行分类（为此可在新闻中搜索关键字）。
+创建一个XMLDestination类，它生成可供项目3（第22章）中网站生成器使用的XML文件。
+这样你就可以创建一个新闻网站了。
+预告
+前面做了大量文件创建和处理工作（包括下载必要的文件），这虽然很有用，但交互性不强。
+在下一个项目中，我们将创建一个聊天服务器，让你能够与朋友在线聊天。你甚至可对其进行扩
+展，以创建自己的虚拟（文本式）环境。 
+                          

@@ -1,0 +1,679 @@
+The Django Book
+| 上一章 | 目 录 | 下一章 | 翻译 |
+About | Comment help | Contact us | Errata | Buy the print version on Amazon.com
+第十二章： 部署Django
+本章包含创建一个django程序最必不可少的步骤 在服务器上部署它
+如果你一直跟着我们的例子做，你可能正在用runserver 但是runserver 要部署你的django程序，你需要挂接
+到工业用的服务器 如：Apache 在本章，我们将展示如何做，但是，在做之前我们要给你一个(要做的事的)清
+单.
+准备你的代码库
+很幸运，runserver 但是，在开始前，有一些**
+关闭Debug模式.
+我们在第2章,用命令 django‐admin.py startproject创建了一个项目 , 其中创建的 settings.py 文件的 DEBUG
+设置默认为 True . django会根据这个设置来改变他们的行为， 如果 DEBUG 模式被开启. 例如， 如果 DEBUG 被设
+置成 True , 那么:
+所有的数据库查询将被保存在内存中， 以 django.db.connection.queries 的形式. 你可以想象，这个吃内
+存!
+任何404错误都将呈现django的特殊的404页面(第3章有)而不是普通的404页面。 这个页面包含潜在的敏
+感信息，但是不会暴露在公共互联网。
+你的应用中任何未捕获的异常，从基本的python语法错误到数据库错误以及模板语法错误都会返回漂亮的
+Django错误页面。 这个页面包含了比404错误页面更多的敏感信息，所以这个页面绝对不要公开暴露。
+简单的说，把`` DEBUG`` 设置成`` True`` 相当于告诉Django你的网站只会被可信任的开发人员使用。 Internet
+里充满了不可信赖的事物，当你准备部署你的应用时，首要的事情就是把`` DEBUG`` 设置为`` False`` 。
+来关闭模板Debug模式。
+类似地，你应该在生产环境中把TEMPLATE_DEBUGFalse 如果这个设为`` True`` ，为了在那个好看的错误页面上显
+示足够的东西，Django的模版系统就会为每一个模版保存一些额外的信息。
+实现一个404模板
+如果`` DEBUG`` 设置为`` True`` ，Django会显示那个自带的404错误页面。 但如果`` DEBUG`` 被设置成``
+False`` ，那它的行为就不一样了： 他会显示一个在你的模版根目录中名字叫`` 404.html`` 的模版 所以，当你准
+备部署你的应用时，你会需要创建这个模版并在里面放一些有意义的“页面未找到”的信息
+这里有一个`` 404.html``的示例，你可以从它开始。 假定你使用的模板继承并定义一个 `` base.html``,该页面
+由titlecontent两块组成。
+{% extends "base.html" %}
+1
+1
+2010-5-5
+第二十章： 部署Django
+djangobook.py3k.cn/2.0/chapter12/
+1/18
+
+{% block title %}Page not found{% endblock %}
+{% block content %}
+<h1>Page not found</h1>
+<p>Sorry, but the requested page could not be found.</p>
+{% endblock %}
+要测试你的404.html页面是否正常工作，仅仅需要将DEBUG 设置为`` False`` ，并且访问一个并不存在的URL。
+（它将在`` sunserver`` 上工作的和开发服务器上一样好）
+实现一个500模板
+类似的，如果`` DEBUG`` 设置为`` False`` ，Djang不再会显示它自带的应对未处理的Python异常的错误反馈页
+面。 作为代替，它会查找一个名为`` 500.html`` 的模板并且显示它。 像`` 404.html`` 一样，这个模板应该被放
+置在你的模板根目录下。
+这里有一个关于500.html的比较棘手的问题。你永远不能确定`` 为什么``会显示这个模板，所以它不应该做任何
+需要连接数据库，或者依赖任何可能被破坏的基础构件的事情。 （例如：它不应该使用自定义模板标签。）如
+果它用到了模板继承，那么父模板也就不应该依赖可能被破坏的基础构件。 因此，最好的方法就是避免模板继
+承，并且用一些非常简单的东西。 这是一个`` 500.html`` 的例子，可以把它作为一个起点：
+<!DOCTYPE html PUBLIC "‐//W3C//DTD HTML 4.01//EN"
+    "http://www.w3.org/TR/html4/strict.dtd">
+<html lang="en">
+<head>
+    <title>Page unavailable</title>
+</head>
+<body>
+    <h1>Page unavailable</h1>
+    <p>Sorry, but the requested page is unavailable due to a
+    server hiccup.</p>
+    <p>Our engineers have been notified, so check back later.</p>
+</body>
+</html>
+设置错误警告
+当你使用Django制作的网站运行中出现了异常，你会希望去了解以便于修正它。 默认情况下，Django在你的
+代码引发未处理的异常时，将会发送一封Email至开发者团队。但你需要去做两件事来设置这种行为。
+首先，改变你的ADMINS设置用来引入你的E-mail地址，以及那些任何需要被注意的联系人的E-mail地址。 这个
+设置采用了类似于(姓名, Email)元组，像这样：
+ADMINS = (
+    ('John Lennon', 'jlennon@example.com'),
+    ('Paul McCartney', 'pmacca@example.com'),
+)
+第二，确保你的服务器配置为发送电子邮件。 设置好postfix,sendmail或其他本书范围之外但是与Django设置
+相关的邮件服务器,你需要将将 EMAIL_HOST设置为你的邮件服务器的正确的主机名. 默认模式下是设置
+为’localhost’, 这个设置对大多数的共享主机系统环境适用. 取决于你的安排的复杂性,你可能还需要设置
+EMAIL_HOST_USER,EMAIL_HOST_PASSWORD,EMAIL_PORT或EMAIL_USE_TLS。
+2010-5-5
+第二十章： 部署Django
+djangobook.py3k.cn/2.0/chapter12/
+2/18
+
+你还可以设置EMAIL_SUBJECT_PREFIX以控制Django使用的 error e-mail的前缀。 默认情况下它被设置
+为'[Django] '
+设置连接中断警报
+如果你安装有CommonMiddleware(比如，你的MIDDLEWARE_CLASSES设置包含
+了’django.middleware.common.CommonMiddleware’的情况下，默认就安装了
+CommonMiddleware),你就具有了设置这个选项的能力：有人在访问你的Django网站的一个非空的链接而导
+致一个404错误的发生和连接中断的情况，你将收到一封邮件. 如果你想激活这个特性，设置
+SEND_BROKEN_LINK_EMAILS 为True(默认为False),并设置你的MANAGERS为某个人或某些人的邮件地址，
+这些邮件地址将会收到报告连接中断错误的邮件. MANAGERS使用和ADMINS 同样的语法.例如:
+MANAGERS = (
+    ('George Harrison', 'gharrison@example.com'),
+    ('Ringo Starr', 'ringo@example.com'),
+)
+请注意，错误的Email会令人感到反感，对于任何人来说都是这样。
+使用针对产品的不同的设置
+在此书中，我们仅仅处理一个单一的设置文件 settings.py文件由django-admin.py startproject命令生成。但
+是当你准备要进行配置的时候，你将发现你需要多个配置文件以使你的开发环境和产品环境相独立。 比如，你
+可能不想每次在本地机器上测试代码改变的时候将DEBUG从False 改为True。Django通过使用多个配置文件
+而使得这种情况很容易得到避免。
+如果你想把你的配置文件按照产品设置和开发设置组织起来，你可以通过下面三种方法的其中一种达到这个目
+的。
+设置成两个全面的，彼此独立的配置文件
+设置一个基本的配置文件（比如，为了开发)和第二个（为了产品)配置文件，第二个配置文件仅仅从基本
+的那个配置文件导入配置，并对需要定义的进行复写.
+使用一个单独的配置文件，此配置文件包含一个Python的逻辑判断根据上下文环境改变设置。
+我们将会在依次解释这几种方式
+首先，最基本的方法是定义两个单独的配置文件。 如果你是跟随之前的例子做下来的，那么你已经有了一个
+settings.py了，现在你只需要将它复制一份并命名为settings_production.py（文件名可以按照你自己的喜好
+定义),在这个新文件中改变DEBUG等设置。
+第二种方法比较类似，但是减少了许多冗余。 作为使用两个内容大部分相同的配置文件的替代方式，你可以使
+用一个文件为基本文件，另外一个文件从基本文件中导入相关设定。 例如
+# settings.py
+DEBUG = True
+TEMPLATE_DEBUG = DEBUG
+DATABASE_ENGINE = 'postgresql_psycopg2'
+DATABASE_NAME = 'devdb'
+DATABASE_USER = ''
+2010-5-5
+第二十章： 部署Django
+djangobook.py3k.cn/2.0/chapter12/
+3/18
+
+DATABASE_PASSWORD = ''
+DATABASE_PORT = ''
+# ...
+# settings_production.py
+from settings import *
+DEBUG = TEMPLATE_DEBUG = False
+DATABASE_NAME = 'production'
+DATABASE_USER = 'app'
+DATABASE_PASSWORD = 'letmein'
+此处，settings_production.py 从settings.py 导入所有的设定，仅仅只是重新定义了产品模式下需要特殊处理
+的设置。 在这个案例中，DEBUG 被设置为False，但是我们已经对产品模式设置了不同的数据库访问参数。
+（后者将向你演示你可以重新定义 任何 设置，并不只是象 DEBUG 这样的基本设置。）
+最终，最精简的达到两个配置环境设定的方案是使用一个配置文件，在此配置文件中根据不同的环境进行设
+置。 一个达到这个目的的方法是检查当前的主机名。 例如：
+# settings.py
+import socket
+if socket.gethostname() == 'my‐laptop':
+    DEBUG = TEMPLATE_DEBUG = True
+else:
+    DEBUG = TEMPLATE_DEBUG = False
+# ...
+在这里，我们从python标准库导入了socket 模块，使用它来检查当前系统的主机名。 我们可以通过检查主机
+名来确认代码是否运行在产品服务器上。
+一个关键是配置文件仅仅是包含python代码的文件。你可以从其他文件导入这些python代码，可以通过这些
+代码执行任意的逻辑判断等操作。 如果你打算按照这种方案走下去，请确定这些配置文件中的代码是足够安全
+（防弹)的。 如果这个配置文件抛出任何的异常，Django都有可能会发生很严重的崩溃。
+重命名settings.py
+随便将你的settings.py重命名为settings_dev.py或settings/dev.py或foobar.py，Django 并不在乎你的配置
+文件取什么名字，只要你告诉它你使用的哪个配置文件就可以了。
+但是如果你真的重命名了由django-admin.py startproject 命令创建的settings.py文件，你会发现manage.py
+会给出一个错误信息说找不到配置文件。 那是由于它尝试从这个文件中导入一个叫做settings的模块，你可以
+通过修改manage.py 文件，将 import settings 语句改为导入你自己的模块，或者使用django-admin.py而不
+是使用manage.py,在后一种方式中你需要设置 DJANGO_SETTINGS_MODULE 环境变量为你的配置文件所在
+的python 路径.(比如’mysite.settings’）。
+DJANGO_SETTINGS_MODULE
+通过这种方式的代码改变后，本章的下一部分将集中在对具体环境(比如Apache)的发布所需要的指令上。 这些
+指令针对每一种环境都不同，但是有一件事情是相同的。 在每一种环境中，你都需要告诉Web服务器你的
+DJANGO_SETTINGS_MODULE是什么,这是你的Django应用程序的进入点。 DJANGO_SETTINGS_MODULE
+指向你的配置文件，在你的配置文件中指向你的ROOT_URLCONF,在ROOT_URLCONF中指向了你的视图以及
+2010-5-5
+第二十章： 部署Django
+djangobook.py3k.cn/2.0/chapter12/
+4/18
+
+System Message: WARNING/2 (<string>, line 403); backlink
+其他的部分。
+DJANGO_SETTINGS_MODULE是你的配置文件的python的路径 比如，假设mysite是在你的Python路径中，
+DJANGO_SETTINGS_MODULE对于我们正在进行的例子就是’mysite.settings’。
+用Apache和mod_python来部署Django
+目前，Apache和mod_python是在生产服务器上部署Django的最健壮搭配。
+mod_python (http://www.djangoproject.com/r/mod_python/)是一个在Apache中嵌入Python的Apache
+插件，它在服务器启动时将Python代码加载到内存中。 (译注：
+Django 需要Apaceh 2.x 和mod_python 3.x支持。
+备注
+如何配置Apache超出了本书的范围，因此下面将只简单介绍必要的细节。 幸运的是，如果需要进一步学习
+Apache的相关知识，可以找到相当多的绝佳资源。 我们喜欢去的几个地方:
+开源的Apache在线文档，位于 http://www.djangoproject.com/r/apache/docs/
+Pro Apache，第三版 (Apress, 2004),作者Peter Wainwright, 位于
+http://www.djangoproject.com/r/books/pro-apache/
+Apache: The Definitive Guide, 第三版 (OReilly, 2002),作者Ben Laurie和Peter Laurie, 位于
+http://www.djangoproject.com/r/books/apache-pra/
+基本配置
+为了配置基于 mod_python 的 Django，首先要安装有可用的 mod_python 模块的 Apache。 这通常意味着
+应该有一个 LoadModule 指令在 Apache 配置文件中。 它看起来就像是这样：
+LoadModule python_module /usr/lib/apache2/modules/mod_python.so
+Then, edit your Apache configuration file and add a <Location> directive that ties a specific URL path
+to a specific Django installation. 例如：
+<Location "/">
+    SetHandler python‐program
+    PythonHandler django.core.handlers.modpython
+    SetEnv DJANGO_SETTINGS_MODULE mysite.settings
+    PythonDebug Off
+</Location>
+要确保把 DJANGO_SETTINGS_MODULE 中的 mysite.settings 项目换成与你的站点相应的内容。
+它告诉 Apache，任何在 / 这个路径之后的 URL 都使用 Django 的 mod_python 来处理。 它 将
+DJANGO_SETTINGS_MODULE 的值传递过去，使得 mod_python 知道这时应该使用哪个配置。
+注意这里使用 ```` 指令而不是 ```` 。 后者用于指向你的文件系统中的一个位置，然而 ````
+Inline literal start-string without end-string.
+2010-5-5
+第二十章： 部署Django
+djangobook.py3k.cn/2.0/chapter12/
+5/18
+
+System Message: WARNING/2 (<string>, line 403); backlink
+System Message: WARNING/2 (<string>, line 403); backlink
+System Message: WARNING/2 (<string>, line 403); backlink
+System Message: ERROR/3 (<string>, line 405)
+System Message: WARNING/2 (<string>, line 405); backlink
+System Message: WARNING/2 (<string>, line 405); backlink
+Inline literal start-string without end-string.
+Inline literal start-string without end-string.
+Inline literal start-string without end-string.
+Unexpected indentation.
+指向一个 Web 站点的 URL 位置。 ````
+Inline literal start-string without end-string.
+Inline literal start-string without end-string.
+Apache 可能不但会运行在你正常登录的环境中，也会运行在其它不同的用户环境中；也可能会有不同的文件
+路径或 sys.path。 你需要告诉 mod_python 如何去寻找你的项目及 Django 的位置。
+PythonPath "['/path/to/project', '/path/to/django'] + sys.path"
+你也可以加入一些其它指令，比如 PythonAutoReload Off 以提升性能。 查看 mod_python 文档获得详细的指
+令列表。
+注意，你应该在成品服务器上设置 PythonDebug Off 。如果你使用 PythonDebug On 的话，在程序产生错误时，
+你的用户会看到难看的（并且是暴露的） Python 回溯信息。 如果你把 PythonDebug 置 On,当mod_python
+出现某些错误,你的用户会看到丑陋的（也会暴露某些信息)Python的对错误的追踪的信息。
+重启 Apache 之后所有对你的站点的请求（或者是当你用了 <VirtualHost> 指令后则是虚拟主机）都会由
+Djanog 来处理。
+在同一个 Apache 的实例中运行多个 Django 程序
+在同一个 Apache 实例中运行多个 Django 程序是完全可能的。 当你是一个独立的 Web 开发人员并有多个不
+同的客户时，你可能会想这么做。
+只要像下面这样使用 VirtualHost 你可以实现：
+NameVirtualHost *
+<VirtualHost *>
+    ServerName www.example.com
+    # ...
+    SetEnv DJANGO_SETTINGS_MODULE mysite.settings
+</VirtualHost>
+2010-5-5
+第二十章： 部署Django
+djangobook.py3k.cn/2.0/chapter12/
+6/18
+
+<VirtualHost *>
+    ServerName www2.example.com
+    # ...
+    SetEnv DJANGO_SETTINGS_MODULE mysite.other_settings
+</VirtualHost>
+如果你需要在同一个 VirtualHost 中运行两个 Django 程序，你需要特别留意一下以 确保 mod_python 的代
+码缓存不被弄得乱七八糟。 使用 PythonInterpreter 指令来将不 同的 <Location> 指令分别解释：
+<VirtualHost *>
+    ServerName www.example.com
+    # ...
+    <Location "/something">
+        SetEnv DJANGO_SETTINGS_MODULE mysite.settings
+        PythonInterpreter mysite
+    </Location>
+    <Location "/otherthing">
+        SetEnv DJANGO_SETTINGS_MODULE mysite.other_settings
+        PythonInterpreter mysite_other
+    </Location>
+</VirtualHost>
+这个 PythonInterpreter 中的值不重要，只要它们在两个 Location 块中不同。
+用 mod_python 运行一个开发服务器
+因为 mod_python 缓存预载入了 Python 的代码，当在 mod_python 上发布 Django 站点时，你每 改动了一
+次代码都要需要重启 Apache 一次。 这还真是件麻烦事，所以这有个办法来避免它： 只要 加入
+MaxRequestsPerChild 1 到配置文件中强制 Apache 在每个请求时都重新载入所有的 代码。 但是不要在产品服
+务器上使用这个指令，这会撤销 Django 的特权。
+如果你是一个用分散的 print 语句（我们就是这样）来调试的程序员，注意这 print 语 句在 mod_python 中
+是无效的；它不会像你希望的那样产生一个 Apache 日志。 如果你需要在 mod_python 中打印调试信息，可
+能需要用到 Python 标准日志包（Pythons standard logging package）。 更多的信息请参见
+http://docs.python.org/lib/module-logging.html 。另一个选择是在模板页面中加入调试信息。
+使用相同的Apache实例来服务Django和Media文件
+Django本身不用来服务media文件；应该把这项工作留给你选择的网络服务器。 我们推荐使用一个单独的网
+络服务器（即没有运行Django的一个）来服务media。 想了解更多信息，看下面的章节。
+不过，如果你没有其他选择，所以只能在同Django一样的Apache VirtualHost 上服务media文件，这里你可
+以针对这个站点的特定部分关闭mod_python：
+<Location "/media/">
+    SetHandler None
+</Location>
+将 Location 改成你的media文件所处的根目录。
+你也可以使用 <LocationMatch> 来匹配正则表达式。 比如，下面的写法将Django定义到网站的根目录，并且
+显式地将 media 子目录以及任何以 .jpg ， .gif ， 或者 .png 结尾的URL屏蔽掉:
+<Location "/">
+    SetHandler python‐program
+    PythonHandler django.core.handlers.modpython
+1
+2010-5-5
+第二十章： 部署Django
+djangobook.py3k.cn/2.0/chapter12/
+7/18
+
+    SetEnv DJANGO_SETTINGS_MODULE mysite.settings
+</Location>
+<Location "/media/">
+    SetHandler None
+</Location>
+<LocationMatch "\.(jpg|gif|png)$">
+    SetHandler None
+</LocationMatch>
+在所有这些例子中，你必须设置 DocumentRoot ，这样apache才能知道你存放静态文件的位置。
+错误处理
+当你使用 Apache/mod_python 时，错误会被 Django 捕捉，它们不会传播到 Apache 那里，也不会出现在
+Apache 的 错误日志 中。
+除非你的 Django 设置的确出了问题。 在这种情况下，你会在浏览器上看到一个 内部服务器错误的页面，并在
+Apache 的 错误日志 中看到 Python 的完整回溯信息。 错误日志 的回溯信息有多行。 当然，这些信息是难看
+且难以阅读的。
+处理段错误
+有时候，Apache会在你安装Django的时候发生段错误。 这时，基本上 总是 有以下两个与Django本身无关的
+原因其中之一所造成：
+有可能是因为，你使用了 pyexpat 模块（进行XML解析）并且与Apache内置的版本相冲突。 详情请见
+http://www.djangoproject.com/r/articles/expat-apache-crash/.
+也有可能是在同一个Apache进程中，同时使用了mod_python 和 mod_php，而且都使用MySQL作为数
+据库后端。 在有些情况下，这会造成PHP和Python的MySQL模块的版本冲突。 在mod_python的FAQ中
+有更详细的解释。
+如果还有安装mod_python的问题，有一个好的建议，就是先只运行mod_python站点，而不使用Django框
+架。 这是区分mod_python特定问题的好方法。 下面的这篇文章给出了更详细的解释。
+http://www.djangoproject.com/r/articles/getting-modpython-working/.
+下一个步骤应该是编辑一段测试代码，把你所有django相关代码import进去，你的
+views,models,URLconf,RSS配置，等等。 把这些imports放进你的handler函数中，然后从浏览器进入你的
+URL。 如果这些导致了crash，你就可以确定是import的django代码引起了问题。 逐个去掉这些imports，直
+到不再冲突，这样就能找到引起问题的那个模块。 深入了解各模块，看看它们的imports。 要想获得更多帮
+助，像linux的ldconfig，Mac OS的otool和windows的ListDLLs（form sysInternals）都可以帮你识别共享依
+赖和可能的版本冲突。
+一种替代方案： mod_wsgi模块
+作为一个mod_python模块的替代，你可以考虑使用mod_wsgi模块(http://code.google.com/p/modwsgi/),
+此模块开发的时间比mod_python的开发时间离现在更近一些，在Django社区已有一些使用。 一个完整的概
+述超出了本书的范围，你可以从官方的Django文档查看到更多的信息。
+使用FastCGI部署Django应用
+2010-5-5
+第二十章： 部署Django
+djangobook.py3k.cn/2.0/chapter12/
+8/18
+
+尽管将使用Apache和mod_python搭建Django环境是最具鲁棒性的，但在很多虚拟主机平台上，往往只能使
+用FastCGI
+此外，在很多情况下，FastCGI能够提供比mod_python更为优越的安全性和效能。 针对小型站点，相对于
+Apache来说FastCGI更为轻量级。
+FastCGI 简介
+如何能够由一个外部的应用程序很有效解释WEB 服务器上的动态页面请求呢？ 答案就是使用FastCGI! 它的工
+作步骤简单的描述起来是这样的：
+和mod_python一样，FastCGI也是驻留在内存里为客户请求返回动态信息,而且也免掉了像传统的CGI一样启动
+进程时候的时间花销。 但于mod_python不同之处是它并不是作为模块运行在web服务器同一进程内的，而是
+有自己的独立进程。
+为什么要在一个独立的进程中运行代码？
+在以传统的方式的几种以mod_*方式嵌入到Apache的脚本语言中（常见的例如： PHP，
+Python/mod_python和Perl/mod_perl），他们都是以apache扩展模块的方式将自身嵌入到Apache进程中
+的。
+每一个Apache进程都是一个Apache引擎的副本，它完全包括了所有Apache所具有的一切功能特性（哪怕是
+对Django毫无好处的东西也一并加载进来）。 而FastCGI就不一样了，它仅仅把Python和Django等必备的东
+东弄到内存中。
+依据FastCGI自身的特点可以看到，FastCGI进程可以与Web服务器的进程分别运行在不同的用户权限下。 对于
+一个多人共用的系统来说，这个特性对于安全性是非常有好处的，因为你可以安全的于别人分享和重用代码
+了。
+如果你希望你的Django以FastCGI的方式运行，那么你还必须安装 flup 这个Python库，这个库就是用于处理
+FastCGI的。 很多用户都抱怨 flup 的发布版太久了，老是不更新。 其实不是的，他们一直在努力的工作着，这
+是没有放出来而已。
+运行你的 FastCGI 服务器
+FastCGI是以客户机/服务器方式运行的，并且在很多情况下，你得自己去启动FastCGI的服务进程。 Web服务
+器（例如Apache,lighttpd等等）仅仅在有动态页面访问请求的时候才会去与你的Django-FastCGI进程交互。
+因为Fast-CGI已经一直驻留在内存里面了的，所以它响应起来也是很快的。
+记录
+在虚拟主机上使用的话，你可能会被强制的使用Web server-managed FastCGI进程。 在这样的情况下，请参
+阅下面的“在Apache共享主机里运行Django”这一小节。
+web服务器有两种方式于FastCGI进程交互： 使用Unix domain socket(在win32里面是 命名管道 )或者使用
+TCP socket.具体使用哪一个，那就根据你的偏好而定了，但是TCP socket弄不好的话往往会发生一些权限上的
+问题。 What you choose is a manner of preference; a TCP socket is usually easier due to permissions
+issues.
+开始你的服务器项目，首先进入你的项目目录下（你的 manage.py 文件所在之处），然后使用
+manage.py runfcgi 命令：
+1
+2010-5-5
+第二十章： 部署Django
+djangobook.py3k.cn/2.0/chapter12/
+9/18
+
+./manage.py runfcgi [options]
+想了解如何使用 runfcgi ，输入 manage.py runfcgi help 命令。
+你可以指定 socket 或者同时指定 host 和 port 。当你要创建Web服务器时，你只需要将服务器指向当你在启
+动FastCGI服务器时确定的socket或者host/port。
+范例：
+在TCP端口上运行一个线程服务器：
+./manage.py runfcgi method=threaded host=127.0.0.1 port=3033
+在Unix socket上运行prefork服务器：
+./manage.py runfcgi method=prefork socket=/home/user/mysite.sock pidfile=django.pid
+启动，但不作为后台进程（在调试时比较方便）：
+./manage.py runfcgi daemonize=false socket=/tmp/mysite.sock
+停止FastCGI的行程
+如果你的FastCGI是在前台运行的，那么只需按Ctrl+C就可以很方便的停止这个进程了。 但如果是在后台运行
+的话，你就要使用Unix的 kill 命令来杀掉它。 然而，当你正在处理后台进程时，你会需要将其付诸于Unix
+kill的命令
+如果你在 manage.py runfcgi 中指定了 pidfile 这个选项，那么你可以这样来杀死这个FastCGI后台进程：
+kill `cat $PIDFILE`
+$PIDFILE 就是你在 pidfile 指定的那个。
+你可以使用下面这个脚本方便地重启Unix里的FastCGI守护进程：
+#!/bin/bash
+# Replace these three settings.
+PROJDIR="/home/user/myproject"
+PIDFILE="$PROJDIR/mysite.pid"
+SOCKET="$PROJDIR/mysite.sock"
+cd $PROJDIR
+if [ ‐f $PIDFILE ]; then
+    kill `cat ‐‐ $PIDFILE`
+    rm ‐f ‐‐ $PIDFILE
+fi
+exec /usr/bin/env ‐   PYTHONPATH="../python:.."   ./manage.py runfcgi socket=$SOCKET pidfile=$PIDF
+在Apache中以FastCGI的方式使用Django
+在Apache和FastCGI上使用Django，你需要安装和配置Apache，并且安装mod_fastcgi。 请参见Apache和
+mod_fastcgi文档： http://www.djangoproject.com/r/mod_fastcgi/ 。
+当完成了安装，通过 httpd.conf （Apache的配置文件）来让Apache和Django FastCGI互相通信。 你需要做
+两件事：
+2010-5-5
+第二十章： 部署Django
+djangobook.py3k.cn/2.0/chapter12/
+10/18
+
+使用 FastCGIExternalServer 指明FastCGI的位置。
+使用 mod_rewrite 为FastCGI指定合适的URL。
+指定 FastCGI Server 的位置
+FastCGIExternalServer 告诉Apache如何找到FastCGI服务器。 按照FastCGIExternalServer 文档（
+http://www.djangoproject.com/r/mod_fastcgi/FastCGIExternalServer/ ），你可以指明 socket 或者 host
+。以下是两个例子：
+# Connect to FastCGI via a socket/named pipe:
+FastCGIExternalServer /home/user/public_html/mysite.fcgi ‐socket /home/user/mysite.sock
+# Connect to FastCGI via a TCP host/port:
+FastCGIExternalServer /home/user/public_html/mysite.fcgi ‐host 127.0.0.1:3033
+在这两个例子中， /home/user/public_html/ 目录必须存在，而 /home/user/public_html/mysite.fcgi 文件
+不一定存在。 它仅仅是一个Web服务器内部使用的接口，这个URL决定了对于哪些URL的请求会被FastCGI处理
+（下一部分详细讨论）。 （下一章将会有更多有关于此的介绍）
+使用mod_rewrite为FastCGI指定URL
+第二步是告诉Apache为符合一定模式的URL使用FastCGI。 为了实现这一点，请使用mod_rewrite 模块，并将
+这些URL重定向到 mysite.fcgi （或者正如在前文中描述的那样，使用任何在 FastCGIExternalServer 指定的
+内容）。
+在这个例子里面，我们告诉Apache使用FastCGI来处理那些在文件系统上不提供文件(译者注：
+<VirtualHost 12.34.56.78>
+  ServerName example.com
+  DocumentRoot /home/user/public_html
+  Alias /media /home/user/python/django/contrib/admin/media
+  RewriteEngine On
+  RewriteRule ^/(media.*)$ /$1 [QSA,L]
+  RewriteCond %{REQUEST_FILENAME} !‐f
+  RewriteRule ^/(.*)$ /mysite.fcgi/$1 [QSA,L]
+</VirtualHost>
+FastCGI 和 lighttpd
+lighttpd (http://www.djangoproject.com/r/lighttpd/) 是一个轻量级的Web服务器，通常被用来提供静态页
+面的访问。 它天生支持FastCGI，因此除非你的站点需要一些Apache特有的特性，否则，lighttpd对于静态和
+动态页面来说都是理想的选择。
+确保 mod_fastcgi 在模块列表中，它需要出现在 mod_rewrite 和 mod_access ，但是要在 mod_accesslog 之
+前。
+将下面的内容添加到你的lighttpd的配置文件中：
+server.document‐root = "/home/user/public_html"
+fastcgi.server = (
+    "/mysite.fcgi" => (
+        "main" => (
+            # Use host / port instead of socket for TCP fastcgi
+            # "host" => "127.0.0.1",
+            # "port" => 3033,
+2010-5-5
+第二十章： 部署Django
+djangobook.py3k.cn/2.0/chapter12/
+11/18
+
+            "socket" => "/home/user/mysite.sock",
+            "check‐local" => "disable",
+        )
+    ),
+)
+alias.url = (
+    "/media/" => "/home/user/django/contrib/admin/media/",
+)
+url.rewrite‐once = (
+    "^(/media.*)$" => "$1",
+    "^/favicon\.ico$" => "/media/favicon.ico",
+    "^(/.*)$" => "/mysite.fcgi$1",
+)
+在一个lighttpd进程中运行多个Django站点
+lighttpd允许你使用条件配置来为每个站点分别提供设置。 为了支持FastCGI的多站点，只需要在FastCGI的配
+置文件中，为每个站点分别建立条件配置项：
+# If the hostname is 'www.example1.com'...
+$HTTP["host"] == "www.example1.com" {
+    server.document‐root = "/foo/site1"
+    fastcgi.server = (
+       ...
+    )
+    ...
+}
+# If the hostname is 'www.example2.com'...
+$HTTP["host"] == "www.example2.com" {
+    server.document‐root = "/foo/site2"
+    fastcgi.server = (
+       ...
+    )
+    ...
+}
+你也可以通过 fastcgi.server 中指定多个入口，在同一个站点上实现多个Django安装。 请为每一个安装指定
+一个FastCGI主机。
+在使用Apache的共享主机服务商处运行Django
+许多共享主机的服务提供商不允许运行你自己的服务进程，也不允许修改 httpd.conf 文件。 尽管如此，仍然
+有可能通过Web服务器产生的子进程来运行Django。
+记录
+如果你要使用服务器的子进程，你没有必要自己去启动FastCGI服务器。 Apache会自动产生一些子进程，产生
+的数量按照需求和配置会有所不同。
+在你的Web根目录下，将下面的内容增加到 .htaccess 文件中：
+AddHandler fastcgi‐script .fcgi
+RewriteEngine On
+RewriteCond %{REQUEST_FILENAME} !‐f
+RewriteRule ^(.*)$ mysite.fcgi/$1 [QSA,L]
+接着，创建一个脚本，告知Apache如何运行你的FastCGI程序。 创建一个 mysite.fcgi 文件，并把它放在你的
+2010-5-5
+第二十章： 部署Django
+djangobook.py3k.cn/2.0/chapter12/
+12/18
+
+Web目录中，打开可执行权限。
+#!/usr/bin/python
+import sys, os
+# Add a custom Python path.
+sys.path.insert(0, "/home/user/python")
+# Switch to the directory of your project. (Optional.)
+# os.chdir("/home/user/myproject")
+# Set the DJANGO_SETTINGS_MODULE environment variable.
+os.environ['DJANGO_SETTINGS_MODULE'] = "myproject.settings"
+from django.core.servers.fastcgi import runfastcgi
+runfastcgi(method="threaded", daemonize="false")
+重启新产生的进程服务器
+如果你改变了站点上任何的python代码，你需要告知FastCGI。 但是，这不需要重启Apache，而只需要重新
+上传 mysite.fcgi 或者编辑改文件，使得修改时间发生了变化，它会自动帮你重启Django应用。 你可以重新
+上传mysite.fcgi或者编辑这个文件以改变该文件的时间戳。 当阿帕奇服务器发现文档被更新了，它将会为你重
+启你的Django应用。
+如果你拥有Unix系统命令行的可执行权限，只需要简单地使用 touch 命令：
+touch mysite.fcgi
+可扩展性
+既然你已经知道如何在一台服务器上运行Django，让我们来研究一下，如何扩展我们的Django安装。 这一部
+分我们将讨论，如何把一台服务器扩展为一个大规模的服务器集群，这样就能满足每小时上百万的点击率。
+有一点很重要，每一个大型的站点大的形式和规模不同，因此可扩展性其实并不是一种千篇一律的行为。 以下
+部分会涉及到一些通用的原则，并且会指出一些不同选择。
+首先，我们来做一个大的假设，只集中地讨论在Apache和mod_python下的可扩展性问题。 尽管我们也知道
+一些成功的中型和大型的FastCGI策略，但是我们更加熟悉Apache。
+运行在一台单机服务器上
+大多数的站点一开始都运行在单机服务器上，看起来像图20-1这样的构架。
+图 20-1： 一个单服务器的Django安装。
+2010-5-5
+第二十章： 部署Django
+djangobook.py3k.cn/2.0/chapter12/
+13/18
+
+这对于小型和中型的站点来说还不错，并且也很便宜，一般来说，你可以在3000美元以下就搞定一切。
+然而，当流量增加的时候，你会迅速陷入不同软件的 资源争夺 之中。 数据库服务器和Web服务器都 喜欢 自己
+拥有整个服务器资源，因此当被安装在单机上时，它们总会争夺相同的资源（RAM, CPU），它们更愿意独享
+资源。
+通过把数据库服务器搬移到第二台主机上，可以很容易地解决这个问题。
+分离出数据库服务器
+对于Django来说，把数据库服务器分离开来很容易： 只需要简单地修改 DATABASE_HOST ，设置为新的数据库
+服务器的IP地址或者DNS域名。 设置为IP地址总是一个好主意，因为使用DNS域名，还要牵涉到DNS服务器的
+可靠性连接问题。
+使用了一个独立的数据库服务器以后，我们的构架变成了图20-2。
+图 20-2： 将数据库移到单独的服务器上。
+这里，我们开始步入 n-tier 构架。 不要被这个词所吓坏，它只是说明了Web栈的不同部分，被分离到了不同的
+物理机器上。
+我们再来看，如果发现需要不止一台的数据库服务器，考虑使用连接池和数据库备份将是一个好主意。 不幸的
+是，本书没有足够的时间来讨论这个问题，所以你参考数据库文档或者向社区求助。
+运行一个独立的媒体服务器
+使用单机服务器仍然留下了一个大问题： 处理动态内容的媒体资源，也是在同一台机器上完成的。
+这两个活动是在不同的条件下进行的，因此把它们强行凑和在同一台机器上，你不可能获得很好的性能。 下一
+步，我们要把媒体资源（任何 不是 由Django视图产生的东西）分离到别的服务器上（请看图20-3）。
+2010-5-5
+第二十章： 部署Django
+djangobook.py3k.cn/2.0/chapter12/
+14/18
+
+图 20-3： 分离出媒体服务器。
+理想的情况是，这个媒体服务器是一个定制的Web服务器，为传送静态媒体资源做了优化。 lighttpd和tux
+(http://www.djangoproject.com/r/tux/) 都是极佳的选择，当然瘦身的Apache服务器也可以工作的很好。
+对于拥有大量静态内容（照片、视频等）的站点来说，将媒体服务器分离出去显然有着更加重要的意义，而且
+应该是扩大规模的时候所要采取的 第一步措施 。
+这一步需要一点点技巧，Django的admin管理接口需要能够获得足够的权限来处理上传的媒体（通过设置
+MEDIA_ROOT ）。如果媒体资源在另外的一台服务器上，你需要获得通过网络写操作的权限。 如果你的应用牵涉
+到文件上载，Django需要能够面向媒体服务器撰写上载媒体 如果媒体是在另外一台服务器上的，你需要部署
+一种方法使得Django可以通过网络去写这些媒体。
+实现负担均衡和数据冗余备份
+现在，我们已经尽可能地进行了分解。 这种三台服务器的构架可以承受很大的流量，比如每天1000万的点击
+率。
+这是个好主意。 请看图 20-3，一旦三个服务器中的任何一个发生了故障，你就得关闭整个站点。 因此在引入
+冗余备份的时候，你并不只是增加了容量，同时也增加了可靠性。
+我们首先来考虑Web服务器的点击量。 把同一个Django的站点复制多份，在多台机器上同时运行很容易，我
+们也只需要同时运行多台机器上的Apache服务器。
+你还需要另一个软件来帮助你在多台服务器之间均衡网络流量： 流量均衡器（load balancer） 。你可以购买
+昂贵的专有的硬件均衡器，当然也有一些高质量的开源的软件均衡器可供选择。
+Apaches 的 mod_proxy 是一个可以考虑的选择，但另一个配置更棒的选择是： memcached是同一个团队的人
+写的一个负载均衡和反向代理的程序.(见第15章)
+记录
+如果你使用FastCGI，你同样可以分离前台的web服务器，并在多台其他机器上运行FastCGI服务器来实现相同
+的负载均衡的功能。 前台的服务器就相当于是一个均衡器，而后台的FastCGI服务进程代替了
+Apache/mod_python/Django服务器。
+现在我们拥有了服务器集群，我们的构架慢慢演化，越来越复杂，如图20-4。
+2010-5-5
+第二十章： 部署Django
+djangobook.py3k.cn/2.0/chapter12/
+15/18
+
+图 20-4： 负载均衡的服务器设置。
+值得一提的是，在图中，Web服务器指的是一个集群，来表示许多数量的服务器。 一旦你拥有了一个前台的均
+衡器，你就可以很方便地增加和删除后台的Web服务器，而且不会造成任何网站不可用的时间。
+慢慢变大
+下面的这些步骤都是上面最后一个的变体：
+当你需要更好的数据库性能，你可能需要增加数据库的冗余服务器。 MySQL内置了备份功能；
+PostgreSQL应该看一下Slony (http://www.djangoproject.com/r/slony/) 和 pgpool
+(http://www.djangoproject.com/r/pgpool/) ，这两个分别是数据库备份和连接池的工具。
+如果单个均衡器不能达到要求，你可以增加更多的均衡器，并且使用轮训（round-robin）DNS来实现分
+布访问。
+如果单台媒体服务器不够用，你可以增加更多的媒体服务器，并通过集群来分布流量。
+如果你需要更多的高速缓存（cache），你可以增加cache服务器。
+在任何情况下，只要集群工作性能不好，你都可以往上增加服务器。
+重复了几次以后，一个大规模的构架会像图20-5。
+图 20-5。 大规模的Django安装。
+尽管我们只是在每一层上展示了两到三台服务器，你可以在上面随意地增加更多。
+性能优化
+2010-5-5
+第二十章： 部署Django
+djangobook.py3k.cn/2.0/chapter12/
+16/18
+
+如果你有大笔大笔的钱，遇到扩展性问题时，你可以简单地投资硬件。 对于剩下的人来说，性能优化就是必须
+要做的一件事。
+注意
+顺便提一句，谁要是有大笔大笔的钞票，请捐助一点Django项目。 我们也接受未切割的钻石和金币。
+不幸的是，性能优化比起科学来说更像是一种艺术，并且这比扩展性更难描述。 如果你真想要构建一个大规模
+的Django应用，你需要花大量的时间和精力学习如何优化构架中的每一部分。
+以下部分总结了多年以来的经验，是一些专属于Django的优化技巧。
+RAM怎么也不嫌多
+最近即使那些昂贵的RAM也相对来说可以负担的起了。 购买尽可能多的RAM，再在别的上面投资一点点。
+高速的处理器并不会大幅度地提高性能；大多数的Web服务器90%的时间都浪费在了硬盘IO上。 当硬盘上的数
+据开始交换，性能就急剧下降。 更快速的硬盘可以改善这个问题，但是比起RAM来说，那太贵了。
+如果你拥有多台服务器，首要的是要在数据库服务器上增加内存。 如果你能负担得起，把你整个数据库都放入
+到内存中。 这应该不是很困难，我们已经开发过一个站点上面有多于一百万条报刊文章，这个站点使用了不到
+2GB的空间。
+下一步，最大化Web服务器上的内存。 最理想的情况是，没有一台服务器进行磁盘交换。 如果你达到了这个
+水平，你就能应付大多数正常的流量。
+禁用 Keep-Alive
+Keep‐Alive 是HTTP提供的功能之一，它的目的是允许多个HTTP请求复用一个TCP连接，也就是允许在同一个
+TCP连接上发起多个HTTP请求，这样有效的避免了每个HTTP请求都重新建立自己的TCP连接的开销。
+这一眼看上去是好事，但它足以杀死Django站点的性能。 如果你从单独的媒体服务器上向用户提供服务，每
+个光顾你站点的用户都大约10秒钟左右发出一次请求。 这就使得HTTP服务器一直在等待下一次keep-alive 的
+请求，空闲的HTTP服务器和工作时消耗一样多的内存。
+使用 memcached
+尽管Django支持多种不同的cache后台机制，没有一种的性能可以 接近 memcached。 如果你有一个高流量
+的站点，不要犹豫，直接选择memcached。
+经常使用memcached
+当然，选择了memcached而不去使用它，你不会从中获得任何性能上的提升。 Chapter 15 is your best
+friend here: 学习如何使用Django的cache框架，并且尽可能地使用它。 大量的可抢占式的高速缓存通常是一
+个站点在大流量下正常工作的唯一瓶颈。
+参加讨论
+Django相关的每一个部分，从Linux到Apache到PostgreSQL或者MySQL背后，都有一个非常棒的社区支持。
+如果你真想从你的服务器上榨干最后1%的性能，加入开源社区寻求帮助。 多数的自由软件社区成员都会很乐意
+地提供帮助。
+别忘了Django社区。 这本书谦逊的作者只是Django开发团队中的两位成员。 我们的社区有大量的经验可以提
+2010-5-5
+第二十章： 部署Django
+djangobook.py3k.cn/2.0/chapter12/
+17/18
+
+| 上一章 | 目 录 | 下一章 | 翻译 |
+Copyright 2006 Adrian Holovaty and Jacob Kaplan-Moss.
+This work is licensed under the GNU Free Document License. 
+Hosting graciously provided by 
+ 
+Chinese translate hosting by py3k.cn.
+供。
+下一章
+下面的章节集中在其他的一些Django特性上，你是否需要它们取决于你的应用项目。 可以自由选择阅读。
+2010-5-5
+第二十章： 部署Django
+djangobook.py3k.cn/2.0/chapter12/
+18/18

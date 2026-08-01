@@ -1,0 +1,63 @@
+在定义完输入之后，可以调用PyCUDA函数ReductionKernel来定义MapReduce操作：
+这个内核操作的定义如下：
+▼ 参数列表中的第一项告诉我们，输出将是一个整数。
+▼ 第二项以类似C语言的标记定义了输入（整数数组）的数据类型。
+▼ 第三项是map操作，即求两个向量第i项元素的乘积。
+▼ 第四个操作是reduction操作，即求所有乘积之和。
+注意，调用ReductionKernel实例的最终结果是一个仍存在于GPU中的GPUArray标量。可以调用其get方法将其放到
+CPU中，或者也可以在GPU中使用这个值。
+然后，按如下方式调用内核函数：
+dot_product=dot_product (input_vector_a,input_vector_b).get()
+最后，打印出输入向量以及最终的点积：
+print input_vector_a
+print input_vector_b
+print dot_product
+使用NumbaPro进行GPU编程
+NumbaPro是一个Python编译器，提供了基于CUDA的API编程接口，可以编写CUDA程序。它专门设计用来执行与
+数组相关的计算任务，和广泛使用的NumPy库类似。与数组相关的计算任务中的数据并行性非常适合由GPU等加速器
+完成。NumbaPro可接受NumPy数组类型，并用这些数组生成可在GPU或多核CPU上执行的高效编译代码。
+该编译器支持对Python函数指定类型签名（type signature），可开启运行时编译特性（被称为JIT编译）。
+其中最重要的装饰器如下所示。
+▼ numbapro.jit：支持开发者编写类CUDA的函数。遇到该装饰器时，编译器会将装饰器下的代码编译为伪汇编语
+言PTX，在GPU中执行。
+▼ numbapro.autojit：注释一个函数为延迟编译（deferred compilation），这意味着带有该签名的每个函数只会被编
+译一次。
+▼ numbapro.vectorize：创建一个所谓的ufunc对象（NumPy 中的通用函数），接受一个函数，并以向量参数并行执
+行。
+▼ 
+guvectorize：创建所谓的gufunc对象（NumPy 
+中的泛通用函数）。这种对象可以操作整个子数组（参看
+http：//docs.continuum.io/numbapro/generalizedufuncs.html获取更多资料）。
+这些装饰器都有一个叫目标（target）的编译器指令，用于选择代码生成目标。NumbaPro编译器支持并行和GPU等
+目标。并行目标可用于向量化操作，而GPU指令则将计算负载交给NVIDIA的CUDA GPU进行。
+准备工作
+NumbaPro是Anaconda Accelerate的一部分，后者是Continuum Analytics公司的商业许可产品（学术用户可以免费协
+议使用NumbaPro）。它基于以BSD 
+协议发布的开源项目Numba，而Numba自身也很大程度依赖于LLVM编译器。
+NumbaPro的GPU后端利用了基于LLVM的NVIDIA编译器SDK。
+如想使用NumbaPro，第一步要下载并安装Anaconda 提供的Python 发行版（http：//continuum.io/downloads），这是
+一个完全免费的企业级Python发行版，可用于大规模数据处理、预测分析和科学计算，包含许多流行库（NumPy、
+SciPy、IPython等），还提供了一个强大的包管理器conda。
+安装好Anaconda之后，从Anaconda的命令提示符中输入以下指令：
+NumbaPro并没有包含CUDA驱动器，应由用户确保系统已经使用了最新的驱动器。在安装完后，可以检测CUDA
+
+库和GPU。我们从Anaconda控制台打开Python并输入：
+import numbapro
+numbapro.check_cuda()
+这两行代码的输出如下所示（我们使用的是64位的Anaconda发行版）：
+
+具体实现
+
+在本例中，我们使用注释@guvectorize来说明NumbaPro编译器的用法。在下面的任务中，我们试着使用NumbaPro
+模块执行矩阵乘法：
+运行上述代码（使用Anaconda控制台）之后，应该会出现类似如下的输出：
+
+实例精解
+@guvectorize注释适用于数组参数。该装饰器可接受一个额外参数，指定gufunc签名。各个参数的解释如下所示。
+▼ 前三个参数指定要管理的数据类型，为整数数组：＇void（int64[：，：]、int64[：，：]、int64[：，：]）＇。
+▼@guvectorize的最后一个参数指定如何操作矩阵维度：＇（m，n），（n，p）-＞（m，p）＇。
+在之后的代码中，我们定义matmul（A，B，C）操作。它接受两个输入矩阵A和B，生成输出矩阵C。根据gufunc
+签名，可以知道：
+A（m，n）*B（n，p）=C（m，p），其中m、n、p为矩阵的维度
+矩阵乘积只需执行三个带矩阵索引的for循环即可求出：
+NumPy中的randint函数可用于从随机矩阵构建整数：

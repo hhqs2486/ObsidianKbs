@@ -1,0 +1,1071 @@
+Kubernetes应用管理
+本章介绍Kubernetes manifest以及应用的管理方法。
+目前最常用的是手动管理manifest，比如kubernetes github代码库就提供了很多的
+manifest示例
+https://github.com/kubernetes/kubernetes/tree/master/examples
+https://github.com/kubernetes/contrib
+https://github.com/kubernetes/ingress
+手动管理的一个问题就是繁琐，特别是应用复杂并且Manifest比较多的时候，还需要考
+虑他们之间部署关系。Kubernetes开源社区正在推动更易用的管理方法，如
+Helm提供了一些常见应用的模版
+operator则提供了一种有状态应用的管理模式
+Deis在Kubernetes之上提供了一个PaaS平台
+Draft是微软Deis团队开源的容器应用开发辅助工具，可以帮助开发人员简化容器应
+用程序的开发流程
+Kompose是一个将docker-compose配置转换成Kubernetes manifests的工具
+6. 应用管理
+449
+
+一般准则
+分离构建和运行环境
+使用 dumb-int 等避免僵尸进程
+不推荐直接使用Pod，而是推荐使用Deployment/DaemonSet等
+不推荐在容器中使用后台进程，而是推荐将进程前台运行，并使用探针保证服务确
+实在运行中
+推荐容器中应用日志打到stdout和stderr，方便日志插件的处理
+由于容器采用了COW，大量数据写入有可能会有性能问题，推荐将数据写入到
+Volume中
+不推荐生产环境镜像使用 latest 标签，但开发环境推荐使用并设
+置 imagePullPolicy 为 Always 
+推荐使用Readiness探针检测服务是否真正运行起来了
+使用 activeDeadlineSeconds 避免快速失败的Job无限重启
+引入Sidecar处理代理、请求速率控制和连接控制等问题
+分离构建和运行环境
+注意分离构建和运行环境，直接通过Dockerfile构建的镜像不仅体积大，包含了很多运行
+时不必要的包，并且还容易引入安全隐患，如包含了应用的源代码。
+可以使用Docker多阶段构建来简化这个步骤。
+FROM golang:1.7.3 as builder
+WORKDIR /go/src/github.com/alexellis/href-counter/
+RUN go get -d -v golang.org/x/net/html
+COPY app.go    .
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o app .
+FROM alpine:latest
+RUN apk --no-cache add ca-certificates
+WORKDIR /root/
+COPY --from=builder /go/src/github.com/alexellis/href-counter/app .
+CMD ["./app"]
+僵尸进程和孤儿进程
+一般准则
+450
+
+孤儿进程：一个父进程退出，而它的一个或多个子进程还在运行，那么那些子进程
+将成为孤儿进程。孤儿进程将被init进程(进程号为1)所收养，并由init进程对它们完
+成状态收集工作。
+僵尸进程：一个进程使用fork创建子进程，如果子进程退出，而父进程并没有调用
+wait或waitpid获取子进程的状态信息，那么子进程的进程描述符仍然保存在系统
+中。
+在容器中，很容易掉进的一个陷阱就是init进程没有正确处理SIGTERM等退出信号。这
+种情景很容易构造出来，比如
+# 首先运行一个容器
+$ docker run busybox sleep 10000
+# 打开另外一个terminal
+$ ps uax | grep sleep
+sasha    14171  0.0  0.0 139736 17744 pts/18   Sl+  13:25   0:00 dock
+er run busybox sleep 10000
+root     14221  0.1  0.0   1188     4 ?        Ss   13:25   0:00 slee
+p 10000
+# 接着kill掉第一个进程
+$ kill 14171
+# 现在会发现sleep进程并没有退出
+$ ps uax | grep sleep
+root     14221  0.0  0.0   1188     4 ?        Ss   13:25   0:00 slee
+p 10000
+解决方法就是保证容器的init进程可以正确处理SIGTERM等退出信号，比如使用dumb-
+init
+$ docker run quay.io/gravitational/debian-tall /usr/bin/dumb-init /bi
+n/sh -c "sleep 10000"
+参考文档
+Kubernetes Production Patterns
+一般准则
+451
+
+服务滚动升级
+当有镜像发布新版本，新版本服务上线时如何实现服务的滚动和平滑升级？
+如果你使用ReplicationController创建的pod可以使用 kubectl rollingupdate 命令
+滚动升级，如果使用的是Deployment创建的Pod可以直接修改yaml文件后执
+行 kubectl apply 即可。
+Deployment已经内置了RollingUpdate strategy，因此不用再调用 kubectl
+rollingupdate 命令，升级的过程是先创建新版的pod将流量导入到新pod上后销毁原
+来的旧的pod。
+Rolling Update适用于 Deployment 、 Replication Controller ，官方推荐使用
+Deployment而不再使用Replication Controller。
+使用ReplicationController时的滚动升级请参考官网说
+明：https://kubernetes.io/docs/tasks/run-application/rolling-update-replication-
+controller/
+ReplicationController与Deployment的关系
+ReplicationController和Deployment的RollingUpdate命令有些不同，但是实现的机制是
+一样的，关于这两个kind的关系我引用了ReplicationController与Deployment的区别中的
+部分内容如下，详细区别请查看原文。
+ReplicationController
+Replication Controller为Kubernetes的一个核心内容，应用托管到Kubernetes之后，需
+要保证应用能够持续的运行，Replication Controller就是这个保证的key，主要的功能如
+下：
+确保pod数量：它会确保Kubernetes中有指定数量的Pod在运行。如果少于指定数
+量的pod，Replication Controller会创建新的，反之则会删除掉多余的以保证Pod数
+量不变。
+确保pod健康：当pod不健康，运行出错或者无法提供服务时，Replication
+Controller也会杀死不健康的pod，重新创建新的。
+弹性伸缩 ：在业务高峰或者低峰期的时候，可以通过Replication Controller动态的
+调整pod的数量来提高资源的利用率。同时，配置相应的监控功能（Hroizontal Pod
+滚动升级
+453
+
+Autoscaler），会定时自动从监控平台获取Replication Controller关联pod的整体资
+源使用情况，做到自动伸缩。
+滚动升级：滚动升级为一种平滑的升级方式，通过逐步替换的策略，保证整体系统
+的稳定，在初始化升级的时候就可以及时发现和解决问题，避免问题不断扩大。
+Deployment
+Deployment同样为Kubernetes的一个核心内容，主要职责同样是为了保证pod的数量和
+健康，90%的功能与Replication Controller完全一样，可以看做新一代的Replication
+Controller。但是，它又具备了Replication Controller之外的新特性：
+Replication Controller全部功能：Deployment继承了上面描述的Replication
+Controller全部功能。
+事件和状态查看：可以查看Deployment的升级详细进度和状态。
+回滚：当升级pod镜像或者相关参数的时候发现问题，可以使用回滚操作回滚到上
+一个稳定的版本或者指定的版本。
+版本记录: 每一次对Deployment的操作，都能保存下来，给予后续可能的回滚使
+用。
+暂停和启动：对于每一次升级，都能够随时暂停和启动。
+多种升级方案：Recreate：删除所有已存在的pod,重新创建新的; RollingUpdate：
+滚动升级，逐步替换的策略，同时滚动升级时，支持更多的附加参数，例如设置最
+大不可用pod数量，最小升级间隔时间等等。
+创建测试镜像
+我们来创建一个特别简单的web服务，当你访问网页时，将输出一句版本信息。通过区
+分这句版本信息输出我们就可以断定升级是否完成。
+所有配置和代码见manifests/test/rolling-update-test目录。
+Web服务的代码main.go
+滚动升级
+454
+
+package main
+import (
+    "fmt"
+    "log"
+    "net/http"
+)
+func sayhello(w http.ResponseWriter, r *http.Request) {
+    fmt.Fprintf(w, "This is version 1.") //这个写入到w的是输出到客户端的
+}
+func main() {
+    http.HandleFunc("/", sayhello) //设置访问的路由
+    log.Println("This is version 1.")
+    err := http.ListenAndServe(":9090", nil) //设置监听的端口
+    if err != nil {
+        log.Fatal("ListenAndServe: ", err)
+    }
+}
+创建Dockerfile
+FROM alpine:3.5
+ADD hellov2 /
+ENTRYPOINT ["/hellov2"]
+注意修改添加的文件的名称。
+创建Makefile
+修改镜像仓库的地址为你自己的私有镜像仓库地址。
+修改 Makefile 中的 TAG 为新的版本号。
+滚动升级
+455
+
+all: build push clean
+.PHONY: build push clean
+TAG = v1
+# Build for linux amd64
+build:
+    GOOS=linux GOARCH=amd64 go build -o hello${TAG} main.go
+    docker build -t sz-pg-oam-docker-hub-001.tendcloud.com/library/he
+llo:${TAG} .
+# Push to tenxcloud
+push:
+    docker push sz-pg-oam-docker-hub-001.tendcloud.com/library/hello:
+${TAG}
+# Clean 
+clean:
+    rm -f hello${TAG}
+编译
+make all
+分别修改main.go中的输出语句、Dockerfile中的文件名称和Makefile中的TAG，创建两
+个版本的镜像。
+测试
+我们使用Deployment部署服务来测试。
+配置文件 rolling-update-test.yaml ：
+滚动升级
+456
+
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+    name: rolling-update-test
+spec:
+  replicas: 3
+  template:
+    metadata:
+      labels:
+        app: rolling-update-test
+    spec:
+      containers:
+      - name: rolling-update-test
+        image: sz-pg-oam-docker-hub-001.tendcloud.com/library/hello:v
+1
+        ports:
+        - containerPort: 9090
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rolling-update-test
+  labels:
+    app: rolling-update-test
+spec:
+  ports:
+  - port: 9090
+    protocol: TCP
+    name: http
+  selector:
+    app: rolling-update-test
+部署service
+kubectl create -f rolling-update-test.yaml
+修改traefik ingress配置
+在 ingress.yaml 文件中增加新service的配置。
+滚动升级
+457
+
+  - host: rolling-update-test.traefik.io
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: rolling-update-test
+          servicePort: 9090
+修改本地的host配置，增加一条配置：
+172.20.0.119 rolling-update-test.traefik.io
+注意：172.20.0.119是我们之前使用keepalived创建的VIP。
+打开浏览器访问 http://rolling-update-test.traefik.io 将会看到以下输出：
+This is version 1.
+滚动升级
+只需要将 rolling-update-test.yaml 文件中的 image 改成新版本的镜像名，然后执
+行：
+kubectl apply -f rolling-update-test.yaml
+也可以参考Kubernetes Deployment Concept中的方法，直接设置新的镜像。
+kubectl set image deployment/rolling-update-test rolling-update-test=
+sz-pg-oam-docker-hub-001.tendcloud.com/library/hello:v2
+或者使用 kubectl edit deployment/rolling-update-test 修改镜像名称后保存。
+使用以下命令查看升级进度：
+kubectl rollout status deployment/rolling-update-test
+升级完成后在浏览器中刷新 http://rolling-update-test.traefik.io 将会看到以
+下输出：
+滚动升级
+458
+
+This is version 2.
+说明滚动升级成功。
+使用ReplicationController创建的Pod如何
+RollingUpdate
+以上讲解使用Deployment创建的Pod的RollingUpdate方式，那么如果使用传统的
+ReplicationController创建的Pod如何Update呢？
+举个例子：
+$ kubectl -n spark-cluster rolling-update zeppelin-controller --image
+ sz-pg-oam-docker-hub-001.tendcloud.com/library/zeppelin:0.7.1
+Created zeppelin-controller-99be89dbbe5cd5b8d6feab8f57a04a8b
+Scaling up zeppelin-controller-99be89dbbe5cd5b8d6feab8f57a04a8b from 
+0 to 1, scaling down zeppelin-controller from 1 to 0 (keep 1 pods ava
+ilable, don't exceed 2 pods)
+Scaling zeppelin-controller-99be89dbbe5cd5b8d6feab8f57a04a8b up to 1
+Scaling zeppelin-controller down to 0
+Update succeeded. Deleting old controller: zeppelin-controller
+Renaming zeppelin-controller-99be89dbbe5cd5b8d6feab8f57a04a8b to zepp
+elin-controller
+replicationcontroller "zeppelin-controller" rolling updated
+只需要指定新的镜像即可，当然你可以配置RollingUpdate的策略。
+参考
+Rolling update机制解析
+Running a Stateless Application Using a Deployment
+Simple Rolling Update
+使用kubernetes的deployment进行RollingUpdate
+滚动升级
+459
+
+Kubernetes应用管理--Helm
+Helm是一个类似于yum/apt/homebrew的Kubernetes应用管理工具。Helm使用Chart来
+管理Kubernetes manifest文件。
+Helm基本使用
+安装 helm 客户端
+brew install kubernetes-helm
+初始化Helm并安装 Tiller 服务（需要事先配置好kubeclt）
+helm init
+更新charts列表
+helm repo update
+部署服务，比如mysql
+➜  ~ helm install stable/mysql
+NAME:   quieting-warthog
+LAST DEPLOYED: Tue Feb 21 16:13:02 2017
+NAMESPACE: default
+STATUS: DEPLOYED
+RESOURCES:
+==> v1/Secret
+NAME                    TYPE    DATA  AGE
+quieting-warthog-mysql  Opaque  2     1s
+==> v1/PersistentVolumeClaim
+NAME                    STATUS   VOLUME  CAPACITY  ACCESSMODES  AGE
+quieting-warthog-mysql  Pending  1s
+Helm
+460
+
+==> v1/Service
+NAME                    CLUSTER-IP    EXTERNAL-IP  PORT(S)   AGE
+quieting-warthog-mysql  10.3.253.105  <none>       3306/TCP  1s
+==> extensions/v1beta1/Deployment
+NAME                    DESIRED  CURRENT  UP-TO-DATE  AVAILABLE  AGE
+quieting-warthog-mysql  1        1        1           0          1s
+NOTES:
+MySQL can be accessed via port 3306 on the following DNS name from wi
+thin your cluster:
+quieting-warthog-mysql.default.svc.cluster.local
+To get your root password run:
+    kubectl get secret --namespace default quieting-warthog-mysql -o 
+jsonpath="{.data.mysql-root-password}" | base64 --decode; echo
+To connect to your database:
+1. Run an Ubuntu pod that you can use as a client:
+    kubectl run -i --tty ubuntu --image=ubuntu:16.04 --restart=Never 
+-- bash -il
+2. Install the mysql client:
+    $ apt-get update && apt-get install mysql-client -y
+3. Connect using the mysql cli, then provide your password:
+    $ mysql -h quieting-warthog-mysql -p
+更多命令的使用方法可以参考Helm命令参考。
+Helm工作原理
+见Helm工作原理。
+链接
+Helm
+461
+
+Helm文档
+https://github.com/kubernetes/helm
+https://github.com/kubernetes/charts
+第三方Helm repository
+https://github.com/deis/charts
+https://github.com/bitnami/charts
+https://github.com/att-comdev/openstack-helm
+https://github.com/sapcc/openstack-helm
+https://github.com/mgoodness/kube-prometheus-charts
+https://github.com/helm/charts
+https://github.com/jackzampolin/tick-charts
+常用Helm插件
+1. helm-tiller - Additional commands to work with Tiller
+2. Technosophos's Helm Plugins - Plugins for GitHub, Keybase, and GPG
+3. helm-template - Debug/render templates client-side
+4. Helm Value Store - Plugin for working with Helm deployment values
+5. Drone.io Helm Plugin - Run Helm inside of the Drone CI/CD system
+Helm
+462
+
+Helm命令参考
+查询charts
+helm search
+helm search mysql
+查询package详细信息
+helm inspect stable/mariadb
+部署package
+helm install stable/mysql
+部署之前可以自定义package的选项：
+# 查询支持的选项
+helm inspect values stable/mysql
+# 自定义password
+echo "mysqlRootPassword: passwd" > config.yaml
+helm install -f config.yaml stable/mysql
+另外，还可以通过打包文件（.tgz）或者本地package路径（如path/foo）来部署应用。
+查询服务(Release)列表
+Helm参考
+463
+
+➜  ~ helm ls
+NAME                REVISION    UPDATED                     STATUS   
+   CHART          NAMESPACE
+quieting-warthog    1           Tue Feb 21 20:13:02 2017    DEPLOYED 
+   mysql-0.2.5    default
+查询服务(Release)状态
+➜  ~ helm status quieting-warthog
+LAST DEPLOYED: Tue Feb 21 16:13:02 2017
+NAMESPACE: default
+STATUS: DEPLOYED
+RESOURCES:
+==> v1/Secret
+NAME                    TYPE    DATA  AGE
+quieting-warthog-mysql  Opaque  2     9m
+==> v1/PersistentVolumeClaim
+NAME                    STATUS  VOLUME                               
+     CAPACITY  ACCESSMODES  AGE
+quieting-warthog-mysql  Bound   pvc-90af9bf9-f80d-11e6-930a-42010af00
+102  8Gi       RWO          9m
+==> v1/Service
+NAME                    CLUSTER-IP    EXTERNAL-IP  PORT(S)   AGE
+quieting-warthog-mysql  10.3.253.105  <none>       3306/TCP  9m
+==> extensions/v1beta1/Deployment
+NAME                    DESIRED  CURRENT  UP-TO-DATE  AVAILABLE  AGE
+quieting-warthog-mysql  1        1        1           1          9m
+NOTES:
+MySQL can be accessed via port 3306 on the following DNS name from wi
+thin your cluster:
+quieting-warthog-mysql.default.svc.cluster.local
+To get your root password run:
+Helm参考
+464
+
+    kubectl get secret --namespace default quieting-warthog-mysql -o 
+jsonpath="{.data.mysql-root-password}" | base64 --decode; echo
+To connect to your database:
+1. Run an Ubuntu pod that you can use as a client:
+    kubectl run -i --tty ubuntu --image=ubuntu:16.04 --restart=Never 
+-- bash -il
+2. Install the mysql client:
+    $ apt-get update && apt-get install mysql-client -y
+3. Connect using the mysql cli, then provide your password:
+    $ mysql -h quieting-warthog-mysql -p
+升级和回滚Release
+# 升级
+cat "mariadbUser: user1" >panda.yaml
+helm upgrade -f panda.yaml happy-panda stable/mariadb
+# 回滚
+helm rollback happy-panda 1
+删除Release
+helm delete quieting-warthog
+repo管理
+Helm参考
+465
+
+# 添加incubator repo
+helm repo add incubator https://kubernetes-charts-incubator.storage.g
+oogleapis.com/
+# 查询repo列表
+helm repo list
+# 生成repo索引（用于搭建helm repository）
+helm repo index
+chart管理
+# 创建一个新的chart
+helm create deis-workflow
+# validate chart
+helm lint
+# 打包chart到tgz
+helm package deis-workflow
+Helm命令参考
+Helm参考
+466
+
+  completion  Generate bash autocompletions script
+  create      create a new chart with the given name
+  delete      given a release name, delete the release from Kubernete
+s
+  dependency  manage a chart's dependencies
+  fetch       download a chart from a repository and (optionally) unp
+ack it in local directory
+  get         download a named release
+  history     fetch release history
+  home        displays the location of HELM_HOME
+  init        initialize Helm on both client and server
+  inspect     inspect a chart
+  install     install a chart archive
+  lint        examines a chart for possible issues
+  list        list releases
+  package     package a chart directory into a chart archive
+  repo        add, list, remove, update, and index chart repositories
+  reset       uninstalls Tiller from a cluster
+  rollback    roll back a release to a previous revision
+  search      search for a keyword in charts
+  serve       start a local http web server
+  status      displays the status of the named release
+  test        test a release
+  upgrade     upgrade a release
+  verify      verify that a chart at the given path has been signed a
+nd is valid
+  version     print the client/server version information
+Flags:
+      --debug                     enable verbose output
+      --home string               location of your Helm config. Overr
+ides $HELM_HOME (default "~/.helm")
+      --host string               address of tiller. Overrides $HELM_
+HOST
+      --kube-context string       name of the kubeconfig context to u
+se
+      --tiller-namespace string   namespace of tiller (default "kube-
+system")
+Helm参考
+467
+
+Draft
+Draft是微软Deis团队开源（见https://github.com/azure/draft）的容器应用开发辅助工
+具，它可以帮助开发人员简化容器应用程序的开发流程。
+Draft主要由三个命令组成
+ draft init ：初始化docker registry账号，并在Kubernetes集群中部署
+draftd（负责镜像构建、将镜像推送到docker registry以及部署应用等）
+ draft create ：draft根据packs检测应用的开发语言，并自动生成Dockerfile和
+Kubernetes Helm Charts
+ draft up ：根据Dockfile构建镜像，并使用Helm将应用部署到Kubernetes集群
+（支持本地或远端集群）。同时，还会在本地启动一个draft client，监控代码变
+化，并将更新过的代码推送给draftd。
+Draft安装
+由于Draft需要构建镜像并部署应用到Kubernetes集群，因而在安装Draft之前需要
+部署一个Kubernetes集群，部署方法可以参考kubernetes部署方法
+安装并初始化helm（需要v2.4.x版本，并且不要忘记运行 helm init ），具体步
+骤可以参考helm使用方法
+注册docker registry账号，比如Docker Hub或Quay.io
+配置Ingress Controller并在DNS中设置通配符域 * 的A记录
+（如 *.draft.example.com ）到Ingress IP地址。最简单的Ingress Controller创建
+方式是使用helm：
+# 部署nginx ingress controller
+$ helm install stable/nginx-ingress --namespace=kube-system --name=ng
+inx-ingress
+# 等待ingress controller配置完成，并记下外网IP
+$ kubectl --namespace kube-system get services -w nginx-ingress-nginx
+-ingress-controller
+[info] minikube Ingress Controller
+minikube中配置和使用Ingress Controller的方法可以参考这里。
+Draft
+469
+
+初始化好Kubernetes集群和Helm后，可以在这里下载draft二进制文件，并配置draft
+# 注意修改用户名、密码和邮件
+$ token=$(echo '{"username":"feisky","password":"secret","email":"fei
+sky@email.com"}' | base64)
+# 注意修改registry.org和basedomain
+$ draft init --set registry.url=docker.io,registry.org=feisky,registr
+y.authtoken=${token},basedomain=app.feisky.xyz
+Draft入门
+draft源码中提供了很多应用的示例，我们来看一下怎么用draft来简化python应用的开发
+流程。
+$ git clone https://github.com/Azure/draft.git
+$ cd draft/examples/python
+$ ls
+app.py           requirements.txt
+$ cat requirements.txt
+flask
+$ cat app.py
+from flask import Flask
+app = Flask(__name__)
+@app.route('/')
+def hello_world():
+    return "Hello, World!\n"
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080)
+Draft create生成Dockerfile和chart
+Draft
+470
+
+$ draft create
+--> Python app detected
+--> Ready to sail
+$ ls
+Dockerfile       app.py           chart            draft.toml       r
+equirements.txt
+$ cat Dockerfile
+FROM python:onbuild
+EXPOSE 8080
+ENTRYPOINT ["python"]
+CMD ["app.py"]
+$ cat draft.toml
+[environments]
+  [environments.development]
+    name = "virulent-sheep"
+    namespace = "default"
+    watch = true
+    watch_delay = 2
+Draft Up构建镜像并部署应用
+Draft
+471
+
+$ draft up
+--> Building Dockerfile
+Step 1 : FROM python:onbuild
+onbuild: Pulling from library/python
+10a267c67f42: Pulling fs layer
+....
+Digest: sha256:5178d22192c2b8b4e1140a3bae9021ee0e808d754b4310014745c1
+1f03fcc61b
+Status: Downloaded newer image for python:onbuild
+# Executing 3 build triggers...
+Step 1 : COPY requirements.txt /usr/src/app/
+Step 1 : RUN pip install --no-cache-dir -r requirements.txt
+....
+Successfully built f742caba47ed
+--> Pushing docker.io/feisky/virulent-sheep:de7e97d0d889b4cdb81ae4b97
+2097d759c59e06e
+....
+de7e97d0d889b4cdb81ae4b972097d759c59e06e: digest: sha256:7ee10c1a56ce
+d4f854e7934c9d4a1722d331d7e9bf8130c1a01d6adf7aed6238 size: 2840
+--> Deploying to Kubernetes
+    Release "virulent-sheep" does not exist. Installing it now.
+--> Status: DEPLOYED
+--> Notes:
+  http://virulent-sheep.app.feisky.xyzto access your application
+Watching local files for changes...
+打开一个新的shell，就可以通过子域名来访问应用了
+$ curl virulent-sheep.app.feisky.xyz
+Hello, World!
+Draft
+472
+
+# Operator
+Operator是CoreOS推出的旨在简化复杂有状态应用管理的框架，它是一个感知应用状
+态的控制器，通过扩展Kubernetes API来自动创建、管理和配置应用实例。
+Operator原理
+Operator基于Third Party Resources扩展了新的应用资源，并通过控制器来保证应用处
+于预期状态。比如etcd operator通过下面的三个步骤模拟了管理etcd集群的行为：
+1. 通过Kubernetes API观察集群的当前状态；
+2. 分析当前状态与期望状态的差别；
+3. 调用etcd集群管理API或Kubernetes API消除这些差别。
+如何创建Operator
+Operator是一个感知应用状态的控制器，所以实现一个Operator最关键的就是把管理应
+用状态的所有操作封装到配置资源和控制器中。通常来说Operator需要包括以下功能：
+Operator自身以deployment的方式部署
+Operator自动创建一个Third Party Resources资源类型，用户可以用该类型创建应
+用实例
+Operator应该利用Kubernetes内置的Serivce/ReplicaSet等管理应用
+Operator应该向后兼容，并且在Operator自身退出或删除时不影响应用的状态
+Operator应该支持应用版本更新
+Operator应该测试Pod失效、配置错误、网络错误等异常情况
+Operator
+473
+
+如何使用Operator
+为了方便描述，以Etcd Operator为例，具体的链接可以参考-Etcd Operator。
+在Kubernetes部署Operator： 通过在Kubernetes集群中创建一个deploymet实例，来部
+署对应的Operator。具体的Yaml示例如下：
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: admin
+  namespace: default
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1alpha1
+metadata:
+  name: admin
+subjects:
+  - kind: ServiceAccount
+    name: admin
+    namespace: default
+roleRef:
+  kind: ClusterRole
+  name: cluster-admin
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: etcd-operator
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        name: etcd-operator
+    spec:
+      serviceAccountName: admin
+      containers:
+      - name: etcd-operator
+Operator
+474
+
+        image: quay.io/coreos/etcd-operator:v0.4.2
+        env:
+        - name: MY_POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: MY_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+# kubectl create -f deployment.yaml
+serviceaccount "admin" created
+clusterrolebinding "admin" created
+deployment "etcd-operator" created
+# kubectl  get pod 
+NAME                            READY     STATUS    RESTARTS   AGE
+etcd-operator-334633986-3nzk1   1/1       Running   0          31s
+查看operator是否部署成功：
+# kubectl get thirdpartyresources
+NAME                      DESCRIPTION             VERSION(S)
+cluster.etcd.coreos.com   Managed etcd clusters   v1beta1
+对应的有状态服务yaml文件示例如下：
+apiVersion: "etcd.coreos.com/v1beta1"
+kind: "Cluster"
+metadata:
+  name: "example-etcd-cluster"
+spec:
+  size: 3
+  version: "3.1.8"
+部署对应的有状态服务：
+Operator
+475
+
+# kubectl create -f example-etcd-cluster.yaml
+Cluster "example-etcd-cluster" created
+# kubectl get  cluster
+NAME                                        KIND
+example-etcd-cluster   Cluster.v1beta1.etcd.coreos.com
+# kubectl get  service
+NAME                          CLUSTER-IP      EXTERNAL-IP   PORT(S) 
+example-etcd-cluster          None            <none>        2379/TCP,
+2380/TCP   
+example-etcd-cluster-client   10.105.90.190   <none>        2379/TCP
+# kubectl get pod
+NAME                            READY     STATUS    RESTARTS   AGE
+example-etcd-cluster-0002       1/1       Running   0          5h
+example-etcd-cluster-0003       1/1       Running   0          4h
+example-etcd-cluster-0004       1/1       Running   0          4h
+其他示例
+Prometheus Operator
+Rook Operator
+Tectonic Operators
+相关示例
+https://github.com/sapcc/kubernetes-operators
+https://github.com/kbst/memcached
+https://github.com/Yolean/kubernetes-kafka
+https://github.com/krallistic/kafka-operator
+https://github.com/huawei-cloudfederation/redis-operator
+https://github.com/upmc-enterprises/elasticsearch-operator
+https://github.com/pires/nats-operator
+https://github.com/rosskukulinski/rethinkdb-operator
+https://istio.io/
+Operator
+476
+
+与其他工具的关系
+StatefulSets：StatefulSets为有状态服务提供了DNS、持久化存储等，而Operator
+可以自动处理服务失效、备份、重配置等复杂的场景。
+Puppet：Puppet是一个静态配置工具，而Operator则可以实时、动态地保证应用处
+于预期状态
+Helm：Helm是一个打包工具，可以将多个应用打包到一起部署，而Operator则可
+以认为是Helm的补充，用来动态保证这些应用的正常运行
+参考资料
+Kubernetes Operators
+Operator
+477
+
+Deis workflow
+Deis workflow是基于Kubernetes的PaaS管理平台，进一步简化了应用的打包、部署和
+服务发现。
+Deis架构
+Deis workflow
+478
+
+Deis workflow
+479
+
+Deis安装部署
+首先需要部署一套kubernetes（比如minikube，GKE等，记得启
+用 KUBE_ENABLE_CLUSTER_DNS=true ），并配置好本机的kubectl客户端，然后运行以
+下脚本安装deis：
+Deis workflow
+480
+
+# install deis v2 (workflow)
+curl -sSL http://deis.io/deis-cli/install-v2.sh | bash
+mv deis /usr/local/bin/
+# install helm
+wget https://storage.googleapis.com/kubernetes-helm/helm-v2.2.1-linux
+-amd64.tar.gz
+tar zxvf helm-v2.2.1-linux-amd64.tar.gz
+mv linux-amd64/helm /usr/local/bin/
+rm -rf linux-amd64 helm-v2.2.1-linux-amd64.tar.gz
+helm init
+# deploy helm components
+helm repo add deis https://charts.deis.com/workflow
+helm install deis/workflow --namespace deis
+kubectl --namespace=deis get pods
+Deis基本使用
+注册用户并登录
+deis register deis-controller.deis.svc.cluster.local
+deis login deis-controller.deis.svc.cluster.local
+deis perms:create newuser --admin
+部署应用
+注意，deis的大部分操作命令都需要在应用的目录中（即下面的 example-
+dockerfile-http ）。
+Deis workflow
+481
+
+git clone https://github.com/deis/example-dockerfile-http.git
+cd example-dockerfile-http
+docker build -t deis/example-dockerfile-http .
+docker push deis/example-dockerfile-http
+# create app
+deis create example-dockerfile-http --no-remote
+# deploy app
+deis pull deis/example-dockerfile-http:latest
+# query application status
+deis info
+扩展应用
+$ deis scale cmd=3
+$ deis ps
+=== example-dockerfile-http Processes
+--- cmd:
+example-dockerfile-http-cmd-4246296512-08124 up (v2)
+example-dockerfile-http-cmd-4246296512-40lfv up (v2)
+example-dockerfile-http-cmd-4246296512-fx3w3 up (v2)
+也可以配置自动扩展
+deis autoscale:set example-dockerfile-http --min=3 --max=8 --cpu-perc
+ent=75
+这样，就可以通过Kubernetes的DNS来访问应用了（配置了外网负载均衡后，还可以通
+过负载均衡来访问服务）：
+$ curl example-dockerfile-http.example-dockerfile-http.svc.cluster.lo
+cal
+Powered by Deis
+域名和路由
+Deis workflow
+482
+
+# 注意设置CNMAE记录到原来的地址
+deis domains:add hello.bacongobbler.com
+dig hello.deisapp.com
+deis routing:enable
+这实际上是在deis-router的nginx配置中增加了 virtual hosts ：
+    server {
+        listen 8080;
+        server_name ~^example-dockerfile-http\.(?<domain>.+)$;
+        server_name_in_redirect off;
+        port_in_redirect off;
+        set $app_name "example-dockerfile-http";
+        vhost_traffic_status_filter_by_set_key example-dockerfile-htt
+p application::*;
+        location / {
+            proxy_buffering off;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Forwarded-Proto $access_scheme;
+            proxy_set_header X-Forwarded-Port $forwarded_port;
+            proxy_redirect off;
+            proxy_connect_timeout 30s;
+            proxy_send_timeout 1300s;
+            proxy_read_timeout 1300s;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+            proxy_pass http://10.0.0.224:80;
+        }
+    }
+    server {
+        listen 8080;
+        server_name hello.bacongobbler.com;
+        server_name_in_redirect off;
+        port_in_redirect off;
+Deis workflow
+483
+
+        set $app_name "example-dockerfile-http";
+        vhost_traffic_status_filter_by_set_key example-dockerfile-htt
+p application::*;
+        location / {
+            proxy_buffering off;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Forwarded-Proto $access_scheme;
+            proxy_set_header X-Forwarded-Port $forwarded_port;
+            proxy_redirect off;
+            proxy_connect_timeout 30s;
+            proxy_send_timeout 1300s;
+            proxy_read_timeout 1300s;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+            proxy_pass http://10.0.0.224:80;
+        }
+    }
+参考文档
+https://github.com/deis/workflow
+https://deis.com/workflow/
+Deis workflow
+484
+
+Kompose
+Kompose是一个将docker-compose配置转换成Kubernetes manifests的工具，官方网站
+为http://kompose.io/。
+Kompose安装
+# Linux
+$ curl -L https://github.com/kubernetes-incubator/kompose/releases/do
+wnload/v0.5.0/kompose-linux-amd64 -o kompose
+# macOS
+$ curl -L https://github.com/kubernetes-incubator/kompose/releases/do
+wnload/v0.5.0/kompose-darwin-amd64 -o kompose
+# Windows
+$ curl -L https://github.com/kubernetes-incubator/kompose/releases/do
+wnload/v0.5.0/kompose-windows-amd64.exe -o kompose.exe
+# 放到PATH中
+$ chmod +x kompose
+$ sudo mv ./kompose /usr/local/bin/kompose
+Kompose使用
+docker-compose.yaml
+Kompose
+485
+
+version: "2"
+services:
+  redis-master:
+    image: gcr.io/google_containers/redis:e2e 
+    ports:
+      - "6379"
+  redis-slave:
+    image: gcr.io/google_samples/gb-redisslave:v1
+    ports:
+      - "6379"
+    environment:
+      - GET_HOSTS_FROM=dns
+  frontend:
+    image: gcr.io/google-samples/gb-frontend:v4
+    ports:
+      - "80:80"
+    environment:
+      - GET_HOSTS_FROM=dns
+    labels:
+      kompose.service.type: LoadBalancer
+kompose up
+Kompose
+486
+
+$ kompose up
+We are going to create Kubernetes Deployments, Services and Persisten
+tVolumeClaims for your Dockerized application. 
+If you need different kind of resources, use the 'kompose convert' an
+d 'kubectl create -f' commands instead. 
+INFO Successfully created Service: redis
+INFO Successfully created Service: web
+INFO Successfully created Deployment: redis
+INFO Successfully created Deployment: web
+Your application has been deployed to Kubernetes. You can run 'kubect
+l get deployment,svc,pods,pvc' for details.
+kompose convert
+$ kompose convert
+INFO file "frontend-service.yaml" created
+INFO file "redis-master-service.yaml" created
+INFO file "redis-slave-service.yaml" created
+INFO file "frontend-deployment.yaml" created
+INFO file "redis-master-deployment.yaml" created
+INFO file "redis-slave-deployment.yaml" created
+Kompose
+487
+
+Istio
+Istio是Google、IBM和Lyft联合开源的微服务Service Mesh框架，旨在解决大量微服务的
+发现、连接、管理、监控以及安全等问题。
+Istio的主要特性包括：
+HTTP、gRPC和TCP网络流量的自动负载均衡
+丰富的路由规则，细粒度的网络流量行为控制
+流量加密、服务间认证，以及强身份声明
+全范围（Fleet-wide）策略执行
+深度遥测和报告
+原理
+Istio从逻辑上可以分为数据平面和控制平面：
+数据平面主要由一系列的智能代理（Envoy）组成，管理微服务之间的网络通信
+控制平面负责管理和配置这些智能代理，并动态执行策略
+Istio架构可以如下图所示
+主要由以下组件构成
+Envoy：Lyft开源的高性能代理总线，支持动态服务发现、负载均衡、TLS终止、
+Istio
+488
+
+HTTP/2和gPRC代理、健康检查、性能测量等功能。Envoy以sidecar的方式部署在
+相关的服务的Pod中。
+Mixer：负责访问控制、执行策略并从Envoy代理中收集遥测数据。Mixer支持灵活
+的插件模型，方便扩展
+Pilot：用户和Istio的接口，验证用户提供的配置和路由策略并发送给Istio组件，管
+理Envoy示例的生命周期
+Istio-Auth：提供服务间和终端用户的认证机制
+安装
+Istio目前仅支持Kubernetes，在部署Istio之前需要先部署好Kubernetes集群并配置
+好kubectl客户端。
+下载Istio
+curl -L https://git.io/getIstio | sh -
+cd istio-0.1.6/
+cp bin/istioctl /usr/local/bin/
+创建RBAC角色和绑定
+$ kubectl apply -f install/kubernetes/istio-rbac-beta.yaml
+clusterrole "istio-pilot" created
+clusterrole "istio-ca" created
+clusterrole "istio-sidecar" created
+rolebinding "istio-pilot-admin-role-binding" created
+rolebinding "istio-ca-role-binding" created
+rolebinding "istio-ingress-admin-role-binding" created
+rolebinding "istio-sidecar-role-binding" created
+如果碰到下面的错误
+Istio
+489
+
+Error from server (Forbidden): error when creating "install/kubernete
+s/istio-rbac-beta.yaml": clusterroles.rbac.authorization.k8s.io "isti
+o-pilot" is forbidden: attempt to grant extra privileges: [{[*] [isti
+o.io] [istioconfigs] [] []} {[*] [istio.io] [istioconfigs.istio.io] [
+] []} {[*] [extensions] [thirdpartyresources] [] []} {[*] [extensions
+] [thirdpartyresources.extensions] [] []} {[*] [extensions] [ingresse
+s] [] []} {[*] [] [configmaps] [] []} {[*] [] [endpoints] [] []} {[*]
+ [] [pods] [] []} {[*] [] [services] [] []}] user=&{user@example.org 
+[...]
+需要给用户授予admin权限
+kubectl create clusterrolebinding myname-cluster-admin-binding --clus
+terrole=cluster-admin --user=myname@example.org
+部署Istio核心服务
+两种方式（选择其一执行）
+禁止Auth： kubectl apply -f install/kubernetes/istio.yaml 
+启用Auth： kubectl apply -f install/kubernetes/istio-auth.yaml 
+部署Prometheus、Grafana和Zipkin插件
+kubectl apply -f install/kubernetes/addons/prometheus.yaml
+kubectl apply -f install/kubernetes/addons/grafana.yaml
+kubectl apply -f install/kubernetes/addons/servicegraph.yaml
+kubectl apply -f install/kubernetes/addons/zipkin.yaml
+等一会所有Pod启动后，可以通过NodePort或负载均衡服务的外网IP来访问这些服务。
+比如通过NodePort方式，先查询服务的NodePort
+Istio
+490
+
+$ kubectl get svc grafana -o jsonpath='{.spec.ports[0].nodePort}'
+32070
+$ kubectl get svc servicegraph -o jsonpath='{.spec.ports[0].nodePort}'
+31072
+$ kubectl get svc zipkin -o jsonpath='{.spec.ports[0].nodePort}'
+30032
+$ kubectl get svc prometheus -o jsonpath='{.spec.ports[0].nodePort}'
+30890
+通过 http://<kubernetes-ip>:32070/dashboard/db/istio-dashboard 访问
+Grafana服务
+通过 http://<kubernetes-ip>:31072/dotviz 访问ServiceGraph服务，展示服务之
+间调用关系图
+Istio
+491
+
+通过 http://<kubernetes-ip>:30032 访问Zipkin跟踪页面
+通过 http://<kubernetes-ip>:30890 访问Prometheus页面
+Istio
+492
+
+部署示例应用
+在部署应用时，需要通过 istioctl kube-inject 给Pod自动插入Envoy容器，即
+kubectl create -f <(istioctl kube-inject -f <your-app-spec>.yaml)
+比如Istio提供的BookInof示例：
+kubectl apply -f <(istioctl kube-inject -f samples/apps/bookinfo/book
+info.yaml)
+原始应用如下图所示
+Istio
+493
+
+ istioctl kube-inject 在原始应用的每个Pod中插入了一个Envoy容器
+服务启动后，可以通过Ingress地址 http://<ingress-address>/productpage 来访问
+BookInfo应用
+Istio
+494
+
+$ kubectl describe ingress
+Name:            gateway
+Namespace:        default
+Address:        192.168.0.77
+Default backend:    default-http-backend:80 (10.8.0.4:8080)
+Rules:
+  Host    Path    Backends
+  ----    ----    --------
+  *
+        /productpage     productpage:9080 (<none>)
+        /login         productpage:9080 (<none>)
+        /logout     productpage:9080 (<none>)
+Annotations:
+Events:    <none>
+参考文档
+https://istio.io/
+Istio - A modern service mesh
+https://lyft.github.io/envoy/
+Istio
+495

@@ -1,0 +1,119 @@
+6.4 构建内容评分的预测模型 157 
+ 图6-26 图6-27 
+6.4 构建内容评分的预测模型 
+现在让我们使用所学到的东西来创建一个模型，它可以根据给定的内容，预估其被分
+享的次数。我们将使用前文已经创建的特征，以及几个额外的特征。
+理想情况下，我们需要一个更大的内容样本，特别是有更多分享次数的内容。尽管这
+样，我们还是就手头上的数据进行操作。
+我们将使用一种称为随机森林回归（random forest regression）的算法。在前面的章节
+中，我们看过随机森林一个更典型的实现，就是基于分类的模型。而这里，我们将使用回
+归并尝试预测分享的次数。当然，我们也可以将分享次数划分为不同的范围，转化成分类
+问题，但是对于连续变量的处理，最好还是使用回归的技术。
+首先，我们将创建一个极其简单的模型。使用的特征包括图像的数量、网站和字数。
+
+158 第6 章预测你的内容是否会广为流传 
+我们将使用Facebook 的Like 数来训练模型。 
+首先导入sci-kit 学习库，然后这样预处理数据：删除包含null 值的行，重置行的索引
+编号，最后将数据框切分为训练集和测试集。
+from sklearn.ensemble import RandomForestRegressor  
+all_data = dfc.dropna(subset=['img_count', 'word_count']) 
+all_data.reset_index(inplace=True, drop=True)  
+train_index = []  
+test_index = []  
+for i in all_data.index:  
+ result = np.random.choice(2, p=[.65,.35]) 
+ if result == 1:  
+ test_index.append(i)  
+ else:  
+ train_index.append(i) 
+我们使用一个随机数生成器来确定哪些行的内容（基于它们的索引）将被放置在哪个
+集合中，其概率的分配大约为2/3 和1/3。设定这样的概率，可以确保我们获得的训练样本
+数量约为测试样本数量的两倍。如下所示，我们可以将其打印出来。
+print('test length:', len(test_index), '\ntrain length:', len(train_index)) 
+上述代码生成图6-28 的输出。 
+现在，我们将继续准备数据。接下来，需要为不同的网站设置
+分类型的编码。目前，DataFrame 对象含有每个站点用字符串表
+示的名称。我们需要使用虚构的编码。这将为每个站点创建一个列。如果该行源于该特定
+的网站，那么该列将用1 填充；所有对应其他网站的列用0 填充。如下处理。 
+sites = pd.get_dummies(all_data['site']) 
+sites  
+上述代码生成图6-29 的输出。 
+虚构的编码可以在图6-29 中看到。 
+现在我们继续将数据分成训练集和测试集，如下所示。
+y_train = all_data.iloc[train_index]['fb'].astype(int)  
+X_train_nosite = all_data.iloc[train_index][['img_count', 'word_count']] 
+X_train = pd.merge(X_train_nosite, sites.iloc[train_index],  
+left_index=True, right_index=True)  
+y_test = all_data.iloc[test_index]['fb'].astype(int)  
+X_test_nosite = all_data.iloc[test_index][['img_count', 'word_count']]  
+X_test = pd.merge(X_test_nosite, sites.iloc[test_index], left_index=True, 
+right_index=True) 
+图6-28 
+
+6.4 构建内容评分的预测模型 159 
+图6-29 
+这样，我们设置了X_test、X_train、y_test 和y_train 变量。现在使用它们构
+建模型。
+clf = RandomForestRegressor(n_estimators=1000)  
+clf.fit(X_train, y_train) 
+通过这两行代码，我们训练了模型。下面，使用这个模型来预测测试集中的数据，能
+够收获多少Facebook 的Like。 
+y_actual = y_test  
+deltas = pd.DataFrame(list(zip(y_pred, y_actual, (y_pred – 
+y_actual)/(y_actual))), columns=['predicted', 'actual', 'delta']) 
+deltas 
+上述代码生成图6-30 的输出。 
+在这里，我们看到并排的预测值、实际值和差值百分比。下面看看这个结果的描述性
+统计。
+deltas['delta'].describe() 
+
+160 第6 章预测你的内容是否会广为流传 
+上述代码生成图6-31 的输出。 
+ 图6-30 图6-31 
+这看起来很惊人。错误的中位数是0！好吧，不幸的是，这不是一个特别有用的信息，
+因为在两侧正和负的错误都存在，并且它们会中和平均值，就是我们在这里所看的。让我
+们来看一个更具信息性的指标来评估这个模型。我们将把均方根误差（也就是标准差）比
+上实际平均值。
+首先，来说明一下为什么这样计算更有价值，让我们在两个示例的数据序列上运行以
+下场景。
+a = pd.Series([10,10,10,10])  
+b = pd.Series([12,8,8,12])  
+np.sqrt(np.mean((b-a)**2))/np.mean(a) 
+这将产生图6-32 的输出。 
+现在将其与平均值进行比较。
+(b-a).mean() 
+这将产生图6-33 的输出。 
+ 图6-32 图6-33 
+显然前者是更有意义的统计
+①
+①译者注：作者的意思是，他所建议的统计方式更能体现数据的波动。
+。现在为我们的模型运行这个统计。 
+np.sqrt(np.mean((y_pred-y_actual)**2))/np.mean(y_actual) 
+
+6.4 构建内容评分的预测模型 161 
+上述代码生成图6-34 的输出。 
+突然发现，我们的模型没有那么优秀了
+①。让我们为
+模型添加另一个特征。来看看添加单词的计数是否会有助
+于模型的提升。我们将使用计数的向量转化器来做到这一点。和之前对于网站名称的处理
+很像，我们将单个词和n元语法转换成特征。 
+from sklearn.feature_extraction.text import CountVectorizer  
+vect = CountVectorizer(ngram_range=(1,3))  
+X_titles_all = vect.fit_transform(all_data['title'])  
+X_titles_train = X_titles_all[train_index]  
+X_titles_test = X_titles_all[test_index]  
+X_test = pd.merge(X_test, pd.DataFrame(X_titles_test.toarray(),  
+index=X_test.index), left_index=True, right_index=True)  
+X_train = pd.merge(X_train, pd.DataFrame(X_titles_train.toarray(), 
+index=X_train.index), left_index=True, right_index=True) 
+在这些代码行中，我们将新的n 元语法特征加入到现有的特征中。现在重新训练模型，
+看看是否有任何改进。
+clf.fit(X_train, y_train)  
+y_pred = clf.predict(X_test)  
+deltas = pd.DataFrame(list(zip(y_pred, y_actual, (y_pred -  
+y_actual)/(y_actual))), columns=['predicted', 'actual', 'delta']) 
+deltas 
+上述代码生成图6-35 的输出。 
+图6-35 
+①译者注：在这里，和平均值相比，较大的波动意味着较大的预测误差。
+图6-34 

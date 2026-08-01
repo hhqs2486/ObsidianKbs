@@ -1,0 +1,1721 @@
+Chapter 5
+ENVISION: Energy-Scalable Sparse
+Convolutional Neural Network
+Processing
+5.1
+Neural Network Acceleration
+Several prior works have proposed specialized and optimized CNN dataﬂows
+for energy-efﬁcient network inference, either on existing platforms, or on novel
+hardware architectures. A non-exhaustive overview is given in Sect. 3.1 in Chap. 3.
+Part of it is repeated here as an introduction. Optimizations for high-performance
+applications on CPU (Vanhoucke et al. 2011), GPU (Cavigelli et al. 2015b),
+or FPGA (Rahman et al. 2016; Suda et al. 2016; Motamedi et al. 2016) all
+consume several to hundreds of Watts, making them unusable in battery-constrained
+embedded systems. Other works, such as Chen et al. (2014, 2016), Knag et al.
+(2016), Du et al. (2015), Cavigelli et al. (2015a), Albericio et al. (2016), Han
+et al. (2016), Reagen et al. (2016), are ASICs which focus on low-power embedded
+applications, aiming to achieve real-time operation at sub-Watt power consumption.
+They are all accelerators, reducing their ﬂexibility in exchange for energy-efﬁciency.
+Eyeriss (Chen et al. 2016) proposes a two-dimensional spatial architecture, exploit-
+ing data-locality and network sparsity, but does not exploit reduced precision
+computations. Knag et al. (2016) is an optimized architecture exploiting reduced
+precision, but can only perform a hardwired number of layers. DaDianNao (Chen
+et al. 2014) and ShiDianNao (Du et al. 2015) exploit locality, but only achieve
+high performance for small neural networks. Cavigelli et al. (2015a) use a speciﬁc
+7 × 7 convolutional engine, which limits ﬂexibility, operating at constant 12b ﬁxed-
+precision. Albericio et al. (2016) combine DaDianNao’s architecture with hardware
+support to exploit network sparsity in the time-domain, achieving up to a 1.55×
+performance improvement. EIE (Han et al. 2016) and Minerva (Reagen et al. 2016)
+exploit reduced precision and sparsity in a novel hardware architecture, but tailored
+only for fully connected network layers.
+Figure 5.1 classiﬁes the different possible solutions for neural network accel-
+eration in the ﬂexibility-vs-efﬁciency plane. Only ASICs and application speciﬁc
+© Springer Nature Switzerland AG 2019
+B. Moons et al., Embedded Deep Learning,
+https://doi.org/10.1007/978-3-319-99223-5_5
+115
+
+116
+5
+ENVISION: Energy-Scalable Sparse Convolutional Neural Network Processing
+The Bigger Picture
+The chips discussed in this chapter are optimized for complex CNN-based, large-scale
+and multi-class classiﬁcation problems. Here, energy-efﬁciency is of utmost concern. In
+the hierarchical approach discussed in Chap. 2, they would hence be used in the last
+couple of stages of a full hierarchy. The BinarEye chips in Chap. 6 would take care of
+the more simple earliest stages in the hierarchy.
+Fig. 5.1 Different hardware platforms in the energy-efﬁciency vs ﬂexibility space. ASIPs offer
+better ﬂexibility than hardwired or reconﬁgurable ASICs at a similar energy-efﬁciency
+instruction set processors (ASIPs) (Wu and Willems 2015) are efﬁcient enough for
+embedded, always-on applications.
+The Envision chips (Moons and Verhelst 2016; Moons et al. 2017) discussed in
+this chapter are ASIP designs. They outperformed the state of the art at the time of
+
+5.2
+The Envision Processor Architecture
+117
+publication by up to 5× in energy-efﬁciency as they were the ﬁrst to exploit all main
+energy-saving opportunities in CNNs: (a) data-locality, (b) network sparsity, and (c)
+precision scaling, as discussed in Chap. 1. These results were achieved through three
+key neural network characteristics discussed earlier in Chap. 3:
+(a) A processor architecture employing a two-dimensional (2D) single instruction
+multiple data (SIMD) MAC array.
+(b) Hardware support for network compression and guarding sparse operations. The
+system-level gains of this technique have been discussed for test-time FPNNs
+in Chap. 3.
+(c) Hardware support for dynamic-voltage-accuracy-scaling (DVAS) in V1 and
+dynamic-voltage-accuracy-frequency-scaling (DVAFS) in V2, according to
+the concepts discussed in Chap. 4. We hereby illustrate the viability of the
+approximate computing (Chippa et al. 2013) paradigm in the context of neural
+networks: an efﬁcient baseline processor can be made more energy-efﬁcient if
+the algorithm requires less accurate computations.
+Section 2.4 in Chap. 2 illustrates a use-case for the scalable Envision processors:
+a hierarchical face recognition example. This speciﬁc chapter is further organized
+as follows. Section 5.2 discusses the processor architecture and instruction set
+that is used in the Envision chips. Section 5.3 discusses the speciﬁc design and
+measurement results of DVAS-compatible Envision V1, implemented in a 40 nm
+CMOS technology. Section 5.4 discusses the design and measurements of Envision
+V2, implemented in a 28 nm FD-SOI technology. Finally, Sect. 5.5 explicitly
+compares the two versions of Envision and concludes this chapter.
+5.2
+A 2D-MAC Processor Architecture for Embedded CNNs
+The proposed programmable and energy-efﬁcient ASIP architecture, shown in
+Fig. 5.2, employs a 2D SIMD MAC array as an efﬁcient convolutional engine
+(Sect. 5.2.1). For ﬂexibility, a conﬁgurable on-chip memory architecture and on-chip
+direct memory access (DMA) controller (Sect. 5.2.2) have been added. Section 5.2.4
+discusses the processor’s instruction set.
+5.2.1
+Processor Datapath
+5.2.1.1
+2D-MAC Array
+The 16 × 16 2D-MAC array, shown in Fig. 5.2, with its dataﬂow illustrated in
+Fig. 5.3, operates as a convolution engine. This array of single-cycle MACs achieves
+a 256× speedup compared to a scalar solution, while minimizing bandwidth to on-
+chip memory. The 2D-architecture allows applying 16 different ﬁlters to 16 different
+
+118
+5
+ENVISION: Energy-Scalable Sparse Convolutional Neural Network Processing
+Fig. 5.2 High-level overview of the Envision architecture. The chip contains a scalar and 16×
+vector ALU, an input and weight on-chip SP SRAM, an SRAM storing sparsity information, a
+control unit, a DMA, and a Huffman-based en/decoder in a ﬁxed power domain at supply Vf . A
+2D SIMD MAC array is put in a scalable power domain at supply Vs
+units of the input feature map simultaneously, which is an effective exploitation
+of the convolutional and image reuse available in CNNs (Chen et al. 2016). This
+exploitation of data reuse thus allows a 256× speedup, at more than 16× lower
+internal bandwidth compared to a naive 1D-SIMD solution, requiring 2 inputs per
+processing unit per cycle. The local communication overhead can be further reduced
+by adding a FIFO register at the input of the MAC array, as shown in Fig. 5.3.
+Table 5.1 shows a comparison of the bandwidth fetch-reductions of the 2D-MAC
+array architecture compared to the naive 1D-SIMD baseline.
+The example in Fig. 5.3 illustrates the four ﬁrst operation steps of a typical 3 ×
+3 × C × F ﬁlter dataﬂow, of which 4 out of F ﬁlters are performed in parallel. The
+concept is illustrated for a simpliﬁed 4 × 4 MAC array for clarity, but the chip has
+a 16 × 16 array. In this simpliﬁed example a vector is loaded from the input feature
+map buffer to a FIFO register as a ﬁrst step. Then, it is multiplied with the ﬁrst (w00)
+ﬁlter values of four different ﬁlters out of F. All 16 partial sums are then accumulated
+with the previous result and stored in a matrix of local accumulation registers. In the
+second and third steps, a single word is fetched from the input feature map memory
+and pushed through the FIFO. This shifted vector is again multiplied with the next
+four ﬁlter values and accumulated with the previous result. This sequence is repeated
+three times for the 3 × 3 ﬁlter, illustrated by step 4, in which a vector of the next
+input row is multiplied and accumulated with the correct weights.
+An additional advantage of this scheme is that it allows all intermediate values to
+be kept in the accumulation registers for a full K × K × C convolution. Therefore
+the MAC accumulation registers are 48b, which is an over-design for the worst case
+in the AlexNet (Krizhevsky et al. 2012) benchmark. Because of this, there is no need
+for frequent write-backs to more expensive SRAM.
+
+5.2
+The Envision Processor Architecture
+119
+Fig. 5.3 Example of a typical CNN dataﬂow in Envision. (a) Step 1. (b) Step 2. (c) Step 3.
+(d) Step 4
+Table 5.1 Words fetched per
+MAC-unit per
+MAC-operation in stride-1
+operation
+Filter size
+1D-SIMD
+2D-SIMD
+2D-FIFO
+Gain [×]
+1 × 1
+2
+0.125
+0.125
+16.0
+3 × 3
+2
+0.125
+0.086
+23.3
+5 × 5
+2
+0.125
+0.078
+25.6
+11 × 11
+2
+0.125
+0.072
+27.8
+The presented 2D-MAC-unit with FIFO-input also supports CNN dataﬂows with
+strides not equal to 1. This is illustrated in Fig. 5.4. Figure 5.4a is a representation of
+the dataﬂow when the stride is 1 and the kernel size k ×k is 3×3, similar to the ﬂow
+depicted in Fig. 5.3. Figure 5.4b is a representation of a CNN-layer with k = 3 and a
+stride of 2. Here, both the input features and weights require re-ordering compared
+to the standard scheme with a stride of 1. In this scheme, a vector of 16 features
+is fetched ﬁrst, together with w00. This vector stores features 0, 2, . . . , 30 of the
+ﬁrst line. The second cycle is a single word FIFO-access, fetching feature 32 and
+pushing it to the FIFO, while fetching w02. Finally, this scheme requires another
+vector access of features 1, 3, . . . , 31, together with w01. A ﬁnal example is given
+
+120
+5
+ENVISION: Energy-Scalable Sparse Convolutional Neural Network Processing
+Fig. 5.4 Examples of CNN
+dataﬂow on Envision with
+different strides. (a) k = 3,
+stride = 1. (b) k = 3,
+stride = 2. (c) k = 5,
+stride = 4
+in Fig. 5.4c, where k = 5 and the stride is equal to 4. In this case, vector access
+is necessary in cycles 1, 3, and 5, while a single word FIFO-access is possible in
+cycles 2 and 4. In order for these schemes to be implemented, the instruction set
+requires sufﬁcient ﬂexibility in terms of vector- and word-address computations.
+
+5.2
+The Envision Processor Architecture
+121
+5.2.1.2
+Other Compute Units
+The processor also contains a 1D-SIMD processing unit capable of performing
+multiple types of vector operations. This vector unit contains 16 parallel processing
+units with support for bitwise- and shift operators, MAC and max-pooling (2 × 2
+and 3 × 3). The processor also contains a standard scalar ALU and MAC.
+5.2.2
+On-Chip Memory Architecture
+5.2.2.1
+On-Chip Main Memory
+Figure 5.5 shows the on-chip data memory topology. It is organized as one large
+16b memory address space (128 kB) and is subdivided into four blocks (32 kB)
+containing 16 single port SRAM banks (2 kB) of 1024×16b words. Every block
+hence allows vector access, reading/writing one word from every bank. Single word
+access is also possible for scalar operations and for the FIFO-based architecture.
+The programmer is free to store feature maps or ﬁlter bank weights in any of the
+four available memory blocks.
+From the processor side, two of the four blocks can be read simultaneously.
+Typically one block would contain only ﬁlter values and a second block a part of
+an input feature map. This allows fetching both ﬁlter and feature inputs for the 2D-
+MAC array in a single cycle. There is only one write port from the processor side,
+due to the lower amount of write accesses.
+Fig. 5.5 On-chip memory architecture. One large address space is subdivided into 4 blocks, each
+containing 16 banks of single port SRAM. Every SRAM macro can store 1024 × 16b words. The
+architecture allows scalar, vector, or double vector access from the processor side, while being read
+or written through a vector port from the DMA side
+
+122
+5
+ENVISION: Energy-Scalable Sparse Convolutional Neural Network Processing
+5.2.2.2
+Direct Memory Access Controller
+A custom designed DMA allows to efﬁciently communicate with off-chip memory,
+without stalling the processor pipeline. In parallel with access from the processor,
+any of the memory blocks can be read or written by the DMA which is controlled by
+memory-mappedregisters. Synchronization between processor and DMA is done by
+checking DMA-speciﬁc status registers in software, indicating whether data transfer
+is ﬁnished.
+Furthermore, it contains a speciﬁc Huffman-based en/decoder (Huffman et al.
+1952) performing IO compression on sparse in- and output data (Sect. 5.2.3.2).
+Communication with the outside world is done using a 32b parallel interface,
+transferring two words per cycle if compression is turned off.
+5.2.3
+Hardware Support for Exploiting Network Sparsity
+As discussed extensively in Sect. 3.3 in Chap. 3 in the context of test-time FPNNs,
+convolutional neural networks can be very sparse. This is mainly due to the use
+of ReLU activations and due to operation at reduced computational precision.
+Several hardware extensions are implemented to perform operation guarding and
+data compression.
+5.2.3.1
+Guarding Operations
+At the start of a new CONV layer, both the sparsity information of the input feature
+map and of the layer ﬁlter banks is known. This information is stored in two
+dedicated, small on-chip SRAM buffers (Fig. 5.6a), containing 1024 × 16b words
+each, storing the sparsity information for one main memory block. Every word is
+a 16 × 1b ﬂag, where every ﬂag denotes the sparsity information of an associated
+feature map unit or ﬁlter weight. If the ﬂag is 1, the associated word contains valid
+data, if it is 0 it contains zero-valued data, which can be ignored. These sparsity
+ﬂags are used in Envision to both guard redundant memory fetches from memory
+and prevent redundant switching using zero-valued data in the MAC array.
+Guarding memory fetches is done by checking the sparsity ﬂags before
+performing a fetch from on-chip memory. Depending on the value of the ﬂag, words
+are conditionally fetched. This is simply done by gating the enable signals to the
+on-chip SRAM memory banks, as in Fig. 5.6b. Only 16 + 16 1b ﬂags are checked
+in order to potentially prevent 32 large SRAM banks (2 kB each) from switching.
+Guarding 2D-MAC-operations is done by both preventing the MAC inputs from
+switching and by clock gating the accumulation registers. To this end, extra arrays
+of switch-prevention circuitry, as shown in Fig. 5.6, are added. A sparsity-guard
+register is controlled by a sparsity ﬂag. If the ﬂag is 1, a new input value is stored
+in the register and propagated directly to the MAC array. If the ﬂag is 0, the
+
+5.2
+The Envision Processor Architecture
+123
+Fig. 5.6 The 2D-MAC architecture is expanded with support memory fetch- and operator-
+guarding to exploit network sparsity. Only the inputs of the MAC array (a) are guarded through
+arrays (b) guarding units.
+switch-prevention register is disabled and the previous value is kept as input to
+the MAC array. This way, the input to a column or row of the MAC array is kept
+constant, effectively lowering the switching activity. The actual power reduction is
+dependent on the product of the sparsity levels of both the weights sw and the feature
+map inputs si. A multiplier will only be guarded completely if both inputs are zero:
+Prel = si × sw. Here, Prel is the probability of a MAC to be shut down completely.
+si and sw are the probabilities for inputs (or features) and weights to be zero.
+Tips and Tricks
+When guarding inputs, do not put data busses to logic 1 or 0. This might lead to additional
+switching activity rather than reduced switching activity, depending on the usage pattern
+of the guarded block. As is done here, it can be more efﬁcient to keep data constant across
+cycles as a guarding technique. This way, the guarded arithmetic blocks will not switch
+when they are not used.
+The same ﬂags are used to clock-gate the accumulation registers. In this case, the
+sparsity ﬂags are used to clock gate whole columns or rows in the MAC array at
+once. This leads to much higher relative gains, as only one of the inputs of the MAC
+must be zero to clock gate the accumulation register: Prel = si + sw × (1 −si).
+Here, the chance for an accumulation register to be clock-gated Prel depends on the
+rates of input si and weight sw sparsity.
+The overhead of sparsity guarding is limited due to the 2D array topology. Only
+32×1b ﬂags have to be checked in order to potentially prevent 256 MAC-units from
+switching.
+
+124
+5
+ENVISION: Energy-Scalable Sparse Convolutional Neural Network Processing
+0
+0.5
+1
+Sparsity [-]
+0
+0.5
+1
+1.5
+Compression [-]
+Ideal Linear
+Huff random
+RLE random
+RLE structured
+(a) RLE vs Huffman
+(b) Implementation
+Fig. 5.7 (a) Comparison of two-symbol Huffman and random, multi-symbol RLE-encoding.
+Huffman encoding achieves near-linear compression, independent of the data distribution. In RLE,
+the compression rate is a function of data-clustering and lower than two-symbol Huffman for
+random sparsity. (b) Outline of hardware implementation
+5.2.3.2
+Compressing IO Streams for Off-Chip Communication
+Off-chip communication is controlled through a DMA containing an en/decoder. I
+implement a linear compression scheme based on 2-symbol Huffman encoding. If
+data is zero, the 16b data word is encoded as a 1′b0. If the word is non-zero, it is
+encoded as a 17b word {1′b1, 16′bdata}. As shown in Fig. 5.7, this allows near ideal
+linear compression with the compressed data-size (C): C = (s × 1
+n +(1−s)× n+1
+n ).
+Here, s is the degree of sparsity and n = 16 is the word length.
+Although other available compression algorithms such as run-length encoding
+(RLE), used in Chen et al. (2016) e.g., could potentially achieve super-linear
+compression, it does not necessarily perform well on CNN data sets. This is
+illustrated in Fig. 5.7a, where the plotted compression rate for RLE is a function
+of the data distribution and clustering, while for Huffman, it is only a function of
+sparsity.
+An overview of the on-chip en/decoder is given in Fig. 5.7b. All words stored in
+on-chip memory are decompressed, as the correct data-address is crucial for pointer-
+based processing.
+5.2.4
+Energy-Efﬁcient Flexibility Through a Custom
+Instruction Set
+All arithmetic blocks, the memory architecture, and all precision-scaling and
+sparsity guarding related building blocks are controlled in the custom processor
+architecture shown in Fig. 5.2. This processor is built on a baseline SIMD RISC
+
+5.3
+DVAS Compatible Envision V1
+125
+Fig. 5.8 Example assembly code for the inner loop of Listing 5.1
+vector processor with a 16b instruction set and an 8192-word (16 kB) instruction
+memory using the Synopsys ASIP designer tool (Wu and Willems 2015). It operates
+a 7-stage pipeline with one fetch (IF), one decode (ID), and 5 execute (E1,. . .,E5)
+stages and is fully C-programmable using pointers. Furthermore it is equipped with
+numerous standard scalar- and vector-ALU instructions, as well as with jump and
+control instructions. Hardware loop counters are built-in for up to three nested loops.
+In this work, multiple custom variable-length instruction words (VLIW)
+are added to the instruction set to, among others, support guard, round, and
+MAC-operations. This allows exploitation of instruction level parallelism. This is
+illustrated in Fig. 5.8, showing assembly code generated by the generated compiler
+of the ASIP design tool for the inner loop of the C-code example in Listing 5.1. This
+code, for a 3 × 3 × C convolution, illustrates the C-implementation of the different
+steps of Fig. 5.3. The listed instructions are a parallel combination of sequential sub-
+instructions, all of which are shorter than the standard 16b instruction length. Instead
+of calling these sequentially, the multiple sequential sub-instructions are combined
+into one single parallel instruction. The assembly instructions in Fig. 5.8, are hence
+the combination of 2 guard fetch, 2 guarded vload, 2 round, and a guarded MAC
+instruction with a short, variable length combined into one 16b instruction word.
+Most sub-instructions can be called individually as well. By creating these parallel
+instructions, the number of cycles for the inner loop of Listing 5.1 can be reduced
+from 3 × 7 = 21 to 3 + 1 = 4.
+5.2.5
+Conclusion and Overview
+5.3
+A DVAS Compatible Envision Processor in 40 nm CMOS
+The baseline processor architecture discussed in Sect. 5.2 can beneﬁt from dynamic
+precision scaling by making it compatible with dynamic-voltage-accuracy-scaling
+(DVAS), as discussed in Chap. 4. The architecture is expanded on the RTL-level
+by adding functional support for precision scaling and on the physical level by
+
+126
+5
+ENVISION: Energy-Scalable Sparse Convolutional Neural Network Processing
+Listing 5.1 Example code for a 3×3×C CONV layer. pI is a vector pointer, Ig is the guarded
+vector, Igr is the guarded and rounded vector. The compiled assembly associated with this code is
+shown in Fig. 5.8. C1-3 are as in Fig. 5.8
+for
+( i n t
+f = 0; f <F ; f ++){
+for
+( i n t
+h1 =0; h1<H; h1 ++){
+for
+( i n t
+h2 =0; h2<H; h++) {
+pW = ( v i n t ∗) &Weights [ f ( f , h ) ] ;
+for
+( i n t
+c =0; c<C; c ++){
+pIg = ( i n t ∗) &F e a t u r e _ g r d s [ fun ( f , h1 , h2 , c ) ] ;
+pWg = ( i n t ∗) &Weight_grds [ fun ( f , h1 , h2 , c ) ] ;
+for
+( i n t
+k = 0; k<K; k++){
+/ /
+Fig
+7 .
+st e p
+1 ,
+4 , 7
+|
+pI = ( v i n t ∗) &F e a t u r e s [ fun ( f , h1 , h2 , c , k ) ] ;
+C1
+|
+Ig r
+= round ( guard ( pI ++ , I , pIg ) ) ;
+/ / guard , round
+|
+Wgr = round ( guard (pW++ ,W,pWg ) ) ;
+/ / guard , round
+|
+R = gMAC( Igr , Wgr ,R, pIg ++ ,pWg++);
+/ / guarded mac
+/ /
+Fig
+7 .
+st e p
+2 ,
+5 , 8
+|
+pIs = ( i n t ∗) &F e a t u r e s [ fun ( f , h1 , h2 , c , k ) + 1 ] ;
+|
+Is =
+f i f o ( pIs ++);
+/ / FIFO ld
+C2
+|
+Ig r = round ( guard ( Is , I , pIg + + ));
+/ / guard , round
+|
+Wgr = round ( guard (pW++ ,W,pWg+ + )); / / guard , round
+|
+R = gMAC( Igr , Wgr , R, pIg ++ ,pWg++);
+/ / guarded mac
+/ /
+Fig
+7 .
+st e p
+3 ,
+6 , 9
+|
+pIs = ( i n t ∗) &F e a t u r e s [ fun ( f , h1 , h2 , c , k ) + 2 ] ;
+|
+Is =
+f i f o ( pIs ++);
+/ / FIFO ld
+C3
+|
+Ig r = round ( guard ( Is , I , pIg + + ));
+/ / guard , round
+|
+Wgr = round ( guard (pW++ ,W,pWg+ + )); / / guard , round
+|
+R = gMAC( Igr , Wgr , R, pIg ++ ,pWg++);
+/ / guarded mac
+}
+}
+}
+}
+}
+splitting the design into a scalable power domain for the MAC array and a ﬁxed
+power domain for all other blocks. In order to enforce critical path scaling at lower
+precision, an advanced back-end place and route optimization is needed as well.
+This section discusses the design and measurements of DVAS compatible Envision
+V1, implemented in 40 nm CMOS.
+5.3.1
+RTL Level Hardware Support
+As discussed in Sect. 4.5 in Chap.4, DVAS compatibility requires RTL changes. The
+main points listed there are repeated here for completeness. The inputs to the MAC
+array in the scalable voltage domain are precision scaled by rounding their values to
+a programmable number of most-signiﬁcant-bits (MSB). The least-signiﬁcant-bits
+
+5.3
+DVAS Compatible Envision V1
+127
+Fig. 5.9 A single rounding
+building block exists out of
+one adder, two programmable
+shifters, and 16 AND-gates
+(LSB) are explicitly gated to zero, to reduce switching activity. This is done through
+classical round-up rounding, transforming the positive number 10010 to 10100 if
+it is quantized to 3b MSB. This process requires two additions to the processor
+architecture.
+First, two programmable status registers are added, as in Fig. 5.6a, one for feature
+map inputs and one for ﬁlter weights, containing the number of bits that will be used
+for computation. These status registers can be written from software with a latency
+of 2 cycles. In practice, the precision is only changed on a per-layer basis. Second,
+two 1 × 16 vector arrays of programmable rounding units have to be added at the
+input of the MAC array, as shown in Fig. 5.6a. Figure 5.9 shows the building blocks
+of this rounding unit: one adder, two shifters, and 16 AND-gates to put the LSBs of
+a word to zero.
+The 2D-architecture is crucial to limit the overhead of the rounding units. Only
+2 × 16 = 32 inputs have to be rounded in order to provide rounded inputs to 16 ×
+16 = 256 MAC-units.
+5.3.2
+Physical Implementation
+Creating a multi-power domain DVAS design, with one ﬁxed and one scalable
+power domain for the MAC array, implies several complications in the physical
+implementation. Not only should the layout of the ﬂoorplan be adapted to contain
+level shifters, multiple power grids, and multiple supply ports, the back-end
+optimization ﬂow should be changed as well. This is already highlighted in Chap. 4
+and repeated here in the context of Envision for completeness.
+DVAS is not automatically possible if the back-end optimizations are only
+performed in full precision mode. In a real chip, there are no guarantees that
+critical paths actually decrease at low computational precision, even if the circuit
+architecture does permit it. Theoretically shorter paths in a multiplier can still
+be critical at low precision due to sub-optimal placement, high wire delays or
+small transistor sizing. Therefore, in DVAS it is necessary to perform an advanced
+
+128
+5
+ENVISION: Energy-Scalable Sparse Convolutional Neural Network Processing
+Table 5.2 Multi-mode optimization settings
+Mode
+Fixed V [V]
+Scalable f [MHz]
+Scalable V [V]
+Fixed f [MHz]
+4b
+1.1
+400
+0.9
+200
+8b
+1.1
+333
+0.9
+200
+12b
+1.1
+200
+1
+200
+16b
+1.1
+200
+1.1
+200
+Fig. 5.10 Chip photograph and layout overview of the processor. The system totals 2.4 mm2 in a
+40 nm LP technology
+multi-mode, multi-corner place, and route optimization scheme enforcing the
+theoretical potential of shorter critical paths at lower precision in the physical
+implementation. Ideally, layout should be optimized for the continuous precision
+range from 1 to 16 bit, using libraries characterized at all supply voltages. However,
+satisfactory results were achieved optimizing only for the 4-, 8-, 12-, and 16b modes.
+The design was optimized for 200 MHz operation in different simultaneously
+performed optimization modes, listed in Table 5.2. If libraries were not available
+at the necessary voltage, the circuit was optimized at the lowest available voltage
+with heavier timing constraints.
+Figure 5.10 is a die photograph of the fabricated chip. The chip requires 2.4 mm2
+of active area in a 40 nm LP CMOS technology. Also indicated in this ﬁgure is the
+placement of the different building blocks. All DVAS-compatible building blocks,
+such as the 2D-MAC array data path are placed in a single power domain with a
+scalable supply voltage Vscalable. Another power domain contains all non-accuracy-
+scalable (nas) logic that is incompatible with DVAS voltage scaling, such as all
+instruction control logic, scalar ALUs, and the system’s DMA. This power domain
+is at a ﬁxed voltage Vf ixed = Vnominal = 1.1 V. A third power domain contains
+all program and data memories and is also at the same supply voltage Vf ixed. The
+domains are separated for academic purposes only, in order to be able to separately
+measure the power consumed by the memories.
+
+5.3
+DVAS Compatible Envision V1
+129
+5.3.3
+Measurement Results
+The performance of the Envision V1 processor in 40 nm LP was measured in the
+lab. Section 5.3.3.1 discusses its baseline performance. Sections 5.3.3.2 and 5.3.3.3
+discuss the individual gains of DVAS and sparsity guarding. Section 5.3.3.4
+demonstrates the inﬂuence of the combined techniques on a number of benchmarks.
+5.3.3.1
+Performance of the Full Precision Baseline
+A non-unrolled 5 × 5 × C CONV layer, similar to Listing 5.1, is executed on the
+processor. At it’s nominal supply voltage of 1.1 V and operating at full precision,
+the processor operates at a nominal frequency of 204 MHz and a peak performance
+of 204 MHz×256MACs×2 = 102 giga-operations per second (GOPS). Every
+MAC-unit hence performs two operations per cycle: 1 multiply and 1 add. The
+real coding efﬁciency, the average number of MAC instructions per cycle, of the
+processor is typically lower and dependent on the operated ﬁlter sizes, as listed
+in Table 5.3. The reference code does not achieve peak performance, but has a
+coding-efﬁciency of 72%. Hence the effective performance in this case is 74 GOPS.
+In this nominal mode, the processor consumes 287 mW, achieving 372 peak or
+270 effective GOPS/W in energy-efﬁciency. Table 5.4 shows a measured power
+breakdown of the processor. If operated simultaneously, the DMA and en/decoder
+consume an additional 2.5 mW, the extra on-chip SRAM consumption in this case
+ranges anywhere from 5 to 10 mW depending on the data-sparsity and precision.
+If lower throughput is allowed, the full precision processor can easily be
+operated at lower voltages, as in Fig. 5.11. It runs at 100 MHz at 0.8 V, consuming
+72 mW at 37 GOPS or 510 GOPS/W. Energy-efﬁciency improves further up until
+900 GOPS/W in full precision mode, if operating at 12 MHz at 0.6 V, consuming
+only 5 mW at 4.4 GOPS.
+Table 5.3 MAC-efﬁciency
+as a function of ﬁlter sizes
+Filter size
+Not-unrolled [%]
+Unrolled [%]
+1 × 1
+33
+50
+3 × 3
+53
+75
+5 × 5
+72
+83
+11 × 11
+85
+92
+Table 5.4 Full precision
+power breakdown at 1.1 V
+and 204 MHz
+Dynamic [mW] Leakage [mW] Total [mW]
+Program Mem 4.1
+0.4
+22.5
+Data Mem
+18
+Control
+6.4
+0.3
+18.7
+Data Transfer
+12
+MAC array
+244
+1.6
+245.6
+Total
+284.5
+2.3
+286.8
+
+130
+5
+ENVISION: Energy-Scalable Sparse Convolutional Neural Network Processing
+0.6
+0.8
+1
+1.2
+Voltage [V]
+12
+102
+204
+Frequency [MHz]
+(a)
+0.6
+0.8
+1
+1.2
+Voltage [V]
+500
+1000
+1500
+2000
+2500
+3000
+Efficiency [GOPS/W]
+16b
+8b
+4b
+(b)
+Fig. 5.11 (a) Frequency and (b) efﬁciency versus supply voltage in different modes. In the 4b and
+8b modes, the ﬁxed power domain is running at a higher supply voltage. This voltage is the same
+as the one in the 16b mode at a given frequency
+5
+10
+15
+Precision [bits]
+0
+50
+100
+150
+200
+250
+300
+Power [mW]
+Control
+Memory
+MAC
+total
+(a)
+5
+10
+15
+Precision [bits]
+0
+50
+100
+150
+200
+250
+300
+Power [mW]
+(b)
+Fig. 5.12 Effect of precision scaling on power consumption under (a) DAS and (b) DVAS
+5.3.3.2
+Performance Under Dynamic Precision DVAS
+In DVAS the supply of the scalable power domain can be lowered at constant
+frequency, as illustrated in Fig. 5.11 for different modes. The ﬁxed power domain is
+always operating at the supply necessary for full precision operation. At 204 MHz,
+the scalable supply can be lowered down to 0.9 V and 0.8 V for 8b and 4b
+operation, respectively. Up to 2715 GOPS/W operation is measured at 12 MHz
+and 4b precision. Figure 5.12 shows the explicit effect of precision scaling and
+voltage scaling on the power consumption of different parts of the processor. The
+measured efﬁciency gains are signiﬁcant: in a typical AlexNet l2 (Table 5.5),
+reducing precision down to 7b improves energy-efﬁciency 2.6× compared to the
+full precision baseline.
+
+5.3
+DVAS Compatible Envision V1
+131
+Table 5.5 Performance comparison of relevant benchmarks, running at 204 MHz
+Weight
+Input
+Weight
+Input
+Weight
+Input
+IO
+HuffIO
+Voltage
+MMACs/
+Power
+Effective
+Layer
+bits
+bits
+sparsity (%)
+sparsity (%)
+BW Reduc.
+BW reduc.
+(MB/f)
+(MB/f)
+(V)
+frame
+(mW)
+TOPS/W
+General CNN
+16
+16
+0%
+0%
+1.0×
+1.0×
+–
+–
+1.1
+–
+287
+0.3
+AlexNet l1
+7
+4
+21%
+29%
+1.17×
+1.3×
+1
+0.77
+0.85
+105
+85
+0.96
+AlexNet l2
+7
+7
+19%
+89%
+1.15×
+5.8×
+3.2
+1.1
+0.9
+224
+55
+1.4
+AlexNet l3
+8
+9
+11%
+82%
+1.05×
+4.1×
+6.5
+2.8
+0.92
+150
+77
+0.7
+AlexNet l4
+9
+8
+04%
+72%
+1.00×
+2.9×
+5.4
+3.2
+0.92
+112
+95
+0.56
+AlexNet l5
+9
+8
+04%
+72%
+1.00×
+2.9×
+3.7
+2.1
+0.92
+75
+95
+0.56
+Total/avg.
+–
+–
+–
+–
+–
+–
+19.8
+10
+–
+–
+76
+0.9
+LeNet-5 l1
+3
+1
+35%
+87%
+1.40×
+5.2×
+0.003
+0.001
+0.7
+0.3
+25
+1.07
+LeNet-5 l2
+4
+6
+26%
+55%
+1.25×
+1.9×
+0.050
+0.042
+0.8
+1.6
+35
+1.75
+Total/avg.
+–
+–
+–
+–
+–
+–
+0.053
+0.043
+–
+–
+33
+1.6
+
+132
+5
+ENVISION: Energy-Scalable Sparse Convolutional Neural Network Processing
+0
+50
+100
+Weight Sparsity sw [%]
+0
+5
+10
+15
+20
+25
+Power [mW]
+si 0%
+si 20%
+si 40%
+si 60%
+si 80%
+si 100%
+(a) Memory
+0
+50
+100
+Weight Sparsity sw [%]
+0
+5
+10
+15
+20
+25
+Power [mW]
+(b) Control + transfer
+0
+50
+100
+Weight Sparsity sw [%]
+0
+50
+100
+150
+200
+250
+300
+Power [mW]
+(c) MAC array
+0
+50
+100
+Weight Sparsity sw [%]
+0
+50
+100
+150
+200
+250
+300
+Power [mW]
+(d) Total
+Fig. 5.13 Inﬂuence of input and weight sparsity guarding on the power consumption of the (a)
+Memory, (b) control unit and data transfer, (c) the 2D-MAC array and (d) gives an overview of the
+global power consumption
+5.3.3.3
+Performance on Sparse Datastreams
+Figure 5.13 shows the individual effects of sparsity guarding in different parts of
+the processor, using the same reference code as in the previous sections at nominal
+frequency and supply voltage. Memory energy consumption scales down linearly
+with the sparsity degrees sw and si. The effect of si on memory power consumption
+is limited, because the FIFO-based architecture requires less reads from the input
+feature memory than from the weight memory. The global energy gains are small if
+only one of the inputs is sparse. Still, in a typical AlexNet l3 (Table 5.5), relatively
+high sparsity sw = 11% and si = 82% leads to a large 3× energy decrease in the
+MAC array and a 2.4× decrease for the whole system at full precision.
+5.3.3.4
+Performance on Benchmarks
+Table 5.5 shows the combined effect of the proposed techniques on the energy
+consumption of three benchmarks: AlexNet (Krizhevsky et al. 2012), Lenet-5
+
+5.3
+DVAS Compatible Envision V1
+133
+Fig. 5.14 Inﬂuence of the
+different techniques on the
+power consumption of
+AlexNet layer 2. A total 5×
+gain in power consumption is
+achieved through precision,
+voltage scaling, and sparse
+operator guarding
+(LeCun et al. 1998), and the full precision baseline reference layer of Sect. 5.3.3.1.
+All measurements are again performed at the nominal 204 MHz.
+As shown in Table 5.5 and Fig. 5.14, the ﬁlter weights and feature map inputs can
+be represented using only 7b. Reducing global power consumption by 1.9× from
+274 mW at full precision down to 142 mW. Voltage in the MAC array can be set
+to 0.9 V, lowering power by an additional 1.3× to 107 mW. With these quantization
+settings, sparsity in the ﬁlters is 20% and 89% in the input feature map. If operations
+and memory fetches are guarded as well, power consumption goes down another
+1.9× to 55 mW, which is a total 5× gain compared to the already efﬁcient 2D-
+baseline processor architecture. Also, because of sparsity, the IO-communication
+can be compressed up to 5.8× for input features. Similar results are illustrated for
+the other layers in Table 5.5, resulting in an average of 76 mW or 0.9 TOPS/W for
+AlexNet, running at 47 fps.
+LeNet-5 is more sparse and requires less computational precision, even down
+to 1b in the ﬁrst layer, gaining another factor of 2× in energy-efﬁciency. The
+combination of these effects—lower precision arithmetic, lower voltages, and more
+guarded operations—allows running LeNet-5 at 13k fps at an efﬁciency of 1.6
+effective TOPS/W or 2.5 µJ/frame. We hereby illustrate the ﬂexibility, performance,
+and unique energy-scalability of this design.
+5.3.3.5
+Comparison with the State of the Art
+As shown in Table 5.6, CPU and GPU implementations (Cavigelli et al. 2015b) are
+extremely ﬂexible but consume >100W at low energy-efﬁciency. Origami (Cav-
+igelli et al. 2015a), running at 12b, achieves an energy-efﬁciency of 437 GOPS/W,
+but cannot scale its energy consumption depending on the application’s require-
+ments. Knag et al. (2016) is a hardwired ASIC for a ﬁxed two-layer network
+topology. It only achieves high performance when the network is >90% sparse.
+Eyeriss (Chen et al. 2016), implemented in a 65 nm CMOS technology and running
+at 16b, consumes 278 mW or 166 GOPS/W on the AlexNet benchmark at a
+throughput of 34.7 fps on the CONV layers, or an efﬁciency of 8 mJ/frame.
+
+134
+5
+ENVISION: Energy-Scalable Sparse Convolutional Neural Network Processing
+Table 5.6 Comparison of this work with previous published CNN implementations
+DAC’15
+DAC’15
+GLSVLSI’15
+VLSI’16
+ISSCC’16
+This work
+Reference
+(Cavigelli et al.
+2015b)
+(Cavigelli et al.
+2015b)
+(Cavigelli et al.
+2015a)
+(Knag et al.
+2016)
+(Chen et al.
+2016)
+(Moons and
+Verhelst 2016)
+Technology
+CPUa
+GPUb
+65 nm
+40 nm
+65 nm LP
+40 nm LP
+Gate count [NND2]
+–
+–
+912k
+–
+1852k
+1600k
+Core area [mm2]
+–
+–
+1.31
+1.41
+12.25
+2.4
+On-chip SRAM [kB]
+–
+–
+43
+52 (Reg)
+181.5
+144
+# MAC-units [–]
+–
+–
+196
+2432 (Eq.)
+168
+256
+Frequency [MHz]
+3700
+852
+500
+240
+200
+204
+Peak perf. [GOPS]
+118
+365
+196
+898
+67
+102
+Avg. perf. [GOPS]
+35
+84
+145
+–
+60
+74
+Bit width [bits]
+32 ﬂoat
+32 ﬂoat
+12 ﬁxed
+8 ﬁxed
+16 ﬁxed
+1–16 progr.
+Filters [–]
+All
+All
+< 7 × 7
+< 8 × 8
+All
+All
+Channels [–]
+All
+All
+1–256
+3, 16
+1–1024
+All
+Filters [–]
+All
+All
+1–256
+16, 64
+1–1024
+All
+Layers [–]
+All
+All
+All
+2
+All
+All
+Stride [–]
+All
+All
+–
+No
+All
+1–4 [h], all [v]
+Power @ fnom [mW]
+130,000
+11,000
+510
+141
+235–332
+25–300
+Energy [GOPS/W]
+0.15
+8.6
+437–803
+6400
+160–250
+270–2750
+(AlexNet) [mW]
+–
+–
+–
+–
+278
+76
+(AlexNet) [fps]
+–
+–
+–
+–
+34.7
+47
+a E5-1620v2
+bTegra K1
+
+5.3
+DVAS Compatible Envision V1
+135
+This work achieves 47 fps throughput on the AlexNet CONV layers at nominal
+speed, consuming 76 mW or 1.6 mJ/frame if the system is fully optimized. This
+is hence a 5× improvement in energy-delay-product (EDP) over the AlexNet-
+benchmarked reference. The processor further allows scaling energy-efﬁciency
+depending on the network’s requirements. LeNet-5 consumes only 25–33 mW or
+1600 GOPS/W at the same nominal 204 MHz clock frequency, due to DVAS and
+sparsity guarding. No other work allows such network dependent energy-scalability
+at nominal throughput.
+5.3.4
+Envision V1 Overview
+A DVAFS precision-scalable processor for CNNs with operator- and memory-
+guarding was fabricated in a 40 nm LP CMOS technology. It has a total active area
+of 2.4 mm2 and runs at a nominal frequency of 204 MHz at 1.1 V.
+First, the processor is fully C-programmable and uses a 256 2D-MAC array
+architecture as an efﬁcient convolution baseline. This 2D-architecture allows inher-
+ent 16× reuse of ﬁlter weights and feature map inputs. A FIFO further reduces
+internal memory bandwidth up to 27.8×.
+Second, the processor minimizes energy by modulating precision and supply
+voltage in the MAC array from layer-to-layer. This requires extra rounding circuitry,
+a split into two power domains and an advanced back-end place and route
+optimization. When scaling down from 16- to 8- or 4b at 204 MHz, the scalable
+supply voltage can go down from 1.1 V nominally to 0.9 V and 0.8 V, respectively.
+In AlexNet layer 2, this leads to a 2.6× gain compared to the full precision baseline.
+Only 32 rounding units are necessary to supply rounded inputs to 256 MACs.
+Finally, sparsity in CNNs is exploited through preventing SRAM banks and the
+2D array from switching and by compressing data up to 5.8×. In AlexNet layer 2,
+sparsity leads to a 2× gain compared to the precision and voltage scaled baseline,
+while only 32 sparsity ﬂags are required to potentially prevent 32 SRAM banks and
+256 MACs from switching.
+Because of these techniques this chip minimizes energy consumption for any
+CNN, showing up to 5× improvement over the prior state of the art in terms
+of energy/frame. We hereby enable low-power, high-performance applications of
+computer vision for battery powered devices.
+However, Envision V1 was only DVAS compatible. As shown in Chap. 4, the
+energy-scalability of the same architecture can be further improved upon by making
+it dynamic-voltage-accuracy-frequency-scaling (DVAFS) compatible. This tech-
+nique leads to larger energy savings especially in low-precision operating points,
+as it also reduces non-compute overheads that might become dominant. Section 5.4
+discusses the design and measurements of DVAFS-compatible Envision V2.
+
+136
+5
+ENVISION: Energy-Scalable Sparse Convolutional Neural Network Processing
+5.4
+A DVAFS-Compatible Envision Processor in 28 nm
+FD-SOI
+The baseline processor architecture discussed in Sect. 5.2 can beneﬁt further from
+dynamic precision scaling by making it DVAFS compatible. As discussed in
+Chap. 4, a DVAFS-compatible system uses subword-parallel building blocks at low
+precision. A 16b multiplier, for example, can be used to process 2× 8b words if such
+low computational precision is allowed by the algorithm. If in this case system-level
+throughput is kept constant, all run-time adaptable variables α, f, V in the digital
+power equation P = αCf V 2 can be modulated to save in energy consumption. The
+major advantage over DVAS, which only allows α and V modulation at constant
+throughput, is that DVAFS allows minimizing non-compute overheads as well.
+A conceptual overview of the different supported operating modes and their
+inﬂuence on the processing architecture is given in Fig. 5.15. The same 2D-MAC
+architecture as in Envision V1 is used. However, Envision V2 supports 3 operating
+modes:
+1. A default DVAS compatible 1-16b operating mode, as in Envision V1. Every
+memory address occupies 1 1-16b word and every MAC processes 1 word per
+cycle.
+2. A 2× subword-parallel mode can be used when precision drops below 8b. Every
+memory address then contains 2× 1-8b words while every MAC processes 2
+words per cycle, an effective 2× throughput increase at a ﬁxed frequency.
+3. A 4× subword-parallel mode can be used when precision drops below 4b. Every
+memory address then contains 4× 1-4b words while every MAC processes 4
+words per cycle, an effective 4× throughput increase at a ﬁxed frequency.
+In modes (2) and (3), the chip effectively uses all three ways of reuse available
+in CNNs: convolutional, image, and ﬁlter reuse (Chen et al. 2016). In Envision
+V1, only the convolutional and image reuse can be exploited. This section further
+discusses the design and measurements of DVAFS-compatible Envision V2, imple-
+mented in 28 nm FD-SOI.
+5.4.1
+RTL Level Hardware Support
+As DVAFS-compatible building blocks have to be made subword-parallel, several
+RTL changes have to be made to the baseline architecture. A detailed discussion on
+the adaptations necessary to build a subword-parallel DVAFS multiplier is given in
+Chap. 4 in Sect. 4.5.1.2. For other building blocks, such as ALUs and multiplexers,
+other strategies are followed, depending on the relative importance of the building
+blocks.
+
+5.4
+DVAFS-Compatible Envision V2
+137
+Fig. 5.15 Three different
+supported modes in Envision.
+Each MAC in the processor
+can either compute on
+1×1-16b DVAS input, or on
+2×1-8b or 4×1-4b DVAFS
+inputs. (a) DVAS / DVAFS
+with N = 1. (b) DVAFS with
+N=2. (c) DVAFS with N = 4
+
+138
+5
+ENVISION: Energy-Scalable Sparse Convolutional Neural Network Processing
+Making building blocks subword-parallel, three different strategies were fol-
+lowed depending on the impact a change would have on critical path delay
+and energy consumption. These three strategies were only used due to timing
+constraints.
+1. Deﬁne custom building blocks in ASIP-designer’s (Wu and Willems 2015) C-like
+PDG language. This strategy is followed for any adder-type operations, where
+the impact of this high-level language change is deemed minimal, as the changes
+necessary to create subword-parallel blocks are minimal.
+2. Logic-doubling, where different hardware is used for different DVAFS modes
+is used for a small number of blocks that are not frequently used, but require
+major changes to be made subword-parallel. Examples of this are the ReLU and
+Max-Pool hardware blocks in the processor.
+3. All multipliers and MACs are custom built in Verilog-RTL in order to have an
+efﬁcient design.
+Ideally, strategy 3—optimal hand-designed RTL subword-parallel blocks—should
+be used in all cases to minimize any overheads.
+All DVAFS-compatible building blocks are controlled by a single programmable
+status register, similar to the strategy for DVAS-compatible building blocks. This
+status register is directly connected to all DVAFS-arithmetic for reconﬁguration.
+This way, the chip can switch its operation between 1-16b DVAS modes and 4×1-
+4b, 2×1-8b DVAFS modes. The circuitry and software to reshufﬂe data operating
+in different modes from layer-to-layer is not included on-chip. This could be part of
+our future work.
+Memory fetch- and operator-guarding,as discussed in detail in Sect. 5.2.3, cannot
+be performed on a per word basis in DVAFS, as this would incur large overheads.
+All guarding is performed at the default full-word level, not at the subword-level.
+•
+Especially in memories, a single address could maximally contain 4 separate 4b
+words. In such implementation, memory-fetch guarding can only be performed
+at an address granularity and not at a subword-granularity.
+•
+In the 2D-MAC array, inputs are only gated at a per-MAC granularity and not at
+a subword-granularity.
+This effectively reduces the potential for energy gains in highly sparse models, as in
+the 4×4b case, all four words have to be zero before the system can properly guard
+memory-fetches and MAC-operations. Hence, in Envision V1, every zero-valued
+word can be guarded. In Envision V2, guarding is only possible if all subwords are
+zero-valued.
+5.4.2
+Physical Implementation
+In order to build a successful DVAFS implementation, the same modiﬁcations as
+in DVAS are necessary: a physical design split into multiple power domains and
+
+5.4
+DVAFS-Compatible Envision V2
+139
+Fig. 5.16 Chip photograph
+and layout overview of the
+processor. The system totals
+1.9 mm2 in a 28 nm FD-SOI
+technology
+a multi-mode back-end optimization guaranteeing critical path scaling in DVA(F)S
+operating modes. As this design was made in 28 nm FD-SOI where transistor Vt can
+be modulated through modulating the body-bias voltage, several FD-SOI-speciﬁc
+steps have to be incorporated as well. In this case, every power domain is also a
+separate body-bias domain.
+Hence, the full chip exists out of three power/body-bias domains: one containing
+all voltage-accuracy scalable vas DVAFS-compatible building blocks at a variable
+voltage, one containing non-accuracy scalable nas blocks such as the control logic
+and accuracy-scalable blocks as such as data transfer blocks, and one containing
+all memories. The design was optimized for 200 MHz typical operation in different
+simultaneously performed optimization modes.
+Figure 5.16 is a photograph of the fabricated chip. The chip requires 1.9 mm2 of
+active area in its 28 nm technology. Indicated in the ﬁgure is the placement of the
+different power/body-bias domains. Due to these splits, three supply voltages and 6
+body-bias (2 per body bias domain) voltages can be independently optimized.
+5.4.3
+Measurement Results
+A DVAFS-compatible processor has the potential to outperform a DVAS-scalable
+processor at reduced precision, as is clear from the discussion in Sect. 4.3 in Chap. 4.
+This section discusses the measurements on different operating modes in Envision
+and compares the DVAS-vs-DVAFS modes.
+
+140
+5
+ENVISION: Energy-Scalable Sparse Convolutional Neural Network Processing
+Fig. 5.17 Relative energy
+consumption per word as a
+function of computational
+precision under DAS, DVAS,
+and DVAFS
+16
+12
+8 
+4 
+Precision [bits]
+10-1
+100
+Relative Energy/Op [-]
+DAS
+DVAS
+DVAFS
+5.4.3.1
+Performance Under DVA(F)S
+A non-unrolled 5 × 5 × C CONV layer, similar to Listing 5.1, is executed on the
+processor in different modes at a ﬁxed real throughput of 76 GOPS. At full precision
+and in DVAS, the operating frequency for the full system is then ﬁxed to 204 MHz.
+In DVAFS, the operating frequency is either 204 MHz at a computational precision
+of 9-16b, 102 MHz at a precision ranging from 5 to 8b, and 51 MHz at a precision
+ranging from 1 to 4b. On the arithmetic-building block level, little gains are to be
+expected from DVAFS. However, in a system with large nas overheads such as
+Envision, DVAFS reduces the overhead of nas blocks at low precision, allowing the
+system to be more energy-efﬁcient in these cases. In the DVAS-version of Envision,
+for example, energy consumption is dominated by control and memory overheads
+in the 1-4b precision region. These overheads can be reduced at least by a factor of
+4 in a DVAFS-compatible architecture.
+This is illustrated in the measurements shown in Fig. 5.17. Here, energy per
+operation is plotted against computational precision at a ﬁxed 76 GOPs throughput,
+relative to the 16b full precision case in the same architecture. In DAS, energy/op is
+only 5× lower than in the high precision case. This is due to the large clocking,
+control, and memory overheads in this mode. Energy consumption is reduced
+further up to a maximum of 8× at 1b compared to the full precision baseline due
+to DVAS voltage scaling. In DVAFS, the remaining non-compute overheads can
+be diminished at the same word-throughput by using the MACs in their 4-way
+subword-parallel mode at the 1b-low-precision case. Here, relative energy per word
+is 20× lower than the default 16b baseline.
+A more detailed overview of the performance of Envision under DVAFS is shown
+in Fig. 5.18. Here, the supply voltage and energy-efﬁciency under nominal body-
+biasing operations is shown as a function of the required throughput in different
+DVAFS modes. The shown 1 × 16b, 2 × 8b, 4 × 4b non-sparse and 4×3-4b sparse
+modes are all measured on the same 5 × 5 × C benchmark layer. The 4×3-4b
+
+5.4
+DVAFS-Compatible Envision V2
+141
+Fig. 5.18 Supply voltage and energy-efﬁciency as a function of average throughput in different
+DVAFS operating modes. (a) and (b) are with nominal body-bias, (c) and (d) are with optimal
+body-bias. Here optimality is deﬁned as most energy-efﬁcient at a given throughput
+sparse mode is seen as representative for a low-precision always-on task. Weights
+are quantized to 3b, activations to 4b, while sparsity is 30% on the weights and
+60% on the activations due to the quantization and ReLU operators. The nominal
+body-bias voltage in this case is non-zero at the nominal 1 V supply voltage.
+Rather, a symmetrical +/−0.6 V body-bias voltage is chosen in order to allow a
+nominal operating frequency of 204 MHz at nominal supply. Although the design
+was optimized to be able to run at 204 MHz at nominal supply and zero body-bias,
+non-zero nominal biasing was necessary in the measurement setup. Up to this time,
+it is still unclear what caused the slower operation of this chip in measurement.
+From these measurements, it is clear that energy-efﬁciency can be pushed up from
+0.33 TOPS/W in 16b full precision at a core voltage of 1.05 V up to 4 TOPS/W
+0.66 V in 4×4b mode and 8 TOPS/W at 0.62 V in a sparse 4×3-4b operating mode.
+In the low-precision case, throughput can be pushed upwards to 300 GOPS if the
+system is operated at 204 MHz. In this case, energy-efﬁciency drops to 2.5 TOPS/W
+in the default 4 × 4b mode and to 6 TOPS/W in the sparse low-precision mode.
+
+142
+5
+ENVISION: Energy-Scalable Sparse Convolutional Neural Network Processing
+5.4.3.2
+Inﬂuence of Optimal Body-Biasing
+Modulating the body-bias of a circuit directly affects the threshold voltage Vt of all
+devices in its domain. Reducing the Vt increases the leakage power exponentially,
+but also increases the overdrive voltage V DD −Vt and hence the speed of a
+circuit at a ﬁxed supply voltage V DD. Increasing Vt reduces the leakage power
+exponentially and does not change dynamic power consumption considerably. At
+the same time, it also reduces the overdrive voltage V DD −Vt and hence the speed
+of the circuit. Depending on the initial leakage-vs-active power ratio of a circuit, the
+body-bias thus allows increasing efﬁciency at a ﬁxed speed. If the same clock speed
+is maintained, the supply voltage V DD can be reduced at a lower Vt, effectively
+increasing energy-efﬁciency if the system power is dominated by dynamic power
+consumption. In order to maintain a constant clock speed, the V DD should hence
+be increased if Vt is increased. This can still lead to global energy gains if the power
+is signiﬁcantly dominated by leakage. The optimal V DD and body-bias controlled
+Vt will vary across Pleak/Pdynamic operating points and hence in this case across
+the different DVAFS operating modes.
+As a rule-of-thumb the gains described in Eqs. (5.1) and (5.2) can be expected
+around a nominal operating point, depending on the type of body-bias (reverse
+or forward) applied. If Vt is lowered nonlinearly through forward body-biasing
+to a point where leakage increases tenfold, the supply voltage at the same clock
+frequency can be lowered by more than
+√
+2 or a decrease of 30%. The global power
+reduction in this case hence depends on the ratio of leakage-vs-dynamic power
+consumption. If initial leakage is around 1%, the strategy makes sense and leads
+to a global reduction.
+Ptotal = Pdyn/2 + Pleak × 10
+(5.1)
+If leakage is close to 10%, global power will increase and the strategy should
+be avoided. At such balance in leakage-vs-dynamic power, the reverse strategy
+could reduce power consumption. If Vt is increased through reverse body-biasing,
+leakage could decrease tenfold, while dynamic power consumption at the same
+clock frequency increases by about a factor of 1.7, if the supply voltage is increased
+by about 30%. Power consumption can then be estimated as follows:
+Ptotal = Pdyn ∗1.7 + Pleak/10
+(5.2)
+Equations (5.1) and (5.2) are visualized in Fig. 5.19. From this graph it is clear
+that forward body-biasing only makes sense when the percentage of leakage power
+is in the 1–5% range. Gains can be expected from reverse body-biasing when the
+contribution of dynamic power is below 50%. In general, body-biasing should only
+be applied in extreme modes: either when leakage is dominant, or when dynamic
+power is dominant.
+This kind of dynamic power scaling is speciﬁcally applicable to Envision V2,
+as its different operating modes have different Pleak/Pdynamic ratios. The system
+
+5.4
+DVAFS-Compatible Envision V2
+143
+Fig. 5.19 First order
+expected gains using
+body-biasing in FDSOI,
+starting from a nominal
+operating point. The expected
+gains depend strongly on the
+ratio between dynamic and
+leakage power
+0
+50
+100
+Dynamic Power [%]
+1
+100
+Body-Biasing
+Optimized Power [%]
+Forward Body Biasing
+Reverse Body Biasing
+Fig. 5.20 Body-biasing rationale in Envision. (a) BB in high precision modes. (b) BB in low-
+precision modes
+can hence be differently optimized by different body-bias and supply voltage
+combinations in every mode. In Fig. 5.20a, power consumption is dominated by
+dynamic switching energy. This opens opportunities to reduce energy consumption
+through body-biasing. At low precision, as in Fig. 5.20b energy consumption can
+be leakage dominated. An optimized body-biasing strategy reduces leakage at a
+slightly higher dynamic cost.
+Full measurement results using optimal body-bias settings are given in Fig. 5.18c,
+d. In high precision modes, body-biasing allows reducing the supply voltage and
+hence increases energy-efﬁciency. In the low-precision modes, energy-efﬁciency is
+improved by lowering the leakage power in these modes. Ultimately this leads to
+a peak energy-efﬁciency measured in Envision of 10 TOPS/W at a throughput of
+76 GOPS in the sparse 4×3-4b operating mode.
+
+144
+5
+ENVISION: Energy-Scalable Sparse Convolutional Neural Network Processing
+Fig. 5.21 Sparse processing in Envision
+5.4.3.3
+Performance on Sparse Datastreams
+The general inﬂuence of sparse data operation on effective energy-efﬁciencyis given
+in Fig. 5.21. Here, total power consumption at 152 GOPS throughput and 200 MHz
+in the 2 × 8b mode is split into three separately measurable parts: the 2D-MAC
+array, all memory and the control, and data transfer parts. Total power consumption
+is indicated as well. In these plots, both the sparsity in the feature input streams
+and in the weight input streams is modulated from 0 to 100%. Due to the FIFO-
+based dataﬂow on the feature stream, power consumption in the memory part will be
+highly dominated by the weight- and program-memorybuffers. Hence, the inﬂuence
+of feature sparsity on memory consumption is limited, while it remains high on the
+power consumed in the 2D-MAC.
+5.4.3.4
+Performance on Benchmarks
+The combined effect of the proposed techniques on the energy consumption
+of Envision is further measured on the CONV layers of three benchmarks:
+AlexNet(Krizhevsky et al. 2012), Lenet-5 (LeCun et al. 1998), and the VGG-
+16 net that is also used in the face recognition hierarchy as the ﬁnal stage. All
+measurements are shown in Fig. 5.22 and are performed at the indicated frequency
+f = 204 MHz/N, where N is the DVAFS mode, equal to the level of subword
+
+5.4
+DVAFS-Compatible Envision V2
+145
+Fig. 5.22 Envision’s performance on the CONV layers of LeNet-5, AlexNet, and VGG-16
+parallelism. More speciﬁcally, Fig. 5.22 shows the effect of computational precision
+and sparsity on supply voltage, optimal body-biasing, IO compression, and power
+consumption. At full 16b precision, power consumption is around 290 mW at
+200 MHz, +/ −1.2 V body-biasing, and 1 V supply on all power domains. This
+power consumption drops to below 6 mW at 50 MHz in the 4×1-3b DVAFS mode
+of layer 1 in LeNet-5. Here, body-biasing is reduced to +/−.4 V, reducing the
+leakage power signiﬁcantly. Power is further minimized due to sparsity guarding
+and advanced voltage scaling on all but the memory power domains.
+A more detailed example for AlexNet layer 2 is given in Fig. 5.23. It shows the
+effect of our precision scaling (C) and sparsity exploitation techniques (B) on this
+speciﬁc layer on Envision V2. Without any optimizations on this layer, it operates
+in the N = 1 mode, where every feature and weight is represented using 16b.
+Sparsity guarding is shut down as well. In this mode, the chip consumes 290 mW
+at a throughput of 76 GOPS. However, that speciﬁc layer can operate at 7b if it is
+permitted to lose 1% of relative benchmark accuracy. Hence, the chip can operate
+in mode N = 2 processing 2 words per operating units per cycle. If throughput
+is kept constant at 76 GOPS, this leads to a 5.4× decrease in energy consumption,
+because of voltage, activity, and frequency scaling. On top of that, AlexNet layer 2
+is exceptionally sparse, up to 90% in its feature stream. This leads to an additional
+2.5× reduction in energy consumption, totaling 15× compared to the non-optimized
+baseline. In other layers, the gains compared to 16b non-sparse operation are more
+limited, but still signiﬁcant.
+On top of that, Envision V2 is benchmarked in a face recognition hierarchy,
+similar to the one discussed in Chap.2. Figure 5.24 compares the performance
+of Envision on the CONV layers of separate steps of such a face recognition
+
+146
+5
+ENVISION: Energy-Scalable Sparse Convolutional Neural Network Processing
+Fig. 5.23 The gains of
+exploiting sparsity (B) and
+reduced precision (C)
+operation compared to a
+dataﬂow optimized baseline
+(A)
+Fig. 5.24 Envision V2 CONVL energy consumption and achieved accuracy on different sub-tasks
+in a large-scale face recognition hierarchy, similar to the one discussed in Chap. 2
+hierarchy. The different steps of the hierarchy achieve high precision on their
+respective data sets at different bit widths. Envision can then speciﬁcally minimize
+energy consumption for these cases by using its DVAFS capabilities. The smallest
+networks “face-vs-background” and “owner-vs-all” are sufﬁciently small so they ﬁt
+completely on chip.
+5.4.3.5
+Comparison with the State of the Art
+Envision V2 is compared with other SotA accelerators in Figs. 5.25 and 5.26.
+Envision scales efﬁciency on the AlexNet convolutional layers between 0.8
+and 3.8 TOPS/W depending on the layer sparsity, the layer topology, and its
+required precision. This should be compared to 0.16 TOPS/W (Chen et al. 2016),
+0.56–1.4TOPS/W, and 0.2–1.1TOPS/W in the 40 nm DVAS-compatible version
+of Envision (Moons and Verhelst 2016). Efﬁciency is 2 TOPS/W average for the
+
+5.4
+DVAFS-Compatible Envision V2
+147
+Fig. 5.25 Comparison of Envision V1 and V2 to previous references in the ﬁeld
+Fig. 5.26 Visual representation
+of
+SotA CNN-accelerators
+in the throughput-efﬁciency-
+computational precision plane. Envision V2 outperforms V1 up to 4× in terms of maximum
+energy-efﬁciency. + indicates the measurement is performed on a sparse datastream. All other
+measurements are on non-sparse streams
+CONV layers of VGG-16 and up to 10 TOPS/W peak on a sparse 4 × 4b layer.
+Furthermore, unlike any other reference except Envision v1, this DVAFS version of
+Envision is the only one that can signiﬁcantly scale power consumption depending
+on computational precision and sparsity. The chip allows a global 40× trade-off
+from a full precision baseline down to a low-precision sparse mode. This further
+illustrates Envisions capability to minimize energy consumption for any CNN,
+
+148
+5
+ENVISION: Energy-Scalable Sparse Convolutional Neural Network Processing
+depending on its system-level requirements. The chip hereby enables always-on
+hierarchical recognition applications.
+5.4.4
+Envision V2 Overview
+A precision-scalable processor for CNNs with operator- and memory-guarding was
+fabricated in a 28 nm FD-SOI technology.It has a total active area of 2 mm2 and runs
+at a nominal frequency of 204 MHz at 1.05 V and nominal +/−0.6 V body-biasing.
+First, the processor is fully C-programmable and uses a reconﬁgurable 256-
+1024 2D-MAC array architecture as an efﬁcient convolution baseline. This 2D-
+architecture allows inherent 16× reuse of ﬁlter weights and feature map inputs.
+A FIFO further reduces internal memory bandwidth up to 27.8×.
+Second, the processor minimizes energy by modulating precision and supply
+voltage in the MAC array from layer-to-layer using the DVAFS principle. This
+requires extra rounding circuitry, subword-parallel DVAFS-compatible building
+blocks, a split into three power domains, and an advanced back-end place and
+route optimization. Compared to DVAS-only, energy-efﬁciency is increased more in
+DVAFS, as the technique allows minimizing all non-compute overheads that would
+otherwise become dominant in those modes. When scaling down from 1 × 16b- to
+2×8b or 4×4b at 76 GOPS constant throughput, the scalable supply voltage can go
+down from 1 V nominally at nominal body-bias voltage to 0.65 V at different boy-
+bias voltages, respectively. In AlexNet layer 2, this leads to a 5.4× gain compared
+to the full precision baseline.
+Finally, sparsity in CNNs is exploited through preventing SRAM-banks and the
+2D array from switching and by compressing data up to 5.8×. In AlexNet layer 2,
+sparsity leads to a 2.7× gain compared to the precision and voltage scaled baseline,
+while only 32 sparsity ﬂags are required to potentially prevent 32 SRAM banks and
+256 MACs from switching.
+Because of these techniques this chip minimizes energy consumption for any
+CNN, showing 4–10× improvement over the state of the art in terms of ener-
+gy/frame using 4b operations in Envision V1 and a minimum of 20% higher than
+a 2017 alternative (Shin et al. 2017). Envision V2 can reduce its energy by 15×
+compared to non-sparse full precision operation in the same architecture on AlexNet
+layer 2. The maximum theoretical gain factor at constant throughput is up to 40×,
+a fact that can be well exploited in the hierarchical systems of Chap. 2. The chip
+hereby enables low-power, high-performance applications of computer vision for
+battery powered devices.
+
+5.5
+Conclusion
+149
+5.5
+Conclusion
+This chapter discussed the design and measurements of two generations of energy-
+scalable CNN processors. These processors offer (a) an energy-efﬁcient baseline
+in a parallel 2D-MAC array architecture. They can minimize energy consumption
+depending on (b) the sparsity of a CNN-application and (c) its computational
+precision requirements.
+(a) The 2D-MAC array with input FIFO offers a high throughput increase, while
+minimizing bandwidth to the on-chip memory. Only 32 words need to be
+fetched per cycle to generate 256 outputs per cycle. The nature of the 2D-system
+allows rounding and guarding inputs to the array efﬁciently, with limited energy
+overhead.
+(b) Finally, Envision exploits the sparsity of weight and feature input streams to
+minimize energy consumption further. A separate on-chip memory contains
+ﬂags with sparsity information that are used to effectively gate memory-fetches
+and MAC-operations in the 2D-array. In Envision, this can lead to an additional
+2–2.7× increase in energy-efﬁciency, if the input datastreams are 50–90%
+sparse.
+(c) Both versions of the architecture can modulate the used computational pre-
+cision dynamically on a layer-per-layer basis and scale energy consumption
+accordingly. In V1 this is done through dynamic-voltage-accuracy-scaling
+(DVAS), which modulates supply voltage on the 2D-MAC array at lower
+computational precision. In V2, this is expanded upon by making the architec-
+ture subword-parallel and hence dynamic-voltage-accuracy-frequency-scalable
+(DVAFS) compatible, which increases the energy-accuracy trade-off consider-
+ably. Energy-efﬁciency is speciﬁcally reduced at low precision, as the DVAFS
+techniques also reduces the contribution of all non-compute overheads, such
+as control, data transfers, and SRAM energy. Through DVA(F)S, operating on
+1b operands is 8× (20×) more efﬁcient than the 16b full precision baseline.
+Depending on the application, this may not lead to a loss in system-level
+accuracy.
+Figure 5.26 shows Envision V1 and V2 together with other recent references in
+the throughput vs energy-efﬁciency space. Envision V2 shows one of the highest
+achieved energy-efﬁciencies in terms of 4b ops, outperforming V1 4–10× at iso-
+throughput and the closest SotA by 20% at a lower throughput, albeit for a sparse
+dataﬂow. Lee et al. (2018) is a 1–16 bit weight implementation for CNNs. It shows
+the highest 4b energy-efﬁciency at a high effective throughput, up to 11.6 TOPS/W.
+The same chip is also very competitive at full 16b precision, showcasing 3.06
+TOPS/W at 16b and 43 GOPS.
+
+150
+5
+ENVISION: Energy-Scalable Sparse Convolutional Neural Network Processing
+References
+Albericio J, Judd P, Jerger N, Aamodt T, Hetherington T, Moshovos A (2016) Cnvlutin: ineffectual-
+neuron-free deep neural network computing. In: International symposium on computer
+architecture (ISCA)
+Cavigelli L, Gschwend D, Mayer C, Willi S, Muheim B, Benini L (2015a) Origami: a convolutional
+network accelerator. In: Proceedings of the 25th edition on Great Lakes symposium on VLSI,
+pp 199–204
+Cavigelli L, Magno M, Benini L (2015b) Accelerating real-time embedded scene labeling with
+convolutional networks. In: Proceedings of the 52nd annual design automation conference
+Chen Y, Luo T, Liu S, Zhang S, He L, Wang J, Li L, Chen T, Xu Z, Sun N, et al (2014) DaDi-
+anNao: a machine-learning supercomputer. In: Proceedings of the 47th Annual IEEE/ACM
+international symposium on microarchitecture, pp 609–622
+Chen YH, Krishna T, Emer J, Sze V (2016) Eyeriss: An energy-efﬁcient reconﬁgurable accelerator
+for deep convolutional neural networks. ISSCC Dig of Tech papers, pp 262–263
+Chippa VK, Venkataramani S, Chakradhar ST, Roy K, Raghunathan A (2013) Approximate
+computing: an integrated hardware approach. In: Proceedings of the Asilomar conference on
+signals, systems and computers, pp 111–117
+Du Z, Fasthuber R, Chen T, Ienne P, Li L, Luo T, Feng X, Chen Y, Temam O (2015) ShiDianNao:
+shifting vision processing closer to the sensor. In: International symposium on computer
+architecture (ISCA), pp 92–104
+Han S, Liu X, Mao H, Pu J, Pedram A, Horowitz MA, Dally WJ (2016) EIE: efﬁcient
+inference engine on compressed deep neural network. In: International symposium on computer
+architecture (ISCA)
+Huffman DA, et al (1952) A method for the construction of minimum-redundancy codes. Proc IRE
+40(9):1098–1101
+Knag P, Chester L, Zhang Z (2016) A 1.40 mm2 141mW 898 GOPS sparse neuromorphic processor
+in 40 nm CMOS. In: Proceedings of the IEEE symposium on VLSI circuits, pp 180–181
+Krizhevsky A, Sutskever I, Hinton GE (2012) Imagenet classiﬁcation with deep convolutional
+neural networks. In: Proceedings of advances in neural information processing systems, pp
+1097–1105
+LeCun Y, Bottou L, Bengio Y, Haffner P (1998) Gradient-based learning applied to document
+recognition. Proc IEEE 86(11):2278–2234
+Lee J, Kim C, Kang S, Shin D, Kim S, Yoo HY (2018) UNPU: a 50.6 tops/w uniﬁed deep neural
+network accelerator with 1b-to-16b fully-variable weight bit-precision. In: International solid-
+state circuits conference (ISSCC)
+Moons B, Verhelst M (2016) A 0.3–2.6 TOPS/W precision-scalable processor for real-time large-
+scale convNets. In: Proceedings of the IEEE symposium on VLSI Circuits, pp 178–179
+Moons B, Uytterhoeven R, Dehaene W, Verhelst M (2017) Envision: a 0.26-to-10 TOPS/W
+subword-parallel dynamic-voltage-accuracy-frequency-scalable convolutional neural network
+processor in 28nm FDSOI. In: International solid-state circuits conference (ISSCC)
+Motamedi M, Gysel P, Akella V, Ghiasi S (2016) Design space exploration of FPGA-based deep
+convolutional neural networks. In: Proceedings of the 21st Asia and South Paciﬁc design
+automation conference (ASP-DAC), pp 575–580
+Rahman A, Lee J, Choi K (2016) Efﬁcient FPGA acceleration of convolutional neural networks
+using logical-3D compute array. In: Proceedings of the design, automation & test in Europe
+conference & exhibition (DATE), pp 1393–1398
+Reagen B, Whatmough P, Adolf R, Rama S, Lee H, Lee SK, Hernandez-Lobato JM, Wei
+GY, Brooks D (2016) Minerva: enabling low-power, highly-accurate deep neural network
+accelerators. In: Proceedings of the ACM/IEEE 43rd annual international symposium on
+computer architecture (ISCA)
+
+References
+151
+Shin D, Lee J, Lee J, Yoo HJ (2017) 14.2 DNPU: an 8.1 TOPS/W reconﬁgurable CNN-RNN
+processor for general-purpose deep neural networks. In: 2017 IEEE international solid-state
+circuits conference (ISSCC). IEEE, New York, pp 240–241
+Suda N, Chandra V, Dasika G, Mohanty A, Ma Y, Vrudhula S, Seo Js, Cao Y (2016) Throughput-
+optimized openCL-based FPGA accelerator for large-scale convolutional neural networks. In:
+Proceedings of the 2016 ACM/SIGDA international symposium on ﬁeld-programmable gate
+arrays, pp 16–25
+Vanhoucke V, Senior A, Mao MZ (2011) Improving the speed of neural networks on CPUs. In:
+Deep learning and unsupervised feature learning workshop at advances in neural information
+processing systems
+Wu B, Willems M (2015) Rapid architectural exploration in designing application-speciﬁc
+processors. In: ASIP designer whitepaper

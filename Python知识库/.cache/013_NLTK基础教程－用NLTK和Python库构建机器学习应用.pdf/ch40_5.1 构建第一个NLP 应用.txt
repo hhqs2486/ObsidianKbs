@@ -1,0 +1,101 @@
+5.1  构建第一个NLP 应用 57 
+5.1  构建第一个NLP 应用 
+先来看一种非常复杂的NLP 应用：信息摘要（summarization）。该应用的概念非常简
+单：对于所提供的文章、短文、故事，通常会需要针对其内容自动生成摘要。事实上，信息
+摘要这个应用需要具备一些深层次的NLP 知识，因为这里需要了解的不单是句子的结构，而
+是整个文本的结构，除此之外，还得要了解该文本的体裁和主题内容。
+鉴于这一切看上去都太过于复杂，所以还是先来尝试一种很直观的方法吧。假设这里
+所要做的信息摘要是针对句子的重要性和意义进行一次排名。为此，要在理解句子的基础
+上创建一系列规则，然后用目前为止所学到的处理工具来对新闻文章进行一些可接受的信
+息摘要处理。
+在下面的例子中，我们会将从纽约时报上搜刮来的一篇文章保存在nyt.txt 这个文本文
+件中。这里要对这篇新闻稿进行信息摘要。下面就来创建一个个人版的Google News 吧。 
+一开始，需要记住一件事：在通常情况下，拥有较多实体和名词的句子的重要性往往
+会相对比较高。现在的任务是要用某种可被标准化的统一逻辑来计算重要性评分
+（importance score）。即如果想获取前n 个句子的信息情况，就要去选择一个重要性评分的
+阈值。
+现在来看看新闻稿的内容。在这里，你也可以选择将这篇新闻稿以纯新闻内容的形式
+转储到一个文本文件中。内容具体如下：
+>>>import sys 
+>>>f=open('nyt.txt','r') 
+>>>news_content=f.read() 
+""" President Obama on Monday will ban the federal provision of some types 
+of military-style equipment to local police departments and sharply restrict the 
+availability of others, administration officials said. 
+The ban is part of Mr. Obama's push to ease tensions between law enforcement 
+and minority communities in reaction to the crises in Baltimore; Ferguson, Mo.; 
+and other cities.  
+- - 
+blic." It contains dozens of recommendations for agencies throughout the 
+country.""" 
+一旦要对这段新闻内容进行解析，就需整个新闻稿分解成一个句子列表。这样，就回
+
+58 第5 章  NLP 应用 
+到了之前讨论过的句子标识器上了，后者会将整个新闻片段分解成若干个句子。在这里，
+我们会提供一些句型编号，便于识别这些句子并对其进行排名。一旦得到了这些句子，我
+们会让其在单词标识器中过一遍，最后再来过NER 标注器和POS 标注器。 
+>>>import nltk 
+>>>results=[]  
+>>>for sent_no,sentence in enumerate(nltk.sent_tokenize(news_content)): 
+>>>    no_of_tokens=len(nltk.word_tokenize(sentence)) 
+>>>    #print no_of_toekns 
+>>>    # Let's do POS tagging 
+>>>    tagged=nltk.pos_tag(nltk.word_tokenize(sentence)) 
+>>>    # Count the no of Nouns in the sentence 
+>>>    no_of_nouns=len([word for word,pos in tagged if pos in ["NN","NNP"] ])  
+>>>    #Use NER to tag the named entities. 
+>>>    ners=nltk.ne_chunk(nltk.pos_tag(nltk.word_tokenize(sentence)),  
+    binary=False) 
+>>>    no_of_ners= len([chunk for chunk in ners if hasattr(chunk, 'node')]) 
+>>>    score=(no_of_ners+no_of_nouns)/float(no_of_toekns) 
+>>>    
+>>>    results.append((sent_no,no_of_tokens,no_of_ners,\  
+    no_of_nouns,score,sentence)) 
+在上面的代码中，我们对一个句子列表进行了迭代，并根据公式计算出了这些句子的
+评分。当然，该公式只是个以被标识实体为分子，以普通标识词为分母的分子式。我们会
+将所有的这些结果创建成一个元组。
+现在，结果就是一个包含了所有评分的元组，例如其中的名词数量、实体数量等。下
+面来对评分来一个降序排序，代码如下：
+>>>for sent in sorted(results,key=lambda x: x[4],reverse=True): 
+>>>    print sent[5] 
+这样一来，就完成了对这些句子的排名。你会为这篇新闻稿能得到这样的结果而感到
+惊讶。
+一旦有了no_of_nouns 和no_of_ners 的评分列表，就可以围绕它们去建立一些更复杂
+的规则。例如，一篇典型的新闻稿通常都会在文章的开头来一个主题说明，并在文章的最
+后一句也会对整个故事做一个总结。
+可以修改之前那段代码，将上述逻辑整合进去吗？
+
+5.1  构建第一个NLP 应用 59 
+当然，这种信息摘要应用中还包含着另一种理论逻辑：重要的句子中通常包含着重要
+的词汇，而跨语料库的差异词（discriminatory word）绝大多数都是重要的词汇。因此，只
+要句子中包含具有很大差异性的词汇，它就是重要的。这样，就得到了一个非常简单的测量
+方法，就是计算每个词各自的TF-IDF（term frequency–inverse document frequency）
+①分
+值，然后根据词汇的重要性找出一种标准化的平均评分。这个评分就可以用来充当在信息
+摘要中选取句子的标准。
+为了解释清楚概念，这里不会拿整篇文章来举例，这里将只采用文章的前三个句子。
+下面，就来看看如何用寥寥几行代码实现这个复杂的东西：
+提示： 
+这段代码需要你安装一下scikit 库。如果你已经安装了
+anaconda 或canopy，那么其实就已经安装了这个库，否
+则请按照下面链接中的指示安装scikit： 
+http://scikit-learn.org/stable/install.html。 
+>>>import nltk 
+>>>from sklearn.feature_extraction.text import TfidfVectorizer 
+>>>results=[] 
+>>>news_content="Mr. Obama planned to promote the effort on Monday during 
+a visit to Camden, N.J. The ban is part of Mr. Obama's push to ease tensions between 
+law enforcement and minority \communities in reaction to the crises in Baltimore; 
+Ferguson, Mo. We are, without a doubt, sitting at a defining moment in American 
+policing, Ronald L. Davis, the director of the Office of Community Oriented 
+Policing Services at the Department of Justice, told reporters in a conference 
+call organized by the White House" 
+>>>sentences=nltk.sent_tokenize(news_content) 
+>>>vectorizer = TfidfVectorizer(norm='l2', min_df=0, use_idf=True, smooth_ 
+idf=False, sublinear_tf=True) 
+>>>sklearn_binary=vectorizer.fit_transform(sentences) 
+>>>print countvectorizer.get_feature_names() 
+>>>print sklearn_binary.toarray()  
+①译者注：TF-IDF 是一种统计方法，主要用来评估某一单词在一个文件集或某个语料库中某一份文件的重要程度。单词的重
+要性随着它在文件中出现的次数成正比增加，但同时会随着它在语料库中出现的频率成反比下降。TF-IDF 加权的各种形式常
+被搜索引擎应用，作为文件与用户查询之间相关程度的度量或评级。 

@@ -1,0 +1,2331 @@
+Part III
+ADDITIONAL NOTES
+Design notes, legal information and changelog are here for the interested.
+229
+
+230
+
+CHAPTER
+TWENTYTWO
+DESIGN DECISIONS IN FLASK
+If you are curious why Flask does certain things the way it does and not differently,
+this section is for you. This should give you an idea about some of the design decisions
+that may appear arbitrary and surprising at ﬁrst, especially in direct comparison with
+other frameworks.
+22.1 The Explicit Application Object
+A Python web application based on WSGI has to have one central callable object that
+implements the actual application. In Flask this is an instance of the Flask class. Each
+Flask application has to create an instance of this class itself and pass it the name of
+the module, but why can’t Flask do that itself?
+Without such an explicit application object the following code:
+from flask import Flask
+app = Flask(__name__)
+@app.route(’/’)
+def index():
+return ’Hello World!’
+Would look like this instead:
+from hypothetical_flask import route
+@route(’/’)
+def index():
+return ’Hello World!’
+There are three major reasons for this. The most important one is that implicit appli-
+cation objects require that there may only be one instance at the time. There are ways
+to fake multiple applications with a single application object, like maintaining a stack
+of applications, but this causes some problems I won’t outline here in detail. Now
+the question is: when does a microframework need more than one application at the
+same time? A good example for this is unittesting. When you want to test something
+231
+
+it can be very helpful to create a minimal application to test speciﬁc behavior. When
+the application object is deleted everything it allocated will be freed again.
+Another thing that becomes possible when you have an explicit object lying around in
+your code is that you can subclass the base class (Flask) to alter speciﬁc behavior. This
+would not be possible without hacks if the object were created ahead of time for you
+based on a class that is not exposed to you.
+But there is another very important reason why Flask depends on an explicit instantia-
+tion of that class: the package name. Whenever you create a Flask instance you usually
+pass it __name__ as package name. Flask depends on that information to properly load
+resources relative to your module. With Python’s outstanding support for reﬂection it
+can then access the package to ﬁgure out where the templates and static ﬁles are stored
+(see open_resource()). Now obviously there are frameworks around that do not need
+any conﬁguration and will still be able to load templates relative to your application
+module. But they have to use the current working directory for that, which is a very
+unreliable way to determine where the application is. The current working directory is
+process-wide and if you are running multiple applications in one process (which could
+happen in a webserver without you knowing) the paths will be off. Worse: many web-
+servers do not set the working directory to the directory of your application but to the
+document root which does not have to be the same folder.
+The third reason is “explicit is better than implicit”. That object is your WSGI ap-
+plication, you don’t have to remember anything else. If you want to apply a WSGI
+middleware, just wrap it and you’re done (though there are better ways to do that so
+that you do not lose the reference to the application object wsgi_app()).
+Furthermore this design makes it possible to use a factory function to create the appli-
+cation which is very helpful for unittesting and similar things (Application Factories).
+22.2 The Routing System
+Flask uses the Werkzeug routing system which was designed to automatically order
+routes by complexity. This means that you can declare routes in arbitrary order and
+they will still work as expected. This is a requirement if you want to properly imple-
+ment decorator based routing since decorators could be ﬁred in undeﬁned order when
+the application is split into multiple modules.
+Another design decision with the Werkzeug routing system is that routes in Werkzeug
+try to ensure that URLs are unique. Werkzeug will go quite far with that in that it will
+automatically redirect to a canonical URL if a route is ambiguous.
+22.3 One Template Engine
+Flask decides on one template engine: Jinja2. Why doesn’t Flask have a pluggable tem-
+plate engine interface? You can obviously use a different template engine, but Flask
+will still conﬁgure Jinja2 for you. While that limitation that Jinja2 is always conﬁgured
+232
+
+will probably go away, the decision to bundle one template engine and use that will
+not.
+Template engines are like programming languages and each of those engines has a
+certain understanding about how things work. On the surface they all work the same:
+you tell the engine to evaluate a template with a set of variables and take the return
+value as string.
+But that’s about where similarities end. Jinja2 for example has an extensive ﬁlter sys-
+tem, a certain way to do template inheritance, support for reusable blocks (macros)
+that can be used from inside templates and also from Python code, uses Unicode for
+all operations, supports iterative template rendering, conﬁgurable syntax and more.
+On the other hand an engine like Genshi is based on XML stream evaluation, template
+inheritance by taking the availability of XPath into account and more. Mako on the
+other hand treats templates similar to Python modules.
+When it comes to connecting a template engine with an application or framework
+there is more than just rendering templates. For instance, Flask uses Jinja2’s extensive
+autoescaping support. Also it provides ways to access macros from Jinja2 templates.
+A template abstraction layer that would not take the unique features of the template
+engines away is a science on its own and a too large undertaking for a microframework
+like Flask.
+Furthermore extensions can then easily depend on one template language being
+present. You can easily use your own templating language, but an extension could
+still depend on Jinja itself.
+22.4 Micro with Dependencies
+Why does Flask call itself a microframework and yet it depends on two libraries
+(namely Werkzeug and Jinja2). Why shouldn’t it? If we look over to the Ruby side of
+web development there we have a protocol very similar to WSGI. Just that it’s called
+Rack there, but besides that it looks very much like a WSGI rendition for Ruby. But
+nearly all applications in Ruby land do not work with Rack directly, but on top of a
+library with the same name. This Rack library has two equivalents in Python: WebOb
+(formerly Paste) and Werkzeug. Paste is still around but from my understanding it’s
+sort of deprecated in favour of WebOb. The development of WebOb and Werkzeug
+started side by side with similar ideas in mind: be a good implementation of WSGI for
+other applications to take advantage.
+Flask is a framework that takes advantage of the work already done by Werkzeug to
+properly interface WSGI (which can be a complex task at times). Thanks to recent
+developments in the Python package infrastructure, packages with dependencies are
+no longer an issue and there are very few reasons against having libraries that depend
+on others.
+233
+
+22.5 Thread Locals
+Flask uses thread local objects (context local objects in fact, they support greenlet con-
+texts as well) for request, session and an extra object you can put your own things on
+(g). Why is that and isn’t that a bad idea?
+Yes it is usually not such a bright idea to use thread locals. They cause troubles for
+servers that are not based on the concept of threads and make large applications harder
+to maintain. However Flask is just not designed for large applications or asynchronous
+servers. Flask wants to make it quick and easy to write a traditional web application.
+Also see the Becoming Big section of the documentation for some inspiration for larger
+applications based on Flask.
+22.6 What Flask is, What Flask is Not
+Flask will never have a database layer. It will not have a form library or anything else
+in that direction. Flask itself just bridges to Werkzeug to implement a proper WSGI
+application and to Jinja2 to handle templating. It also binds to a few common standard
+library packages such as logging. Everything else is up for extensions.
+Why is this the case? Because people have different preferences and requirements and
+Flask could not meet those if it would force any of this into the core. The majority
+of web applications will need a template engine in some sort. However not every
+application needs a SQL database.
+The idea of Flask is to build a good foundation for all applications. Everything else is
+up to you or extensions.
+234
+
+CHAPTER
+TWENTYTHREE
+HTML/XHTML FAQ
+The Flask documentation and example applications are using HTML5. You may no-
+tice that in many situations, when end tags are optional they are not used, so that
+the HTML is cleaner and faster to load. Because there is much confusion about HTML
+and XHTML among developers, this document tries to answer some of the major ques-
+tions.
+23.1 History of XHTML
+For a while, it appeared that HTML was about to be replaced by XHTML. However,
+barely any websites on the Internet are actual XHTML (which is HTML processed us-
+ing XML rules). There are a couple of major reasons why this is the case. One of
+them is Internet Explorer’s lack of proper XHTML support. The XHTML spec states
+that XHTML must be served with the MIME type application/xhtml+xml, but Internet
+Explorer refuses to read ﬁles with that MIME type. While it is relatively easy to con-
+ﬁgure Web servers to serve XHTML properly, few people do. This is likely because
+properly using XHTML can be quite painful.
+One of the most important causes of pain is XML’s draconian (strict and ruthless) er-
+ror handling. When an XML parsing error is encountered, the browser is supposed to
+show the user an ugly error message, instead of attempting to recover from the error
+and display what it can. Most of the (X)HTML generation on the web is based on
+non-XML template engines (such as Jinja, the one used in Flask) which do not protect
+you from accidentally creating invalid XHTML. There are XML based template en-
+gines, such as Kid and the popular Genshi, but they often come with a larger runtime
+overhead and, are not as straightforward to use because they have to obey XML rules.
+The majority of users, however, assumed they were properly using XHTML. They
+wrote an XHTML doctype at the top of the document and self-closed all the necessary
+tags (<br> becomes <br/> or <br></br> in XHTML). However, even if the document
+properly validates as XHTML, what really determines XHTML/HTML processing in
+browsers is the MIME type, which as said before is often not set properly. So the valid
+XHTML was being treated as invalid HTML.
+XHTML also changed the way JavaScript is used. To properly work with XHTML, pro-
+grammers have to use the namespaced DOM interface with the XHTML namespace
+235
+
+to query for HTML elements.
+23.2 History of HTML5
+Development of the HTML5 speciﬁcation was started in 2004 under the name “Web
+Applications 1.0” by the Web Hypertext Application Technology Working Group, or
+WHATWG (which was formed by the major browser vendors Apple, Mozilla, and
+Opera) with the goal of writing a new and improved HTML speciﬁcation, based on
+existing browser behavior instead of unrealistic and backwards-incompatible speciﬁ-
+cations.
+For example, in HTML4 <title/Hello/ theoretically parses exactly the same as
+<title>Hello</title>. However, since people were using XHTML-like tags along the
+lines of <link />, browser vendors implemented the XHTML syntax over the syntax
+deﬁned by the speciﬁcation.
+In 2007, the speciﬁcation was adopted as the basis of a new HTML speciﬁcation under
+the umbrella of the W3C, known as HTML5. Currently, it appears that XHTML is
+losing traction, as the XHTML 2 working group has been disbanded and HTML5 is
+being implemented by all major browser vendors.
+23.3 HTML versus XHTML
+The following table gives you a quick overview of features available in HTML 4.01,
+XHTML 1.1 and HTML5.
+(XHTML 1.0 is not included, as it was superseded by
+XHTML 1.1 and the barely-used XHTML5.)
+HTML4.01
+XHTML1.1
+HTML5
+<tag/value/ == <tag>value</tag>
+1
+<br/> supported
+2
+<script/> supported
+should be served as text/html
+3
+should be served as application/xhtml+xml
+strict error handling
+inline SVG
+inline MathML
+<video> tag
+<audio> tag
+New semantic tags like <article>
+1This is an obscure feature inherited from SGML. It is usually not supported by browsers, for reasons
+236
+
+23.4 What does “strict” mean?
+HTML5 has strictly deﬁned parsing rules, but it also speciﬁes exactly how a browser
+should react to parsing errors - unlike XHTML, which simply states parsing should
+abort. Some people are confused by apparently invalid syntax that still generates the
+expected results (for example, missing end tags or unquoted attribute values).
+Some of these work because of the lenient error handling most browsers use when
+they encounter a markup error, others are actually speciﬁed. The following constructs
+are optional in HTML5 by standard, but have to be supported by browsers:
+• Wrapping the document in an <html> tag
+• Wrapping header elements in <head> or the body elements in <body>
+• Closing the <p>, <li>, <dt>, <dd>, <tr>, <td>, <th>, <tbody>, <thead>, or <tfoot>
+tags.
+• Quoting attributes, so long as they contain no whitespace or special characters
+(like <, >, ’, or ").
+• Requiring boolean attributes to have a value.
+This means the following page in HTML5 is perfectly valid:
+<!doctype html>
+<title>Hello HTML5</title>
+<div class=header>
+<h1>Hello HTML5</h1>
+<p class=tagline>HTML5 is awesome
+</div>
+<ul class=nav>
+<li><a href=/index>Index</a>
+<li><a href=/downloads>Downloads</a>
+<li><a href=/about>About</a>
+</ul>
+<div class=body>
+<h2>HTML5 is probably the future</h2>
+<p>
+There might be some other things around but in terms of
+browser vendor support, HTML5 is hard to beat.
+<dl>
+<dt>Key 1
+<dd>Value 1
+<dt>Key 2
+<dd>Value 2
+</dl>
+</div>
+detailed above.
+2This is for compatibility with server code that generates XHTML for tags such as <br>. It should
+not be used in new code.
+3XHTML 1.0 is the last XHTML standard that allows to be served as text/html for backwards com-
+patibility reasons.
+237
+
+23.5 New technologies in HTML5
+HTML5 adds many new features that make Web applications easier to write and to
+use.
+• The <audio> and <video> tags provide a way to embed audio and video without
+complicated add-ons like QuickTime or Flash.
+• Semantic elements like <article>, <header>, <nav>, and <time> that make con-
+tent easier to understand.
+• The <canvas> tag, which supports a powerful drawing API, reducing the need
+for server-generated images to present data graphically.
+• New form control types like <input type="date"> that allow user agents to make
+entering and validating values easier.
+• Advanced JavaScript APIs like Web Storage, Web Workers, Web Sockets, geolo-
+cation, and ofﬂine applications.
+Many other features have been added, as well.
+A good guide to new features in
+HTML5 is Mark Pilgrim’s soon-to-be-published book, Dive Into HTML5. Not all of
+them are supported in browsers yet, however, so use caution.
+23.6 What should be used?
+Currently, the answer is HTML5. There are very few reasons to use XHTML consider-
+ing the latest developments in Web browsers. To summarize the reasons given above:
+• Internet Explorer (which, sadly, currently leads in market share) has poor sup-
+port for XHTML.
+• Many JavaScript libraries also do not support XHTML, due to the more compli-
+cated namespacing API it requires.
+• HTML5 adds several new features, including semantic tags and the long-awaited
+<audio> and <video> tags.
+• It has the support of most browser vendors behind it.
+• It is much easier to write, and more compact.
+For most applications, it is undoubtedly better to use HTML5 than XHTML.
+238
+
+CHAPTER
+TWENTYFOUR
+SECURITY CONSIDERATIONS
+Web applications usually face all kinds of security problems and it’s very hard to get
+everything right. Flask tries to solve a few of these things for you, but there are a
+couple more you have to take care of yourself.
+24.1 Cross-Site Scripting (XSS)
+Cross site scripting is the concept of injecting arbitrary HTML (and with it JavaScript)
+into the context of a website. To remedy this, developers have to properly escape text
+so that it cannot include arbitrary HTML tags. For more information on that have a
+look at the Wikipedia article on Cross-Site Scripting.
+Flask conﬁgures Jinja2 to automatically escape all values unless explicitly told other-
+wise. This should rule out all XSS problems caused in templates, but there are still
+other places where you have to be careful:
+• generating HTML without the help of Jinja2
+• calling Markup on data submitted by users
+• sending out HTML from uploaded ﬁles, never do that, use the Content-
+Disposition: attachment header to prevent that problem.
+• sending out textﬁles from uploaded ﬁles. Some browsers are using content-type
+guessing based on the ﬁrst few bytes so users could trick a browser to execute
+HTML.
+Another thing that is very important are unquoted attributes. While Jinja2 can protect
+you from XSS issues by escaping HTML, there is one thing it cannot protect you from:
+XSS by attribute injection. To counter this possible attack vector, be sure to always
+quote your attributes with either double or single quotes when using Jinja expressions
+in them:
+<a href="{{ href }}">the text</a>
+Why is this necessary? Because if you would not be doing that, an attacker could easily
+inject custom JavaScript handlers. For example an attacker could inject this piece of
+HTML+JavaScript:
+239
+
+onmouseover=alert(document.cookie)
+When the user would then move with the mouse over the link, the cookie would be
+presented to the user in an alert window. But instead of showing the cookie to the
+user, a good attacker might also execute any other JavaScript code. In combination
+with CSS injections the attacker might even make the element ﬁll out the entire page
+so that the user would just have to have the mouse anywhere on the page to trigger
+the attack.
+24.2 Cross-Site Request Forgery (CSRF)
+Another big problem is CSRF. This is a very complex topic and I won’t outline it here
+in detail just mention what it is and how to theoretically prevent it.
+If your authentication information is stored in cookies, you have implicit state man-
+agement. The state of “being logged in” is controlled by a cookie, and that cookie is
+sent with each request to a page. Unfortunately that includes requests triggered by
+3rd party sites. If you don’t keep that in mind, some people might be able to trick your
+application’s users with social engineering to do stupid things without them knowing.
+Say you have a speciﬁc URL that, when you sent POST requests to will delete a user’s
+proﬁle (say http://example.com/user/delete). If an attacker now creates a page that sends
+a post request to that page with some JavaScript they just has to trick some users to
+load that page and their proﬁles will end up being deleted.
+Imagine you were to run Facebook with millions of concurrent users and someone
+would send out links to images of little kittens. When users would go to that page,
+their proﬁles would get deleted while they are looking at images of ﬂuffy cats.
+How can you prevent that? Basically for each request that modiﬁes content on the
+server you would have to either use a one-time token and store that in the cookie and
+also transmit it with the form data. After receiving the data on the server again, you
+would then have to compare the two tokens and ensure they are equal.
+Why does Flask not do that for you? The ideal place for this to happen is the form
+validation framework, which does not exist in Flask.
+24.3 JSON Security
+ECMAScript 5 Changes
+Starting with ECMAScript 5 the behavior of literals changed. Now they are not con-
+structed with the constructor of Array and others, but with the builtin constructor of
+Array which closes this particular attack vector.
+JSON itself is a high-level serialization format, so there is barely anything that could
+cause security problems, right? You can’t declare recursive structures that could cause
+240
+
+problems and the only thing that could possibly break are very large responses that
+can cause some kind of denial of service at the receiver’s side.
+However there is a catch. Due to how browsers work the CSRF issue comes up with
+JSON unfortunately. Fortunately there is also a weird part of the JavaScript speciﬁca-
+tion that can be used to solve that problem easily and Flask is kinda doing that for you
+by preventing you from doing dangerous stuff. Unfortunately that protection is only
+there for jsonify() so you are still at risk when using other ways to generate JSON.
+So what is the issue and how to avoid it? The problem are arrays at top-level in JSON.
+Imagine you send the following data out in a JSON request. Say that’s exporting the
+names and email addresses of all your friends for a part of the user interface that is
+written in JavaScript. Not very uncommon:
+[
+{"username": "admin",
+"email": "admin@localhost"}
+]
+And it is doing that of course only as long as you are logged in and only for you. And
+it is doing that for all GET requests to a certain URL, say the URL for that request is
+http://example.com/api/get_friends.json.
+So now what happens if a clever hacker is embedding this to his website and social
+engineers a victim to visiting his site:
+<script type=text/javascript>
+var captured = [];
+var oldArray = Array;
+function Array() {
+var obj = this, id = 0, capture = function(value) {
+obj.__defineSetter__(id++, capture);
+if (value)
+captured.push(value);
+};
+capture();
+}
+</script>
+<script type=text/javascript
+src=http://example.com/api/get_friends.json></script>
+<script type=text/javascript>
+Array = oldArray;
+// now we have all the data in the captured array.
+</script>
+If you know a bit of JavaScript internals you might know that it’s possible to patch
+constructors and register callbacks for setters. An attacker can use this (like above)
+to get all the data you exported in your JSON ﬁle. The browser will totally ignore
+the application/json mimetype if text/javascript is deﬁned as content type in the
+script tag and evaluate that as JavaScript. Because top-level array elements are allowed
+(albeit useless) and we hooked in our own constructor, after that page loaded the data
+from the JSON response is in the captured array.
+241
+
+Because it is a syntax error in JavaScript to have an object literal ({...}) toplevel an
+attacker could not just do a request to an external URL with the script tag to load up
+the data. So what Flask does is to only allow objects as toplevel elements when using
+jsonify(). Make sure to do the same when using an ordinary JSON generate function.
+242
+
+CHAPTER
+TWENTYFIVE
+UNICODE IN FLASK
+Flask like Jinja2 and Werkzeug is totally Unicode based when it comes to text. Not
+only these libraries, also the majority of web related Python libraries that deal with
+text. If you don’t know Unicode so far, you should probably read The Absolute Min-
+imum Every Software Developer Absolutely, Positively Must Know About Unicode
+and Character Sets. This part of the documentation just tries to cover the very basics
+so that you have a pleasant experience with Unicode related things.
+25.1 Automatic Conversion
+Flask has a few assumptions about your application (which you can change of course)
+that give you basic and painless Unicode support:
+• the encoding for text on your website is UTF-8
+• internally you will always use Unicode exclusively for text except for literal
+strings with only ASCII character points.
+• encoding and decoding happens whenever you are talking over a protocol that
+requires bytes to be transmitted.
+So what does this mean to you?
+HTTP is based on bytes. Not only the protocol, also the system used to address doc-
+uments on servers (so called URIs or URLs). However HTML which is usually trans-
+mitted on top of HTTP supports a large variety of character sets and which ones are
+used, are transmitted in an HTTP header. To not make this too complex Flask just
+assumes that if you are sending Unicode out you want it to be UTF-8 encoded. Flask
+will do the encoding and setting of the appropriate headers for you.
+The same is true if you are talking to databases with the help of SQLAlchemy or a
+similar ORM system. Some databases have a protocol that already transmits Unicode
+and if they do not, SQLAlchemy or your other ORM should take care of that.
+243
+
+25.2 The Golden Rule
+So the rule of thumb: if you are not dealing with binary data, work with Unicode.
+What does working with Unicode in Python 2.x mean?
+• as long as you are using ASCII charpoints only (basically numbers, some special
+characters of latin letters without umlauts or anything fancy) you can use regular
+string literals (’Hello World’).
+• if you need anything else than ASCII in a string you have to mark this string as
+Unicode string by preﬁxing it with a lowercase u. (like u’Hänsel und Gretel’)
+• if you are using non-Unicode characters in your Python ﬁles you have to tell
+Python which encoding your ﬁle uses.
+Again, I recommend UTF-8 for this
+purpose. To tell the interpreter your encoding you can put the # -*- coding:
+utf-8 -*- into the ﬁrst or second line of your Python source ﬁle.
+• Jinja is conﬁgured to decode the template ﬁles from UTF-8. So make sure to tell
+your editor to save the ﬁle as UTF-8 there as well.
+25.3 Encoding and Decoding Yourself
+If you are talking with a ﬁlesystem or something that is not really based on Unicode
+you will have to ensure that you decode properly when working with Unicode inter-
+face. So for example if you want to load a ﬁle on the ﬁlesystem and embed it into a
+Jinja2 template you will have to decode it from the encoding of that ﬁle. Here the old
+problem that text ﬁles do not specify their encoding comes into play. So do yourself a
+favour and limit yourself to UTF-8 for text ﬁles as well.
+Anyways. To load such a ﬁle with Unicode you can use the built-in str.decode()
+method:
+def read_file(filename, charset=’utf-8’):
+with open(filename, ’r’) as f:
+return f.read().decode(charset)
+To go from Unicode into a speciﬁc charset such as UTF-8 you can use the
+unicode.encode() method:
+def write_file(filename, contents, charset=’utf-8’):
+with open(filename, ’w’) as f:
+f.write(contents.encode(charset))
+25.4 Conﬁguring Editors
+Most editors save as UTF-8 by default nowadays but in case your editor is not conﬁg-
+ured to do this you have to change it. Here some common ways to set your editor to
+store as UTF-8:
+244
+
+• Vim: put set enc=utf-8 to your .vimrc ﬁle.
+• Emacs: either use an encoding cookie or put this into your .emacs ﬁle:
+(prefer-coding-system ’utf-8)
+(setq default-buffer-file-coding-system ’utf-8)
+• Notepad++:
+1. Go to Settings -> Preferences ...
+2. Select the “New Document/Default Directory” tab
+3. Select “UTF-8 without BOM” as encoding
+It is also recommended to use the Unix newline format, you can select it in the
+same panel but this is not a requirement.
+245
+
+246
+
+CHAPTER
+TWENTYSIX
+FLASK EXTENSION DEVELOPMENT
+Flask, being a microframework, often requires some repetitive steps to get a third party
+library working. Because very often these steps could be abstracted to support multi-
+ple projects the Flask Extension Registry was created.
+If you want to create your own Flask extension for something that does not exist yet,
+this guide to extension development will help you get your extension running in no
+time and to feel like users would expect your extension to behave.
+26.1 Anatomy of an Extension
+Extensions are all located in a package called flask_something where “something” is
+the name of the library you want to bridge. So for example if you plan to add support
+for a library named simplexml to Flask, you would name your extension’s package
+flask_simplexml.
+The name of the actual extension (the human readable name) however would be some-
+thing like “Flask-SimpleXML”. Make sure to include the name “Flask” somewhere in
+that name and that you check the capitalization. This is how users can then register
+dependencies to your extension in their setup.py ﬁles.
+Flask sets up a redirect package called flask.ext where users should import the ex-
+tensions from. If you for instance have a package called flask_something users would
+import it as flask.ext.something. This is done to transition from the old namespace
+packages. See Extension Import Transition for more details.
+But how do extensions look like themselves? An extension has to ensure that it works
+with multiple Flask application instances at once. This is a requirement because many
+people will use patterns like the Application Factories pattern to create their application
+as needed to aid unittests and to support multiple conﬁgurations. Because of that it is
+crucial that your application supports that kind of behavior.
+Most importantly the extension must be shipped with a setup.py ﬁle and registered
+on PyPI. Also the development checkout link should work so that people can easily
+install the development version into their virtualenv without having to download the
+library by hand.
+247
+
+Flask extensions must be licensed under a BSD, MIT or more liberal license to be able
+to be enlisted in the Flask Extension Registry. Keep in mind that the Flask Extension
+Registry is a moderated place and libraries will be reviewed upfront if they behave as
+required.
+26.2 “Hello Flaskext!”
+So let’s get started with creating such a Flask extension. The extension we want to
+create here will provide very basic support for SQLite3.
+First we create the following folder structure:
+flask-sqlite3/
+flask_sqlite3.py
+LICENSE
+README
+Here’s the contents of the most important ﬁles:
+26.2.1 setup.py
+The next ﬁle that is absolutely required is the setup.py ﬁle which is used to install your
+Flask extension. The following contents are something you can work with:
+"""
+Flask-SQLite3
+-------------
+This is the description for that library
+"""
+from setuptools import setup
+setup(
+name=’Flask-SQLite3’,
+version=’1.0’,
+url=’http://example.com/flask-sqlite3/’,
+license=’BSD’,
+author=’Your Name’,
+author_email=’your-email@example.com’,
+description=’Very short description’,
+long_description=__doc__,
+py_modules=[’flask_sqlite3’],
+# if you would be using a package instead use packages instead
+# of py_modules:
+# packages=[’flask_sqlite3’],
+zip_safe=False,
+include_package_data=True,
+platforms=’any’,
+248
+
+install_requires=[
+’Flask’
+],
+classifiers=[
+’Environment :: Web Environment’,
+’Intended Audience :: Developers’,
+’License :: OSI Approved :: BSD License’,
+’Operating System :: OS Independent’,
+’Programming Language :: Python’,
+’Topic :: Internet :: WWW/HTTP :: Dynamic Content’,
+’Topic :: Software Development :: Libraries :: Python Modules’
+]
+)
+That’s a lot of code but you can really just copy/paste that from existing extensions
+and adapt.
+26.2.2 ﬂask_sqlite3.py
+Now this is where your extension code goes. But how exactly should such an exten-
+sion look like? What are the best practices? Continue reading for some insight.
+26.3 Initializing Extensions
+Many extensions will need some kind of initialization step. For example, consider an
+application that’s currently connecting to SQLite like the documentation suggests (Us-
+ing SQLite 3 with Flask). So how does the extension know the name of the application
+object?
+Quite simple: you pass it to it.
+There are two recommended ways for an extension to initialize:
+initialization functions:
+If your extension is called helloworld you might have a function called
+init_helloworld(app[, extra_args]) that initializes the extension for that
+application. It could attach before / after handlers etc.
+classes:
+Classes work mostly like initialization functions but can later be used to
+further change the behavior. For an example look at how the OAuth exten-
+sion works: there is an OAuth object that provides some helper functions
+like OAuth.remote_app to create a reference to a remote application that uses
+OAuth.
+What to use depends on what you have in mind. For the SQLite 3 extension we will
+use the class-based approach because it will provide users with an object that handles
+opening and closing database connections.
+249
+
+What’s important about classes is that they encourage to be shared around on mod-
+ule level. In that case, the object itself must not under any circumstances store any
+application speciﬁc state and must be shareable between different application.
+26.4 The Extension Code
+Here’s the contents of the ﬂask_sqlite3.py for copy/paste:
+import sqlite3
+from flask import current_app
+# Find the stack on which we want to store the database connection.
+# Starting with Flask 0.9, the _app_ctx_stack is the correct one,
+# before that we need to use the _request_ctx_stack.
+try:
+from flask import _app_ctx_stack as stack
+except ImportError:
+from flask import _request_ctx_stack as stack
+class SQLite3(object):
+def __init__(self, app=None):
+self.app = app
+if app is not None:
+self.init_app(app)
+def init_app(self, app):
+app.config.setdefault(’SQLITE3_DATABASE’, ’:memory:’)
+# Use the newstyle teardown_appcontext if it’s available,
+# otherwise fall back to the request context
+if hasattr(app, ’teardown_appcontext’):
+app.teardown_appcontext(self.teardown)
+else:
+app.teardown_request(self.teardown)
+def connect(self):
+return sqlite3.connect(current_app.config[’SQLITE3_DATABASE’])
+def teardown(self, exception):
+ctx = stack.top
+if hasattr(ctx, ’sqlite3_db’):
+ctx.sqlite3_db.close()
+@property
+def connection(self):
+ctx = stack.top
+if ctx is not None:
+if not hasattr(ctx, ’sqlite3_db’):
+250
+
+ctx.sqlite3_db = self.connect()
+return ctx.sqlite3_db
+So here’s what these lines of code do:
+1. The __init__ method takes an optional app object and, if supplied, will call
+init_app.
+2. The init_app method exists so that the SQLite3 object can be instantiated with-
+out requiring an app object. This method supports the factory pattern for cre-
+ating applications. The init_app will set the conﬁguration for the database, de-
+faulting to an in memory database if no conﬁguration is supplied. In addition,
+the init_app method attaches the teardown handler. It will try to use the new-
+style app context handler and if it does not exist, falls back to the request context
+one.
+3. Next, we deﬁne a connect method that opens a database connection.
+4. Finally, we add a connection property that on ﬁrst access opens the database
+connection and stores it on the context. This is also the recommended way to
+handling resources: fetch resources lazily the ﬁrst time they are used.
+Note here that we’re attaching our database connection to the top application
+context via _app_ctx_stack.top. Extensions should use the top context for stor-
+ing their own information with a sufﬁciently complex name. Note that we’re
+falling back to the _request_ctx_stack.top if the application is using an older
+version of Flask that does not support it.
+So why did we decide on a class-based approach here? Because using our extension
+looks something like this:
+from flask import Flask
+from flask_sqlite3 import SQLite3
+app = Flask(__name__)
+app.config.from_pyfile(’the-config.cfg’)
+db = SQLite3(app)
+You can then use the database from views like this:
+@app.route(’/’)
+def show_all():
+cur = db.connection.cursor()
+cur.execute(...)
+Likewise if you are outside of a request but you are using Flask 0.9 or later with the
+app context support, you can use the database in the same way:
+with app.app_context():
+cur = db.connection.cursor()
+cur.execute(...)
+At the end of the with block the teardown handles will be executed automatically.
+251
+
+Additionally, the init_app method is used to support the factory pattern for creating
+apps:
+db = Sqlite3()
+# Then later on.
+app = create_app(’the-config.cfg’)
+db.init_app(app)
+Keep in mind that supporting this factory pattern for creating apps is required for
+approved ﬂask extensions (described below).
+Note on init_app
+As you noticed, init_app does not assign app to self. This is intentional! Class based
+Flask extensions must only store the application on the object when the application
+was passed to the constructor. This tells the extension: I am not interested in using
+multiple applications.
+When the extension needs to ﬁnd the current application and it does not have a refer-
+ence to it, it must either use the current_app context local or change the API in a way
+that you can pass the application explicitly.
+26.5 Using _app_ctx_stack
+In the example above, before every request, a sqlite3_db variable is assigned
+to _app_ctx_stack.top.
+In a view function, this variable is accessible using the
+connection property of SQLite3. During the teardown of a request, the sqlite3_db
+connection is closed. By using this pattern, the same connection to the sqlite3 database
+is accessible to anything that needs it for the duration of the request.
+If the _app_ctx_stack does not exist because the user uses an old version of Flask, it is
+recommended to fall back to _request_ctx_stack which is bound to a request.
+26.6 Teardown Behavior
+This is only relevant if you want to support Flask 0.6 and older
+Due to the change in Flask 0.7 regarding functions that are run at the end of the request
+your extension will have to be extra careful there if it wants to continue to support
+older versions of Flask. The following pattern is a good way to support both:
+def close_connection(response):
+ctx = _request_ctx_stack.top
+ctx.sqlite3_db.close()
+return response
+if hasattr(app, ’teardown_request’):
+252
+
+app.teardown_request(close_connection)
+else:
+app.after_request(close_connection)
+Strictly speaking the above code is wrong, because teardown functions are passed the
+exception and typically don’t return anything. However because the return value is
+discarded this will just work assuming that the code in between does not touch the
+passed parameter.
+26.7 Learn from Others
+This documentation only touches the bare minimum for extension development. If
+you want to learn more, it’s a very good idea to check out existing extensions on the
+Flask Extension Registry. If you feel lost there is still the mailinglist and the IRC chan-
+nel to get some ideas for nice looking APIs. Especially if you do something nobody
+before you did, it might be a very good idea to get some more input. This not only
+to get an idea about what people might want to have from an extension, but also to
+avoid having multiple developers working on pretty much the same side by side.
+Remember: good API design is hard, so introduce your project on the mailinglist, and
+let other developers give you a helping hand with designing the API.
+The best Flask extensions are extensions that share common idioms for the API. And
+this can only work if collaboration happens early.
+26.8 Approved Extensions
+Flask also has the concept of approved extensions. Approved extensions are tested as
+part of Flask itself to ensure extensions do not break on new releases. These approved
+extensions are listed on the Flask Extension Registry and marked appropriately. If you
+want your own extension to be approved you have to follow these guidelines:
+0. An approved Flask extension requires a maintainer. In the event an extension
+author would like to move beyond the project, the project should ﬁnd a new
+maintainer including full source hosting transition and PyPI access. If no main-
+tainer is available, give access to the Flask core team.
+1. An approved Flask extension must provide exactly one package or module
+named flask_extensionname. They might also reside inside a flaskext names-
+pace packages though this is discouraged now.
+2. It must ship a testing suite that can either be invoked with make test or python
+setup.py test. For test suites invoked with make test the extension has to en-
+sure that all dependencies for the test are installed automatically. If tests are
+invoked with python setup.py test, test dependencies can be speciﬁed in the
+setup.py ﬁle. The test suite also has to be part of the distribution.
+3. APIs of approved extensions will be checked for the following characteristics:
+253
+
+• an approved extension has to support multiple applications running in the
+same Python process.
+• it must be possible to use the factory pattern for creating applications.
+4. The license must be BSD/MIT/WTFPL licensed.
+5. The
+naming
+scheme
+for
+ofﬁcial
+extensions
+is
+Flask-ExtensionName
+or
+ExtensionName-Flask.
+6. Approved extensions must deﬁne all their dependencies in the setup.py ﬁle un-
+less a dependency cannot be met because it is not available on PyPI.
+7. The extension must have documentation that uses one of the two Flask themes
+for Sphinx documentation.
+8. The setup.py description (and thus the PyPI description) has to link to the doc-
+umentation, website (if there is one) and there must be a link to automatically
+install the development version (PackageName==dev).
+9. The zip_safe ﬂag in the setup script must be set to False, even if the extension
+would be safe for zipping.
+10. An extension currently has to support Python 2.6 as well as Python 2.7
+26.9 Extension Import Transition
+For a while we recommended using namespace packages for Flask extensions. This
+turned out to be problematic in practice because many different competing namespace
+package systems exist and pip would automatically switch between different systems
+and this caused a lot of problems for users.
+Instead we now recommend naming packages flask_foo instead of the now depre-
+cated flaskext.foo. Flask 0.8 introduces a redirect import system that lets uses import
+from flask.ext.foo and it will try flask_foo ﬁrst and if that fails flaskext.foo.
+Flask extensions should urge users to import from flask.ext.foo instead of flask_foo
+or flaskext_foo so that extensions can transition to the new package name without
+affecting users.
+254
+
+CHAPTER
+TWENTYSEVEN
+POCOO STYLEGUIDE
+The Pocoo styleguide is the styleguide for all Pocoo Projects, including Flask. This
+styleguide is a requirement for Patches to Flask and a recommendation for Flask ex-
+tensions.
+In general the Pocoo Styleguide closely follows PEP 8 with some small differences and
+extensions.
+27.1 General Layout
+Indentation: 4 real spaces. No tabs, no exceptions.
+Maximum line length: 79 characters with a soft limit for 84 if absolutely necessary.
+Try to avoid too nested code by cleverly placing break, continue and return state-
+ments.
+Continuing long statements: To continue a statement you can use backslashes in
+which case you should align the next line with the last dot or equal sign, or
+indent four spaces:
+this_is_a_very_long(function_call, ’with many parameters’) \
+.that_returns_an_object_with_an_attribute
+MyModel.query.filter(MyModel.scalar > 120) \
+.order_by(MyModel.name.desc()) \
+.limit(10)
+If you break in a statement with parentheses or braces, align to the braces:
+this_is_a_very_long(function_call, ’with many parameters’,
+23, 42, ’and even more’)
+For lists or tuples with many items, break immediately after the opening brace:
+items = [
+’this is the first’, ’set of items’, ’with more items’,
+’to come in this line’, ’like this’
+]
+255
+
+Blank lines: Top level functions and classes are separated by two lines, everything
+else by one. Do not use too many blank lines to separate logical segments in
+code. Example:
+def hello(name):
+print ’Hello %s!’ % name
+def goodbye(name):
+print ’See you %s.’ % name
+class MyClass(object):
+"""This is a simple docstring"""
+def __init__(self, name):
+self.name = name
+def get_annoying_name(self):
+return self.name.upper() + ’!!!!111’
+27.2 Expressions and Statements
+General whitespace rules:
+• No whitespace for unary operators that are not words (e.g.: -, ~ etc.) as well
+on the inner side of parentheses.
+• Whitespace is placed between binary operators.
+Good:
+exp = -1.05
+value = (item_value / item_count) * offset / exp
+value = my_list[index]
+value = my_dict[’key’]
+Bad:
+exp = - 1.05
+value = ( item_value / item_count ) * offset / exp
+value = (item_value/item_count)*offset/exp
+value=( item_value/item_count ) * offset/exp
+value = my_list[ index ]
+value = my_dict [’key’]
+Yoda statements are a no-go: Never compare constant with variable, always variable
+with constant:
+Good:
+256
+
+if method == ’md5’:
+pass
+Bad:
+if ’md5’ == method:
+pass
+Comparisons:
+• against arbitrary types: == and !=
+• against singletons with is and is not (eg: foo is not None)
+• never compare something with True or False (for example never do foo ==
+False, do not foo instead)
+Negated containment checks: use foo not in bar instead of not foo in bar
+Instance checks: isinstance(a, C) instead of type(A) is C, but try to avoid instance
+checks in general. Check for features.
+27.3 Naming Conventions
+• Class names: CamelCase, with acronyms kept uppercase (HTTPWriter and not
+HttpWriter)
+• Variable names: lowercase_with_underscores
+• Method and function names: lowercase_with_underscores
+• Constants: UPPERCASE_WITH_UNDERSCORES
+• precompiled regular expressions: name_re
+Protected members are preﬁxed with a single underscore. Double underscores are
+reserved for mixin classes.
+On classes with keywords, trailing underscores are appended. Clashes with builtins
+are allowed and must not be resolved by appending an underline to the variable name.
+If the function needs to access a shadowed builtin, rebind the builtin to a different
+name instead.
+Function and method arguments:
+• class methods: cls as ﬁrst parameter
+• instance methods: self as ﬁrst parameter
+• lambdas for properties might have the ﬁrst parameter replaced with x like
+in display_name = property(lambda x:
+x.real_name or x.username)
+257
+
+27.4 Docstrings
+Docstring conventions: All docstrings are formatted with reStructuredText as under-
+stood by Sphinx. Depending on the number of lines in the docstring, they are
+laid out differently. If it’s just one line, the closing triple quote is on the same line
+as the opening, otherwise the text is on the same line as the opening quote and
+the triple quote that closes the string on its own line:
+def foo():
+"""This is a simple docstring"""
+def bar():
+"""This is a longer docstring with so much information in there
+that it spans three lines.
+In this case the closing triple quote
+is on its own line.
+"""
+Module header: The module header consists of an utf-8 encoding declaration (if non
+ASCII letters are used, but it is recommended all the time) and a standard doc-
+string:
+# -*- coding: utf-8 -*-
+"""
+package.module
+~~~~~~~~~~~~~~
+A brief description goes here.
+:copyright: (c) YEAR by AUTHOR.
+:license: LICENSE_NAME, see LICENSE_FILE for more details.
+"""
+Please keep in mind that proper copyrights and license ﬁles are a requirement
+for approved Flask extensions.
+27.5 Comments
+Rules for comments are similar to docstrings. Both are formatted with reStructured-
+Text. If a comment is used to document an attribute, put a colon after the opening
+pound sign (#):
+class User(object):
+#: the name of the user as unicode string
+name = Column(String)
+#: the sha1 hash of the password + inline salt
+pw_hash = Column(String)
+258
+
+CHAPTER
+TWENTYEIGHT
+PYTHON 3 SUPPORT
+Flask and all of its dependencies support Python 3 so you can in theory start working
+on it already. There are however a few things you should be aware of before you start
+using Python 3 for your next project.
+28.1 Requirements
+If you want to use Flask with Python 3 you will need to use Python 3.3 or higher. 3.2
+and older are not supported.
+In addition to that you need to use the latest and greatest versions of itsdangerous, Jinja2
+and Werkzeug.
+28.2 API Stability
+Some of the decisions made in regards to unicode and byte untilization on Python 3
+make it hard to write low level code. This mainly affects WSGI middlewares and inter-
+acting with the WSGI provided information. Werkzeug wraps all that information in
+high-level helpers but some of those were speciﬁcally added for the Python 3 support
+and are quite new.
+A lot of the documentation out there on using WSGI leaves out those details as it was
+written before WSGI was updated to Python 3. While the API for Werkzeug and Flask
+on Python 2.x should not change much we cannot guarantee that this won’t happen
+on Python 3.
+28.3 Few Users
+Python 3 currently has less than 1% of the users of Python 2 going by PyPI download
+stats. As a result many of the problems you will encounter are probably hard to search
+for on the internet if they are Python 3 speciﬁc.
+259
+
+28.4 Small Ecosystem
+The majority of the Flask extensions, all of the documentation and the vast majority of
+the PyPI provided libraries do not support Python 3 yet. Even if you start your project
+with knowing that all you will need is supported by Python 3 you don’t know what
+happens six months from now. If you are adventurous you can start porting libraries
+on your own, but that is nothing for the faint of heart.
+28.5 Recommendations
+Unless you are already familiar with the differences in the versions we recommend
+sticking to current versions of Python until the ecosystem caught up.
+The majority of the upgrade pain is in the lower-level libararies like Flask and
+Werkzeug and not in the actual high-level application code. For instance all of the
+Flask examples that are in the Flask repository work out of the box on both 2.x and 3.x
+and did not require a single line of code changed.
+260
+
+CHAPTER
+TWENTYNINE
+UPGRADING TO NEWER RELEASES
+Flask itself is changing like any software is changing over time. Most of the changes
+are the nice kind, the kind where you don’t have to change anything in your code to
+proﬁt from a new release.
+However every once in a while there are changes that do require some changes in
+your code or there are changes that make it possible for you to improve your own
+code quality by taking advantage of new features in Flask.
+This section of the documentation enumerates all the changes in Flask from release to
+release and how you can change your code to have a painless updating experience.
+If you want to use the easy_install command to upgrade your Flask installation, make
+sure to pass it the -U parameter:
+$ easy_install -U Flask
+29.1 Version 0.10
+The biggest change going from 0.9 to 0.10 is that the cookie serialization format
+changed from pickle to a specialized JSON format. This change has been done in order
+to avoid the damage an attacker can do if the secret key is leaked. When you upgrade
+you will notice two major changes: all sessions that were issued before the upgrade
+are invalidated and you can only store a limited amount of types in the session. The
+new sessions are by design much more restricted to only allow JSON with a few small
+extensions for tuples and strings with HTML markup.
+In order to not break people’s sessions it is possible to continue using the old session
+system by using the Flask-OldSessions extension.
+Flask also started storing the flask.g object on the application context instead of the
+request context. This change should be transparent for you but it means that you now
+can store things on the g object when there is no request context yet but an applica-
+tion context. The old flask.Flask.request_globals_class attribute was renamed to
+flask.Flask.app_ctx_globals_class.
+261
+
+29.2 Version 0.9
+The behavior of returning tuples from a function was simpliﬁed. If you return a tuple
+it no longer deﬁnes the arguments for the response object you’re creating, it’s now
+always a tuple in the form (response, status, headers) where at least one item has
+to be provided. If you depend on the old behavior, you can add it easily by subclassing
+Flask:
+class TraditionalFlask(Flask):
+def make_response(self, rv):
+if isinstance(rv, tuple):
+return self.response_class(*rv)
+return Flask.make_response(self, rv)
+If you maintain an extension that was using _request_ctx_stack before, please con-
+sider changing to _app_ctx_stack if it makes sense for your extension. For instance,
+the app context stack makes sense for extensions which connect to databases. Using
+the app context stack instead of the request stack will make extensions more readily
+handle use cases outside of requests.
+29.3 Version 0.8
+Flask introduced a new session interface system.
+We also noticed that there
+was a naming collision between ﬂask.session the module that implements sessions
+and flask.session which is the global session object.
+With that introduction we
+moved the implementation details for the session system into a new module called
+flask.sessions. If you used the previously undocumented session support we urge
+you to upgrade.
+If invalid JSON data was submitted Flask will now raise a BadRequest exception in-
+stead of letting the default ValueError bubble up. This has the advantage that you no
+longer have to handle that error to avoid an internal server error showing up for the
+user. If you were catching this down explicitly in the past as ValueError you will need
+to change this.
+Due to a bug in the test client Flask 0.7 did not trigger teardown handlers when the
+test client was used in a with statement. This was since ﬁxed but might require some
+changes in your testsuites if you relied on this behavior.
+29.4 Version 0.7
+In Flask 0.7 we cleaned up the code base internally a lot and did some backwards in-
+compatible changes that make it easier to implement larger applications with Flask.
+Because we want to make upgrading as easy as possible we tried to counter the prob-
+lems arising from these changes by providing a script that can ease the transition.
+262
+
+The script scans your whole application and generates an uniﬁed diff with changes it
+assumes are safe to apply. However as this is an automated tool it won’t be able to
+ﬁnd all use cases and it might miss some. We internally spread a lot of deprecation
+warnings all over the place to make it easy to ﬁnd pieces of code that it was unable to
+upgrade.
+We strongly recommend that you hand review the generated patchﬁle and only apply
+the chunks that look good.
+If you are using git as version control system for your project we recommend apply-
+ing the patch with path -p1 < patchfile.diff and then using the interactive commit
+feature to only apply the chunks that look good.
+To apply the upgrade script do the following:
+1. Download the script: ﬂask-07-upgrade.py
+2. Run it in the directory of your application:
+python flask-07-upgrade.py > patchfile.diff
+3. Review the generated patchﬁle.
+4. Apply the patch:
+patch -p1 < patchfile.diff
+5. If you were using per-module template folders you need to move some templates
+around. Previously if you had a folder named templates next to a blueprint
+named admin the implicit template path automatically was admin/index.html for
+a template ﬁle called templates/index.html. This no longer is the case. Now you
+need to name the template templates/admin/index.html. The tool will not detect
+this so you will have to do that on your own.
+Please note that deprecation warnings are disabled by default starting with Python 2.7.
+In order to see the deprecation warnings that might be emitted you have to enabled
+them with the warnings module.
+If you are working with windows and you lack the patch command line utility you can
+get it as part of various Unix runtime environments for windows including cygwin,
+msysgit or ming32. Also source control systems like svn, hg or git have builtin support
+for applying uniﬁed diffs as generated by the tool. Check the manual of your version
+control system for more information.
+29.4.1 Bug in Request Locals
+Due to a bug in earlier implementations the request local proxies now raise a
+RuntimeError instead of an AttributeError when they are unbound.
+If you
+caught these exceptions with AttributeError before, you should catch them with
+RuntimeError now.
+Additionally the send_file() function is now issuing deprecation warnings if you
+depend on functionality that will be removed in Flask 1.0. Previously it was possible
+263
+
+to use etags and mimetypes when ﬁle objects were passed. This was unreliable and
+caused issues for a few setups. If you get a deprecation warning, make sure to update
+your application to work with either ﬁlenames there or disable etag attaching and
+attach them yourself.
+Old code:
+return send_file(my_file_object)
+return send_file(my_file_object)
+New code:
+return send_file(my_file_object, add_etags=False)
+29.4.2 Upgrading to new Teardown Handling
+We streamlined the behavior of the callbacks for request handling. For things that
+modify the response the after_request() decorators continue to work as expected,
+but for things that absolutely must happen at the end of request we introduced the new
+teardown_request() decorator.
+Unfortunately that change also made after-request
+work differently under error conditions. It’s not consistently skipped if exceptions
+happen whereas previously it might have been called twice to ensure it is executed at
+the end of the request.
+If you have database connection code that looks like this:
+@app.after_request
+def after_request(response):
+g.db.close()
+return response
+You are now encouraged to use this instead:
+@app.teardown_request
+def after_request(exception):
+if hasattr(g, ’db’):
+g.db.close()
+On the upside this change greatly improves the internal code ﬂow and makes it easier
+to customize the dispatching and error handling. This makes it now a lot easier to
+write unit tests as you can prevent closing down of database connections for a while.
+You can take advantage of the fact that the teardown callbacks are called when the re-
+sponse context is removed from the stack so a test can query the database after request
+handling:
+with app.test_client() as client:
+resp = client.get(’/’)
+# g.db is still bound if there is such a thing
+# and here it’s gone
+264
+
+29.4.3 Manual Error Handler Attaching
+While it is still possible to attach error handlers to Flask.error_handlers it’s discour-
+aged to do so and in fact deprecated. In general we no longer recommend custom
+error handler attaching via assignments to the underlying dictionary due to the more
+complex internal handling to support arbitrary exception classes and blueprints. See
+Flask.errorhandler() for more information.
+The proper upgrade is to change this:
+app.error_handlers[403] = handle_error
+Into this:
+app.register_error_handler(403, handle_error)
+Alternatively you should just attach the function with a decorator:
+@app.errorhandler(403)
+def handle_error(e):
+...
+(Note that register_error_handler() is new in Flask 0.7)
+29.4.4 Blueprint Support
+Blueprints replace the previous concept of “Modules” in Flask. They provide better
+semantics for various features and work better with large applications. The update
+script provided should be able to upgrade your applications automatically, but there
+might be some cases where it fails to upgrade. What changed?
+• Blueprints need explicit names.
+Modules had an automatic name guesssing
+scheme where the shortname for the module was taken from the last part of
+the import module. The upgrade script tries to guess that name but it might fail
+as this information could change at runtime.
+• Blueprints have an inverse behavior for url_for().
+Previously .foo told
+url_for() that it should look for the endpoint foo on the application. Now it
+means “relative to current module”. The script will inverse all calls to url_for()
+automatically for you. It will do this in a very eager way so you might end up
+with some unnecessary leading dots in your code if you’re not using modules.
+• Blueprints do not automatically provide static folders. They will also no longer
+automatically export templates from a folder called templates next to their loca-
+tion however but it can be enabled from the constructor. Same with static ﬁles: if
+you want to continue serving static ﬁles you need to tell the constructor explic-
+itly the path to the static folder (which can be relative to the blueprint’s module
+path).
+• Rendering templates was simpliﬁed. Now the blueprints can provide template
+folders which are added to a general template searchpath. This means that you
+265
+
+need to add another subfolder with the blueprint’s name into that folder if you
+want blueprintname/template.html as the template name.
+If you continue to use the Module object which is deprecated, Flask will restore the
+previous behavior as good as possible. However we strongly recommend upgrading
+to the new blueprints as they provide a lot of useful improvement such as the ability
+to attach a blueprint multiple times, blueprint speciﬁc error handlers and a lot more.
+29.5 Version 0.6
+Flask 0.6 comes with a backwards incompatible change which affects the order of after-
+request handlers. Previously they were called in the order of the registration, now
+they are called in reverse order. This change was made so that Flask behaves more like
+people expected it to work and how other systems handle request pre- and postpro-
+cessing. If you depend on the order of execution of post-request functions, be sure to
+change the order.
+Another change that breaks backwards compatibility is that context processors will no
+longer override values passed directly to the template rendering function. If for exam-
+ple request is as variable passed directly to the template, the default context processor
+will not override it with the current request object. This makes it easier to extend con-
+text processors later to inject additional variables without breaking existing template
+not expecting them.
+29.6 Version 0.5
+Flask 0.5 is the ﬁrst release that comes as a Python package instead of a single mod-
+ule. There were a couple of internal refactoring so if you depend on undocumented
+internal details you probably have to adapt the imports.
+The following changes may be relevant to your application:
+• autoescaping no longer happens for all templates. Instead it is conﬁgured to only
+happen on ﬁles ending with .html, .htm, .xml and .xhtml. If you have templates
+with different extensions you should override the select_jinja_autoescape()
+method.
+• Flask no longer supports zipped applications in this release. This functionality
+might come back in future releases if there is demand for this feature. Removing
+support for this makes the Flask internal code easier to understand and ﬁxes a
+couple of small issues that make debugging harder than necessary.
+• The create_jinja_loader function is gone. If you want to customize the Jinja loader
+now, use the create_jinja_environment() method instead.
+266
+
+29.7 Version 0.4
+For application developers there are no changes that require changes in your code.
+In case you are developing on a Flask extension however, and that extension has a
+unittest-mode you might want to link the activation of that mode to the new TESTING
+ﬂag.
+29.8 Version 0.3
+Flask 0.3 introduces conﬁguration support and logging as well as categories for ﬂash-
+ing messages. All these are features that are 100% backwards compatible but you
+might want to take advantage of them.
+29.8.1 Conﬁguration Support
+The conﬁguration support makes it easier to write any kind of application that requires
+some sort of conﬁguration. (Which most likely is the case for any application out
+there).
+If you previously had code like this:
+app.debug = DEBUG
+app.secret_key = SECRET_KEY
+You no longer have to do that, instead you can just load a conﬁguration into the conﬁg
+object. How this works is outlined in Conﬁguration Handling.
+29.8.2 Logging Integration
+Flask now conﬁgures a logger for you with some basic and useful defaults. If you
+run your application in production and want to proﬁt from automatic error logging,
+you might be interested in attaching a proper log handler. Also you can start logging
+warnings and errors into the logger when appropriately. For more information on
+that, read Logging Application Errors.
+29.8.3 Categories for Flash Messages
+Flash messages can now have categories attached. This makes it possible to render
+errors, warnings or regular messages differently for example. This is an opt-in feature
+because it requires some rethinking in the code.
+Read all about that in the Message Flashing pattern.
+267
+
+268
+
+CHAPTER
+THIRTY
+FLASK CHANGELOG
+Here you can see the full list of changes between each Flask release.
+30.1 Version 0.10.1
+(bugﬁx release, released on June 14th 2013)
+• Fixed an issue where |tojson was not quoting single quotes which made the
+ﬁlter not work properly in HTML attributes. Now it’s possible to use that ﬁlter
+in single quoted attributes. This should make using that ﬁlter with angular.js
+easier.
+• Added support for byte strings back to the session system. This broke compati-
+bility with the common case of people putting binary data for token veriﬁcation
+into the session.
+• Fixed an issue were registering the same method twice for the same endpoint
+would trigger an exception incorrectly.
+30.2 Version 0.10
+Released on June 13nd 2013, codename Limoncello.
+• Changed default cookie serialization format from pickle to JSON to limit the
+impact an attacker can do if the secret key leaks. See Version 0.10 for more infor-
+mation.
+• Added
+template_test
+methods
+in
+addition
+to
+the
+already
+existing
+template_filter method family.
+• Added
+template_global
+methods
+in
+addition
+to
+the
+already
+existing
+template_filter method family.
+• Set the content-length header for x-sendﬁle.
+• tojson ﬁlter now does not escape script blocks in HTML5 parsers.
+269
+
+• tojson used in templates is now safe by default due. This was allowed due to
+the different escaping behavior.
+• Flask will now raise an error if you attempt to register a new function on an
+already used endpoint.
+• Added wrapper module around simplejson and added default serialization of
+datetime objects. This allows much easier customization of how JSON is handled
+by Flask or any Flask extension.
+• Removed deprecated internal flask.session module alias. Use flask.sessions
+instead to get the session module. This is not to be confused with flask.session
+the session proxy.
+• Templates can now be rendered without request context.
+The behavior is
+slightly different as the request, session and g objects will not be available and
+blueprint’s context processors are not called.
+• The conﬁg object is now available to the template as a real global and not through
+a context processor which makes it available even in imported templates by de-
+fault.
+• Added an option to generate non-ascii encoded JSON which should result in less
+bytes being transmitted over the network. It’s disabled by default to not cause
+confusion with existing libraries that might expect flask.json.dumps to return
+bytestrings by default.
+• flask.g is now stored on the app context instead of the request context.
+• flask.g now gained a get() method for not erroring out on non existing items.
+• flask.g now can be used with the in operator to see what’s deﬁned and it now
+is iterable and will yield all attributes stored.
+• flask.Flask.request_globals_class
+got
+renamed
+to
+flask.Flask.app_ctx_globals_class which is a better name to what it does
+since 0.10.
+• request, session and g are now also added as proxies to the template context which
+makes them available in imported templates. One has to be very careful with
+those though because usage outside of macros might cause caching.
+• Flask will no longer invoke the wrong error handlers if a proxy exception is
+passed through.
+• Added a workaround for chrome’s cookies in localhost not working as intended
+with domain names.
+• Changed logic for picking defaults for cookie values from sessions to work better
+with Google Chrome.
+• Added message_ﬂashed signal that simpliﬁes ﬂashing testing.
+• Added support for copying of request contexts for better working with greenlets.
+270
+
+• Removed custom JSON HTTP exception subclasses.
+If you were relying on
+them you can reintroduce them again yourself trivially. Using them however
+is strongly discouraged as the interface was ﬂawed.
+• Python requirements changed: requiring Python 2.6 or 2.7 now to prepare for
+Python 3.3 port.
+• Changed how the teardown system is informed about exceptions. This is now
+more reliable in case something handles an exception halfway through the error
+handling process.
+• Request context preservation in debug mode now keeps the exception informa-
+tion around which means that teardown handlers are able to distinguish error
+from success cases.
+• Added the JSONIFY_PRETTYPRINT_REGULAR conﬁguration variable.
+• Flask now orders JSON keys by default to not trash HTTP caches due to different
+hash seeds between different workers.
+• Added appcontext_pushed and appcontext_popped signals.
+• The builtin run method now takes the SERVER_NAME into account when picking
+the default port to run on.
+• Added ﬂask.request.get_json() as a replacement for the old ﬂask.request.json prop-
+erty.
+30.3 Version 0.9
+Released on July 1st 2012, codename Campari.
+• The flask.Request.on_json_loading_failed() now returns a JSON formatted
+response by default.
+• The flask.url_for() function now can generate anchors to the generated links.
+• The flask.url_for() function now can also explicitly generate URL rules spe-
+ciﬁc to a given HTTP method.
+• Logger now only returns the debug log setting if it was not set explicitly.
+• Unregister a circular dependency between the WSGI environment and the
+request object when shutting down the request.
+This means that environ
+werkzeug.request will be None after the response was returned to the WSGI
+server but has the advantage that the garbage collector is not needed on CPython
+to tear down the request unless the user created circular dependencies them-
+selves.
+• Session is now stored after callbacks so that if the session payload is stored in the
+session you can still modify it in an after request callback.
+271
+
+• The flask.Flask class will avoid importing the provided import name if it can
+(the required ﬁrst parameter), to beneﬁt tools which build Flask instances pro-
+grammatically. The Flask class will fall back to using import on systems with
+custom module hooks, e.g. Google App Engine, or when the import name is
+inside a zip archive (usually a .egg) prior to Python 2.7.
+• Blueprints now have a decorator to add custom template ﬁlters application wide,
+flask.Blueprint.app_template_filter().
+• The Flask and Blueprint classes now have a non-decorator method for adding
+custom template ﬁlters application wide, flask.Flask.add_template_filter()
+and flask.Blueprint.add_app_template_filter().
+• The flask.get_flashed_messages() function now allows rendering ﬂashed mes-
+sage categories in separate blocks, through a category_filter argument.
+• The flask.Flask.run() method now accepts None for host and port arguments,
+using default values when None. This allows for calling run using conﬁguration
+values, e.g. app.run(app.config.get(’MYHOST’), app.config.get(’MYPORT’)),
+with proper behavior whether or not a conﬁg ﬁle is provided.
+• The flask.render_template() method now accepts a either an iterable of tem-
+plate names or a single template name. Previously, it only accepted a single
+template name. On an iterable, the ﬁrst template found is rendered.
+• Added flask.Flask.app_context() which works very similar to the request con-
+text but only provides access to the current application. This also adds support
+for URL generation without an active request context.
+• View functions can now return a tuple with the ﬁrst instance being an instance
+of flask.Response. This allows for returning jsonify(error="error msg"), 400
+from a view function.
+• Flask and Blueprint now provide a get_send_file_max_age() hook for sub-
+classes to override behavior of serving static ﬁles from Flask when using
+flask.Flask.send_static_file() (used for the default static ﬁle handler) and
+send_file(). This hook is provided a ﬁlename, which for example allows chang-
+ing cache controls by ﬁle extension. The default max-age for send_ﬁle and static
+ﬁles can be conﬁgured through a new SEND_FILE_MAX_AGE_DEFAULT conﬁguration
+variable, which is used in the default get_send_ﬁle_max_age implementation.
+• Fixed an assumption in sessions implementation which could break message
+ﬂashing on sessions implementations which use external storage.
+• Changed the behavior of tuple return values from functions. They are no longer
+arguments to the response object, they now have a deﬁned meaning.
+• Added flask.Flask.request_globals_class to allow a speciﬁc class to be used
+on creation of the g instance of each request.
+• Added required_methods attribute to view functions to force-add methods on reg-
+istration.
+• Added flask.after_this_request().
+272
+
+• Added flask.stream_with_context() and the ability to push contexts multiple
+times without producing unexpected behavior.
+30.4 Version 0.8.1
+Bugﬁx release, released on July 1st 2012
+• Fixed an issue with the undocumented ﬂask.session module to not work properly
+on Python 2.5. It should not be used but did cause some problems for package
+managers.
+30.5 Version 0.8
+Released on September 29th 2011, codename Rakija
+• Refactored session support into a session interface so that the implementation of
+the sessions can be changed without having to override the Flask class.
+• Empty session cookies are now deleted properly automatically.
+• View functions can now opt out of getting the automatic OPTIONS implementa-
+tion.
+• HTTP exceptions and Bad Request errors can now be trapped so that they show
+up normally in the traceback.
+• Flask in debug mode is now detecting some common problems and tries to warn
+you about them.
+• Flask in debug mode will now complain with an assertion error if a view was
+attached after the ﬁrst request was handled. This gives earlier feedback when
+users forget to import view code ahead of time.
+• Added the ability to register callbacks that are only triggered once at the begin-
+ning of the ﬁrst request. (Flask.before_first_request())
+• Malformed JSON data will now trigger a bad request HTTP exception instead
+of a value error which usually would result in a 500 internal server error if not
+handled. This is a backwards incompatible change.
+• Applications now not only have a root path where the resources and modules are
+located but also an instance path which is the designated place to drop ﬁles that
+are modiﬁed at runtime (uploads etc.). Also this is conceptionally only instance
+depending and outside version control so it’s the perfect place to put conﬁgura-
+tion ﬁles etc. For more information see Instance Folders.
+• Added the APPLICATION_ROOT conﬁguration variable.
+• Implemented session_transaction() to easily modify sessions from the test en-
+vironment.
+273
+
+• Refactored test client internally. The APPLICATION_ROOT conﬁguration variable as
+well as SERVER_NAME are now properly used by the test client as defaults.
+• Added flask.views.View.decorators to support simpler decorating of plug-
+gable (class-based) views.
+• Fixed an issue where the test client if used with the “with” statement did not
+trigger the execution of the teardown handlers.
+• Added ﬁner control over the session cookie parameters.
+• HEAD requests to a method view now automatically dispatch to the get method
+if no handler was implemented.
+• Implemented the virtual flask.ext package to import extensions from.
+• The context preservation on exceptions is now an integral component of Flask
+itself and no longer of the test client. This cleaned up some internal logic and
+lowers the odds of runaway request contexts in unittests.
+30.6 Version 0.7.3
+Bugﬁx release, release date to be decided
+• Fixed the Jinja2 environment’s list_templates method not returning the correct
+names when blueprints or modules were involved.
+30.7 Version 0.7.2
+Bugﬁx release, released on July 6th 2011
+• Fixed an issue with URL processors not properly working on blueprints.
+30.8 Version 0.7.1
+Bugﬁx release, released on June 29th 2011
+• Added missing future import that broke 2.5 compatibility.
+• Fixed an inﬁnite redirect issue with blueprints.
+30.9 Version 0.7
+Released on June 28th 2011, codename Grappa
+• Added make_default_options_response() which can be used by subclasses to
+alter the default behavior for OPTIONS responses.
+274
+
+• Unbound locals now raise a proper RuntimeError instead of an AttributeError.
+• Mimetype guessing and etag support based on ﬁle objects is now deprecated for
+flask.send_file() because it was unreliable. Pass ﬁlenames instead or attach
+your own etags and provide a proper mimetype by hand.
+• Static ﬁle handling for modules now requires the name of the static folder to
+be supplied explicitly. The previous autodetection was not reliable and caused
+issues on Google’s App Engine. Until 1.0 the old behavior will continue to work
+but issue dependency warnings.
+• ﬁxed a problem for Flask to run on jython.
+• added a PROPAGATE_EXCEPTIONS conﬁguration variable that can be used to
+ﬂip the setting of exception propagation which previously was linked to DEBUG
+alone and is now linked to either DEBUG or TESTING.
+• Flask no longer internally depends on rules being added through the add_url_rule
+function and can now also accept regular werkzeug rules added to the url map.
+• Added an endpoint method to the ﬂask application object which allows one to
+register a callback to an arbitrary endpoint with a decorator.
+• Use Last-Modiﬁed for static ﬁle sending instead of Date which was incorrectly
+introduced in 0.6.
+• Added create_jinja_loader to override the loader creation process.
+• Implemented a silent ﬂag for conﬁg.from_pyﬁle.
+• Added teardown_request decorator, for functions that should run at the end of
+a request regardless of whether an exception occurred. Also the behavior for
+after_request was changed. It’s now no longer executed when an exception is
+raised. See Upgrading to new Teardown Handling
+• Implemented flask.has_request_context()
+• Deprecated init_jinja_globals. Override the create_jinja_environment() method
+instead to achieve the same functionality.
+• Added flask.safe_join()
+• The automatic JSON request data unpacking now looks at the charset mimetype
+parameter.
+• Don’t modify the session on flask.get_flashed_messages() if there are no mes-
+sages in the session.
+• before_request handlers are now able to abort requests with errors.
+• it is not possible to deﬁne user exception handlers. That way you can provide
+custom error messages from a central hub for certain errors that might occur dur-
+ing request processing (for instance database connection errors, timeouts from
+remote resources etc.).
+• Blueprints can provide blueprint speciﬁc error handlers.
+275
+
+• Implemented generic Pluggable Views (class-based views).
+30.10 Version 0.6.1
+Bugﬁx release, released on December 31st 2010
+• Fixed an issue where the default OPTIONS response was not exposing all valid
+methods in the Allow header.
+• Jinja2 template loading syntax now allows ”./” in front of a template load path.
+Previously this caused issues with module setups.
+• Fixed an issue where the subdomain setting for modules was ignored for the
+static folder.
+• Fixed a security problem that allowed clients to download arbitrary ﬁles if the
+host server was a windows based operating system and the client uses back-
+slashes to escape the directory the ﬁles where exposed from.
+30.11 Version 0.6
+Released on July 27th 2010, codename Whisky
+• after request functions are now called in reverse order of registration.
+• OPTIONS is now automatically implemented by Flask unless the application
+explicitly adds ‘OPTIONS’ as method to the URL rule. In this case no automatic
+OPTIONS handling kicks in.
+• static rules are now even in place if there is no static folder for the module. This
+was implemented to aid GAE which will remove the static folder if it’s part of a
+mapping in the .yml ﬁle.
+• the config is now available in the templates as conﬁg.
+• context processors will no longer override values passed directly to the render
+function.
+• added
+the
+ability
+to
+limit
+the
+incoming
+request
+data
+with
+the
+new
+MAX_CONTENT_LENGTH conﬁguration value.
+• the endpoint for the flask.Module.add_url_rule() method is now optional to
+be consistent with the function of the same name on the application object.
+• added a flask.make_response() function that simpliﬁes creating response object
+instances in views.
+• added signalling support based on blinker. This feature is currently optional and
+supposed to be used by extensions and applications. If you want to use it, make
+sure to have blinker installed.
+276
+
+• refactored the way URL adapters are created. This process is now fully customiz-
+able with the create_url_adapter() method.
+• modules can now register for a subdomain instead of just an URL preﬁx. This
+makes it possible to bind a whole module to a conﬁgurable subdomain.
+30.12 Version 0.5.2
+Bugﬁx Release, released on July 15th 2010
+• ﬁxed another issue with loading templates from directories when modules were
+used.
+30.13 Version 0.5.1
+Bugﬁx Release, released on July 6th 2010
+• ﬁxes an issue with template loading from directories when modules where used.
+30.14 Version 0.5
+Released on July 6th 2010, codename Calvados
+• ﬁxed a bug with subdomains that was caused by the inability to specify the
+server name. The server name can now be set with the SERVER_NAME conﬁg
+key. This key is now also used to set the session cookie cross-subdomain wide.
+• autoescaping is no longer active for all templates. Instead it is only active for
+.html, .htm, .xml and .xhtml. Inside templates this behavior can be changed
+with the autoescape tag.
+• refactored Flask internally. It now consists of more than a single ﬁle.
+• flask.send_file() now emits etags and has the ability to do conditional re-
+sponses builtin.
+• (temporarily) dropped support for zipped applications. This was a rarely used
+feature and led to some confusing behavior.
+• added support for per-package template and static-ﬁle directories.
+• removed support for create_jinja_loader which is no longer used in 0.5 due to the
+improved module support.
+• added a helper function to expose ﬁles from any directory.
+277
+
+30.15 Version 0.4
+Released on June 18th 2010, codename Rakia
+• added the ability to register application wide error handlers from modules.
+• after_request() handlers are now also invoked if the request dies with an ex-
+ception and an error handling page kicks in.
+• test client has not the ability to preserve the request context for a little longer.
+This can also be used to trigger custom requests that do not pop the request
+stack for testing.
+• because the Python standard library caches loggers, the name of the logger is
+conﬁgurable now to better support unittests.
+• added TESTING switch that can activate unittesting helpers.
+• the logger switches to DEBUG mode now if debug is enabled.
+30.16 Version 0.3.1
+Bugﬁx release, released on May 28th 2010
+• ﬁxed a error reporting bug with flask.Config.from_envvar()
+• removed some unused code from ﬂask
+• release does no longer include development leftover ﬁles (.git folder for themes,
+built documentation in zip and pdf ﬁle and some .pyc ﬁles)
+30.17 Version 0.3
+Released on May 28th 2010, codename Schnaps
+• added support for categories for ﬂashed messages.
+• the application now conﬁgures a logging.Handler and will log request handling
+exceptions to that logger when not in debug mode. This makes it possible to
+receive mails on server errors for example.
+• added support for context binding that does not require the use of the with state-
+ment for playing in the console.
+• the request context is now available within the with statement making it possible
+to further push the request context or pop it.
+• added support for conﬁgurations.
+278
+
+30.18 Version 0.2
+Released on May 12th 2010, codename Jägermeister
+• various bugﬁxes
+• integrated JSON support
+• added get_template_attribute() helper function.
+• add_url_rule() can now also register a view function.
+• refactored internal request dispatching.
+• server listens on 127.0.0.1 by default now to ﬁx issues with chrome.
+• added external URL support.
+• added support for send_file()
+• module support and internal request handling refactoring to better support
+pluggable applications.
+• sessions can be set to be permanent now on a per-session basis.
+• better error reporting on missing secret keys.
+• added support for Google Appengine.
+30.19 Version 0.1
+First public preview release.
+279
+
+280
+
+CHAPTER
+THIRTYONE
+LICENSE
+Flask is licensed under a three clause BSD License. It basically means: do whatever
+you want with it as long as the copyright in Flask sticks around, the conditions are not
+modiﬁed and the disclaimer is present. Furthermore you must not use the names of
+the authors to promote derivatives of the software without written consent.
+The full license text can be found below (Flask License). For the documentation and
+artwork different licenses apply.
+31.1 Authors
+Flask is written and maintained by Armin Ronacher and various contributors:
+31.1.1 Development Lead
+• Armin Ronacher <armin.ronacher@active-4.com>
+31.1.2 Patches and Suggestions
+• Adam Zapletal
+• Ali Afshar
+• Chris Edgemon
+• Chris Grindstaff
+• Christopher Grebs
+• Daniel Neuhäuser
+• Florent Xicluna
+• Georg Brandl
+• Justin Quick
+• Kenneth Reitz
+281
+
+• Marian Sigler
+• Matt Campell
+• Matthew Frazier
+• Michael van Tellingen
+• Ron DuPlain
+• Sebastien Estienne
+• Simon Sapin
+• Stephane Wirtel
+• Thomas Schranz
+• Zhao Xiaohong
+• Edmond Burnett
+31.2 General License Deﬁnitions
+The following section contains the full license texts for Flask and the documentation.
+• “AUTHORS” hereby refers to all the authors listed in the Authors section.
+• The “Flask License” applies to all the sourcecode shipped as part of Flask (Flask
+itself as well as the examples and the unittests) as well as documentation.
+• The “Flask Artwork License” applies to the project’s Horn-Logo.
+31.3 Flask License
+Copyright (c) 2013 by Armin Ronacher and contributors. See AUTHORS for more
+details.
+Some rights reserved.
+Redistribution and use in source and binary forms of the software as well as docu-
+mentation, with or without modiﬁcation, are permitted provided that the following
+conditions are met:
+• Redistributions of source code must retain the above copyright notice, this list of
+conditions and the following disclaimer.
+• Redistributions in binary form must reproduce the above copyright notice, this
+list of conditions and the following disclaimer in the documentation and/or
+other materials provided with the distribution.
+• The names of the contributors may not be used to endorse or promote products
+derived from this software without speciﬁc prior written permission.
+282
+
+THIS SOFTWARE AND DOCUMENTATION IS PROVIDED BY THE COPYRIGHT
+HOLDERS AND CONTRIBUTORS “AS IS” AND ANY EXPRESS OR IMPLIED WAR-
+RANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DIS-
+CLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS
+BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
+OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PRO-
+CUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
+THE USE OF THIS SOFTWARE AND DOCUMENTATION, EVEN IF ADVISED OF
+THE POSSIBILITY OF SUCH DAMAGE.
+31.4 Flask Artwork License
+Copyright (c) 2010 by Armin Ronacher.
+Some rights reserved.
+This logo or a modiﬁed version may be used by anyone to refer to the Flask project,
+but does not indicate endorsement by the project.
+Redistribution and use in source (the SVG ﬁle) and binary forms (rendered PNG ﬁles
+etc.) of the image, with or without modiﬁcation, are permitted provided that the fol-
+lowing conditions are met:
+• Redistributions of source code must retain the above copyright notice and this
+list of conditions.
+• The names of the contributors to the Flask software (see AUTHORS) may not be
+used to endorse or promote products derived from this software without speciﬁc
+prior written permission.
+Note: we would appreciate that you make the image a link to http://ﬂask.pocoo.org/
+if you use it on a web page.
+283
+
+284
+
+INDEX
+Symbols
+_app_ctx_stack (in module ﬂask), 222
+_request_ctx_stack (in module ﬂask), 221
+A
+abort() (in module ﬂask), 209
+add_app_template_ﬁlter()
+(ﬂask.Blueprint method), 194
+add_app_template_global()
+(ﬂask.Blueprint method), 194
+add_app_template_test() (ﬂask.Blueprint
+method), 194
+add_template_ﬁlter()
+(ﬂask.Flask
+method), 176
+add_template_global()
+(ﬂask.Flask
+method), 176
+add_template_test() (ﬂask.Flask method),
+177
+add_url_rule() (ﬂask.Blueprint method),
+194
+add_url_rule()
+(ﬂask.blueprints.BlueprintSetupState
+method), 222
+add_url_rule() (ﬂask.Flask method), 177
+after_app_request()
+(ﬂask.Blueprint
+method), 194
+after_request() (ﬂask.Blueprint method),
+195
+after_request() (ﬂask.Flask method), 177
+after_request_funcs (ﬂask.Flask attribute),
+178
+after_this_request() (in module ﬂask), 210
+app (ﬂask.blueprints.BlueprintSetupState
+attribute), 222
+app_context() (ﬂask.Flask method), 178
+app_context_processor() (ﬂask.Blueprint
+method), 195
+app_ctx_globals_class
+(ﬂask.Flask
+at-
+tribute), 178
+app_errorhandler()
+(ﬂask.Blueprint
+method), 195
+app_template_ﬁlter()
+(ﬂask.Blueprint
+method), 195
+app_template_global()
+(ﬂask.Blueprint
+method), 195
+app_template_test()
+(ﬂask.Blueprint
+method), 195
+app_url_defaults()
+(ﬂask.Blueprint
+method), 195
+app_url_value_preprocessor()
+(ﬂask.Blueprint method), 195
+AppContext (class in ﬂask.ctx), 222
+appcontext_popped (built-in variable), 72
+appcontext_popped (in module ﬂask), 223
+appcontext_pushed (in module ﬂask), 223
+appcontext_tearing_down
+(in
+module
+ﬂask), 223
+args (ﬂask.Request attribute), 198
+as_view()
+(ﬂask.views.View
+class
+method), 224
+auto_ﬁnd_instance_path()
+(ﬂask.Flask
+method), 178
+B
+base_url (ﬂask.Request attribute), 199
+before_app_ﬁrst_request()
+(ﬂask.Blueprint method), 195
+before_app_request()
+(ﬂask.Blueprint
+method), 195
+before_ﬁrst_request()
+(ﬂask.Flask
+method), 178
+before_ﬁrst_request_funcs (ﬂask.Flask at-
+tribute), 178
+before_request() (ﬂask.Blueprint method),
+195
+285
+
+before_request() (ﬂask.Flask method), 179
+before_request_funcs
+(ﬂask.Flask
+at-
+tribute), 179
+Blueprint (class in ﬂask), 194
+blueprint (ﬂask.blueprints.BlueprintSetupState
+attribute), 222
+blueprint (ﬂask.Request attribute), 199
+blueprints (ﬂask.Flask attribute), 179
+BlueprintSetupState
+(class
+in
+ﬂask.blueprints), 222
+C
+Conﬁg (class in ﬂask), 217
+conﬁg (ﬂask.Flask attribute), 179
+context_processor()
+(ﬂask.Blueprint
+method), 195
+context_processor() (ﬂask.Flask method),
+179
+cookies (ﬂask.Request attribute), 198
+copy() (ﬂask.ctx.RequestContext method),
+221
+copy_current_request_context() (in mod-
+ule ﬂask), 207
+create_global_jinja_loader()
+(ﬂask.Flask
+method), 179
+create_jinja_environment()
+(ﬂask.Flask
+method), 179
+create_url_adapter() (ﬂask.Flask method),
+179
+current_app (in module ﬂask), 207
+D
+data (ﬂask.Request attribute), 198
+data (ﬂask.Response attribute), 201
+debug (ﬂask.Flask attribute), 179
+debug_log_format (ﬂask.Flask attribute),
+180
+decorators
+(ﬂask.views.View
+attribute),
+225
+default()
+(ﬂask.json.JSONEncoder
+method), 216
+default_conﬁg (ﬂask.Flask attribute), 180
+digest_method()
+(ﬂask.sessions.SecureCookieSessionInterface
+method), 204
+dispatch_request() (ﬂask.Flask method),
+180
+dispatch_request()
+(ﬂask.views.View
+method), 225
+do_teardown_appcontext()
+(ﬂask.Flask
+method), 180
+do_teardown_request()
+(ﬂask.Flask
+method), 180
+dump() (in module ﬂask.json), 216
+dumps() (in module ﬂask.json), 216
+E
+enable_modules
+(ﬂask.Flask
+attribute),
+180
+endpoint (ﬂask.Request attribute), 199
+endpoint() (ﬂask.Blueprint method), 196
+endpoint() (ﬂask.Flask method), 180
+environ (ﬂask.Request attribute), 199
+environment variable
+FLASKR_SETTINGS, 30
+YOURAPPLICATION_SETTINGS, 62
+error_handler_spec (ﬂask.Flask attribute),
+180
+errorhandler() (ﬂask.Blueprint method),
+196
+errorhandler() (ﬂask.Flask method), 181
+escape() (ﬂask.Markup class method), 213
+escape() (in module ﬂask), 212
+extensions (ﬂask.Flask attribute), 181
+F
+ﬁles (ﬂask.Request attribute), 198
+ﬁrst_registration
+(ﬂask.blueprints.BlueprintSetupState
+attribute), 222
+ﬂash() (in module ﬂask), 214
+Flask (class in ﬂask), 175
+ﬂask (module), 175
+ﬂask.ext (in module ﬂask), 219
+ﬂask.json (module), 214
+ﬂask.signals.Namespace (built-in class),
+224
+FlaskClient (class in ﬂask.testing), 206
+FLASKR_SETTINGS, 30
+form (ﬂask.Request attribute), 198
+from_envvar() (ﬂask.Conﬁg method), 218
+from_object() (ﬂask.Conﬁg method), 218
+from_pyﬁle() (ﬂask.Conﬁg method), 219
+full_dispatch_request()
+(ﬂask.Flask
+method), 181
+286
+
+G
+g (in module ﬂask), 206
+get_cookie_domain()
+(ﬂask.sessions.SessionInterface
+method), 203
+get_cookie_httponly()
+(ﬂask.sessions.SessionInterface
+method), 203
+get_cookie_path()
+(ﬂask.sessions.SessionInterface
+method), 203
+get_cookie_secure()
+(ﬂask.sessions.SessionInterface
+method), 203
+get_expiration_time()
+(ﬂask.sessions.SessionInterface
+method), 203
+get_ﬂashed_messages() (in module ﬂask),
+214
+get_json() (ﬂask.Request method), 199
+get_send_ﬁle_max_age() (ﬂask.Blueprint
+method), 196
+get_send_ﬁle_max_age()
+(ﬂask.Flask
+method), 181
+get_template_attribute()
+(in
+module
+ﬂask), 217
+got_ﬁrst_request
+(ﬂask.Flask
+attribute),
+182
+got_request_exception (in module ﬂask),
+223
+H
+handle_exception() (ﬂask.Flask method),
+182
+handle_http_exception()
+(ﬂask.Flask
+method), 182
+handle_url_build_error()
+(ﬂask.Flask
+method), 182
+handle_user_exception()
+(ﬂask.Flask
+method), 182
+has_app_context() (in module ﬂask), 208
+has_request_context() (in module ﬂask),
+207
+has_static_folder
+(ﬂask.Blueprint
+at-
+tribute), 196
+has_static_folder
+(ﬂask.Flask
+attribute),
+182
+headers (ﬂask.Request attribute), 198
+headers (ﬂask.Response attribute), 201
+I
+init_jinja_globals() (ﬂask.Flask method),
+182
+inject_url_defaults() (ﬂask.Flask method),
+183
+instance_path (ﬂask.Flask attribute), 183
+is_null_session()
+(ﬂask.sessions.SessionInterface
+method), 203
+is_xhr (ﬂask.Request attribute), 199
+J
+jinja_env (ﬂask.Flask attribute), 183
+jinja_loader
+(ﬂask.Blueprint
+attribute),
+196
+jinja_loader (ﬂask.Flask attribute), 183
+jinja_options (ﬂask.Flask attribute), 183
+json (ﬂask.Request attribute), 200
+json_decoder (ﬂask.Flask attribute), 183
+json_encoder (ﬂask.Flask attribute), 183
+JSONDecoder (class in ﬂask.json), 216
+JSONEncoder (class in ﬂask.json), 216
+jsonify() (in module ﬂask.json), 215
+K
+key_derivation
+(ﬂask.sessions.SecureCookieSessionInterface
+attribute), 204
+L
+load() (in module ﬂask.json), 216
+loads() (in module ﬂask.json), 216
+log_exception() (ﬂask.Flask method), 183
+logger (ﬂask.Flask attribute), 183
+logger_name (ﬂask.Flask attribute), 183
+M
+make_conﬁg() (ﬂask.Flask method), 183
+make_default_options_response()
+(ﬂask.Flask method), 183
+make_null_session() (ﬂask.Flask method),
+184
+make_null_session()
+(ﬂask.sessions.SessionInterface
+method), 203
+make_response()
+(ﬂask.Flask
+method),
+184
+287
+
+make_response() (in module ﬂask), 209
+make_setup_state()
+(ﬂask.Blueprint
+method), 196
+Markup (class in ﬂask), 212
+match_request()
+(ﬂask.ctx.RequestContext
+method), 221
+max_content_length
+(ﬂask.Request
+at-
+tribute), 200
+message_ﬂashed (in module ﬂask), 223
+method (ﬂask.Request attribute), 199
+methods (ﬂask.views.View attribute), 225
+MethodView (class in ﬂask.views), 225
+mimetype (ﬂask.Response attribute), 202
+modiﬁed (ﬂask.session attribute), 202
+modiﬁed (ﬂask.sessions.SessionMixin at-
+tribute), 205
+module (ﬂask.Request attribute), 200
+N
+name (ﬂask.Flask attribute), 184
+new (ﬂask.session attribute), 202
+new
+(ﬂask.sessions.SessionMixin
+at-
+tribute), 205
+null_session_class
+(ﬂask.sessions.SessionInterface
+attribute), 204
+NullSession (class in ﬂask.sessions), 205
+O
+on_json_loading_failed()
+(ﬂask.Request
+method), 200
+open_instance_resource()
+(ﬂask.Flask
+method), 184
+open_resource() (ﬂask.Blueprint method),
+196
+open_resource() (ﬂask.Flask method), 184
+open_session() (ﬂask.Flask method), 185
+open_session()
+(ﬂask.sessions.SessionInterface
+method), 204
+options (ﬂask.blueprints.BlueprintSetupState
+attribute), 222
+P
+path (ﬂask.Request attribute), 199
+permanent (ﬂask.session attribute), 202
+permanent
+(ﬂask.sessions.SessionMixin
+attribute), 205
+permanent_session_lifetime
+(ﬂask.Flask
+attribute), 185
+pickle_based
+(ﬂask.sessions.SessionInterface
+attribute), 204
+pop() (ﬂask.ctx.AppContext method), 222
+pop() (ﬂask.ctx.RequestContext method),
+221
+preprocess_request()
+(ﬂask.Flask
+method), 185
+preserve_context_on_exception
+(ﬂask.Flask attribute), 185
+process_response() (ﬂask.Flask method),
+185
+propagate_exceptions
+(ﬂask.Flask
+at-
+tribute), 186
+push()
+(ﬂask.ctx.AppContext
+method),
+222
+push()
+(ﬂask.ctx.RequestContext
+method), 221
+Python Enhancement Proposals
+PEP 8, 255
+R
+record() (ﬂask.Blueprint method), 197
+record_once() (ﬂask.Blueprint method),
+197
+redirect() (in module ﬂask), 209
+register() (ﬂask.Blueprint method), 197
+register_blueprint() (ﬂask.Flask method),
+186
+register_error_handler()
+(ﬂask.Flask
+method), 186
+register_module() (ﬂask.Flask method),
+186
+render_template() (in module ﬂask), 217
+render_template_string()
+(in
+module
+ﬂask), 217
+Request (class in ﬂask), 198
+request (class in ﬂask), 200
+request_class (ﬂask.Flask attribute), 186
+request_context()
+(ﬂask.Flask
+method),
+186
+request_ﬁnished (in module ﬂask), 223
+request_started (in module ﬂask), 223
+request_tearing_down (in module ﬂask),
+223
+RequestContext (class in ﬂask.ctx), 220
+288
+
+Response (class in ﬂask), 201
+response_class (ﬂask.Flask attribute), 187
+RFC
+RFC 822, 215
+route() (ﬂask.Blueprint method), 197
+route() (ﬂask.Flask method), 187
+routing_exception
+(ﬂask.Request
+at-
+tribute), 200
+run() (ﬂask.Flask method), 187
+S
+safe_join() (in module ﬂask), 212
+salt (ﬂask.sessions.SecureCookieSessionInterface
+attribute), 204
+save_session() (ﬂask.Flask method), 188
+save_session()
+(ﬂask.sessions.SessionInterface
+method), 204
+script_root (ﬂask.Request attribute), 199
+secret_key (ﬂask.Flask attribute), 188
+SecureCookieSession
+(class
+in
+ﬂask.sessions), 204
+SecureCookieSessionInterface
+(class
+in
+ﬂask.sessions), 204
+select_jinja_autoescape()
+(ﬂask.Flask
+method), 188
+send_ﬁle() (in module ﬂask), 210
+send_from_directory() (in module ﬂask),
+211
+send_static_ﬁle()
+(ﬂask.Blueprint
+method), 197
+send_static_ﬁle()
+(ﬂask.Flask
+method),
+188
+serializer (ﬂask.sessions.SecureCookieSessionInterface
+attribute), 204
+session (class in ﬂask), 202
+session_class
+(ﬂask.sessions.SecureCookieSessionInterface
+attribute), 204
+session_cookie_name
+(ﬂask.Flask
+at-
+tribute), 188
+session_interface (ﬂask.Flask attribute),
+188
+session_json_serializer
+(in
+module
+ﬂask.sessions), 205
+session_transaction()
+(ﬂask.testing.FlaskClient method),
+206
+SessionInterface (class in ﬂask.sessions),
+202
+SessionMixin (class in ﬂask.sessions), 205
+set_cookie() (ﬂask.Response method), 201
+should_ignore_error()
+(ﬂask.Flask
+method), 188
+signal()
+(ﬂask.signals.Namespace
+method), 224
+signals_available (in module ﬂask), 223
+status (ﬂask.Response attribute), 201
+status_code
+(ﬂask.Response
+attribute),
+201
+stream (ﬂask.Request attribute), 198
+stream_with_context() (in module ﬂask),
+220
+striptags() (ﬂask.Markup method), 213
+subdomain (ﬂask.blueprints.BlueprintSetupState
+attribute), 222
+T
+teardown_app_request() (ﬂask.Blueprint
+method), 197
+teardown_appcontext()
+(ﬂask.Flask
+method), 189
+teardown_appcontext_funcs
+(ﬂask.Flask
+attribute), 189
+teardown_request()
+(ﬂask.Blueprint
+method), 197
+teardown_request() (ﬂask.Flask method),
+189
+teardown_request_funcs (ﬂask.Flask at-
+tribute), 190
+template_context_processors (ﬂask.Flask
+attribute), 190
+template_ﬁlter() (ﬂask.Flask method), 190
+template_global()
+(ﬂask.Flask
+method),
+190
+template_rendered (in module ﬂask), 223
+template_test() (ﬂask.Flask method), 190
+test_client() (ﬂask.Flask method), 191
+test_client_class
+(ﬂask.Flask
+attribute),
+191
+test_request_context()
+(ﬂask.Flask
+method), 191
+testing (ﬂask.Flask attribute), 191
+trap_http_exception()
+(ﬂask.Flask
+method), 192
+289
+
+U
+unescape() (ﬂask.Markup method), 213
+update_template_context()
+(ﬂask.Flask
+method), 192
+url (ﬂask.Request attribute), 199
+url_build_error_handlers (ﬂask.Flask at-
+tribute), 192
+url_default_functions
+(ﬂask.Flask
+at-
+tribute), 192
+url_defaults (ﬂask.blueprints.BlueprintSetupState
+attribute), 222
+url_defaults() (ﬂask.Blueprint method),
+198
+url_defaults() (ﬂask.Flask method), 192
+url_for() (in module ﬂask), 208
+url_map (ﬂask.Flask attribute), 192
+url_preﬁx (ﬂask.blueprints.BlueprintSetupState
+attribute), 222
+url_root (ﬂask.Request attribute), 199
+url_rule (ﬂask.Request attribute), 200
+url_rule_class (ﬂask.Flask attribute), 193
+url_value_preprocessor() (ﬂask.Blueprint
+method), 198
+url_value_preprocessor()
+(ﬂask.Flask
+method), 193
+url_value_preprocessors (ﬂask.Flask at-
+tribute), 193
+use_x_sendﬁle (ﬂask.Flask attribute), 193
+V
+values (ﬂask.Request attribute), 198
+View (class in ﬂask.views), 224
+view_args (ﬂask.Request attribute), 200
+view_functions (ﬂask.Flask attribute), 193
+W
+wsgi_app() (ﬂask.Flask method), 193
+Y
+YOURAPPLICATION_SETTINGS, 62
+290

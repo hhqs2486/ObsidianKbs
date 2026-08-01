@@ -1,0 +1,159 @@
+37-53  作者：南宫乘风 链接：
+blog.csdn.net/heian_99/article/details/104027379
+54.本地选择脚本auto_build.sh
+ 
+脚本内容如下：
+这个部分有几处技术使用：
+#!/bin/bash
+ 
+MON_DIR=/opt
+inotifywait -mqr --format %f -e create $MON_DIR |\
+while read files; do
+   #同步文件
+   rsync -avz /opt /tmp/opt
+  #检测文件是否被修改
+   #echo "$(date +'%F %T') create $files" | mail -s "dir monitor" xxx@163.com
+done
+#/bin/bash
+remote_ip=172.160.111.32
+remote_hostname=lyn
+case $1 in
+    1)  echo -e '\033[0;42m Ethernet dhcp \033[0m'
+        VAR="eno1"
+    ;;
+    2)  echo -e '\033[0;46m wireless dhcp \033[0m'
+        VAR="wlo1"
+    ;;
+esac
+HOST_IP=$(ifconfig $VAR | grep "inet" | grep -v inet6| awk '{ print $2}' | awk -
+F: '{print $1}')
+echo "parse ip is:" $HOST_IP
+if [[ ! -n "${HOST_IP}" ]] ;then
+ echo -e "\033[0;31m input local ip \033[0m"
+ read local_ip
+else
+ if [[ ! $(echo "${HOST_IP}" | awk -F. '{printf $1}') == "192"  ]] ;then
+  local_ip=$HOST_IP
+ else
+  echo -e "\033[0;31m error ip \033[0m"
+  exit 0
+ fi
+fi
+#exit 0
+if [[ $2 == 1 ]];then
+ build_opt="all_build"
+else
+ build_opt=
+fi
+ssh -t ${remote_hostname}@${remote_ip} "/home/lyn/build.sh ip=${local_ip} 
+${build_opt}"
+
+switch case使用，if else、免密登陆，远程调用脚本。
+首先是一个switch case
+ 
+此处作用是进行ip地址的筛选，因为的在调试过程中，我的电脑有时候用网线连接，有时候会去测试房
+去测试，用wifi连接，这个时候会进行网络ip地址的区分，当我输入./auto_build.sh 1的时候，脚本会进
+行解析eno1网线分配的ip地址，当我输入./auto_build.sh 2的时候则会解析wlo1wifi分配的ip。
+在里面我还用了颜色打印，进行关键词的标注，如下所示：
+ 
+关于颜色打印的部分这个是另一个知识，这是一个转义的实际使用过程，通过特定符号的转义识别，我
+们在Linux终端去显示不同颜色的打印输出，这个是我们经常使用的操作，例如log等级分级打印时候，
+error是红色，正常是绿色，普通是白色等。
+颜色打印大致介绍如下：
+转义序列以控制字符'ESC'开头。该字符的ASCII码十进制表示为27，十六进制表示为0x1B，八进制表示
+为033。多数转义序列超过两个字符，故通常以'ESC'和左括号'['开头。该起始序列称为控制序列引导符
+(CSI，Control Sequence Intro)，通常由 '\033[' 或 '\e[' 代替。
+通过转义序列设置终端显示属性时，可采用以下格式：
+其中，'\033['或'\e['引导转义序列，'m'表示设置属性并结束转义序列。
+因此，通过转义序列设置终端显示属性时，常见格式为：
+其中 ，'\033[0m'用于恢复默认的终端输出属性，否则会影响后续的输出。
+示例：我在此处使用 echo -e '\033[0;42m Ethernet dhcp \033[0m' 进行网线端口ip分配的打印，通过
+转义之后，打印颜色为带背景色的绿色显示。具体对应的颜色，大家可以看一下小麦老兄写的这篇文章 
+printf打印还能这么玩。
+注：打印log时候记得echo 要使用 -e参数。
+\033[ Param {;Param;...}m
+或
+\e[ Param {;Param;...}m
+\033[显示方式;前景色;背景色m输出字符串\033[0m
+或\e[显示方式;前景色;背景色m输出字符串\033[0m
+
+其次还有组合使用命令实现获取本地ip
+ 
+我们一步步查看执行情况
+第一步：ifconfig eno1
+我们经常使用ifconfig查看ip，但是使用ifconfig返回的数据过多，而我们实际使用的部分只是一部分而
+已。
+所以我们使用ifconfig指定设备查找ip，筛去无用信息。
+第二步：ifconfig eno1   | grep "inet"
+把第一步查询的信息通过 | 产生一个管道传递给下一个命令，用grep查找有inet字符的行数据，显示如
+下：
+HOST_IP=$(ifconfig $VAR | grep "inet" | grep -v inet6| awk '{ print $2}' | awk -
+F: '{print $1}')
+lyn@lyn:~/Documents/work-data/download_data$ ifconfig eno1 
+eno1: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
+        inet 172.16.30.147  netmask 255.255.255.0  broadcast 172.16.30.255
+        inet6 fe80::ca7:d954:67e0:7c60  prefixlen 64  scopeid 0x20<link>
+        ether f8:b4:6a:bd:dd:92  txqueuelen 1000  (Ethernet)
+        RX packets 3678600  bytes 3470673356 (3.4 GB)
+        RX errors 0  dropped 36842  overruns 0  frame 0
+        TX packets 2229431  bytes 995696588 (995.6 MB)
+        TX errors 0 
+lyn@lyn:~/Documents/work-data/download_data$ ifconfig eno1  | grep "inet"
+        inet 172.16.30.147  netmask 255.255.255.0  broadcast 172.16.30.255
+        inet6 fe80::ca7:d954:67e0:7c60  prefixlen 64  scopeid 0x20<link>
+
+因为我们只需要ipv4协议的ip，所以我们要去掉inet6对应的地址
+第三步：ifconfig eno1  | grep "inet" | grep -v inet6
+使用grep -v命令去掉 inet6 关键词的对应一行信息
+第四步：ifconfig eno1  | grep "inet" | grep -v inet6 | awk '{ print$2}'
+使用 awk处理文本文件的语言进行处理数据，$2 表示默认以空格分割的第二组 ，-F:-F指定分隔符为 ‘ : ’
+关于grep sed awk的使用大家也可以网上具体查看一下，但是我们一般使用过程中，grep 更适合单纯的
+查找或匹配文本， sed 更适合编辑匹配到的文本，awk 更适合格式化文本，对文本进行较复杂格式处
+理。
+这个时候我们从本机得到了ip地址。我们需要进行远程调用服务器脚本，并把ip以参数形式传入。
+其次ssh免密登陆和ssh远程执行任务
+ 
+首先第一个部分就是ssh免密登陆
+本地执行ssh到服务的相关操作命令需要免密，服务器scp本地文件也要免密登陆，那么如何设置我们
+ssh相关命令操作，无需密码呢？
+SSH分客户端openssh-client和服务器openssh-server如果你只是想登陆别的机器，只需要安装
+openssh-client（ubuntu有默认安装，如果没有则sudo apt-get install openssh-client），如果要使别
+的机器登陆本机就需要在本机安装openssh-server（sudo apt-get install openssh-server）
+我们可以使用 ps -e | grep ssh  来查看对应的openssh-client和openssh-server运行情况，其中ssh是
+client ，sshd是server，哪个缺我们就使用apt-get install 。
+sudo service ssh start 安装之后可以使用这个命令启动。
+准备好了对应的server和client接下来，把我们生成的rsa公钥拷贝要对应要登陆的机器，即可免密登
+陆。
+1.客户端生成公私钥
+lyn@lyn:~/Documents/work-data/download_data$ ifconfig eno1  | grep "inet" | grep 
+-v inet6
+        inet 172.16.30.147  netmask 255.255.255.0  broadcast 172.16.30.255
+lyn@lyn:~/Documents/work-data/download_data$ ifconfig eno1  | grep "inet" | grep 
+-v inet6| awk '{ print$2}' 
+172.16.30.147
+
+ssh-keygen 命令一路回车默认生成
+这个命令会在用户目录.ssh文件夹下创建公私钥，id_rsa （私钥），id_rsa.pub (公钥)。
+2.上传公钥到服务器
+上面这条命令是写到服务器上的ssh目录下去了
+可以看到客户端写入到服务器的 id_rsa.pub （公钥）内容。
+3.测试免密登录 客户端通过ssh连接远程服务器，就可以免密登录了。
+第二个部分就是ssh远程执行服务器脚本
+有时候我们需要远程执行一些有交互操作的命令。这个时候我们就可以使用ssh加参数进去进行远程执
+行。
+格式如下：
+远程执行一个命令
+执行多条命令，使用分号把不同的命令隔起来
+远程执行本地脚本
+远程执行本地的脚本（执行带有参数的脚本），需要为 bash 指定 -s 参数：
+执行远程的脚本
+注，此时需要指定脚本的绝对路径！
+而我们使用的为远程执行脚本，最终ssh远程执行如下：
+ssh-copy-id -i ~/.ssh/id_rsa.pub lyn@172.160.111.32
+vi  ~/.ssh/authorized_keys
+ssh lyn@172.160.111.32
+ssh lyn@172.160.111.32 "ls -l"
+ssh lyn@172.160.111.32 "ls；cat test.txt "
+ssh lyn@172.160.111.32 < test.sh 
+ssh lyn@172.160.111.32 'bash -s' < test.sh helloworld
+ssh lyn@172.160.111.32 "/home/lyn/test.sh"

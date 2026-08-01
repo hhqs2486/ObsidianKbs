@@ -1,0 +1,194 @@
+Jenkins BlueOcean
+上节课我们讲解了使⽤ Jenkins Pipeline 来⾃动化部署⼀个 Kubernetes 应⽤的⽅法，在实际的项⽬
+中，往往⼀个代码仓库都会有很多分⽀的，⽐如开发、测试、线上这些分⽀都是分开的，⼀般情况下
+开发或者测试的分⽀我们希望提交代码后就直接进⾏ CI/CD 操作，⽽线上的话最好增加⼀个⼈⼯⼲预
+的步骤，这就需要 Jenkins 对代码仓库有多分⽀的⽀持，当然这个特性是被 Jenkins ⽀持的。
+Jenkinsfile
+同样的，我们可以使⽤上节课的⽅法直接把要构建的脚本配置在 Jenkins Web UI 界⾯中就可以，但是
+我们也提到过最佳的⽅式是将脚本写⼊⼀个名为 Jenkinsfile 的⽂件中，跟随代码库进⾏统⼀的管理。
+我们这⾥在之前的 git 库中新建⼀个 dev 分⽀，然后更改 main.go 的代码，打印当前运⾏的代码分
+⽀，通过环境变量注⼊进去，所以我们我们通过 k8s.yaml ⽂件的环境变量把当前代码分⽀注⼊进去，
+具体代码可以参考https://github.com/cnych/jenkins-demo/tree/dev。
+然后新建⼀个 Jenkinsfile ⽂件，将上节课的构建脚本拷⻉进来，但是我们需要对其做⼀些修改：
+(Jenkinsfile)
+node('haimaxy-jnlp') {
+    stage('Prepare') {
+        echo "1.Prepare Stage"
+        checkout scm
+        script {
+            build_tag = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
+            if (env.BRANCH_NAME != 'master') {
+                build_tag = "${env.BRANCH_NAME}-${build_tag}"
+            }
+        }
+    }
+    stage('Test') {
+      echo "2.Test Stage"
+    }
+    stage('Build') {
+        echo "3.Build Docker Image Stage"
+        sh "docker build -t cnych/jenkins-demo:${build_tag} ."
+    }
+    stage('Push') {
+        echo "4.Push Docker Image Stage"
+        withCredentials([usernamePassword(credentialsId: 'dockerHub', passwordVariable: 'd
+ockerHubPassword', usernameVariable: 'dockerHubUser')]) {
+            sh "docker login -u ${dockerHubUser} -p ${dockerHubPassword}"
+            sh "docker push cnych/jenkins-demo:${build_tag}"
+        }
+    }
+    stage('Deploy') {
+        echo "5. Deploy Stage"
+        if (env.BRANCH_NAME == 'master') {
+            input "确认要部署线上环境吗？"
+        }
+        sh "sed -i 's/<BUILD_TAG>/${build_tag}/' k8s.yaml"
+Jenkins BlueOcean
+514
+
+        sh "sed -i 's/<BRANCH_NAME>/${env.BRANCH_NAME}/' k8s.yaml"
+        sh "kubectl apply -f k8s.yaml --record"
+    }
+}
+在第⼀步中我们增加了checkout scm命令，⽤来检出代码仓库中当前分⽀的代码，为了避免各个环境
+的镜像 tag 产⽣冲突，我们为⾮ master 分⽀的代码构建的镜像增加了⼀个分⽀的前缀，在第五步中如
+果是 master 分⽀的话我们才增加⼀个确认部署的流程，其他分⽀都⾃动部署，并且还需要替换
+k8s.yaml ⽂件中的环境变量的值。
+更改完成后，提交 dev 分⽀到 github 仓库中。
+BlueOcean
+我们这⾥使⽤ BlueOcean 这种⽅式来完成此处 CI/CD 的⼯作，BlueOcean 是 Jenkins 团队从⽤户体
+验⻆度出发，专为 Jenkins Pipeline 重新设计的⼀套 UI 界⾯，仍然兼容以前的 fressstyle 类型的 job，
+BlueOcean 具有以下的⼀些特性：
+连续交付（CD）Pipeline 的复杂可视化，允许快速直观的了解 Pipeline 的状态
+可以通过 Pipeline 编辑器直观的创建 Pipeline
+需要⼲预或者出现问题时快速定位，BlueOcean 显示了 Pipeline 需要注意的地⽅，便于异常处理
+和提⾼⽣产⼒
+⽤于分⽀和拉取请求的本地集成可以在 GitHub 或者 Bitbucket 中与其他⼈进⾏代码协作时最⼤限
+度提⾼开发⼈员的⽣产⼒。
+BlueOcean 可以安装在现有的 Jenkins 环境中，也可以使⽤ Docker 镜像的⽅式直接运⾏，我们这⾥
+直接在现有的 Jenkins 环境中安装 BlueOcean 插件：登录 Jenkins Web UI -> 点击左侧的 Manage
+Jenkins -> Manage Plugins -> Available -> 搜索查找 BlueOcean -> 点击下载安装并重启
+Jenkins BlueOcean
+515
+
+install BlueOcean
+⼀般来说 Blue Ocean 在安装后不需要额外的配置，现有 Pipeline 和 Job 将继续照常运⾏。但
+是，Blue Ocean 在⾸次创建或添加 Pipeline的时候需要访问您的存储库（Git或GitHub）的权
+限，以便根据这些存储库创建 Pipeline。
+安装完成后，我们可以在 Jenkins Web UI ⾸⻚左侧看到会多⼀个 Open Blue Ocean 的⼊⼝，我们点
+击就可以打开，如果之前没有创建过 Pipeline，则打开 Blue Ocean 后会看到⼀个Create a new
+pipeline的对话框：
+Jenkins BlueOcean
+516
+
+blue demo2
+然后我们点击开始创建⼀个新的 Pipeline，我们可以看到可以选择 Git、Bitbucket、GitHub，我们这⾥
+选择 GitHub，可以看到这⾥需要⼀个访问我们 GitHub 仓库权限的 token，在 GitHub 的仓库中创建⼀
+个 Personal access token:
+Jenkins BlueOcean
+517
+
+blue demo3
+然后将⽣成的 token 填⼊下⾯的创建 Pipeline 的流程中，然后我们就有权限选择⾃⼰的仓库，包括下
+⾯需要构建的仓库，⽐如我们这⾥需要构建的是 jenkins-demo 这个仓库，然后创建 Pipeline 即可：
+Jenkins BlueOcean
+518
+
+blue demo4
+Blue Ocean 会⾃动扫描仓库中的每个分⽀，会为根⽂件夹中包含Jenkinsfile的每个分⽀创建⼀个
+Pipeline，⽐如我们这⾥有 master 和 dev 两个分⽀，并且两个分⽀下⾯都有 Jenkinsfile ⽂件，所以创
+建完成后会⽣成两个 Pipeline:
+Jenkins BlueOcean
+519
+
+blue demo5
+我们可以看到有两个任务在运⾏了，我们可以把 master 分⽀的任务停⽌掉，我们只运⾏ dev 分⽀即
+可，然后我们点击 dev 这个 pipeline 就可以进⼊本次构建的详细⻚⾯：
+blue demo6
+Jenkins BlueOcean
+520
+
+在上⾯的图中每个阶段我们都可以点击进去查看对应的构建结果，⽐如我们可以查看 Push 阶段下⾯
+的⽇志信息：
+...
+[jenkins-demo_dev-I2WMFUIFQCIFGRPNHN3HU7IZIMHEQMHWPUN2TP6DCYSWHFFFFHOA] Running shell scri
+pt
++ docker push ****/jenkins-demo:dev-ee90aa5
+The push refers to a repository [docker.io/****/jenkins-demo]
+...
+我们可以看到本次构建的 Docker 镜像的 Tag 为dev-ee90aa5，是符合我们在 Jenkinsfile 中的定义的
+吧
+现在我们更改下 k8s.yaml 将 环境变量的值的标记改成 BRANCH_NAME，当然 Jenkinsfile 也要对应
+的更改，然后提交代码到 dev 分⽀并且 push 到 Github 仓库，我们可以看到 Jenkins Blue Ocean ⾥
+⾯⾃动触发了⼀次构建⼯作，最好同样我们可以看到本次构建能够正常完成，最后我们查看下本次构
+建的结果：
+$ kubectl get pods
+NAME                                      READY     STATUS        RESTARTS   AGE
+...
+jenkins-demo-648876568d-q5mbx             0/1       Completed     3          57s
+...
+$ kubectl logs jenkins-demo-648876568d-q5mbx
+Hello, Kubernetes！I'm from Jenkins CI！
+BRANCH: dev
+我们可以看到打印了⼀句 BRANCH: dev ，证明我本次 CI/CD 是正常的。
+现在我们来把 dev 分⽀的代码合并到 master 分⽀，然后来触发⼀次⾃动构建：
+☁  jenkins-demo [dev] git status
+On branch dev
+nothing to commit, working directory clean
+☁  jenkins-demo [dev] git checkout master
+Switched to branch 'master'
+Your branch is up-to-date with 'origin/master'.
+☁  jenkins-demo [master] git merge dev
+Updating 50e0401..ee90aa5
+Fast-forward
+ Jenkinsfile | 29 +++++++++--------------------
+ k8s.yaml    |  3 +++
+ main.go     |  2 ++
+ 3 files changed, 14 insertions(+), 20 deletions(-)
+☁  jenkins-demo [master] git push origin master
+Total 0 (delta 0), reused 0 (delta 0)
+To git@github.com:cnych/jenkins-demo.git
+   50e0401..ee90aa5  master -> master
+Jenkins BlueOcean
+521
+
+然后我们回到 Jenkins 的 Blue Ocean ⻚⾯中，可以看到⼀个 master 分⽀下⾯的任务被⾃动触发了，
+同样我们进⼊详情⻚可以查看 Push 阶段下⾯的⽇志：
+...
+[jenkins-demo_master-XA3VZ5LP4XTCFAHHXIN3G5ZB4XA4J5H6I4DNKOH6JAXZXARF7LYQ] Running shell s
+cript
++ docker push ****/jenkins-demo:ee90aa5
+...
+我们可以查看到此处推送的镜像 TAG 为 ee90aa5，没有分⽀的前缀，是不是和我们前⾯在 Jenkinsfile
+中的定义是⼀致的，镜像推送完成后，进⼊ Deploy 阶段的时候我们可以看到出现了⼀个暂停的操作，
+让我们选择是否需要部署到线上，我们前⾯是不是定义的如果是 master 分⽀的话，在部署的阶段需要
+我们⼈⼯确认：
+bule demo7
+然后我们点击Proceed才会继续后⾯的部署⼯作，确认后，我们同样可以去 Kubernetes 环境中查看下
+部署的结果：
+$ kubectl get pods
+NAME                                      READY     STATUS             RESTARTS   AGE
+...
+jenkins-demo-c69dc6fdf-6ssjf              0/1       Completed   5          4m
+...
+$ kubectl logs jenkins-demo-c69dc6fdf-6ssjf
+Hello, Kubernetes！I'm from Jenkins CI！
+BRANCH: master
+现在我们可以看到打印出来的信息是 master，证明部署是没有问题的。
+Jenkins BlueOcean
+522
+
+到这⾥我们就实现了多分⽀代码仓库的完整的 CI/CD 流程。
+当然我们这⾥的示例还是太简单，只是单纯为了说明 CI/CD 的步骤，在后⾯的课程中，我们会结合其
+他的⼯具进⼀步对我们现有的⽅式进⾏改造，⽐如使⽤ Helm、Gitlab 等等。
+另外如果你对声明式的 Pipeline ⽐较熟悉的话，我们推荐使⽤这种⽅式来编写 Jenkinsfile ⽂件，因为
+使⽤声明式的⽅式编写的 Jenkinsfile ⽂件在 Blue Ocean 中不但⽀持得⾮常好，我们还可以直接在
+Blue Ocean Editor 中可视化的对我们的 Pipeline 进⾏编辑操作，⾮常⽅便。
+我们会在单独的课程中对 Jenkinsfile 的声明式语法进⾏详细讲解，感兴趣的同学可以关注下。
+点击查看本⽂视频
+扫描下⾯的⼆维码(或微信搜索 k8s技术圈 )关注我们的微信公众帐号，在微信公众帐号中回复 加群 即
+可加⼊到我们的 kubernetes 讨论群⾥⾯共同学习。
+k8s技术圈⼆维码
+Copyright © qikqiak.com 2018 all right reserved，powered by GitbookUpdated: 2019-03-12 13:03:37
+Jenkins BlueOcean
+523

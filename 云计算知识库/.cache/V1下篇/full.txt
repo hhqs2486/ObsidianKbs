@@ -1,0 +1,2307 @@
+
+--- p1 ---
+ 
+ 
+                         
+                                                                             
+`````` 
+   
+                                                          
+  
+                                                                               开始下篇 
+            第七讲  Prometheus 数学理理论基础学习 （prometheus 数学consule使⽤用）
+下篇的内容展望 
+ •  序章：做本专题讲座的内容简介 
+ • 第⼀一讲：企业级运维监控理理论基础
+ • 第⼆二讲：企业监控通⽤用技术
+ • 第三讲：Prometheus 监控⼊入⻔门简介
+
+
+--- p2 ---
+ • 第四讲：Prometheus 运⾏行行框架介绍
+ • 第五讲：Prometheus 数据格式介绍
+ • 第六讲：Prometheus 初探和配置（安装测试）
+ • 第七讲：Prometheus 数学理理论基础学习 
+（prometheus 数学consule使⽤用）
+ • 第⼋八讲：Prometheus 命令⾏行行使⽤用扩展
+ • 第九讲：企业级监控数据采集⽅方法
+ • 第⼗十讲：企业级监控数据采集脚本开发实践 
+（Pushgateway模块学习）
+ • 第⼗十⼀一讲：Prometheus 之 exporter模块源代码示例例
+ • 第⼗十⼆二讲：Grafana （超实⽤用企业级监控绘图⼯工具的结
+合）
+ • 第⼗十三讲：Prometheus 企业级实际使⽤用（⼀一）
+ • 第⼗十四讲：Prometheus 企业级实际使⽤用（⼆二）
+ • 第⼗十五讲：Pagerduty的连⽤用（重要）
+ • 第⼗十六讲：Prometheus专题讲座总结篇
+第七讲内容概括
+•
+回顾上篇最后留给⼤家的⼀个 较难CPU使⽤率 计算公式
+•
+拆分 并 解释 这个运算公式 
+•
+举⼀反三 计算其他CPU状态
+（⼀）回顾上篇最后留给⼤家的⼀个 较难CPU使⽤率 计算公
+式
+(1-((sum(increase(node_cpu{mode="idle"}[1m])) by (instance))  /
+(sum(increase(node_cpu[1m])) by (instance)))) * 100
+
+
+--- p3 ---
+上篇最后⼀节课 给⼤家讲解了 Linux系统中 底层计算CPU占
+⽤率的 ⽅法
+简单的总结如下：
+Linux系统开启后，CPU开始进⼊⼯作状态，每⼀个不同状态
+的CPU使⽤时间 都从零开始累计
+⽽我们在被监控客户端安装的node_exporter 会抓取 并返回给
+我们 常⽤的⼋种CPU状态的累积时间数值 
+我们就先使⽤ ⽤户态CPU来给⼤家举个例⼦ 
+⽤户态CPU通常是 占⽤整个CPU状态 最多的类型 ， 当然也
+有个别的情况，内核态 或 IO等待 占⽤的更多
+TOP =>   user%  
+12:00 开机后 ⼀直到 12:30 截⽌
+这30分钟的过程中  （当前我们先暂时忽略 是⼏核CPU 就当
+作1核来说）
+
+
+--- p4 ---
+CPU被使⽤在⽤户态 的时间 ⼀共是 8分钟
+CPU被使⽤在内核态 的时间 ⼀共是 1.5分钟
+CPU被使⽤在IO等待状态 的时间 ⼀共是 0.5分钟
+CPU被使⽤在Idle（空闲状态） 的时间 ⼀共是 20分钟
+(idle空闲状态的CPU时间 其实就是CPU处于没事⼉⼲的时间  
+)
+CPU被使⽤在其他⼏个状态的时间  是0 
+--
+上⾯的这些数据 为了我们计算CPU在这段30mins 时间的 使⽤
+率 提供了单位数据基础
+CPU的使⽤率 = （所有⾮空闲状态的CPU使⽤时间总和 ）/ 
+（所有状态CPU时间的总和）
+有了这个公式后 咱们就可以很⾃然的 得出如下的计算公式
+(user(8mins) + sys(1.5mins) + iowa(0.5min) + 0 + 0 + 0 + 0 )  / 
+ (30mins)  
+= 10分钟 / 30分钟
+= 30%
+所以 针对这30分钟 我们的CPU平均使⽤率就是 30% 
+接下来 其实上⾯的这个计算公式 还是有⼀点点 累赘
+我们可以换⼀个更简明的算法
+idle(20mins) / (30mins) => 70%
+空闲时间 除以 总时间 等于 空闲CPU的⽐例
+
+
+--- p5 ---
+然后我们
+100% - 70% = 30%                
+。。。。 是不是更简单了
+说到这⾥之后  其实还有另外两个问题没有解决 咱们来分别说
+⼀下
+<01> 上⾯这样的⽅法去计算 最终只能是算出 CPU在30分钟
+内的 总平均时间 
+如果我要是问  那么中间的某⼀分钟之内CPU的总平均时间是
+多少 ？？
+那么使⽤当前的这个算法 我们就没办法 精确的知道 某⼀分钟
+内的平均值了
+（其实 也是合情合理的提问，对于向CPU这种实时变化的监
+控数据，我们往往需要更精确的单位 去判断当前时刻 或者过
+去某⼀时刻 更细节的即时状况 所以 只知道30分钟的平均值 
+是没有太⼤意思的） 
+如何解决这个问题？ （别担⼼😓）
+还记得咱们学过 Counter 的数据类型吗？（虚拟的数据类型 
+针对返回的数值 他的使⽤途径） 
+
+
+--- p6 ---
+node_exporter => node_cpu给我们返回的是 Counter 的数据
+(CPU 底层是 时间的累积)
+Counter 是⼀个 ⼀直持续增长的数值
+现在⾯临的问题是 30分钟内 CPU使⽤时间持续增长 UP， 我
+们需要截取其中⼀段增长的增量值
+如果我们能获得 1分钟的增量值 然后拿这个数值再去使⽤刚
+才同样的 计算公式 
+那么 我们不就顺理成章的 得到了 1分钟的平均值了嘛？
+解决办法 接踵⽽⾄
+-- 
+prometheus 的数学查询命令⾏ 其实给我们提供了 ⾮常丰富的 
+计算函数
+关于种类繁多的 函数 我们从 第⼋讲开始 给⼤家逐⼀普及
+在这⾥ 我们先给⼤家 介绍⼀个 很实⽤的函数
+increase()
+increase 函数 在promethes中，是⽤来 针对Counter 这种持续增
+长的数值，截取其中⼀段时间的增量 
+increase(node_cpu[1m])   =》 这样 就获取了 CPU总使⽤时间 
+在1分钟内的增量
+这样 我们的第⼀个问题 就解决了
+接下来 来看第⼆个问题
+
+
+--- p7 ---
+<02> 实际⼯作中的CPU ⼤多数都是多核的 单核CPU服务器 
+VM
+如下图 Node_exporter 给我们截图回来的 
+⼋种CPU状态 -> 每⼀个核
+采集的数据 ⾃然也是细到 采集到每⼀个核的CPU时间
+不过我们在运维实际监控中 往往并不是太关注 每⼀个CPU核
+表现如何
+⽽是希望知道 整个CPU表现如何 
+（⼀般⽣产服务器 动不动CPU就是 16 20 32 40 48 核）
+如果每⼀个CPU核 都单独来⼀个监控曲线图 意义不⼤ ⽽且看
+着图太混乱了 
+有什么办法可以解决这个问题？
+prometheus提供了 另⼀个 sum() 函数 很频繁
+sum( ) 就如其字⾯意思⼀样 起到value 加合的作⽤
+
+
+--- p8 ---
+sum(   increase(node_cpu[1m])   ) 
+外⾯套⽤⼀个sum 即可把所有核数值加合
+问题就可以解决了
+然后 我们⼀切就绪 接下来 我们把整个prometheus计算公式 在
+下⼀个阶段进⾏拆分讲解
+-- 
+（⼆）拆分 并 解释 这个运算公式 
+(1-((sum(increase(node_cpu{mode="idle"}[1m])) by (instance))  /
+(sum(increase(node_cpu[1m])) by (instance)))) * 100
+(1-((sum(increase(node_cpu{mode="idle"}[1m])) by (instance))  /
+(sum(increase(node_cpu[1m])) by (instance)))) * 100
+这个prometheus的计算公式 其实就是 咱们最后 那个 使⽤  
+100%- (空闲时间 / 总时间) 的⽅法
+不过这个公式 直接拿来看 还是有点痛苦， 咱们来学⼀下 拆
+分
+
+
+--- p9 ---
+⾸先第⼀步
+key ： node_cpu 是 我们需要使⽤的 key name
+直接输⼊后 如上图所⽰ 
+⽬前这种图 没有任何意义 我们继续完善命令⾏
+第⼆步 
+咱们把idle空闲的CPU时间 和 全部CPU时间 都给过滤出来
+key 使⽤{} 做过滤
+node_cpu{mode="idle”} => 空闲
+node_cpu all
+
+
+--- p10 ---
+第三步
+我们使⽤ increase(      [1m]) 把 node_cpu{mode="idle"} 包起来
+=》
+increase(node_cpu{mode="idle"}[1m]).   => 代表  空闲CPU 1分
+钟内的增量 
+increase(node_cpu[1m]) =》 all_CPu 1mins
+这样就是 把⼀分钟的增量 的CPU时间给取出来了
+
+
+--- p11 ---
+到这⼀步以后 有点那个意思了
+不过 因为CPU核数太多 曲线太混杂了 我们需要进⼀步加强公
+式
+第四步
+我们使⽤  sum() 再包⼀层 increase(node_cpu{mode="idle"}
+[1m]).
+
+
+--- p12 ---
+到这⾥以后 感觉更像样⼦了
+不过 我们细⼼的同学 又发现了⼀个问题…….
+那就是 我们这个CPU的监控 其实采集的是 多台服务器的监控
+数据
+
+
+--- p13 ---
+怎么现在变成就⼀条线了？？？
+--
+其实 是由于这个 sum()函数的原因
+这个sum()函数 其实默认状况下 是把所有数据 不管是什么内
+容 全部进⾏加合了…… 
+不光把 每⼀台机器的 多个核加⼀起了（这个是我们需要的）
+还把 所有机器的CPU 也全都加到⼀起了…..变成 服务器集群
+总CPU平均值了….. 糗⼤了…
+如何解决？ 看下⼀步
+第五步
+再给⼤家引出⼀个新的函数 （或者说是 ⼀个新功能）
+by (instance)
+这个函数 可以把 sum加合到⼀起的数值 按照指定的⼀个⽅式 
+进⾏⼀层的拆分
+instance代表的是 机器名
+意思就是说 把sum函数中 服务器加合的这个糗事 再给它强⾏
+拆分出来
+我们来试⼀试吧
+sum(increase(node_cpu{mode="idle"}[1m]))    by (instance)
+
+
+--- p14 ---
+哈哈 这下就帅⽓了..
+第六步
+
+
+--- p15 ---
+这下3个问题全都解决了 让我们继续把公式写完整 看看输⼊
+如何
+(1-((sum(increase(node_cpu{mode="idle"}[1m])) by (instance))  /
+(sum(increase(node_cpu[1m])) by (instance)))) * 100
+sum(increase(node_cpu{mode="idle"}[1m])) by (instance)  =》 
+是空闲CPU时间 1分钟的增量 
+sum(increase(node_cpu[1m])) by (instance) 是全部CPU时间 1分
+钟增量 
+1-（sum(increase(node_cpu{mode="idle"}[1m])) by (instance)     
+   /       sum(increase(node_cpu[1m])) by (instance)）
+=> 
+这样就得到了 空闲CPU的 百分⽐了
+第七部
+最后⼀步 ⽤ 1 去减掉 整个上⾯的公式   再 * 100
+
+
+--- p16 ---
+(1-((sum(increase(node_cpu{mode="idle"}[1m])) by (instance))  /
+(sum(increase(node_cpu[1m])) by (instance)))) * 100
+这样我们就得到了 最终我们期望的结果
+基本上 ⼤部分服务器的 CPU使⽤率 都在 50%以下  还是⼀个
+⽐较良好的状态的 ^_^
+虽然过程⿇烦⼀些 但是还是很炫酷的
+（总使⽤率） 
+（三）举⼀反三 查看⼏个其他CPU状态时间的 使⽤率
+既然要看 每⼀个单独cpu类型的 使⽤率， 那么 1-idle的⽅式 
+就不好⽤了
+
+
+--- p17 ---
+sum(increase(node_cpu{mode="user"}[1m])) by (instance)      /   
+  sum(increase(node_cpu[1m])) by (instance)
+=》 ⽤户态 
+sum(increase(node_cpu{mode="system"}[1m])) by 
+(instance)       /     sum(increase(node_cpu[1m])) by (instance)
+sum(increase(node_cpu{mode="iowait"}[1m])) by 
+(instance)       /     sum(increase(node_cpu[1m])) by (instance)
+这样 我们就可以 举⼀反三 轻松获得 每⼀种CPU状态时间的 
+使⽤百分⽐了
+说到这⾥ 我们是不是发现 这下 TOP命令中的这⼀⾏ 我们总
+算是 彻底明⽩怎么回事了 对吗？
+成就感满满的 对吗？ 
+所以 就如我们之前所说
+promethes 计算公式的使⽤ 强制要求我们运维⼈员 必须要对
+Linux系统的深层次的知识 要有⼀定的掌握（依赖Linux的命
+令⾏ ） 
+不然 公式都没得写
+
+
+--- p18 ---
+有点⿇烦的同时 ，更多的 是提供给我们 更加⼴阔的平台 让
+我们尽情发挥 
+                                                                          
+ 
+   
+                                                      
+ 
+          第⼋八讲  Prometheus 命令⾏行行使⽤用扩展 
+本节课内容
+•
+prometheus命令⾏格式
+•
+rate 函数的使⽤
+•
+increase 函数的使⽤
+•
+sum函数使⽤
+•
+topk(x,)
+•
+count()
+（⼀）prometheus命令⾏格式
+
+
+--- p19 ---
+这次我们选⽤ ⼀个新的key 来做讲解
+count_netstat_wait_connections  !node_exporter（TCP 
+wait_connect 数）
+这个key 值得⼀说的是 并不是由我们熟悉的 node_exporter挖
+掘⽽来
+⽽是我们⾃⾏定义 并且 使⽤ bash 脚本 + pushgateway的⽅法 
+推送到 prometheus server采集
+类型 CPU counter 
+类型 gauge
+gauge类型的数据  属于随机变化数值，并不像counter那样 是
+持续增长
+
+
+--- p20 ---
+把⼀个key 直接输⼊ 命令⾏之后 得到的是 最原始的 数据输出
+count_netstat_wait_connections
+counter类型的数据 使⽤起来 相对容易的多 CPU counter 不需
+要任何 increase() rate() 之类的函数去计算 单位时间段的增量
+直接输⼊后 就可以看到 已经成型的 有确实意义的曲线图
+我就使⽤这个key 来进⾏我们的命令⾏ 正式的学习
+count_netstat_wait_connections 
+默认输⼊后 会把所有 安装了这个采集项的 服务器数据都显⽰
+出来
+我们来学习 命令⾏的 过滤
+
+
+--- p21 ---
+看下上⾯这张图的显⽰
+后⾯的{. } 的部分 属于标签 
+标签： 也是来⾃于 采集数据， 可以⾃定义 也可以直接使⽤ 
+默认的exporter提供的标签项 
+上⾯的 这⼏个标签中 最重要的 是 exported_instance  指明 是
+那台被监控服务器  “log” 是⼀台 ⽇志服务器的机器名 
+命令⾏的查询 在原始输⼊的基础上 先使⽤{} 进⾏第⼀步过滤
+count_netstat_wait_connections{exported_instance="log"}
+之后 就只显⽰ 这⼀台服务器的 数据
+过滤除了精确匹配 还有 模糊匹配
+count_netstat_wait_connections{exported_instance=~"web.*"}
+（看图演⽰）
+
+
+--- p22 ---
+把所有 机器名中 带有 web的 机器都显⽰出来 
+.* 属于正则表达式
+模糊匹配   =~
+模糊不匹配  !~
+标签过滤之后  就是数值的过滤
+⽐如 我们只想找出 wait_connection数量 ⼤于200的 
+count_netstat_wait_connections{exported_instance=~"web.*"} 
+> 400
+
+
+--- p23 ---
+这时候 发现图上 看不到曲线了 只看到 很⼩的点
+是因为 我们 > 400的过滤  在30分钟之内 只有很少的时间点 
+达到了这个数值
+-- 
+（⼆）rate 函数的使⽤
+rate 函数可以说 是prometheus提供的 最重要的函数之⼀
+rate()
+rate(v range-vector) calculates the per-second 
+average rate of increase of the time series in the range 
+vector. Breaks in monotonicity (such as counter resets due 
+to target restarts) are automatically adjusted for. Also, the 
+calculation extrapolates to the ends of the time range, 
+
+
+--- p24 ---
+allowing for missed scrapes or imperfect alignment of 
+scrape cycles with the range's time period.
+The following example expression returns the per-second 
+rate of HTTP requests as measured over the last 5 minutes, 
+per time series in the range vector:
+rate(http_requests_total{job="api-server"}
+[5m])
+上⾯这⼀段 是官⽹给提供的解释
+我们来简单翻译⼀下
+gauge 
+rate(.  ) 函数 是专门搭配counter类型数据使⽤的函数
+它的功能 是按照设置⼀个时间段，取counter在这个时间段中
+的 平均每秒的增量
+这么说可能还是有点抽象 咱们来举个例⼦吧
+
+
+--- p25 ---
+这个例⼦ 使⽤的 node_exporter 
+key node_network_receive_bytes
+rate(node_network_receive_bytes[1m])
+node_network_receive_bytes 本⾝是⼀个counter类型 字⾯意
+思 也很好理解
+⽹络接收字节数
+咱们之前也学习过了 对于这种 持续增长的 counter数据，直
+接输⼊key 是没有任何意义的 
+我们必须要 以获取单位时间内 增量的⽅式 来进⾏加⼯ 才能
+有意义
+那么 对于counter数据， 进⾏第⼀步的初始化的 增量获取 加
+⼯ 
+通常的使⽤发放 就是直接⽤ rate() 包上。（increase(). 也是
+可以的 我之后会讲到）
+node_network_receive_bytes 被rate(.    [1m])包上以后
+就可以获取到 在1分钟时间内，平均每秒钟的 增量
+
+
+--- p26 ---
+这样以来 数据就变得有意义了
+强调 
+所以说 我们以后在使⽤任何counter数据类型的时候，永远记
+得 别的先不做 先给它加上⼀个 rate() 或者 increase() 
+接下来我们把rate()做的事情 更加细化的 咱们来解释⼀下
+⽐如上⾯这个图， ⽹络接收字节数 ⼀直不停的累加
+从 23:44开始 到 23:45  
+⽐如累积量 从440011229804456  到了 -> 440011229805456
+1分钟内 增加了 1000bytes （假设）
+从 23:45开始 到 23:50
+⽐如累积量 从440011229805456  到了 -> 440011229810456
+
+
+--- p27 ---
+5分钟内 增加了 5000bytes（假设）
+加⼊rate(.   [1m]) 之后
+会把 1000bytes 除以 1m*60秒 ， =～16bytes/s
+就是这样 计算出 在这1分钟内，平均每秒钟增加 16bytes
+这个还是⽐较好理解的
+接下来 咱们修改 1m => 5m
+变成这样 rate(.   [5m])
+这样就变成 把5分钟内的增量 除以 5m*60 
+5分钟的增量 假如是 5000 ， 那么除以300 以后  也还是约等于
+=~ 16bytes/s
+感觉好像是⼀模⼀样的？
+
+
+--- p28 ---
+那么我们来看下输出 rate[5]
+啊？ 感觉图形发⽣了⼀定的变化 怎么回事？
+
+
+--- p29 ---
+-- 
+明明是⼀样的 平均 16/s 啊 怎么图形变了呢？
+事实是这样的
+如果 我们按照 rate(1m)这样来取，那么是取1分钟内的增量 除
+以秒数
+如果 我们按照 rate(5m)这样来取，那么是取5分钟内的增量 除
+以秒数
+⽽这种取法 是⼀种平均的取法 ⽽且是假设的
+刚才我们说 counter在 ⼀分钟 5分钟 之内的增量 1000 和 5000 
+其实是⼀种假设的理想状态
+事实上 ⽣产环境 ⽹络数据接收量 可不是这么平均的
+有可能在 第⼀分钟内 增加了 1000 ， 到 第⼆分钟 就变成增加
+了2500 ….
+所以 rate(1m) 这样的取值⽅法 ⽐起 rate(5m) ，因为它取的时
+间段短，所以 任何某⼀瞬间的凸起或者降低 
+在成图的时候 会体现的更细致 更敏感
+
+
+--- p30 ---
+⽽ rate(5m) 把整个5分钟内的 都⼀起平均了，那么当发⽣瞬时
+凸起的时候 ，会显得图平缓了⼀些 （因为 取的时间段长 把
+波峰波⾕ 都给平均消下去了）
+那么我们再放⼤⼀些 看看 rate(20m) 会怎么样
+哈哈 😄 是不是就更平缓了
+在我们的⼯作中 取1m 还是取5m
+这个取决于 我们对于监控数据的敏感性程度来挑选
+说到这⾥ 我们对rate（） 函数 应该也有了⼀定的了解了
+接下来 咱们继续学习 第⼆个重要的函数 
+(三) increase函数 使⽤
+increase 函数 其实和rate() 的概念及使⽤⽅法 ⾮常相似 
+
+
+--- p31 ---
+rate(1m) 是取⼀段时间增量的平均每秒数量
+increase(1m) 则是 取⼀段时间增量的总量 
+⽐如
+increase(node_network_receive_bytes[1m])
+取的是 1分钟内的 增量总量
+和 
+rate(node_network_receive_bytes[1m])
+取的是 1分钟内的增量  除以 60秒 每秒数量
+
+
+--- p32 ---
+
+
+--- p33 ---
+从这两个图 我们可以看到 其实曲线的⾛势 基本是⼀样的
+但是 显⽰出来的数量级bytes 可不⼀样 
+137303978 * 60 = 8238238680 (发现)
+正好是 60倍 
+也就很好理理解了了，increase() 是不不会取⼀一秒的平均值的
+incraese() rate()
+
+
+--- p34 ---
+监控 获取采集数据源 
+频率 
+5m =》 rate()  
+形成图 断链  
+increase(5m) 
+rate() -> CPU 内存 硬盘 IO ⽹络流量 
+counter  
+（四） sum()函数的学习  
+sum()函数的使⽤ , 我们在上节课 讲CPU拆分公式的时候 已经
+讲过了
+sum就是 总取合  
+sum 会把结果集的输出 进⾏总加合
+⽐如 
+rate(node_network_receive_bytes[1m]) 显⽰的结果集 会包含如
+下内容
+
+
+--- p35 ---
+从标签 我们就不难看出，有好多台服务器 都返回了 这个监控
+数据
+当我们使⽤ sum()包起来以后
+sum(rate(node_network_receive_bytes[1m])) 就变成下⾯这样了
+
+
+--- p36 ---
+变成⼀条线了 …
+等于是 给出了 所有机器的 每秒请求量..
+我们之前也说过，如果要进⾏下⼀层的拆分
+需要在 sum() 的后⾯ 加上 by (instance)
+
+
+--- p37 ---
+才可以按照 机器名 拆分出⼀层来
+sum() 加合 其实还有更多巧妙使⽤
+instance 
+sum () by (cluster_name)
+如果是 by instance 那么 其实跟 不加sum()的输出结果是⼀样
+的
+本来 rate(node_network_receive_bytes[1m]) 就已经是按照每台
+机器 返回了 
+但是如果 我们希望 按集群总量输出呢？
+⽐如 我们返回了20台机器的数据
+其中 有6台 属于 web server
+10台属于 DB server
+其他的 属于⼀般server
+那么我们这时候 sum() by (cluster_name) 就可以帮我们实现 集
+群加合并分三条曲线输出了
+100 - 1000 CPU  
+顺带⼀提的是 (cluster_name) 这个标签，默认node_exporter 
+是没有办法提供的
+node_exporter只能按照 不同的机器名 去划分
+如果希望 ⽀持cluster_name 我们需要⾃⾏定义标签 😃
+往后的课程 我们会涉及到这个内容
+
+
+--- p38 ---
+（五） topk()函数的学习 
+定义：取前⼏位的最⾼值
+Gauge类型的使⽤
+topk(3,count_netstat_wait_connections)
+Counter类型的使⽤
+topk(3,rate(node_network_receive_bytes[20m]))
+这个函数 还是⽐较容易理解的，根据给定的数字 取数值最⾼
+>=x 的数值
+唯⼀需要注意的是
+这个函数 ⼀般在使⽤的时候 只适合于 在console查看 graph的
+意义不⼤
+如下图所⽰
+
+
+--- p39 ---
+Topk因为对于每⼀个时间点 都只取前三⾼的数值
+那么必然会造成 单个机器的采集数据不连贯
+因为：⽐如 server01在在这⼀分钟的 wait_connection数量排在
+所有机器的前三 ，到了下⼀分钟 可能就排到垫底了.. ⾃然其
+曲线就会中断
+实际使⽤的时候 ⼀般⽤topk（）函数 进⾏瞬时报警 ⽽不是为
+了观察曲线图
+CPU 10 40核
+400项
+topk(10, rate(CPU))
+CPU 更多不看核（很⾃然的分布在多核 服务器 软件）
+
+
+--- p40 ---
+（六） count()函数的学习 
+定义： 把数值符合条件的 输出数⽬进⾏加合 
+举个例⼦ 
+找出当前（或者历史的）当TCP等待数⼤于200的 机器数量 
+count(count_netstat_wait_connections > 200)
+这个函数在实际⼯作中还是很有⽤的
+⼀般⽤它count进⾏⼀些模糊的监控判断
+⽐如说 企业中有100台服务器，那么当只有10台服务器CPU⾼
+于80%的时候 这个时候不需要报警 
+但是 当符合80%CPU的服务器数量 超过 30台的时候 那么就
+会触发报警 count()
+到这⾥ 我们第⼋讲结束
+
+
+--- p41 ---
+顺便提⼀句 prometheus提供的函数 其实还远远不⽌这⼏个
+这节课中 列出的6个函数 是作为 ⼯作中使⽤频率最⾼的函数 
+（或者说 如果这6个函数 不会的话 那么监控基本没发做）
+其他更多的函数 感兴趣的朋友 可以去prometheus官⽅⽹站继
+续学习
+https://prometheus.io/docs/prometheus/latest/querying/functions/
+也欢迎多给⼤⽶提建议和补充新函数知识点
+谢谢🙏
+                      
+       
+                                                                         
+  
+   
+
+
+--- p42 ---
+                                                            
+  
+                                                                                   
+   第九讲：企业级监控数据采集⽅方法
+第九讲内容如下
+1)  prometheus 服务端的安装和后台稳定运⾏ 
+2)  prometheus 服务端配置⽂件写法 
+3)  node_exporter 安装和后台运⾏
+4)  node_exporter 观察 和 采集数据
+5)  prometheus 查询采集回来的各种数据
+6)  使⽤我们之前的学过的 prometheus 命令⾏的形式 练习组合
+各种监控图
+（⼀） prometheus 服务端的安装和后台稳定运⾏ 
+prometheus 的下载地址
+https://prometheus.io/download/#prometheus
+下载和安装的过程 相对⾮常的简单 
+prometheus-2.2.0-rc.0.linux-amd64.tar.gz 最新版
+prometheus_server下载
+
+
+--- p43 ---
+[root@server04 down]# tar -xvzf prometheus-2.2.0-rc.0.linux-
+amd64.tar.gz
+cp -r prometheus-2.2.0-rc.0.linux-amd64 /usr/local/
+之后解压缩后 即可直接运⾏在默认的9090端⼜ 直接就可以使
+⽤了
+不过 我们作为合格的运维⼯程师，对⽣产环境上 运⾏的软件 
+需要多考虑⼀些更合理的运⾏模式
+接下来 咱们来⼀起看下
+1） 我们需要让prometheus_server 运⾏在后台 ⽽不是前端 
+（客户端退出后  prometheus也退出了 这个很好理解）
+相对⽐较好的运⾏后台模式 这⾥给⼤家推荐两种⽅法
+& Nohup  
+第⼀种： 安装screen⼯具 放⼊后台运⾏
+
+
+--- p44 ---
+这种screen放⼊后台运⾏的⽅式 最简单快速了
+最适合懒⼈使⽤….⽐如我 哈哈😁
+screen还有另外⼀个好处 就是 可以随时切换进⼊ 程序前台窗
+⼜ 查看各种调试信息
+screen 也有不好的地⽅ 
+•
+不够正规化 总觉得还是个临时办法
+•
+screen -l 提供的后台 列表 不够⼈性化，很多时候 你记不
+住 到底哪个是哪个
+
+
+--- p45 ---
+•
+很容易被误关闭  操作的时候 ctrl +ad / ctrl +d 不⼩⼼操作
+错了 直接就退出去了..
+第⼆种： 使⽤daemonize 放⼊后台⽅式 
+daemonize Unix系统后台守护进程管理软件
+优点：更加正规 后台运⾏更稳定
+git clone git://github.com/bmc/daemonize.git
+sh configure && make && sudo make install
+daemonize  -c /data/prometheus/   /data/prometheus/up.sh 
+-c 是指定运⾏路径
+/data/prometheus/up.sh 是运⾏路径下的 ⼀个启动脚本
+下⾯是这个启动脚本的内容
+内容：就是开启prometheus进程
+[root@prometheus yd]# cat  /data/prometheus/up.sh
+/data/prometheus/prometheus --web.listen-
+address="0.0.0.0:9090"        --web.read-timeout=5m    --web.max-
+connections=10  --storage.tsdb.retention=15d  --
+storage.tsdb.path="data/"   --query.max-concurrency=20   --
+query.timeout=2m
+
+
+--- p46 ---
+然后 我们来看下 ./prometheus 在实际企业运⾏时 启动参数的
+合理配置
+--web.read-timeout=5m      Maximum duration before timing out 
+read of the request, and closing idle connections.
+请求链接的最⼤等待时间 prometheus process -> GET PUSH 
+防⽌ 太多的空闲链接 占⽤资源
+--web.max-connections=512  Maximum number of simultaneous 
+connections.
+最⼤链接数
+ --storage.tsdb.retention=15d
+                                 How long to retain samples in the storage.
+prometheus开始采集监控数据后 会存在内存中和硬盘中
+对于保留期限的设置 很重要 太长的话  硬盘和内存都吃不消 / 
+太短的话 要查历史数据就没有了
+企业中设置 15天为宜
+— 
+ --storage.tsdb.path="data/"
+                                 Base path for metrics storage.
+存储数据路径 这个也很重要 不要随便放在⼀个地⽅就执⾏ 会
+把/ 根⽬录塞满了
+
+
+--- p47 ---
+      --query.timeout=2m         Maximum time a query may take 
+before being aborted.
+      --query.max-concurrency=20
+                                 Maximum number of queries executed 
+concurrently.
+上⾯这两项 是对 ⽤户执⾏prometheus 查询时候的 优化设置
+防⽌太多的⽤户同时查询，也防⽌单个⽤户执⾏过⼤的查询
+⽽⼀直不退出
+如上这⼏项参数 配置上去后 prometheus运⾏ 就相对稳妥多了 
+😃
+web上直接输⼊ ip:port 就可以进⼊⾸页
+这⾥遇到⼀个问题
+就是 prometheus 对系统时间 ⾮常敏感 ⼀定要时时刻刻 保证
+系统时间同步 不然 曲线是乱的
+ntpdate 循环同步时间后 错误提⽰就没有了
+
+
+--- p48 ---
+prometheus 运⾏时 存放的历史数据 在这⼉ 
+其中 这些 长串字母的 是历史数据保留
+⽽ 当前近期数据 实际上保留在内存中
+并且 按照⼀定间隔 存放在 wal / ⽬录中 防⽌突然断电 或者 重
+启 以⽤来 恢复内存中的数据 （这个咱们之前也提到过）
+（⼆） prometheus 服务端配置⽂件写法
+prometheus_server 安装稳妥之后 咱们要来看下配置⽂件
+/data/prometheus/prometheus.yml
+配置⽂件是 运⾏在哪个⽬录 就默认读取 哪个⽬录下 
+prometheus.yml⽂件
+除⾮使⽤参数指定其他位置的 配置⽂件
+配置⽂件中 我们主要关注 这⼏个地⽅
+
+
+--- p49 ---
+global:
+  scrape_interval:     15s # Set the scrape interval to every 15 
+seconds. Default is every 1 minute.
+  evaluation_interval: 15s # Evaluate rules every 15 seconds. The 
+default is every 1 minute.
+scrape_conﬁgs:
+# The job name is added as a label `job=<job_name>` to any 
+timeseries scraped from this conﬁg.
+  - job_name: 'prometheus'
+    # metrics_path defaults to '/metrics'
+    # scheme defaults to 'http'.
+    static_conﬁgs:
+      - targets: ['prometheus.server:9090','prometheus.server:9100']
+  - job_name: 'pushgateway'
+    static_conﬁgs:
+      - targets: ['localhost:9091','localhost:9092']
+  - job_name: 'aliyun'
+    static_conﬁgs:
+      - targets: 
+[‘server4:9100','web3:9100’,'server6:9100’,'sesrver7:9100','we
+b8:9100','log1:9100’,'mysql1:9100’]
+
+
+--- p50 ---
+⼀个就是 全局变量 scrape_interval 设置多少时间间隔 采集⼀
+次数据
+另⼀个 就是 job和targets的写法 配置⼀个job的标签，然后 在
+这个标签下 定义 我们需要监控的机器
+targets: [‘server4:9100’
+hostname + 端⼜
+⽽这⾥的端⼜ 实际上 就是 node_exporter的默认运⾏端⼜ 
+hostname server01  prometues => dns 
+/etc/hosts 
+local dns server  
+（三） node_exporter 安装和后台运⾏
+node_exporter的下载和安装 跟prometheus也是⼀样的
+这⾥就不再演⽰了
+下载地址为
+https://prometheus.io/download/#node_exporter
+同样适⽤ daemonize 放⼊被监控服务器后台运⾏
+[root@web7 ~]# ps -ef | grep node_exporter
+root      7400     1  0  2017 ?        00:00:00 /bin/sh /usr/local/
+node_exporter/up.sh
+
+
+--- p51 ---
+root      7402  7400  0  2017 ?        01:34:41 /usr/local/
+node_exporter/node_exporter
+默认运⾏在 9100端⼜
+（四） node_exporter 观察 和 采集数据
+运⾏在后台以后
+我们需要 针对这个 node_exporter 进⾏初步的⼿动查询 以确
+保 正常获取监控数据
+⽤如下⽅法 本地查询
+[root@web7 ~]# curl localhost:9100/metrics
+-node_cpu{cpu="cpu7",mode="steal"} 0
+node_cpu{cpu="cpu7",mode="system"} 131503.32
+-node_cpu{cpu="cpu7",mode="user"} 397798.53
+prometheus 15s GET请求 
+只有挑⼏个重要的 key  看到有数据采集上来 就OK了
+prometheus 命令⾏
+node_exporter 经过实际测试 在 Centos/Redhat 任意版本系统中 
+均可以顺利运⾏ （ubantu debian ）
+还没有遇到过 什么问题
+
+
+--- p52 ---
+给node_exporter的开发者 点个赞 👌
+然后 我们去到 node_exporter在 github上的地址 
+来看看 我们伟⼤的社区开发者们 都给咱们提供了 哪些有⽤的 
+采集项⽬
+https://github.com/prometheus/node_exporter
+尽然在 github上 那就很⾃然了 咱们的node_exporter 也⼀样是 
+开源项⽬
+本⾝使⽤ go语⾔发开
+后⾯ 提供了 node_exporter 默认开启 和 不开启的 监控项⽬
+可以监控的内容⾮常的多 庞⼤
+感兴趣的朋友 可以⾃⾏ 满满挖掘
+
+
+--- p53 ---
+Enabled by default
+Name
+Description
+OS
+arp
+Exposes ARP statistics from /proc/net/arp.
+Linux
+bcache
+Exposes bcache statistics from /sys/fs/bcache/.
+Linux
+conntrack
+Shows conntrack statistics (does nothing if no /proc/
+sys/net/netfilter/ present).
+Linux
+cpu
+Exposes CPU statistics
+Darwin, Dragonﬂy, FreeBSD, Linux
+diskstats
+Exposes disk I/O statistics.
+Darwin, Linux
+edac
+Exposes error detection and correction statistics.
+Linux
+entropy
+Exposes available entropy.
+Linux
+exec
+Exposes execution statistics.
+Dragonﬂy, FreeBSD
+ﬁlefd
+Exposes ﬁle descriptor statistics from /proc/sys/fs/
+file-nr.
+
+
+--- p54 ---
+Linux
+ﬁlesystem
+Exposes ﬁlesystem statistics, such as disk space used.
+Darwin, Dragonﬂy, FreeBSD, Linux, OpenBSD
+hwmon
+Expose hardware monitoring and sensor data from /sys/
+class/hwmon/.
+Linux
+inﬁniband
+Exposes network statistics speciﬁc to InﬁniBand and Intel 
+OmniPath conﬁgurations.
+Linux
+ipvs
+Exposes IPVS status from /proc/net/ip_vs and stats 
+from /proc/net/ip_vs_stats.
+Linux
+loadavg
+Exposes load average.
+Darwin, Dragonﬂy, FreeBSD, Linux, NetBSD, OpenBSD, 
+Solaris
+mdadm
+Exposes statistics about devices in /proc/mdstat (does 
+nothing if no /proc/mdstat present).
+Linux
+meminfo
+Exposes memory statistics.
+Darwin, Dragonﬂy, FreeBSD, Linux, OpenBSD
+netdev
+Exposes network interface statistics such as bytes 
+transferred.
+Darwin, Dragonﬂy, FreeBSD, Linux, OpenBSD
+netstat
+
+
+--- p55 ---
+Exposes network statistics from /proc/net/netstat. 
+This is the same information as netstat -s.
+Linux
+nfs
+Exposes NFS client statistics from /proc/net/rpc/nfs. 
+This is the same information as nfsstat -c.
+Linux
+nfsd
+Exposes NFS kernel server statistics from /proc/net/
+rpc/nfsd. This is the same information as nfsstat -s.
+Linux
+sockstat
+Exposes various statistics from /proc/net/sockstat.
+Linux
+stat
+Exposes various statistics from /proc/stat. This includes 
+boot time, forks and interrupts.
+Linux
+textﬁle
+Exposes statistics read from local disk. The --
+collector.textfile.directory ﬂag must be set.
+any
+time
+Exposes the current system time.
+any
+timex
+Exposes selected adjtimex(2) system call stats.
+Linux
+uname
+Exposes system information as provided by the uname 
+system call.
+Linux
+
+
+--- p56 ---
+vmstat
+Exposes statistics from /proc/vmstat.
+Linux
+wiﬁ
+Exposes WiFi device and station statistics.
+Linux
+xfs
+Exposes XFS runtime statistics.
+Linux (kernel 4.4+)
+zfs
+Exposes ZFS performance statistics.
+Linux
+Disabled by default
+Name
+Description
+OS
+bonding
+Exposes the number of conﬁgured and active slaves of 
+Linux bonding interfaces.
+Linux
+buddyinfo
+Exposes statistics of memory fragments as reported by /
+proc/buddyinfo.
+Linux
+devstat
+Exposes device statistics
+Dragonﬂy, FreeBSD
+drbd
+Exposes Distributed Replicated Block Device statistics (to 
+version 8.4)
+Linux
+interrupts
+
+
+--- p57 ---
+Exposes detailed interrupts statistics.
+Linux, OpenBSD
+ksmd
+Exposes kernel and system statistics from /sys/kernel/
+mm/ksm.
+Linux
+logind
+Exposes session counts from logind.
+Linux
+meminfo_numa
+Exposes memory statistics from /proc/meminfo_numa.
+Linux
+mountstats
+Exposes ﬁlesystem statistics from /proc/self/
+mountstats. Exposes detailed NFS client statistics.
+Linux
+ntp
+Exposes local NTP daemon health to check time
+any
+qdisc
+Exposes queuing discipline statistics
+Linux
+runit
+Exposes service status from runit.
+any
+supervisord
+Exposes service status from supervisord.
+any
+systemd
+Exposes service and system status from systemd.
+Linux
+tcpstat
+
+
+--- p58 ---
+Exposes TCP connection status information from /proc/
+net/tcp and /proc/net/tcp6. (Warning: the current 
+version has potential performance issues in high load 
+situations.)
+另外 这些项⽬ 可以通过 node_exporter的⾃定义 启动参数 来
+实现 开启
+./node_exporter —help
+      --collector.arp           Enable the arp collector (default: 
+enabled).
+      --collector.bcache        Enable the bcache collector (default: 
+enabled).
+      --collector.bonding       Enable the bonding collector (default: 
+disabled).
+      --collector.buddyinfo     Enable the buddyinfo collector 
+(default: disabled).
+      --collector.conntrack     Enable the conntrack collector 
+(default: enabled).
+      --collector.cpu           Enable the cpu collector (default: 
+enabled).
+      --collector.diskstats     Enable the diskstats collector (default: 
+enabled).
+      --collector.drbd          Enable the drbd collector (default: 
+disabled).
+      --collector.edac          Enable the edac collector (default: 
+enabled).
+      --collector.entropy       Enable the entropy collector (default: 
+enabled).
+
+
+--- p59 ---
+      --collector.ﬁlefd        Enable the ﬁlefd collector (default: 
+enabled).
+      --collector.ﬁlesystem    Enable the ﬁlesystem collector 
+(default: enabled).
+      --collector.gmond         Enable the gmond collector (default: 
+disabled).
+      --collector.hwmon         Enable the hwmon collector (default: 
+enabled).
+      --collector.inﬁniband    Enable the inﬁniband collector 
+(default: enabled).
+      --collector.interrupts    Enable the interrupts collector (default: 
+disabled).
+      --collector.ipvs          Enable the ipvs collector (default: 
+enabled).
+      --collector.ksmd          Enable the ksmd collector (default: 
+disabled).
+      --collector.loadavg       Enable the loadavg collector (default: 
+enabled).
+      --collector.logind        Enable the logind collector (default: 
+disabled).
+      --collector.mdadm         Enable the mdadm collector (default: 
+enabled).
+（五） prometheus 查询采集回来的各种数据
+接下来 我们回到 prometheus的主界⾯ 
+验证⼀下 我们新部署的 监控机器上的node_exporter 是否给我
+们 正确返回了 数据
+随便挑⼏个 key 就可以查看
+
+
+--- p60 ---
+另外 prometheus 的命令⾏ 本⾝也⽀持suggest 功能（输⼊提
+⽰）
+随便找个key 查询⼀下 是否有输出图输出 就可以了
+本⾝node_exporter提供的 keys 实在太多了 （因为 都是从
+Linux系统中的 底层 各种挖掘数据回来） 
+我们没有时间 也没有必要 把每⼀个key 都掌握  只要知道 ⼀
+部分重要的 必须的key 就⾜够了
+（六） 使⽤我们之前的学过的 prometheus 命令⾏的形式 练习
+组合各种监控图
+
+
+--- p61 ---
+接下来 咱们找⼀个 ⽐较重要的key 然后 ⽤我们学过的 命令⾏
+⽅式 给他组成⼀个 临时监控图
+⽐如 
+node_cpu 
+node_memory
+node_disk
+等等 这⾥我们不再做演⽰了
+可以⾃⾏找⼏个类似的 keys 组成监控图
+不过这⾥有⼀个问题..
+命令⾏组成监控图之后  这些图都是临时的  如果我关闭了浏
+览器 那么下次再想看的时候就没有了 又要重新输⼊查询语句
+（⿇烦不）
+⽽且prometheus ⾃带的这个 监控图 实际上 并不美观 
+
+
+--- p62 ---
+那么我们如何 既能永久保存这些 监控图 ，又可以让它更美观
+呢？
+请关注 我们后⾯的篇章（Grafana + promethues）
+                      
+       
+                                                                     
+  
+   
+                                                            
+  
+     第⼗十讲：企业级监控数据采集脚本开发实
+践 
+
+
+--- p63 ---
+第⼗讲内容：
+•
+pushgateway 的介绍
+•
+pushgateway 的安装和运⾏和配置
+•
+⾃定义编写脚本的⽅法 发送pushgateway 采集
+•
+使⽤pushgateway的优缺点
+（⼀） pushgateway 的介绍
+pushgateway 是另⼀种采⽤被动推送的⽅式（⽽不是exporter
+主动获取）获取监控数据的prometheus 插件
+在上篇中 我们对pushgateway已经做过介绍
+它是可以单独运⾏在 任何节点上的插件（并不⼀定要在被监
+控客户端）
+然后 通过⽤户⾃定义开发脚本 把需要监控的数据 发送给
+pushgateway 
+然后pushgateway 再把数据 推送给prometheus server
+接下来咱们来实践
+（⼆）pushgatway 的安装和运⾏和配置
+pushgateway 跟 prometheus和 exporter ⼀样
+下载地址 
+https://prometheus.io/download/#pushgateway
+解压后 直接运⾏
+
+
+--- p64 ---
+github的官⽅地址
+https://github.com/prometheus/pushgateway
+又是以go语⾔开发的， ⽤go开发的程序 在安装运⾏时 就是这
+么得天独厚的 简单任性
+同样 我们使⽤ daemonize ⽅式 讲pushgateway 放⼊后台运⾏
+root     13980 13976 16 1⽉19 ?       4-19:53:51 /data/
+pushgateway/pushgateway
+root     13981 13978  0 1⽉19 ?       04:15:08 /data/pushgateway/
+pushgateway1 -web.listen-address 0.0.0.0:9092
+关于pushgateway的配置 主要指的是 在prometheus sever端的配
+置
+我们来看下
+在prometheus.yml 配置⽂件中， 单独定义⼀个job
+然后 target 指向到 pushgateway运⾏所在的 机器名和
+pushgateway运⾏的端⼜ 即可
+这⾥我们发现了没有， localhost:9091/9092  ⼤⽶⽼师企业中
+使⽤的 pushgateway开启了两个
+
+
+--- p65 ---
+在prometheus_server 本机上
+为什么开启两个 我最后⼀个段落给⼤家解释
+（三）⾃定义编写脚本的⽅法 发送pushgateway 采集
+接下来 进⼊重头戏了 
+pushgateway 本⾝是没有任何抓取监控数据的功能的 它只是被
+动的等待推送过来
+所以 让我们来学习 pushgateway 编程脚本的写法
+如下是⼀段 ⽣产环境中 使⽤shell 编写的 pushgateway脚本
+⽤于抓取 TCP waiting_connection 瞬时数量
+cat /usr/local/node_exporter/node_exporter_shell.sh
+#!/bin/bash
+instance_name=`hostname -f | cut -d'.' -f1`      #本机机器名 变量 
+⽤于之后的 标签
+if [ $instance_name == "localhost" ];then # 要求机器名 不能是 
+localhost 不然标签就没有区分了
+echo "Must FQDN hostname"
+exit 1
+ﬁ
+# For waitting connections
+
+
+--- p66 ---
+label="count_netstat_wait_connections"     # 定⼀个新的 key  
+count_netstat_wait_connections=`netstat -an | grep -i wait | wc -l` 
+#定义⼀个新的数值 netstat中 wait 的数量 
+echo "$label : $count_netstat_wait_connections"
+echo "$label $count_netstat_wait_connections"  | curl --data-
+binary @- http://prometheus.server.com:9091/metrics/job/
+pushgateway1/instance/$instance_name 
+#最后 把 key & value 推送给 pushgatway 
+curl —data-binary 
+将HTTP POST请求中的数据发送给HTTP服务器器(pushgateway)，
+与⽤用户提交HTML表单时浏览器器的⾏行行为完全⼀一样。
+HTTP POST请求中的数据为纯⼆二进制数据
+从上⾯的 短短的⼗⼏⾏的脚本来看 
+其实最重要的 是两个标红的地⽅ 
+count_netstat_wait_connections=`netstat -an | grep -i wait | wc -l`
+后⾯红⾊部分 是我们通过Linux命令⾏ 就简单的获取到了 我
+们需要监控的数据 TCP_WAIT数
+
+
+--- p67 ---
+http://prometheus.server.com:9091/metrics/job/pushgateway1/
+instance/$instance_name
+最后这⾥ ⽤POST ⽅式 把 key & value 推送给 pushgatway的URL地址 
+这个URL地址中 分成如下三个部分 
+http://prometheus.server.com:9091/metrics/job/pushgateway1  
+这⾥是 URL的主location 
+job/pushgateway1 
+这⾥是 第⼆部分  第⼀个标签： 推送到 哪⼀个prometheus.yml
+定义的 job⾥
+{instance=“server01"}
+instance/$instance_name
+这⾥是 第⼆个标签 推送后 显⽰的 机器名是什么
+其实 pushgateway的脚本 并不是很难写
+但是通过这样的脚本编程⽅式
+我们可以很快速的 ⾃定义 我们需要的任何 监控数据(Linux 命
+令⽅式) 
+最后 这个我们编写的监控bash脚本 是⼀次性执⾏的  bash 
+script.sh
+我们需要按时间段 反复执⾏
+所以呢？⾃然就得结合 contab了
+
+
+--- p68 ---
+这⾥顺带提⼀句
+crontab 默认 只能最短⼀分钟的间隔 
+如果希望 ⼩于⼀分钟的间隔  15s
+我们使⽤如下的⽅法 
+sleep 10
+sleep 20
+😃
+之后 我们回到prometheus主界⾯ 尝试输⼊ 由我们⾃⼰定义的 
+new_key 
+看看结果
+key的名字 就是这个 label="count_netstat_wait_connections"     
+# 定⼀个新的 key 
+
+
+--- p69 ---
+嘿嘿 很愉快 对不？
+其他种类的监控数据 我们都可以通过类似的形式 直接写脚本
+发送
+使⽤python 也是很好的⽅式
+不过我个⼈还是推荐 bash shell 因为速度超级的快～ （⽤
+python的话 还得include 很多库 ⼤⽶⽼师有点懒 哈哈😄）
+（四） 使⽤pushgateway的优缺点
+⼤⽶之前就跟⼤家说过  pushgateway这种⾃定义的 采集⽅式 
+⾮常的快速 ⽽且极其灵活 ⼏乎不收到任何约束
+其实我个⼈ 还是⾮常希望 使⽤pushgateway来获取监控数据的
+各类的exporters虽然玲琅满⽬ ⽽且默认提供的数据很多了已
+经
+⼀般情况下 我在企业中 只安装 node_exporter 和 DB_exporter 
+两个
+其他种类的 监控数据 我倾向于 全部使⽤pushgateway的⽅式 
+采集 （要的就是快速～ 灵活~）
+
+
+--- p70 ---
+不过⾔归正传 习惯并不代表正确性
+pushgateway虽然灵活 但是 也是存在⼀些 短板的
+接下来 我们来看看 prometheus官⽹是怎么说的
+WHEN TO USE THE 
+PUSHGATEWAY
+ • Should I be using the Pushgateway?
+ • Alternative strategies
+The Pushgateway is an intermediary service which allows you to 
+push metrics from jobs which cannot be scraped. For details, 
+see Pushing metrics.
+Should I be using the Pushgateway?
+We only recommend using the Pushgateway in certain limited 
+cases. There are several pitfalls when blindly using the 
+Pushgateway instead of Prometheus's usual pull model for general 
+metrics collection:
+ • 
+When monitoring multiple instances through a single 
+Pushgateway, the Pushgateway becomes both a single point 
+of failure and a potential bottleneck.
+ • 
+You lose Prometheus's automatic instance health monitoring 
+via the up metric (generated on every scrape).
+ • 
+The Pushgateway never forgets series pushed to it and will 
+expose them to Prometheus forever unless those series are 
+manually deleted via the Pushgateway's API.
+The latter point is especially relevant when multiple instances of a 
+job diﬀerentiate their metrics in the Pushgateway via 
+an instance label or similar. Metrics for an instance will then 
+remain in the Pushgateway even if the originating instance is 
+
+
+--- p71 ---
+renamed or removed. This is because the lifecycle of the 
+Pushgateway as a metrics cache is fundamentally separate from 
+the lifecycle of the processes that push metrics to it. Contrast this 
+to Prometheus's usual pull-style monitoring: when an instance 
+disappears (intentional or not), its metrics will automatically 
+disappear along with it. When using the Pushgateway, this is not 
+the case, and you would now have to delete any stale metrics 
+manually or automate this lifecycle synchronization yourself.
+Usually, the only valid use case for the Pushgateway is for 
+capturing the outcome of a service-level batch job. A "service-
+level" batch job is one which is not semantically related to a 
+speciﬁc machine or job instance (for example, a batch job that 
+deletes a number of users for an entire service). Such a job's 
+metrics should not include a machine or instance label to decouple 
+the lifecycle of speciﬁc machines or instances from the pushed 
+metrics. This decreases the burden for managing stale metrics in 
+the Pushgateway. See also the best practices for monitoring batch 
+jobs.
+Alternative strategies
+If an inbound ﬁrewall or NAT is preventing you from pulling metrics 
+from targets, consider moving the Prometheus server behind the 
+network barrier as well. We generally recommend running 
+Prometheus servers on the same network as the monitored 
+instances.
+For batch jobs that are related to a machine (such as automatic 
+security update cronjobs or conﬁguration management client runs), 
+expose the resulting metrics using the Node Exporter's textﬁle 
+module instead of the Pushgateway.
+
+
+--- p72 ---
+⼀⼤堆的英⽂ 其实总结起来 基本上两点
+1） pushgateway 会形成⼀个单点瓶颈，假如好多个 脚本同时
+发送给 ⼀个pushgateway的进程 
+如果这个进程没了，那么监控数据也就没了
+2） pushgateway 并不能对发送过来的 脚本采集数据 进⾏更智
+能的判断 假如脚本中间采集出问题了
+那么有问题的数据 pushgateway⼀样照单全收 发送给
+prometheus
+虽然有这么两个所谓的缺点
+但是实际上通过我 2年多的使⽤
+对于第⼀条缺点 其实只要服务器不当机 那么基本上 
+pushgateway运⾏还是很稳定的  
+就算有太多的脚本 同时都发送给⼀个pushgateway 其实也只是
+接收的速度会变慢 丢数据没有遇到过 （有的时候 我甚⾄觉得 
+⽐exporters还稳定 exporters倒是 有时候会真的就当机 或者 丢
+失数据 因为exporters开发⽐较复杂 越简单的东西 往往越稳
+定）
+对于第⼆条缺点  
+其实只要我们在写脚本的时候 细⼼⼀些 别出错（这也是为什
+么 我推荐就⽤ bash 写 因为简单不容易出错 ， python我可不
+敢打包票）
+那么 监控数据也不会有错误
+
+
+--- p73 ---
+所以说呢 相信⼤⽶ 我们就放⼼的使⽤pushgateway来尽情采集
+我们的数据吧
+课堂的结尾 给⼤家留⼀个作业吧（学习需要勤快）
+我们⾃⼰搭建pushgateway 并⾃⾏编写⼀个 采集脚本 （bash 
+shell即可）
+采集⼀个 ping 延迟和丢包率吧  ^_^
+                                   
+                                                                  
+   
+   
+                                                  
+  
+
+
+--- p74 ---
+                   
+                                                                 第⼗十⼀一
+讲：Prometheus 之 exporter模块源代码示例例
+本节课内容
+•
+ 编写⼀个exporter的流程
+•
+ ⽤go开发⼀个exporter的源代码 及讲解
+•
+ 对于编写exporter的个⼈建议
+（⼀）编写⼀个exporter的流程
+官⽹有介绍 编写exporter的详细内容
+我们这⾥给⼤家做⼀个 简单的归纳
+⾸先 不同于pushgateway,  exporter是⼀个独⽴运⾏ 的采集程序
+其中的功能需要有这三个部分
+1） ⾃⾝是HTTP 服务器，可以响应 从外发过来的 HTTP GET
+请求
+2） ⾃⾝需要运⾏在后台，并可以定期触发 抓取本地的监控
+数据
+3） 返回给prometheus_server 的内容 是需要符合 prometheus
+规定的metrics 类型（Key-Value）
+4) key-value ->  prometheus(TS) values( ﬂoat int ) return string *
+
+
+--- p75 ---
+nil 
+接下来 给⼤家⼀份我之前⽤ go编写⼀份 exporter源代码
+(⼆) ⽤go开发⼀个exporter的源代码 及讲解
+package main
+import (
+  "fmt"
+  _ "net/http/pprof"
+    "sync"
+//  "github.com/hpcloud/tail"
+"github.com/prometheus/client_golang/prometheus"
+"github.com/prometheus/common/log"
+"github.com/prometheus/common/version"
+//  //"net"
+  "net/http"
+//  "net/url"
+//   "errors"
+  "ﬂag"
+  "os"
+  "os/exec"
+  "io/ioutil"
+//  "regexp"
+//  "strconv"
+//  "strings"
+    "time"
+
+
+--- p76 ---
+)
+const (
+  namespace = "my_exporter"
+  )
+type Exporter struct {
+cmd               string
+mutex             sync.RWMutex
+up,freeRam,TotalRam   prometheus.Gauge
+Debug                 bool
+upstreamResponseTimes  *prometheus.HistogramVec
+}
+func (e *Exporter) scrape() {
+log.Infoln("--------")
+e.up.Set(1)
+    }
+func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
+  e.upstreamResponseTimes.Describe(ch)
+}
+
+
+--- p77 ---
+func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
+e.mutex.Lock() // To protect metrics from concurrent collects
+  defer e.mutex.Unlock()
+  e.scrape()
+  e.upstreamResponseTimes.Collect(ch)
+  e.up.Collect(ch)
+}
+func NewExporter(cmd string, timeout time.Duration) (*Exporter, 
+error) {
+  return &Exporter{
+    cmd: cmd,
+    up: prometheus.NewGauge(prometheus.GaugeOpts{
+      Namespace: namespace,
+      Name:      "up",
+      Help:      "Was the last scrape of nginx exporter successful.",
+    }),
+    upstreamResponseTimes: prometheus.NewHistogramVec(
+      prometheus.HistogramOpts{
+        Namespace: namespace,
+        Name:      "http_upstream_request_times",
+        Help:      "Response times from backends/upstreams",
+      },
+      []string{"method", "endpoint", "response_code", 
+"client_type"},
+    ),
+
+
+--- p78 ---
+  }, nil
+}
+func run() {
+  cmd := exec.Command("/bin/sh", "-c", `free -m `)
+  stdout , err := cmd.StdoutPipe()
+  if err != nil {
+    panic(err.Error())
+  }
+  if err != nil {
+    fmt.Println("Stdoutpipe error", err.Error())
+  }
+    stderr , err := cmd.StderrPipe()
+  if err != nil {
+    fmt.Println("Stderrpipe error", err.Error())
+  }
+  if err := cmd.Start(); err != nil {
+    fmt.Println("error start", err )
+  }
+  bytesErr, err := ioutil.ReadAll(stderr)
+
+
+--- p79 ---
+    if err != nil {
+        fmt.Println("ReadAll stderr: ", err.Error())
+        return
+    }
+    if len(bytesErr) != 0 {
+        fmt.Printf("stderr is not nil: %s", bytesErr)
+        return
+    }
+    bytes, err := ioutil.ReadAll(stdout)
+    if err != nil {
+        fmt.Println("ReadAll stdout: ", err.Error())
+        return
+    }
+    if err := cmd.Wait(); err != nil { 
+        fmt.Println("Wait: ", err.Error())
+        return
+    }
+    fmt.Printf("stdout: %s", string(bytes))
+}
+func main() {
+  var (
+      listenAddress = ﬂag.String("web.listen-address", ":9101", 
+"Address to listen on for web interface and telemetry.")
+
+
+--- p80 ---
+      metricsPath   = ﬂag.String("web.telemetry-path", "/metrics", 
+"Path under which to expose metrics.")
+      cmd           = ﬂag.String("free", "", "command to run")
+      nginxTimeout  = ﬂag.Duration("nginx.timeout", 
+5*time.Second, "Timeout for trying to get stats from HA.")
+    showVersion   = ﬂag.Bool("version", false, "Print version 
+information.")
+//    debug         = ﬂag.Bool("debug", false, "Print debug 
+information.")
+  )
+  ﬂag.Parse()
+  if *showVersion {
+    fmt.Println(os.Stdout, version.Print("shannon_exporter"))
+    os.Exit(0)
+  }
+  log.Infoln("Starting shannon_exporter", version.Info())
+  log.Infoln("Build context", version.BuildContext())
+  run()
+  exporter, _ := NewExporter(*cmd, *nginxTimeout)
+  prometheus.MustRegister(exporter)
+  prometheus.MustRegister(version.NewCollector("nginx_exporte
+r"))
+
+
+--- p81 ---
+  http.Handle(*metricsPath, prometheus.Handler())
+  http.HandleFunc("/", func(w http.ResponseWriter, r 
+*http.Request) {
+    w.Write([]byte(`<html>
+      <head><title>Haproxy Exporter</title></head>
+      <body>
+      <h1>Haproxy Exporter</h1>
+      <p><a href='` + *metricsPath + `'>Metrics</a></p>
+      </body>
+      </html>`))
+  })
+  log.Fatal(http.ListenAndServe(*listenAddress, nil))
+  }
+// 前⾯的 scrape describe Collect 是struct类型的成员函数，这⼏
+个函数并没有直接在这个go⾥被调⽤，⽽是 MustRegister注册
+进去了它们。 
+// http.Handle ⾥的prometheus.Handler 将上⼀部2个Mustregister
+的注册 关联进⼊http.handle. 也就进⼀步注册进⼊了httpserver-
+listerner 
+// http.lister是组赛程序，只有启动后 被curl的时候 才会执⾏。 
+并且由于之前经过2步的注册，跟exporter的成员函数建⽴了
+关联（其实是指针关联） 所以，每次被curl的时候 所有上⾯
+的成员函数都会被调⽤ 
+
+
+--- p82 ---
+// 例如上⾯的up.set(1) 就是只有被curl的时候才会被调⽤，成
+员函数是作为 ⽣成metrics的⼊⼜ 
+注： 本Go exporter 源代码 是半年前写的了 其中⼀些地⽅ 可
+能需要进⼀步修改才可以正常使⽤ （本⼈go开发能⼒也⽐较
+菜 - _ -）
+（三） 个⼈建议
+通过上⾯的对⼀个exporter源代码的讲解
+我们也看得出来 
+编写⼀个 exporter 远远⽐ 写⼀个pushgateway脚本要复杂的多
+的多
+个⼈建议：除⾮是⼯作中真的有需要（例如：社区的exporters
+都不能满⾜需求，且对于监控客户端的规范化⽐较严格） 且
+对⾃⼰的编程能⼒有⾃信
+那么可以⾃⾏开发new exporter
+exporter-prometheus 5s GET => exporter Handler-> handler-lister 
+ 开发的过程中 要特别注意 各种⽂件句柄等等资源的 完整回
+收
+因为⼀个⾮常被频繁调⽤的后台程序中 ⼀旦循环中出现资源
+泄漏 那么后果是很严重的 
+（之前其实就遇到过⼀次 资源没有正确回收 导致每⼀次
+promethue_server访问过来 都造成僵⼫进程 最终服务器被拖垮
+的窘境 …囧 当然了 如果是 开发⾼⼿的话 相信我的担⼼也就
+多余啦～～）
+
+
+--- p83 ---
+所以 如果企业中 运维开发的实⼒不够过硬，我还是尽量建议
+⼤家 使⽤现成的社区exporters, 配合⾃⾏开发pushgateway脚本 
+😄
+ 
+                                   
+
+
+--- p84 ---
+                                                                  
+   
+   
+                                                  
+  
+                    
+                                                                        第⼗十⼆二
+讲：Grafana 超实⽤用企业级监控绘图⼯工具的结合
+第⼗⼆讲 内容
+•
+Grafana 这款软件的介绍
+•
+Grafana 下载/安装/配置/运⾏
+•
+Grafana 设置数据源 连接prometheus_server
+•
+Grafana 建⽴ Dashboard
+•
+Grafana 创建 graph 成图
+•
+Grafana graph进阶内容
+•
+Grafana Dashboard 全局部署优化
+•
+Grafana json备份 和 还原
+•
+Grafana 实现报警功能 连接（4.0新功能 重要！）
+•
+Grafana 这款软件的介绍
+定义： Grafana是⼀款近⼏年新兴的 开源数据绘图⼯具平台
+
+
+--- p85 ---
+默认⽀持如下这么多钟 数据源作为输⼊
+现如今在各⼤企业 被⼴泛使⽤中 
+其强⼤⽽美观的绘图能⼒ 灵活的数据链接 以及4.0之后的报警
+功能 让⼈爱不释⼿
+接下来 咱们就⼀起来实践⼀下吧
+•
+Grafana 下载/安装/配置/运⾏
+官⽅⽹站： grafana.com
+
+
+--- p86 ---
+安装更简单了 直接 rpm就装完了 
+运⾏： 也更简单 更规范化 直接service就可以启
+动 
+访问：
+默认运⾏在 3000端⼜
+直接 ip:3000 即可
+•
+Grafana 设置数据源 连接prometheus_server
+进⼊Grafana主界⾯后 
+
+
+--- p87 ---
+第⼀件事就是要： 设置新的数据源
+让Grafana链接上 我们的prometheus_server
+设置⽅法
+找到左上⾓的开始按钮 并选择 Data Sources
+
+
+--- p88 ---
+设置连接的类型 => prometheus
+设置 prometheus的URL地址
+ip:9090 即可
+
+
+--- p89 ---
+•
+Grafana 建⽴ Dashboard
+
+
+--- p90 ---
+之后 就进⼊ new dashboard的 主界⾯
+
+
+--- p91 ---
+•
+Grafana 创建 graph 成图
+接下来 我们来创建第⼀个Graph图
+点击Graph
+这个是空Graph , 我们开始给它添加内容
+
+
+--- p92 ---
+点击 Edit
+之后 我们来到了 graph的 Edit编辑模式
+⾸先 我们给这个Graph 起⼀个名字
+
+
+--- p93 ---
+点击 General 选项卡之后
+之后 我们进⼊右边下⼀个 选项卡 Metrics
+
+
+--- p94 ---
+ Data Source 选择 prometheus
+之后 在下⾯ 输⼊ Key 名称
+然后 我们就得到了 咱们的⼀副Graph监控图
+•
+Grafana graph进阶内容
+接下来 咱们来详细讲 ⼀个 graph的编辑
+第⼀个选项卡 general的部分 
+
+
+--- p95 ---
+可以设置 整个graph的分辨率 
+如果希望图形更清晰 可以设置 Height的部分
+到200-400px 
+接下来我们看 Metrics选项卡的部分
+默认图像下⽅的输出信息 是输出全部的标签 看着很乱
+我们可以定制⾃⼰的 标签别名
+
+
+--- p96 ---
+使⽤ {{ 标签名称}}
+接下来 我们来到 Legend选项卡
+
+
+--- p97 ---
+在这⾥ 我们可以进⼀步 对输出值 进⾏规划
+可以讲显⽰数值 额外设置 最⼩ 最⼤ 平均 当前 数值进⾏显⽰
+最终可以做成这种样⼦的显⽰
+然后 我们可以对 曲线图的颜⾊进⾏设置（保存后 永久⽣效）
+最后我们来看下 最终效果
+
+
+--- p98 ---
+•
+Grafana json备份 和 还原
+SAVE as  
+当我们的dashboard设置的graph越来越多时 我们除了即时保存  
+还要掌握 导出的⽅法 以便永久保存 
+在最上⾯ 设置的部分 选择 View Json 
+
+
+--- p99 ---
+将全部的json copy出来 保存到第⼀个地⽅ 
+以备不时之需  
+Grafana⽀持将 json导⼊ 还原成 dashboard 
+
+
+--- p100 ---
+•
+Grafana 实现报警功能 连接（4.0新功能 重要！）
+Grafana 4.0之后 ⽀持报警功能
+所有的graph图形都可以 设置连接上多个报警平台 并设置阈
+值并报警
+这个是⼀个⾮常重要的新功能 有了这个 新功能后 
+prometheus_server(alertmanager插件)-Pagerduty 仅仅作为数据
+源即可（没有必要再使⽤prometheus做报警设置了）
+整个的流程如下
+
+
+--- p101 ---
+接下来我们来看下 如何设置grafana的报警功能
+1） 新建⼀个报警平台 连接渠道（Alerting channel）
+我们先去Pagerduty   获取⼀个 Integration Key
+这个Integration Key  
+实际上是⼀串数字，作为让其他软件连接到⾃⼰的 认证码
+xxxxxxxxxxxxxxxx
+然后 我们进⼊Grafana的 Alerting选项卡
+点击 Notiﬁcation channels
+
+
+--- p102 ---
+之后 我们新建⼀个 channel 
+然后 我们在新建channel中 设置如下 
+
+
+--- p103 ---
+如此设置 让这个Channel 连接Pagerduty报警平台 
+并黏贴上 那⼀串从Pagerduty申请的 注册码（这个码如何申请，我们会在Pagerduty的章节 进
+⾏讲解） 
+保存 
+2） 回到我们的 Dashboard => Graph 
+我们来设置 报警阈值 
+
+
+--- p104 ---
+进⼊编辑模式后 如下 我们选择 Alert 选项卡 
+点击 
+ 
+之后我们就可以开始设置我们 对于这⼀个graph监控的 阈值设置了 
+Conditions 是作为 报警阈值的 设置项
+WHEN之后 选择阈值的选取形式
+
+
+--- p105 ---
+可以是 avg() 也可以是 max() min() 等等
+对⼀段数据的数值 进⾏估算 ，可以⾛ 平均 也可以取最⼤值 
+最⼩值
+然后 OF 之后 选择我们的 之前的查询公式
+Query(A,1m,now)
+其中的 A 就是我们在创建 Graph Metrics选项卡的 设置的第⼀
+个查询公式
+1m 代表的是 取1分钟内的数据
+IS ABOVE 后 就是报警的触发阈值了
+当⼤于2000的时候 就会发出报警到 Pagerduty
+保存之后 我们的Graph图 如下
+可以看到 图上⽅ 多了⼀条红⾊报警阈值线 
+当我们曲线 达到这个阈值时 就是触发报警的时刻 
+可以看到 在过去的12个⼩时中，只有 ⼀个时刻 真的到达了 触发点 
+3） 继续设置 我们的 notiﬁcation 
+
+
+--- p106 ---
+这⾥ 是设置 报警发送到什么地⽅ 
+选择 我们在第⼀步 刚刚创建的 First Channel (PagerDuty的链接) 
+下⾯的Message 我们⾃⾏定义 报警中会显⽰的额外 内容 
+之后 我们的Grafana 针对这⼀张graph的阈值和报警 就设置完毕了 
+
+
+--- p107 ---
+                                   
+                                                      
+   
+   
+                                                                        
+  
+                    
+ 第⼗十三讲：Prometheus 企业级实际使⽤用
+（⼀一）
+第⼗十三讲内容：
+
+
+--- p108 ---
+•
+prometheus+grafana   企业CPU监控 真实案例
+•
+prometheus+grafana   企业内存监控 真实案例
+•
+prometheus+grafana   企业硬盘/IO监控 真实案例
+•
+prometheus+grafana   企业⽹络传输 真实案例
+（⼀） prometheus+grafana   企业CPU监控 真实案例 
+我们在企业中 基础监控的第⼀项 ⼀般就是 针对服务器集群的
+CPU 进⾏监控
+为什么呢？ 
+因为：1） CPU是处理所有任务的核⼼（这是废话）
+           2） 另外 Linux 由于CPU存在各种 状态类型CPU时间 
+所以 很多情况下 ⼤部分的出现问题的情况
+都可以 反应在CPU的表现上 
+下⾯举⼀个 在企业中对CPU使⽤率监控的实例
+数据采集： Node_exporter
+     
+使⽤prometheus公式
+(1-((sum(increase(node_cpu{mode="idle"}[1m])) by (instance))  /
+(sum(increase(node_cpu[1m])) by (instance)))) * 100
+
+
+--- p109 ---
+第⼀幅图 就是咱们之前 讲过的，计算CPU综合使⽤率 这⾥就
+不再重复它的计算⽅法了 （可以回顾 下篇的 6 7讲）
+在⽣产环境中 ⼀般70-80%以上的CPU⾼ 是因为 ⽤户态user 
+CPU⾼所导致 
+我们使⽤Top命令随便查看⼀台服务器的时候 ⼀般也会看到  
+user%会最⾼
+⽤户态的CPU使⽤率 是跟应⽤程序（或者说软件）的运⾏密
+切相关的
+当软件启动⼤量进程 并⾏处理任务时， 当进程之间频繁上下
+业切换时 对⽤户态的CPU 消耗最⼤
+不过我们 在做监控的时候 ⼀般倒是不⽤ 单独列出⼀个 user%
+态的CPU使⽤率图 因为 除去IO等待造成的CPU⾼之外，⼤部
+分情况 就是 user%造成
+另外， system% 内核态的CPU 使⽤率 偶尔也会出现⾼的情
+况，我们这个课程中 就不再讲解了 
+使⽤prometheus公式
+
+
+--- p110 ---
+(sum(increase(node_cpu{mode="iowait"}[1m])) by 
+(instance)   /  sum(increase(node_cpu[1m]))    by (instance) ) * 
+100
+第⼆个图  是针对 IOWAIT类型的 CPU等待时间 user%
+其中不同的地⽅ 是mode=iowait
+很多情况下 ， 当服务器 硬盘IO占⽤过⼤时，CPU会等待IO
+的返回 进⼊ interuptable 类型的CPU等待时间
+所以 对于 IOWAIT CPU的监控 是很有必要的
+grafana
+另外 对于CPU⾼的报警阈值 
+是这样的设置的
+设置成 99 或者 100 都可以
+如果设置成 80 90 就报警，根据实际测试 并不合适，因为 
+80% 90%状态下的服务器 还是可以处理请求的
+只不过速度会慢了
+但是 ⼀旦综合CPU上了 98 99 100 那么整个服务器 就⼏乎失
+去可⽤性了 连SSH登录 有时候都很困难
+所以 针对Linux系统的优化 ⾮常重要 要通过各种内核参数 软
+件参数 来控制服务器 尽量不让CPU堆到 99 100 （更多Linux
+内核优化知识 请关注⼤⽶运维 第三 四 阶段）
+（⼆） prometheus+grafana   企业内存监控 真实案例 
+
+
+--- p111 ---
+接下来 就到了 内存监控了
+⾸先 ⼤⽶需要给⼤家 说⼀下 内存的计算⽅式
+我们先从Linux命令来看起
+free -m 
+Centos 6.x 5.x 
+Centos 5/6 的版本中 如上图显⽰内存（4.x就不说了 基本绝迹
+了）
+内存管理 是Linux内核的 ⾮常重要的⼀个强势功能 
+可以说 Linux对于内存的使⽤率 ⾮常的⾼校 ⽐起windows来说 
+真的智能了很多
+主要依赖于 Linux内存管理的 缓存功能 （简单来说就是 刚⽤
+过的内存中的内容 会被暂时缓存⼀段时间 以备下次再使⽤ 快
+速调⽤）
+然⽽ 5.x 6.x 的 内存命令 却有⼀点 不太善解⼈意
+对于 ⼤多数的零基础和初级学员来说,  命令⾏显⽰的这个 
+   很容易让⼈误解（甚⾄我遇到 很多⼯
+作5年以上的⼈ 居然还有搞不清这⾥的） 
+
+
+--- p112 ---
+关于Linux的内存种类 和内存管理细节 我们这⾥就不过多阐
+述了
+直接给出⼤家 5.x 6.x 的真实内存使⽤率公式即可
+从应⽤用程序的⻆角度来说，Linux 实际可⽤用内存=系统free 
+memory+buﬀers+cached。
+使⽤率 = 实际可⽤内存 / 总内存
+Centos 7.x
+对于 最新的 7.x中 
+free 命令⾏的输出 解决了这个问题
+变得简单易懂
+实际可⽤内存 直接放在最后⼀列 直接使⽤
+接下来我们来看 企业实际内存监控案例
+
+
+--- p113 ---
+给出⼤家prometheus 公式
+(1-((node_memory_Buffers  + node_memory_Cached  + 
+node_memory_MemFree) / node_memory_MemTotal)) * 100
+(6.x 7.x free , 监控 6 7 )
+这⾥就很清楚了 跟上⾯讲的是对应的算法
+从图上 可以看出 ⼤部分机器的内存使⽤率 ⽐较低 基本都在 
+20%以下
+是因为 之前的⽣产环境使⽤中 并不是内存密集型的 （是CPU
+密集型）
+所以说 我们从内存的计算公式来说， promehtues也让我们很
+精细 很放⼼ ， 很多⽼式的监控 直接返回⼀个 内存使⽤率 很
+多时候 ⽆法确认准确性
+•
+prometheus+grafana   企业硬盘/IO监控 真实案例
+数据来源 : Node_exporter
+硬盘剩余容量的监控 相⽐上⾯的2个 就简单很多
+
+
+--- p114 ---
+(node_ﬁlesystem_free  / node_ﬁlesystem_size) < 0.2(nagios )
+公式上看 也很好理解 当空闲硬盘 ⼩于 0.2的时候 就显⽰在图
+上
+另外 提到了 硬盘使⽤率 
+我在这⾥ 给⼤家推荐另⼀个 难度较⾼的 prometheus 函数
+关于这个函数 我们后⾯会讲解
+在这⾥ 我们先提出⼀个 对于硬盘监控的⽐较新的理念
+对于硬盘使⽤率来说
+通常不管使⽤ 什么样⼦的监控⼯具 基本上 都是简单算法  空
+闲/总量 或 以使⽤/总量 当⼤于或⼩于 ⼀个阈值时 报警
+
+
+--- p115 ---
+这么定义的⽅法 ⽐较简单也普遍
+那么我给⼤家提⼀个问题
+假如有这么⼀种情况
+有⼀天晚上8:00的时候  ⼀台很重要的服务器上 硬盘使⽤率超
+过了 90% 
+超过了报警阈值  于是乎 报警电话就响了
+结果运维⼈员上线⼀看  哦 还有百分10的空间呢  根据以往的
+经验 10%的空间基本上 还能撑个 3,4天呢  
+况且 我们的服务器 每天24:00还会做 ⽇志压缩呢 会释放很多
+空间 
+所以 不着急处理 就回去睡觉了😪
+又有⼀天晚上 10:00的时候  还是这台服务器 又报警了 >90%
+这次运维⼈员 还是⽼样⼦ 觉得没啥⼤事 就去睡觉了 报警也
+给屏蔽了（电话是很吵⼈的）
+结果 到了10:10分的时候 整个⽣产线上报警了 ⽼板也给吵起
+来了
+
+
+--- p116 ---
+运维慌慌张张打开电脑⼀看…. 我靠！！
+硬盘100% 导致nginx服务⽆法响应了…..
+怎搞的啊 平时不会这样⼦啊
+后来经过分析 是由于 晚上 9:00的时候 服务器系统上的APP软
+件 出现了⼀个死循环的错误
+超⼤量的 info/warning⽇志 把整个 根⽬录都给盛满了 ⽽且⽤
+的时间 很短
+运维哭了😢
+运维这个时候想，既然会有这种特殊情况 那么⼲脆把 报警阈
+值 设置的更⾼⼀些吧
+70%就报警好了 … 结果 可想⽽知 往后的⽇⼦⾥ 运维都是⿊
+圆圈了。。。
+
+
+--- p117 ---
+给⼤家讲这个真实发⽣过的 运维故事（嘿嘿 😁 其实那个运维 就是5年前的我） 
+就是想告诉⼤家 prometheus 针对这种特殊的问题 提供了⼀个 ⾮常⽜X的函数 
+这个函数 如果想讲清楚它的底层实现原理 没个 2 3天还真说
+不完 
+我们在这⾥就给⼤家简单介绍⼀下它能做什么吧
+对于刚才那种 硬盘百分⽐报警的案例(剩余空间的百分⽐)
+predict_linear() 函数 可以起到 对曲线变化速率的计算 以及在
+⼀段时间 加速度的未来预测
+说的更简单⼀些
+它可以 实时监测 硬盘使⽤率曲线的 变化情况，假如在⼀个很
+⼩的时间段中 发现硬盘使⽤率 急速的下降（跟之前平缓时期
+相⽐较）
+
+
+--- p118 ---
+那么对这种下降的速度 进⾏⼀个未来⼀段时间的预测 ， 如果
+发现 未来 ⽐如5分钟内 按照这个速度 硬盘肯定就100%了
+那么 在当前硬盘还剩余 20%的时候 就会报警！
+说起来都觉得绕⼜  不过使⽤起来 并不是很难
+官⽹有 predict_linear（）的 使⽤⽅法介绍
+https://prometheus.io/docs/prometheus/latest/querying/functions/#predict_linear()
+另外 也有针对这个 函数的 基础理论 Linear 数学计算模型 的介绍 
+https://en.wikipedia.org/wiki/Simple_linear_regression
+看这个数学计算公式 …..😳
+总之 promehtues就是这样⼀个  有各种⽣活⼤爆炸型的数学家
+（也可能是物理学家哦） 通过他们的⾟勤努⼒ 给我们提供了 
+⾮常繁多的 这种复杂计算的实⽤函数
+为的都是 把监控做的越来越好
+
+
+--- p119 ---
+然后 我们来看下 硬盘IO使⽤的 监控
+使⽤的公式 
+((rate(node_disk_bytes_read[1m] )+ 
+rate(node_disk_bytes_written[1m])) / 1024 /1024) > 0
+硬盘使⽤率 是 read + written 读和写 都会占⽤IO 
+/1024 两次后 就由 bytes => Mbs 
+如果这个指标标⾼了， 那么必然 CPU_IOWAIT 也会飙⾼ 
+（所以说 从这⾥ 我们也可以看得出 报警中 很多项⽬ 虽然重要 但是⽆法避免重复  都有⼀定
+的连带关系 这也是⼤⽶为什么在上篇中 给⼤家提出了⼀个 真实链路报警的 未来展望） 
+•
+prometheus+grafana   企业⽹络传输 真实案例
+
+
+--- p120 ---
+使⽤公式 rate(node_network_transimit_btyes[1m]) /1024 /1024 
+最后这个 咱们 之前在 7 8讲的时候 ⽤过它举过例⼦ 
+这⾥就不再重复了 公式⼤家可以直接使⽤ 
+休息⼀下吧 等待进⼊后⾯的课程  
+
+
+--- p121 ---
+                                   
+                                                      
+   
+   
+                                                                        
+  
+                    
+  第⼗十四讲：Prometheus 企业级实际使⽤用
+（⼆二）
+ 第⼗十四讲内容：
+
+
+--- p122 ---
+• Prometheus+grafana  TCP等待链接监控 企
+业实际使⽤
+TCP等待链接 其实之前应给⼤家 ⽤这个举例⼦好⼏次了
+使⽤公式
+count_netstat_wait_connections ⼀个key⾜够了 gauge
+数据来源： pushgateway + 脚本
+其实 node_exporter 也有对应的 tcp wait
+不过 ⾥⾯提供的 各种 tcp 状态的数据种类 实在太多 太细了 
+（我有点懒得去 ⼀个⼀个TCP状态 加起来出监控 ， 不过感
+兴趣的同学 可以⾃⼰尝试）
+索性 我这⾥就⽤脚本⾃⼰写⼀个了
+处于各种 wait状态的 TCP链接 是作为运维 平⽇排查(⽹络负
+载,服务器的负载，DB)的⼀个重要指标
+netstat 
+
+
+--- p123 ---
+Close_wait , time_wait 等等。。(TCP链接的⽅向 ) TCP协议
+⼀般当 wait类型的TCP 过⼤时 
+⼀定说明 系统⽹络负载（流量负载） 出现问题了
+内核优化 
+⽐如这种状况 
+  
+导致这种 状况的原因 很多 并⾮只会因为 ⽹络不给⼒ 
+还跟 访问请求量 攻击流量 数据库 CPU 等等 都有可能引起 
+• Prometheus+grafana  ⽂件描述符监控 企业
+实际使⽤
+Linux系统 我们之前在 系列课程上篇时 提到过  本⾝就是⼀个
+基于⽂件表达的操作系统
+任何资源的使⽤ 都可以映射成⼀个⽂件
+
+
+--- p124 ---
+⽂件 和 ⽂件句柄（Linux中 叫做⽂件描述符更准确 不过习惯
+叫句柄 不好改⼜了） 虽然并⽆直接联系 但是 有间接的连带
+关系
+如下是⼀段 ⽹上对⽂件描述符的解释 我们来看下
+⽂文件描述符是linux/unix操作系统中特有的概念。其相当于
+windows系统中的句句柄。习惯性的，我们也把linux⽂文件描述
+符称之句句柄。
+Linux系统中， 每当进程打开⼀一个⽂文件时，系统就为其分配
+⼀一个唯⼀一的整型⽂文件描述符，⽤用来标识这个⽂文件。标准C中每
+个进程默认打开的有三个⽂文件，标准输⼊入，标准输出，标准
+错误，分别⽤用⼀一个FILE结构的指针来表示，即stdin，stout，
+sterr，这三个结构分别对应着三个⽂文件描述符0,1,2。
+⽂文件描述符是⼀一个简单的整数，⽤用以标明每⼀一个被进程所打
+开的⽂文件和socket。第⼀一个打开的⽂文件是0，第⼆二个是1，
+PID->⽂文件的句句柄  依此类推。
+linux 操作系统通常对每个进程l能打开的⽂文件数量量有⼀一个限
+制。
+linux系统默认的最⼤大⽂文件描述符限制是1024 
+
+
+--- p125 ---
+• Prometheus+grafana  ⽹络丢包率监控 企业
+实际使⽤
+   
+⽹络监控
+我们来看⼀下    ⼀个企业中 实际使⽤的 对服务器内⽹流量 
+ping延迟和丢包率                                                                           
+                                        
+pushgateway + shell 
+# ping prometheus server
+ping + ip 
+lostpk=`timeout 5 ping -q -A -s 500  -W 1000 -c 100 prometheus | 
+grep transmitted | awk '{print $6}'` 
+
+
+--- p126 ---
+rrt=`timeout 5 ping -q -A -s 500  -W 1000 -c 100 prometheus | 
+grep transmitted | awk '{print $10}’`
+# -s ⼀个ping包的⼤⼩
+# -W 延迟timeout 
+# -c 发送多少个数据包
+                                                              
+T-S 
+value_lostpk=`echo $lostpk | sed "s/%//g"`
+value_rrt=`echo $rrt | sed "s/ms//g" `
+echo "lostpk_"$instance_name"_to_prometheus  : $value_lostpk"
+echo "lostpk_"$instance_name"_to_prometheus  $value_lostpk"  | 
+curl --data-binary @- http://prometheus.monitor.com:9092/
+metrics/job/pushgateway1/instance/localhost:9092 
+echo "rrt_"$instance_name"_to_prometheus  : $value_rrt"
+echo "rrt_"$instance_name"_to_prometheus  $value_rrt"  | curl --
+data-binary @- http://prometheus.monitor.com:9092/metrics/job/
+pushgateway1/instance/localhost:9092 
+
+
+--- p127 ---
+如上就是 使⽤scripts 获取⽹络延迟和丢包率的 实例
+另外 针对企业中 对⽹络的监控 我们还可以 通过安装
+smokeping 等更专业的⽹络监控⼯具来采集数据
+smokeping本⾝就提供很专业的 图形展⽰ 命令⾏输出 -> 脚本 
+-》 pushgatway 
+当然 我们为了统⼀化的考虑 也可以和promethues连⽤ 
+
+
+--- p128 ---
+                                                                                                   
+ 
+    
+                                                                        
+  
+                    
+          第⼗十五讲：Pagerduty的联⽤用 
+                                                                                         
+第15讲 内容                  
+•
+pagerduty 注册新账号
+•
+pagerduty 创建新的service
+•
+pagerduty 报警信息的设置
+•
+pagerduty 注册新账号 （免费试⽤14天）
+https://signup.pagerduty.com/accounts/new
+
+
+--- p129 ---
+
+
+--- p130 ---
+注册账号中的各种预设置 ⼀路跳过即可  
+
+
+--- p131 ---
+我们新注册的pagerduty账号 默认14天的免费试⽤时间
+期间对于接收报警的数量 是有⼀定限制的 不    
+•
+pagerduty 创建新的service
+
+
+--- p132 ---
+点击 配置中的 services选项  
+之后 我们来新建⼀个 service 
+
+
+--- p133 ---
+之后 我们把 ⽣成的这个 new service ’s interation key 复制到 我
+们grafana平台的 notiﬁcation_channel中（12讲中 有讲过 如何
+加载这个key） 
+就完成了 grafana+pagerduty的连接 
+
+
+--- p134 ---
+•
+pagerduty 报警信息的设置
+做好了 grafana+pagerduty的连接
+最后 我们⾃然就需要 设置⼀下pagerduty给咱们⽤户 发送报警
+信息
+回到pagerduty的主页⾯后 找到 设置⾥的 users选项卡
+点击这个
+ 
+
+
+--- p135 ---
+在这⾥ 我们给账号 设置⼀个 ⽤于接收报警的 三项设置信息 
+电话 / 短信 / 邮箱
+之后 我们就可以正式开始使⽤了
+另外 在企业中使⽤的时候 
+我们需要在这⾥ 把所有需要接受报警信息的 员⼯⼿机号 邮箱
+地址 同时都设置上
+这样⼀来 每⼀次发送报警 所有被加⼊的员⼯就都会收到了
+
+
+--- p136 ---
+第⼗五讲结束 
+                                   
+                                                      
+   
+   
+                                                                        
+  
+                    
+    第⼗十六讲：Prometheus专题讲座 总结和展
+望篇
+我们通过这⼀个阶段的promethues专题讲座的学习
+
+
+--- p137 ---
+我们对于prometheus这⼀款新兴的 强⼤的开源监控平台 应该
+有了⼀个不错的开始
+其实 对于我本⼈这10多年的运维⽣涯， 我⾃⼰并不是⼀个新
+产品控（意思是说 我并不是⼀贯只推崇使⽤最新的技术）
+就拿监控⼯具来说，这些年 ⽤过的 ⼤概有10⼏种
+客观的来说 每⼀款监控⼯具 都有⾃⼰的优点缺点  并不是越
+新的就⼀定越好
+就拿 nagios 和 prometheus来说，虽然nagios它的年头很⽼了 
+⽽且很多功能已经⽐较落后了
+但是 nagios即便在今天 ， 运维⼯作中 依然有它独⽴存在的意
+义
+⽐如说： 我之前所在的⼀家公司，我们核⼼监控使⽤的是
+promethues ，但是发现 prometheus这个⾼⼤上的监控⼯具 在
+某些很基本的监控项⽬中
+反⽽不如nagios好⽤
+⽐如 我们对⼀个整机的监控 ping 和 telnet port
+promethues 对这两项 最简单的监控 反⽽做的不够好
+(promethues 有⼀个up 功能函数 ⽤来实现这种 ping port 的持
+续监控，但是由于这种 ping类的监控 ，是⼀次性的发⽣ 并切
+只有两个状态 up and down， 这样以来 就只有 0 1 两个数值会
+显⽰在promethues(不能直接连接服务器， exporter 
+pushgateway GET POST)上，很多时候 汇总出来的图形 会有
+误差)
+
+
+--- p138 ---
+所以 我们后来 针对这种最简单的 ping and port 
+直接就迁移进⼊ nagios ， 发现nagios对这种 状态⽐较少的简
+单监控 是最优秀的 ⽽且还⾮常省时省⼒
+prometheus呢，就专门⽤来应付 ⽐较难的监控业务逻辑需
+求，最简单的监控 交给nagios。 这样集联的来使⽤ 反⽽更能
+让监控体系完善
+所以说 也证实了 我刚才提到的 并不是越新的⼯具 就越好，
+⽽且最合适的⼯具 使⽤在最合适的地点 才是最好的
+这也是 我们作为⼀个运维架构师 在给企业 做综合框架设计时
+的⼀种 专业态度
+⼀句话 不要⼀味的只知道追新 
+另外，prometheus 当前在国外 尤其是欧美国家 是⾮常流⾏了 
+带起了⼀股 ⽤数学家的头脑做监控的风潮
+国外 （讲座）
+promethues经过充分学习和练习之后，它的搭建速度 神⼀般
+的快速
+下载和安装 就不⽤说了 很简单快速
+⽽对于 它的监控采集脚本开发 其重复利⽤的成本⾮常的低 尤
+其是系统基础层的监控 ⼏乎不⽤做什么修改 直接放上去就可
+以再利⽤
+grafana也是⼀样 还记得咱们学过的 json导出吗 也是⼀样的优
+点
+
+
+--- p139 ---
+另外 随着对 prometheus各种函数 以及Linux系统底层的深⼊
+理解， 我们能⾃⾏实现的监控项⽬ 会越来越丰富 越来越精细
+⽽这种精细 让我们未来的 实现真实链路监控的⽬标 变得越来
+越近了
+监控 在我们运维⼯作当中 保证线上的稳定（运维⾃动化开发 
+devops） 可以说是第⼀优先级  
+记得有⼀个⽼运维说过这么⼀句话， 监控如果真的做的完美
+了，我们运维也就可以⾼枕⽆忧了 每天可以就看看监控 然后
+各种的去 '挑刺⼉’  就⾏了 😄 
+可以看出来 监控在运维中的这种核⼼地位 不可动摇
+到这⾥，我们的 promethues 前沿监控专题讲座就全部结束了 . 
+⼤家如果有 针对监控和prometheus 有更多更好的建议 欢迎随
+时给我留⾔ 我会⾮常重视⼤家的反馈的
+在以后的⼤⽶运维课程中 ， 我们还会融⼊prometheus在各个
+阶段中的学习
+谢谢⼤家的收看 希望我们⼀起为运维监控⽽努⼒.
+
+
+--- p140 ---
+
+
+--- p141 ---

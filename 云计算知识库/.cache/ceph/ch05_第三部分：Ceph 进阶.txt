@@ -1,0 +1,1235 @@
+这部分内容介绍了一些 Ceph 使用中的进阶技巧，主要面向二线运维人员。
+第三部分：Ceph 进阶
+第三部分：Ceph 进阶
+- 98 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+本篇内容来自 zphj1987 —— Ceph 中 PG 和 PGP 的区别
+首先来一段关于 PG 和 PGP 区别的英文解释：
+PG = Placement Group
+PGP = Placement Group for Placement purpose
+pg_num = number of placement groups mapped to an OSD
+When pg_num is increased for any pool, every PG of this pool splits into half, but
+they all remain mapped to their parent OSD.
+Until this time, Ceph does not start rebalancing. Now, when you increase the
+pgp_num value for the same pool, PGs start to migrate from the parent to some
+other OSD, and cluster rebalancing starts. This is how PGP plays an important
+role.
+By Karan Singh
+以上是来自邮件列表的  Karan Singh  对 PG 和 PGP 的相关解释，他也是  Learning Ceph 
+和  Ceph Cookbook  的作者，以上的解释没有问题，我们来看下具体在集群里面如何作用。
+环境准备，因为是测试环境，我只准备了两台机器，每台机器 4 个 OSD，所以做了一些参数的设置，
+让数据尽量散列：
+1. osd_crush_chooseleaf_type = 0
+以上为修改的参数，这个是让我的环境故障域为 OSD 分组的。
+我们初始情况只创建一个名为 testpool 包含 6 个 PG 的存储池：
+1. ceph osd pool create testpool 6 6
+2. pool 'testpool' created
+我们看一下默认创建完了后的 PG 分布情况：
+1. ceph pg dump pgs|grep ^1|awk '{print $1,$2,$15}'
+1. PG 和 PGP 的区别
+前言
+实践
+创建测试需要的存储池
+1. PG 和 PGP 的区别
+- 99 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+2. dumped pgs in format plain
+3. 1.1 0 [3,6,0]
+4. 1.0 0 [7,0,6]
+5. 1.3 0 [4,1,2]
+6. 1.2 0 [7,4,1]
+7. 1.5 0 [4,6,3]
+8. 1.4 0 [3,0,4]
+我们写入一些对象，因为我们关心的不仅是 PG 的变动，同样关心 PG 内对象有没有移动，所以需要
+准备一些测试数据，这个调用原生  rados  接口写最方便。
+1. rados -p testpool bench 20 write --no-cleanup
+我们再来查询一次：
+1. ceph pg dump pgs|grep ^1|awk '{print $1,$2,$15}'
+2. dumped pgs in format plain
+3. 1.1 75 [3,6,0]
+4. 1.0 83 [7,0,6]
+5. 1.3 144 [4,1,2]
+6. 1.2 146 [7,4,1]
+7. 1.5 86 [4,6,3]
+8. 1.4 80 [3,0,4]
+可以看到写入了一些数据，其中的第二列为这个 PG 当中的对象的数目，第三列为 PG 所在的 OSD。
+我们来扩大 PG 再看看：
+1. ceph osd pool set testpool pg_num 12
+2. set pool 1 pg_num to 12
+再次查询：
+1. ceph pg dump pgs|grep ^1|awk '{print $1,$2,$15}'
+2. dumped pgs in format plain
+3. 1.1 37 [3,6,0]
+4. 1.9 38 [3,6,0]
+5. 1.0 41 [7,0,6]
+6. 1.8 42 [7,0,6]
+7. 1.3 48 [4,1,2]
+增加 PG 测试
+1. PG 和 PGP 的区别
+- 100 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+8. 1.b 48 [4,1,2]
+9. 1.7 48 [4,1,2]
+10. 1.2 48 [7,4,1]
+11. 1.6 49 [7,4,1]
+12. 1.a 49 [7,4,1]
+13. 1.5 86 [4,6,3]
+14. 1.4 80 [3,0,4]
+可以看到上面新加上的 PG 的分布还是基于老的分布组合，并没有出现新的 OSD 组合，因为我们当前
+的设置是 pgp_num 为 6,那么三个 OSD 的组合的个数就是 6 个，因为当前为 12 个 PG，分布只
+能从 6 种组合里面挑选，所以会有重复的组合。
+根据上面的分布情况，可以确定的是，增加 PG 操作会引起 PG 内部对象分裂，分裂的份数是根据新
+增 PG 组合重复情况来确定的，比如上面的情况：
+ 1.1  的对象分成了两份  [3,6,0] 
+ 1.3  的对象分成了三份  [4,1,2] 
+ 1.4  的对象没有拆分  [3,0,4] 
+结论： 增加 PG 会引起 PG 内的对象分裂，也就是在 OSD 上创建了新的 PG 目录，然后进行部分
+对象的  move  的操作。
+我们将原来的 PGP 从 6 调整到 12：
+1. ceph osd pool set testpool pgp_num 12
+2. 
+3. ceph pg dump pgs|grep ^1|awk '{print $1,$2,$15}'
+4. dumped pgs in format plain
+5. 1.a 49 [1,2,6]
+6. 1.b 48 [1,6,2]
+7. 1.1 37 [3,6,0]
+8. 1.0 41 [7,0,6]
+9. 1.3 48 [4,1,2]
+10. 1.2 48 [7,4,1]
+11. 1.5 86 [4,6,3]
+12. 1.4 80 [3,0,4]
+13. 1.7 48 [1,6,0]
+14. 1.6 49 [3,6,7]
+15. 1.9 38 [1,4,2]
+16. 1.8 42 [1,2,3]
+增加 PGP 测试
+1. PG 和 PGP 的区别
+- 101 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+可以看到 PG 里面的对象并没有发生变化，而 PG 所在的对应关系发生了变化。
+我们看下与调整 PGP 前后的对比：
+1. *1.1 37 [3,6,0]          1.1 37 [3,6,0]*
+2.  1.9 38 [3,6,0]          1.9 38 [1,4,2]
+3. *1.0 41 [7,0,6]          1.0 41 [7,0,6]*
+4.  1.8 42 [7,0,6]          1.8 42 [1,2,3]
+5. *1.3 48 [4,1,2]          1.3 48 [4,1,2]*
+6.  1.b 48 [4,1,2]          1.b 48 [1,6,2]
+7.  1.7 48 [4,1,2]          1.7 48 [1,6,0]
+8. *1.2 48 [7,4,1]          1.2 48 [7,4,1]*
+9.  1.6 49 [7,4,1]          1.6 49 [3,6,7]
+10.  1.a 49 [7,4,1]          1.a 49 [1,2,6]
+11. *1.5 86 [4,6,3]          1.5 86 [4,6,3]*
+12. *1.4 80 [3,0,4]          1.4 80 [3,0,4]*
+可以看到其中最原始的 6 个 PG 的分布并没有变化（标注了  *  号），变化的是后增加的 PG，
+也就是将重复的 PG 分布进行重新分布，这里并不是随机完全打散，而是根据需要去进行重分布。
+结论： 调整 PGP 不会引起 PG 内的对象的分裂，但是会引起 PG 的分布的变动。
+PG 是指定存储池存储对象的目录有多少个，PGP 是存储池 PG 的 OSD 分布组合个数。
+PG 的增加会引起 PG 内的数据进行分裂，分裂到相同的 OSD 上新生成的 PG 当中。
+PGP 的增加会引起部分 PG 的分布进行变化，但是不会引起 PG 内对象的变动。
+总结
+1. PG 和 PGP 的区别
+- 102 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+本篇内容来自 徐小胖’blog —— monitor 的增删改备
+每个 MON 的数据都是保存在数据库内的，这个数据库位于  /var/lib/ceph/mon/$cluster-
+$hostname/store.db  ，这里的  $cluster  是集群的名字，  $hostname  为主机名，MON 的
+所有数据即目录  /var/lib/ceph/mon/$cluster-$hostname/  ，备份好这个目录之后，就可以在任
+一主机上恢复 MON 了。
+这里参考了下 这篇文章 里面的备份方法，简单讲基本思路就是，停止一个 MON，然后将这个 MON
+的数据库压缩保存到其他路径，再开启 MON。文中提到了之所以要停止 MON 是要保证 levelDB 数
+据库的完整性。然后可以做个定时任务一天或者一周备份一次。
+另外最好把  /etc/ceph/  目录也备份一下。
+这个备份路径最好是放到其他节点上，不要保存到本地，因为一般 MON 节点要坏就坏一台机器。
+这里给出文中提到的备份方法：
+1. service ceph stop mon
+2. tar czf /var/backups/ceph-mon-backup_$(date +'%a').tar.gz /var/lib/ceph/mon
+3. service ceph start mon
+4. #for safety, copy it to other nodes
+5. scp /var/backups/* someNode:/backup/
+现在有一个 Ceph 集群，包含 3 个 monitors： ceph-1 、ceph-2 和 ceph-3 。
+1. [root@ceph-1 cluster]# ceph -s
+2.     cluster 844daf70-cdbc-4954-b6c5-f460d25072e0
+3.       health HEALTH_OK
+4. 
+      monmap e2: 3 mons at {ceph-1=192.168.56.101:6789/0,ceph-
+2=192.168.56.102:6789/0,ceph-3=192.168.56.103:6789/0}
+5.             election epoch 8, quorum 0,1,2 ceph-1,ceph-2,ceph-3
+6.       osdmap e13: 3 osds: 3 up, 3 in
+7.         pgmap v20: 64 pgs, 1 pools, 0 bytes data, 0 objects
+8.             101 MB used, 6125 GB / 6125 GB avail
+2. Monitor 的备份和恢复
+Monitor 的备份
+Monitor 的恢复
+2. Monitor 的备份和恢复
+- 103 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+9.                     64 active+clean
+假设发生了某种故障，导致这 3 台 MON 节点全都无法启动，这时 Ceph 集群也将变得不可用。我们
+可以通过前面备份的数据库文件来恢复 MON。当某个集群的所有的 MON 节点都挂掉之后，我们可以将
+最新的备份的数据库解压到其他任意一个节点上，新建 monmap，注入，启动 MON，推送 config，
+重启 OSD就好了。
+将  ceph-1  的  /var/lib/ceph/mon/ceph-ceph-1/  目录的文件拷贝到新节点  ceph-4  的
+ /var/lib/ceph/mon/ceph-ceph-4/  目录下（或者从备份路径拷贝到  ceph-4  节点），一定要
+注意目录的名称！这里  ceph-1  的 IP 为  172.23.0.101 ，  ceph-4  的 IP 为
+ 192.168.56.104  。 ceph-4  节点为一个只安装了 ceph 程序的干净节点。注意下面指令执行
+的节点。
+1. [root@ceph-1 ~]# ip a |grep 172
+2.     inet 172.23.0.101/24 brd 172.23.0.255 scope global enp0s8
+3. [root@ceph-1 ~]# ping ceph-4
+4. PING ceph-4 (192.168.56.104) 56(84) bytes of data.
+5. 64 bytes from ceph-4 (192.168.56.104): icmp_seq=1 ttl=63 time=0.463 ms
+6. 
+7. [root@ceph-4 ~]# mkdir /var/lib/ceph/mon/ceph-ceph-4
+8. 
+[root@ceph-1 ~]# scp -r /var/lib/ceph/mon/ceph-ceph-1/*  ceph-
+4:/var/lib/ceph/mon/ceph-ceph-4/
+9. 
+done                                                             100%    0     
+0.0KB/s   00:00    
+10. 
+keyring                                                          100%   77     
+0.1KB/s   00:00    
+11. 
+LOCK                                                             100%    0     
+0.0KB/s   00:00    
+12. 
+LOG                                                              100%   21KB  
+20.6KB/s   00:00    
+13. 
+161556.ldb                                                       100% 2098KB   
+2.1MB/s   00:00    
+14. ......
+15. 
+MANIFEST-161585                                                  100%  709     
+0.7KB/s   00:00    
+16. 
+CURRENT                                                          100%   16     
+0.0KB/s   00:00    
+17. 
+sysvinit                                                         100%    0     
+0.0KB/s   00:00    
+同时，将  /etc/ceph  目录文件也拷贝到  ceph-4  节点，然后将  ceph.conf  中的
+ mon_initial_members  修改为  ceph-4 。
+2. Monitor 的备份和恢复
+- 104 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+1. [root@ceph-1 ~]# scp /etc/ceph/* ceph-4:/etc/ceph/
+2. 
+ceph.client.admin.keyring                                                        
+100%   63     0.1KB/s   00:00    
+3. 
+ceph.conf                                                                        
+100%  236     0.2KB/s   00:00  
+4. 
+5. [root@ceph-4 ~]# vim /etc/ceph/ceph.conf 
+6. [root@ceph-4 ~]# cat /etc/ceph/ceph.conf 
+7. [global]
+8. fsid = 844daf70-cdbc-4954-b6c5-f460d25072e0
+9. mon_initial_members = ceph-4
+10. mon_host = 192.168.56.104
+新建一个 monmap，使用原来集群的  fsid ，并且将  ceph-4  加入到这个 monmap，然后将
+monmap 注入到  ceph-4  的 MON 数据库中，最后启动  ceph-4  上的 MON 进程。
+1. 
+[root@ceph-4 ~]# monmaptool --create --fsid 844daf70-cdbc-4954-b6c5-
+f460d25072e0 --add ceph-4 192.168.56.104 /tmp/monmap 
+2. [root@ceph-4 ~]# ceph-mon -i ceph-4 --inject-monmap /tmp/monmap 
+3. [root@ceph-4 ~]# ceph-mon -i ceph-4
+4. [root@ceph-4 ~]# ceph -s
+5.     cluster 844daf70-cdbc-4954-b6c5-f460d25072e0
+6.       health HEALTH_ERR
+7.             64 pgs are stuck inactive for more than 300 seconds
+8.             64 pgs degraded
+9.             64 pgs stuck inactive
+10.             64 pgs undersized
+11.       monmap e6: 1 mons at {ceph-4=192.168.56.104:6789/0}
+12.             election epoch 13, quorum 0 ceph-4
+13.       osdmap e36: 3 osds: 1 up, 1 in
+14.         pgmap v58: 64 pgs, 1 pools, 0 bytes data, 0 objects
+15.             34296 kB used, 2041 GB / 2041 GB avail
+16.                     64 undersized+degraded+peered
+好消息是， ceph -s  有了正确的输出，坏消息就是  HEALTH_ERR  了。不过不用担心，这时候将
+ ceph-4  的  ceph.conf  推送到其他所有节点上，再重启 OSD 集群就可以恢复正常了。
+2. Monitor 的备份和恢复
+- 105 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+本篇内容是根据生产环境中遇到的实际问题进行的总结。
+在生产环境中遇到这样一个问题：
+下发删除卷消息无法成功删除卷，后通过 cinder 命令行命令  cinder service-list  查询
+cinder 服务状态，发现  cinder-volume host : r2202002controller@rbd-sata  服务状态为
+ DOWN  。
+1. 
+|  cinder-volume   |  r2202002controller@rbd-sata   | nova | enabled  |    down  
+|
+该状态表明该 cinder-volume 进程已经没有正常上报心跳，处于无法处理请求的状态。
+通过现场复现问题和查看 cinder-volume 日志，发现在出问题的时间点都有删除卷的操作下发，但
+是有的卷一直未结束删除卷流程，直到重启 cinder-volume 进程时才恢复。
+1. 
+2016-09-23 13:42:48.176 44907 INFO cinder.volume.manager [req-0182ed51-a4a7-
+44e4-bd3e-3d456610a135 ff01ec05ed4442799ebad096c1aa2921 
+584c5f2fed764ec9b840319eb2cd0608 - - -] volume b38ea39e-b1f5-4af6-a7b1-
+40fe1d5e80ee: deleting
+2. 
+3. 
+2016-09-23 16:52:08.290 52145 INFO cinder.volume.manager [req-be3fe7fc-39fe-
+4bc3-9a70-d5be1e7330ce - - - - -] Resuming delete on volume: b38ea39e-b1f5-
+4af6-a7b1-40fe1d5e80ee
+怀疑在删除 RDB 卷流程有挂死问题，通过进一步查看日志，发现最后走到调用 RDB Client 删除卷
+时就中断了:
+1. 
+2016-09-23 13:43:27.911 44907 DEBUG cinder.volume.drivers.rbd [req-0182ed51-
+a4a7-44e4-bd3e-3d456610a135 ff01ec05ed4442799ebad096c1aa2921 
+584c5f2fed764ec9b840319eb2cd0608 - - -] deleting rbd volume volume-b38ea39e-
+b1f5-4af6-a7b1-40fe1d5e80  delete_volume /usr/local/lib/python2.7/dist-
+packages/cinder/volume/drivers/rbd.py:666
+因为该问题发生在 Ceph 集群扩容后，因此进一步怀疑和之前 Nova 挂卷后读取变慢问题一样是由于
+3. 修改 Cinder/Glance 进程的最大可用 FD
+背景
+原因分析
+3. 修改 Cinder/Glance 进程的最大可用 FD
+- 106 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+进程打开文件过多引起异常，后在实验环境中通过打开 RDB client 日志，重启 cinder-volume
+进程。
+1. [client]
+2. rbd cache = true
+3. rbd cache writethrough until flush = true
+4. log file = /var/log/ceph/ceph.client.log
+5. debug client = 20
+6. debug rbd = 20
+7. debug librbd = 20
+8. debug objectcacher = 20
+然后增加 cinder-volume 进程删卷时的打开文件数成功复现该问题。RDB client 日志中报
+ too many open files  异常，后在生产环境上通过复现问题和打开 RDB Client 日志观察到同
+样的异常，因此可以确定是由于扩容后 OSD 节点增多，RDB client 删除卷时需要和所有 OSD 建
+立 socket 链接，这样就会超过目前环境中 cinder-volume 进程允许打开的文件数，导致异常发
+生，进入挂死状态。
+1. 
+2016-09-26 20:08:48.953810 7f099566b700 -1 -- 192.168.219.2:0/43062437 >> 
+192.168.219.130:6812/12006 pipe(0x7f0acdcdc090 sd=-1 :0 s=1 pgs=0 cs=0 l=1 
+c=0x7f0acdcae7e0).connect couldn't created socket (24) Too many open files
+2. 
+2016-09-26 20:08:48.953803 7f099556a700 -1 -- 192.168.219.2:0/43062437 >> 
+192.168.219.113:6802/2740 pipe(0x7f0acdce0330 sd=-1 :0 s=1 pgs=0 cs=0 l=1 
+c=0x7f0acdcb2210).connect couldn't created socket (24) Too many open files
+3. 
+2016-09-26 20:08:48.953898 7f0995267700 -1 -- 192.168.219.2:0/43062437 >> 
+192.168.219.179:6812/31845 pipe(0x7f0acdcf12f0 sd=-1 :0 s=1 pgs=0 cs=0 l=1 
+c=0x7f0acdced990).connect couldn't created socket (24) Too many open files
+4. 
+2016-09-26 20:08:48.953913 7f099596e700 -1 -- 192.168.219.2:0/43062437 >> 
+192.168.219.169:6804/8418 pipe(0x7f0acdccd2f0 sd=-1 :0 s=1 pgs=0 cs=0 l=1 
+c=0x7f0acdcc0a90).connect couldn't created socket (24) Too many open files
+5. 
+2016-09-26 20:08:48.953932 7f0995368700 -1 -- 192.168.219.2:0/43062437 >> 
+192.168.219.136:6806/23096 pipe(0x7f0acdce8f40 sd=-1 :0 s=1 pgs=0 cs=0 l=1 
+c=0x7f0acdcc7cf0).connect couldn't created socket (24) Too many open files
+由于问题原因是 cinder-volume 允许打开的文件数没有随着 Ceph 集群的扩容做相应的调整，因
+此解决方案是要调整 cinder-volume 进程的允许打开文件数，目前调整为  65535 （根据测试，
+发现每个删卷请求要建立大约 1000 多个链接，因此调整为  65535  后可以支持并发删除约 60
+个 RDB 卷，后续版本会考虑基于性能基线，进行接口并发操作数量的限制，防止无限制的并发删卷导
+致文件打开数过大）。
+解决方案
+3. 修改 Cinder/Glance 进程的最大可用 FD
+- 107 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+1、cinder-volume 进程被封装成了 Ubuntu 上的 upstart 任务。修改 cinder-volume 进程
+启动配置文件  /etc/init/cinder-volume.conf  ，增加一行配置：
+1. limit nofile 65535 65535
+ limit  变量用来设置任务的资源限制。
+1. root@R1controller1:~# vi /etc/init/cinder-volume.conf
+2. description "Cinder Volume"
+3. 
+4. start on (local-filesystems and net-device-up IFACE!=lo)
+5. stop on runlevel [016]
+6. 
+7. respawn
+8. limit nofile 65535 65535
+9. 
+10. 
+exec su -s /bin/sh -C "exec cinder-volume --config-file /etc/cinder/cinder.conf 
+> /dev/null 2>&1" root
+2、重启 cinder-volume 进程，并用  cat proc/pid/limits  查询设置是否生效。
+1. root@R1controller1:~# service cinder-volume restart
+2. cinder-volume stop/waiting
+3. cinder-volume start/running, process 6298
+4. 
+5. root@R1controller1:~# cat /etc/6298/limits | grep open
+6. Max open files       65535               65535               files
+3、检查 cinder-volume 服务是否为  UP  状态。
+1. root@R1controller1:~# cinder service-list
+2. 
++------------------+---------------------------+------+---------+-------+------
+----------------------+-----------------+
+3. 
+|      Binary      |            Host           | Zone |  Status | State |        
+Updated_at         | Disabled Reason |
+4. 
++------------------+---------------------------+------+---------+-------+------
+----------------------+-----------------+
+5. 
+|  cinder-backup   |      OPS-controller1      | nova | enabled |   up  | 2016-
+09-07T20:38:30.000000 |       None      |
+6. 
+|  cinder-backup   |      OPS-controller2      | nova | enabled |   up  | 2016-
+09-07T20:38:26.000000 |       None      |
+3. 修改 Cinder/Glance 进程的最大可用 FD
+- 108 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+7. 
+| cinder-scheduler |      OPS-controller1      | nova | enabled |   up  | 2016-
+09-07T20:38:29.000000 |       None      |
+8. 
+| cinder-scheduler |      OPS-controller2      | nova | enabled |   up  | 2016-
+09-07T20:38:29.000000 |       None      |
+9. 
+|  cinder-volume   | OPS-controller1@netapp_fc | nova | enabled |   up  | 2016-
+09-07T20:38:32.000000 |       None      |
+10. 
+|  cinder-volume   |  OPS-controller1@rbd-sas  | nova | enabled |   up  | 2016-
+09-07T20:38:33.000000 |       None      |
+11. 
+|  cinder-volume   |  OPS-controller1@rbd-ssd  | nova | enabled |   up  | 2016-
+09-07T20:38:33.000000 |       None      |
+12. 
+|  cinder-volume   |  OPS-controller2@rbd-sas  | nova | enabled |   up  | 2016-
+09-07T20:38:25.000000 |       None      |
+13. 
+|  cinder-volume   |  OPS-controller2@rbd-ssd  | nova | enabled |   up  | 2016-
+09-07T20:38:27.000000 |       None      |
+14. 
++------------------+---------------------------+------+---------+-------+------
+----------------------+-----------------+
+4、重新进行删除卷操作，卷可以被正常删除。
+5、因为 Glance 后端也对接的是 Ceph 集群，为防止 Glance 也出现该问题，建议也修改
+Glance 进程的启动配置文件  /etc/init/glance-api.conf  ，增加  limit nofile 65535
+65535  配置行。
+6、重启 glance-api 进程。
+1. service glance-api restart
+7、重启完成后上传测试镜像，测试镜像可以正常上传和删除。
+3. 修改 Cinder/Glance 进程的最大可用 FD
+- 109 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+本篇中部分内容来自 zphj1987 —— 如何替换 Ceph 的 Journal
+Ceph 在一块单独的磁盘上部署 OSD 的时候，是默认把 journal 和 OSD 放在同一块磁盘的不同分
+区上。有时候，我们可能需要把 OSD 的 journal 分区从一个磁盘替换到另一个磁盘上去。那么应该
+怎样替换 Ceph 的 journal 分区呢？
+有两种方法来修改 Ceph 的 journal：
+创建一个 journal 分区，在上面创建一个新的 journal。
+转移已经存在的 journal 分区到新的分区上，这个适合整盘替换。
+Ceph 的 journal 是基于事务的日志，所以正确的下刷 journal 数据，然后重新创建 journal 并不会引
+起数据丢失，因为在下刷 journal 的数据的时候，osd 是停止的，一旦数据下刷后，这个 journal 是不会
+再有新的脏数据进来的。
+1、首先给 Ceph 集群设置  noout  标志。
+1. root@mon:~# ceph osd set noout
+2. set noout
+2、假设我们现在想要替换 osd.0 的 journal。首先查看 osd.0 当前的 journal 位置，当前使
+用的是  /dev/sdb2  分区。
+1. root@mon:~# ceph-disk list | grep osd.0
+2.   /dev/sdb1 ceph data, active, cluster ceph, osd.0, journal /dev/sdb2
+3. 
+4. root@mon:~# ll /var/lib/ceph/osd/ceph-0/journal
+5. 
+lrwxrwxrwx 1 root root 58 May 24 15:06 /var/lib/ceph/osd/ceph-0/journal -> 
+/dev/disk/by-partuuid/8e95b09d-ffa9-4163-b24c-b78020022797
+6. root@mon:~# ls -l /dev/disk/by-partuuid/
+7. total 0
+8. 
+lrwxrwxrwx 1 root root 10 Nov  8 09:21 39e9ad34-d7aa-4dec-865e-08952aa8aab5 -> 
+../../sdc1
+9. 
+lrwxrwxrwx 1 root root 10 Nov  8 09:21 8e95b09d-ffa9-4163-b24c-b78020022797 -> 
+../../sdb2
+10. 
+lrwxrwxrwx 1 root root 10 Nov  8 09:21 aaeca5fa-456a-4f45-8a8b-9de0c2642f44 -> 
+../../sdc2
+4. 更换 OSD Journal
+第一种方法
+4. 更换 OSD Journal
+- 110 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+11. 
+lrwxrwxrwx 1 root root 10 Nov  8 09:21 d30a6d4a-6da4-4a81-a9e5-4bc69ebeec8f -> 
+../../sdb1
+3、停止 osd.0 进程。
+1. stop ceph-osd id=0
+4、下刷 journal 到 osd，使用  -i  指定需要替换 journal 的 osd 的编号。
+1. root@mon:~# ceph-osd -i 0 --flush-journal
+2. 
+SG_IO: bad/missing sense data, sb[]:  70 00 05 00 00 00 00 0a 00 00 00 00 20 00 
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+3. 
+SG_IO: bad/missing sense data, sb[]:  70 00 05 00 00 00 00 0a 00 00 00 00 20 00 
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+4. 
+2016-11-08 13:17:58.355025 7f8351a72800 -1 flushed journal 
+/var/lib/ceph/osd/ceph-0/journal for object store /var/lib/ceph/osd/ceph-0
+5、删除旧的 journal 。
+1. root@mon:~# ll /var/lib/ceph/osd/ceph-0/journal
+2. 
+lrwxrwxrwx 1 root root 58 May 24 15:06 /var/lib/ceph/osd/ceph-0/journal -> 
+/dev/disk/by-partuuid/8e95b09d-ffa9-4163-b24c-b78020022797
+3. root@mon:~# rm -rf /var/lib/ceph/osd/ceph-0/journal
+6、下面用  /dev/sdc2  分区重建 osd.0 的 journal 。查看  /dev/sdc2  的  uuid ：
+1. root@mon:~# ls -l /dev/disk/by-partuuid/
+2. total 0
+3. 
+lrwxrwxrwx 1 root root 10 Nov  8 09:21 39e9ad34-d7aa-4dec-865e-08952aa8aab5 -> 
+../../sdc1
+4. 
+lrwxrwxrwx 1 root root 10 Nov  8 13:17 8e95b09d-ffa9-4163-b24c-b78020022797 -> 
+../../sdb2
+5. 
+lrwxrwxrwx 1 root root 10 Nov  8 09:21 aaeca5fa-456a-4f45-8a8b-9de0c2642f44 -> 
+../../sdc2
+6. 
+lrwxrwxrwx 1 root root 10 Nov  8 09:21 d30a6d4a-6da4-4a81-a9e5-4bc69ebeec8f -> 
+../../sdb1
+新的 journal 的 uuid 的路径为  /dev/disk/by-partuuid/aaeca5fa-456a-4f45-8a8b-
+9de0c2642f44  。
+7、新建 journal 的链接和 journal_uuid 文件：
+4. 更换 OSD Journal
+- 111 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+1. 
+root@mon:~# ln -s /dev/disk/by-partuuid/aaeca5fa-456a-4f45-8a8b-9de0c2642f44 
+/var/lib/ceph/osd/ceph-0/journal
+2. 
+root@mon:~# echo aaeca5fa-456a-4f45-8a8b-9de0c2642f44 > /var/lib/ceph/osd/ceph-
+0/journal_uuid
+8、给 osd.0 创建 journal，使用  -i  指定 osd 的编号 。
+1. root@mon:~# ceph-osd -i 0 --mkjournal
+2. 
+SG_IO: bad/missing sense data, sb[]:  70 00 05 00 00 00 00 0a 00 00 00 00 20 00 
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+3. 
+2016-11-08 13:29:36.115461 7f64ec851800 -1 created new journal 
+/var/lib/ceph/osd/ceph-0/journal for object store /var/lib/ceph/osd/ceph-0
+9、查看新 journal 。
+1. root@mon:~# ceph-disk list | grep osd.0
+2.   /dev/sdb1 ceph data, active, cluster ceph, osd.0, journal /dev/sdc2
+10、启动 osd.0 。
+1. start ceph-osd id=0
+11、去除 noout 的标记。
+1. ceph osd unset noout
+12、检查集群的状态。
+1. root@mon:~# ceph -s
+2. cluster 614e77b4-c997-490a-a3f9-e89aa0274da3
+3.  health HEALTH_OK
+4.  monmap e5: 1 mons at {osd1=10.95.2.43:6789/0}
+5.         election epoch 796, quorum 0 osd1
+6.  osdmap e1067: 3 osds: 3 up, 3 in
+7.         flags sortbitwise
+8.   pgmap v309733: 384 pgs, 6 pools, 1148 MB data, 311 objects
+9.         3597 MB used, 73162 MB / 76759 MB avail
+10.              384 active+clean
+11. 
+12. root@mon:~# ceph osd tree
+4. 更换 OSD Journal
+- 112 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+13. 
+ID WEIGHT  TYPE NAME                                     UP/DOWN REWEIGHT 
+PRIMARY-AFFINITY                               
+14. -4 0.05997 root default                                                          
+15. -1 0.01999     host mon                                                          
+16. 
+ 0 0.01999         osd.0                                      up  1.00000        
+1.00000 
+17. -2 0.01999     host osd0                                                         
+18. 
+ 1 0.01999         osd.1                                      up  1.00000        
+1.00000 
+19. -3 0.01999     host osd1                                                         
+20. 
+ 2 0.01999         osd.2                                      up  1.00000        
+1.00000
+这个属于备份和转移分区表的方法。
+1、首先按方法一中的第 1 ~ 4 步，设置  noout  标志，停进程，下刷 journal。
+2、备份需要替换 journal 的分区表。
+1. root@lab8106 ~# sgdisk --backup=/tmp/backup_journal_sdd /dev/sdd
+3、 还原分区表。
+1. root@lab8106 ~# sgdisk --load-backup=/tmp/backup_journal_sde /dev/sde
+2. root@lab8106 ~# parted -s /dev/sde print
+新的 journal 磁盘现在跟老的 journal 的磁盘的分区表一样的了。这意味着新的分区的 UUID 和
+老的相同的。如果选择的是这种备份还原的方法，那么 journal 的那个软连接是不需要进行修改的，
+因为两个磁盘的 uuid 是一样的，所以需要注意将老的磁盘拔掉或者清理掉分区，以免冲突。
+4、重建 journal 。
+1. root@lab8106 ~# ceph-osd -i 0 --mkjournal
+5、启动进程。
+1. root@lab8106 ~# start ceph-osd id=0
+6、去除  noout  的标记。
+第二种方法
+4. 更换 OSD Journal
+- 113 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+1. root@lab8106 ~# ceph osd unset noout
+4. 更换 OSD Journal
+- 114 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+本篇内容来自 zphj1987 —— 不小心清空了 Ceph 的 OSD 的分区表如何恢复
+假设不小心对 Ceph OSD 执行了  ceph-deploy disk zap  这个操作，那么该 OSD 对应磁盘的
+分区表就丢失了。本文讲述了在这种情况下如何进行恢复。
+我们现在有一个正常的集群，假设用的是默认的分区的方式，我们先来看看默认的分区方式是怎样的。
+1、查看默认的分区方式。
+1. root@mon:~# ceph-disk  list
+2. ···
+3. /dev/sdb :
+4.   /dev/sdb1 ceph data, active, cluster ceph, osd.0, journal /dev/sdb2
+5.   /dev/sdb2 ceph journal, for /dev/sdb1
+6. ···
+2、查看分区情况
+1. root@mon:~# parted -s /dev/sdb print
+2. Model: SEAGATE ST3300657SS (scsi)
+3. Disk /dev/sdb: 300GB
+4. Sector size (logical/physical): 512B/512B
+5. Partition Table: gpt
+6. Disk Flags: 
+7. 
+8. Number  Start   End     Size    File system  Name          Flags
+9.   2      1049kB  1074MB  1073MB               ceph journal
+10.   1      1075MB  300GB   299GB   xfs          ceph data
+3、破坏  /dev/sdb  的分区表，该磁盘对应的是  osd.0  。
+1. root@mon:~/ceph# ceph-deploy disk zap mon:/dev/sdb
+2. [ceph_deploy.conf][DEBUG ] found configuration file at: /root/.cephdeploy.conf
+3. 
+[ceph_deploy.cli][INFO  ] Invoked (1.5.34): /usr/bin/ceph-deploy disk zap 
+mon:/dev/sdb
+4. ···
+5. 清空 OSD 的分区表后如何恢复
+破坏环境
+5. 清空 OSD 的分区表后如何恢复
+- 115 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+5. [mon][DEBUG ] Warning: The kernel is still using the old partition table.
+6. [mon][DEBUG ] The new table will be used at the next reboot.
+7. 
+[mon][DEBUG ] GPT data structures destroyed! You may now partition the disk 
+using fdisk or
+8. [mon][DEBUG ] other utilities.
+9. ···
+即使这个 osd 在被使用，还是被破坏了，这里假设上面的就是一个误操作，我们看下带来了哪些变
+化：
+1. root@mon:~/ceph# ll /var/lib/ceph/osd/ceph-0/journal
+2. 
+lrwxrwxrwx 1 root root 58 Sep 24 00:02 /var/lib/ceph/osd/ceph-0/journal -> 
+/dev/disk/by-partuuid/bd81471d-13ff-44ce-8a33-92a8df9e8eee
+如果你用命令行看，就可以看到上面的链接已经变红了，分区没有了：
+1. root@mon:~/ceph# ceph-disk  list 
+2. /dev/sdb :
+3.  /dev/sdb1 other, xfs, mounted on /var/lib/ceph/osd/ceph-0
+4.  /dev/sdb2 other
+已经跟上面有变化了，没有 ceph 的相关分区信息了：
+1. root@mon:~/ceph# parted -s /dev/sdb print
+2. Model: SEAGATE ST3300657SS (scsi)
+3. Disk /dev/sdb: 300GB
+4. Sector size (logical/physical): 512B/512B
+5. Partition Table: gpt
+6. Disk Flags: 
+7. 
+8. Number  Start  End  Size  File system  Name  Flags
+分区表完全没有信息了，到这我们可以确定分区表完全没了，如果现在重启将会发生什么？重启以后这
+个磁盘就是一个裸盘，没有分区的裸盘，所以此时千万不能重启！
+首先一个办法就是当这个 OSD 坏了，然后直接按照删除节点，添加节点的方法去处理，这个应该是最
+主流、最通用的处理办法，但是这个方法在生产环境当中引发的数据迁移还是非常大的。我们尝试做恢
+复，这就是本篇主要讲的东西。
+1、首先设置  noout  标志。
+恢复环境
+5. 清空 OSD 的分区表后如何恢复
+- 116 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+1. root@mon:~/ceph# ceph osd set noout
+2、停止 OSD 。
+1. root@mon:~/ceph# stop ceph-osd id=0
+现在的 OSD 还是有进程的，所以需要停止掉再做处理。
+3、查看其他 OSD 的分区信息（这里要求磁盘一致）。
+1. root@mon:~/ceph# parted -s /dev/sdc unit s print
+2. Model: SEAGATE ST3300657SS (scsi)
+3. Disk /dev/sdc: 585937500s
+4. Sector size (logical/physical): 512B/512B
+5. Partition Table: gpt
+6. Disk Flags: 
+7. 
+8. Number  Start     End         Size        File system  Name          Flags
+9.  2      2048s     2097152s    2095105s                 ceph journal
+10.  1      2099200s  585937466s  583838267s  xfs          ceph data
+记住上面的数值，  print  的时候是加了  unit s  这个是要精确的值的，下面的步骤会用到的
+这些数值。
+4、进行分区表的恢复。
+1. root@mon:~/ceph# parted -s /dev/sdb mkpart ceph_data 2099200s 585937466s
+2. root@mon:~/ceph# parted -s /dev/sdb mkpart ceph_journal 2048s 2097152s
+5、再次检查 /dev/sdb 的分区表。
+1. root@mon:~/ceph# parted -s /dev/sdb print
+2. Model: SEAGATE ST3300657SS (scsi)
+3. Disk /dev/sdb: 300GB
+4. Sector size (logical/physical): 512B/512B
+5. Partition Table: gpt
+6. Disk Flags: 
+7. 
+8. Number  Start   End     Size    File system  Name          Flags
+9.  2      1049kB  1074MB  1073MB               ceph_journal
+10.  1      1075MB  300GB   299GB   xfs          ceph_data
+5. 清空 OSD 的分区表后如何恢复
+- 117 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+可以看到，分区表已经回来了。
+6、重新挂载分区。
+1. root@mon:~/ceph# umount /var/lib/ceph/osd/ceph-0
+2. root@mon:~/ceph# partprobe
+3. root@mon:~/ceph# mount /dev/sdb1 /var/lib/ceph/osd/ceph-0
+7、删除旧的 journal ，重建 osd.0 的 journal。
+1. root@mon:~/ceph# rm -rf /var/lib/ceph/osd/ceph-0/journal
+2. 
+3. root@mon:~/ceph# ceph-osd -i 0 --osd-journal=/dev/sdb2 --mkjournal
+4. 
+SG_IO: bad/missing sense data, sb[]:  70 00 05 00 00 00 00 0a 00 00 00 00 20 00 
+01 cf 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+5. 
+2016-09-24 00:36:06.595992 7f9d0afbc880 -1 created new journal /dev/sdb2 for 
+object store /var/lib/ceph/osd/ceph-0
+6. root@mon:~/ceph# ln -s /dev/sdb2 /var/lib/ceph/osd/ceph-0/journal
+7. root@mon:~/ceph# ll /var/lib/ceph/osd/ceph-0/journal
+8. lrwxrwxrwx 1 root root 9 Sep 24 00:37 journal -> /dev/sdb2
+注意上面的操作  --osd-journal=/dev/sdb2  这个地方，此处写成  /dev/sdb2  是便于识别，
+这个地方在实际操作中要写上  /dev/sdb2  的 uuid 的路径。
+1. root@mon:~/ceph# ll /dev/disk/by-partuuid/03fc6039-ad80-4b8d-86ec-aeee14fb3bb6 
+2. 
+lrwxrwxrwx 1 root root 10 Sep 24 00:33 /dev/disk/by-partuuid/03fc6039-ad80-
+4b8d-86ec-aeee14fb3bb6 -> ../../sdb2
+也就是这个链接的一串内容，这是为了防止盘符串了的情况下无法找到 journal 的问题。
+8、启动 OSD 。
+1. root@mon:~/ceph# start ceph-osd id=0
+检查下，到这 osd.0 就成功地恢复了。
+5. 清空 OSD 的分区表后如何恢复
+- 118 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+有时，我们的 Ceph 集群可能会出现 PG 长时间卡在  active + remapped  的状态。
+1. root@ceph1:~# ceph -s
+2.     cluster 5ccdcb2d-961d-4dcb-a9ed-e8034c56cf71
+3.       health HEALTH_WARN 88 pgs stuck unclean
+4. 
+      monmap e2: 1 mons at {ceph1=192.168.56.102:6789/0}, election epoch 1, 
+quorum 0 ceph1
+5.       osdmap e71: 4 osds: 4 up, 3 in
+6.         pgmap v442: 256 pgs, 4 pools, 285 MB data, 8 objects
+7.             690 MB used, 14636 MB / 15326 MB avail
+8.                     88 active+remapped
+9.                   168 active+clean
+出现这种情况，一般是做了 osd 的  reweight  操作引起的，这是因为一般在做  reweight  的
+操作的时候，根据算法，这个上面的 pg 是会尽量分布在这个主机上的，而  crush reweight  不
+变的情况下，去修改 osd 的  reweight  的时候，可能算法上会出现无法映射的问题。
+1、直接做  ceph osd crush reweigh  的调整即可避免这个问题，这个 straw 算法里面还是有点
+小问题的，在调整某个因子的时候会引起整个因子的变动。
+2、从 FIREFLY (CRUSH_TUNABLES3) 开始 CRUSH 里面增加了一个参数：
+1. chooseleaf_vary_r
+是否递归的进行 chooseleaf 尝试，如果非 0 ，就递归的进行，这个基于 parent 已经做了多少
+次尝试。默认值是 0 ，但是常常找不到合适的 mapping 。在计算成本和正确性上来看最优值是 1
+。对于已经有大量数据的集群来说，从 0 调整为 1 将会有大量数值的迁移，调整为 4 或者 5 的
+话，将会找到一个更有效的映射，可以减少数据的移动。
+查看当前的值：
+6. PG 卡在 active + remapped 状态
+问题现象
+产生问题的原因
+如何解决
+6. PG 卡在 active + remapped 状态
+- 119 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+1. root@ceph1:~# ceph osd crush show-tunables |grep chooseleaf_vary_r
+2.     "chooseleaf_vary_r": 0,
+修改  chooseleaf_vary_r  的值。
+Hammer 版本下这个参数默认为：
+1. tunable chooseleaf_vary_r 0
+修改 Crush Map 的方法请参考本手册第一部分 9. 管理 Crushmap 。
+或者，直接修改  crush tunables  的值为  optimal  。
+1. ceph osd crush tunables optimal
+6. PG 卡在 active + remapped 状态
+- 120 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+有时，我们需要查看某个 RBD 镜像的对象都存放在哪些 PG 中，这些 PG 又分布在哪些 OSD 上。
+可以利用下面的 shell 脚本来实现快速查看 RBD 镜像的位置。
+1. #!/bin/bash
+2. 
+3. # USAGE:./rbd-loc <pool> <image>
+4. 
+5. if [ -z ${1} ] || [ -z ${2} ];
+6. then
+7.     echo "USAGE: ./rbd-loc <pool> <image>"
+8. exit 1
+9. fi
+10. 
+11. rbd_prefix=$(rbd -p ${1} info ${2} | grep block_name_prefix | awk '{print $2}')
+12. for i in $(rados -p ${1} ls | grep ${rbd_prefix})
+13. do
+14.     ceph osd map ${1} ${i}
+15. done
+执行的效果如下所示：
+1. root@mon:~# rbd ls -p images
+2. fc5b017d-fc74-4a59-80bb-a5a76e26dd4e
+3. 
+4. root@mon:~# ./rbd-loc.sh images fc5b017d-fc74-4a59-80bb-a5a76e26dd4e
+5. 
+osdmap e1078 pool 'images' (9) object 
+'rbd_data.1349f035c101d9.0000000000000001' -> pg 9.99b52d94 (9.14) -> up 
+([1,2,0], p1) acting ([1,2,0], p1)
+6. 
+osdmap e1078 pool 'images' (9) object 
+'rbd_data.1349f035c101d9.0000000000000002' -> pg 9.40973ca2 (9.22) -> up 
+([0,2,1], p0) acting ([0,2,1], p0)
+7. 
+osdmap e1078 pool 'images' (9) object 
+'rbd_data.1349f035c101d9.0000000000000003' -> pg 9.86758b2c (9.2c) -> up 
+([1,2,0], p1) acting ([1,2,0], p1)
+8. 
+osdmap e1078 pool 'images' (9) object 
+'rbd_data.1349f035c101d9.0000000000000004' -> pg 9.3c8e78f6 (9.36) -> up 
+([0,1,2], p0) acting ([0,1,2], p0)
+7. 查看 RBD 镜像的位置
+7. 查看 RBD 镜像的位置
+- 121 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+9. 
+osdmap e1078 pool 'images' (9) object 
+'rbd_data.1349f035c101d9.0000000000000000' -> pg 9.ffc971ff (9.3f) -> up 
+([0,2,1], p0) acting ([0,2,1], p0)
+该测试环境只有 3 个 host， 每个 host 上 1 个 OSD ，3 副本设置。
+7. 查看 RBD 镜像的位置
+- 122 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+本篇内容来自 zphj1987 —— 如何统计 Ceph 的 RBD 真实使用容量
+Ceph 的 rbd 一直有个问题就是无法清楚的知道这个分配的空间里面到底使用了多少，使用  rbd
+info  命令查询出来的容量是预分配的总容量而非实际使用容量。在 Jewel 版中提供了一个新的接
+口去查询，对于老版本来说可能同样有这个需求，本篇将详细介绍如何解决这个问题。
+目前已知的有三种查询方法：
+1. 使用  rbd du  查询（Jewel 版才支持）
+2. 使用  rbd diff 
+3. 根据对象统计的方法进行统计
+此命令在 Jewel 版中可用。
+1. root@mon:~# rbd du rbd/mysql-img
+2. NAME PROVISIONED USED 
+3. test       52.8047M    0
+不过需要注意，执行此命令要求开启 rbd image 的如下属性：
+1. layering, exclusive-lock, object-map, fast-diff
+具体使用可参考 这篇文章 。
+1. 
+root@mon:~# rbd diff rbd/mysql-img | awk '{ SUM += $2 } END { print 
+SUM/1024/1024 " MB" }'
+2. 52.8047 MB
+在集群非常大的时候，再按上面的方法一个个查询，需要花很长的时间，并且需要时不时的跟集群进行
+交互。方法三是把统计数据一次获取下来，然后进行数据的统计分析，从而获取结果，获取的粒度是以
+存储池为基准的。
+8. 查看 RBD 镜像的实际大小
+方法一：使用 rbd du 查询
+方法二：使用 rbd diff
+方法三：根据对象统计的方法进行统计
+8. 查看 RBD 镜像的实际大小
+- 123 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+拿到所有对象的信息：
+1. for obj in `rados -p rbd ls`;do rados -p rbd stat $obj >> obj.txt;done
+这个获取的时间长短是根据对象的多少来的，如果担心出问题，可以换个终端查看进度：
+1. tail -f obj.txt
+获取 RBD 的镜像列表：
+1. rbd -p rbd ls
+2. img2
+3. mysql-img
+4. volume-e5376906-7a95-48bb-a1c6-bb694b4f4813.backup.base
+获取 RBD 的镜像的 prefix ：
+1. 
+root@mon:~# for a in `rbd -p rbd ls`;do echo $a ;rbd -p rbd info $a|grep prefix 
+|awk '{print $2}' ;done
+2. img2
+3. rb.0.f4730.2ae8944a
+4. mysql-img
+5. rb.0.f4652.2ae8944a
+6. volume-e5376906-7a95-48bb-a1c6-bb694b4f4813.backup.base
+7. rbd_data.23a53c28fb938f
+获取指定RBD镜像的大小：
+1. 
+root@mon:~# cat obj.txt |grep rb.0.f4652.2ae8944a |awk  '{ SUM += $6 } END { 
+print SUM/1024/1024 " MB" }'
+2. 52.8047 MB
+将上面的汇总，使用脚本一次查询出指定存储池中所有镜像的大小：
+1. #!/bin/bash
+2. # USAGE:./get_used.sh <poolname>
+3. 
+4. objfile=obj.txt
+5. Poolname=${1}
+6. echo "In the pool ${Poolname}":
+7. 
+8. 查看 RBD 镜像的实际大小
+- 124 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+8. for obj in `rados -p $Poolname ls`
+9. do
+10.     rados -p $Poolname stat $obj >> $objfile
+11. done
+12. 
+13. for image in `rbd -p $Poolname ls`
+14. do
+15.     Imagename=$image
+16.     Prefix=`rbd  -p $Poolname info $image|grep prefix |awk '{print $2}'`
+17. 
+    Used=`cat $objfile |grep $Prefix|awk '{ SUM += $6 } END { print 
+SUM/1024/1024 " MB" }'`
+18.     echo $Imagename $Prefix
+19.     echo Used: $Used
+20. done
+执行的效果如下：
+1. root@mon:~# ./get_used.sh rbd
+2. In the pool rbd:
+3. img2 rb.0.f4730.2ae8944a
+4. Used: 3076 MB
+5. mysql-img rb.0.f4652.2ae8944a
+6. Used: 158.414 MB
+7. volume-e5376906-7a95-48bb-a1c6-bb694b4f4813.backup.base rbd_data.23a53c28fb938f
+8. Used: 96 MB
+注意这里只统计了 image 里面的真实容量，如果是用了链接 clone 的，存在容量复用的问题，需要
+自己看是否需要统计那一部分的对象，方法同上。
+8. 查看 RBD 镜像的实际大小
+- 125 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+我们可以通过一个 Python 脚本，统计出每个 OSD 上分布了多少个 PG ，以此判断集群的数据分布
+是否均衡。
+1. #!/usr/bin/env  python
+2. import sys 
+3. import os
+4. import json
+5. cmd = '''
+6. 
+ceph pg dump | awk ' /^pg_stat/ { col=1; while($col!="up") {col++}; col++ } 
+/^[0-9a-f]+\.[0-9a-f]+/ {print $1,$col}'
+7. '''
+8. body = os.popen(cmd).read()
+9. SUM = {}
+10. for line in  body.split('\n'):
+11.        if not line.strip():
+12.         continue
+13.        SUM[line.split()[0]] = json.loads(line.split()[1])
+14. pool = set()
+15. for  key in  SUM:
+16.       pool.add(key.split('.')[0])
+17. mapping = {}
+18. for number in pool:
+19.       for k,v in SUM.items():
+20.         if k.split('.')[0] == number:
+21.                if number in mapping:
+22.                    mapping[number] += v
+23.                else:
+24.                    mapping[number] = v
+25. MSG = """%(pool)-6s: %(pools)s | SUM
+26. %(line)s
+27. %(dy)s
+28. %(line)s
+29. %(sun)-6s: %(end)s |"""
+30. pools = " ".join(['%(a)-6s' % {"a": x} for x in sorted(list(mapping))])
+31. line = len(pools) + 20
+32. MA = {}
+33. OSD = []
+34. for p in mapping:
+9. 统计 OSD 上 PG 的数量
+9. 统计 OSD 上 PG 的数量
+- 126 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+35.     osd = sorted(list(set(mapping[p])))
+36.     OSD += osd
+37.     count = sum([mapping[p].count(x) for x in osd])
+38.     osds = {}
+39.     for x in osd:
+40.         osds[x] = mapping[p].count(x)
+41.     MA[p] = {"osd": osds, "count": count}
+42. MA = sorted(MA.items(), key=lambda x:x[0])
+43. OSD = sorted(list(set(OSD)))
+44. DY = ""
+45. for osd in OSD:
+46.     count = sum([x[1]["osd"].get(osd,0) for x in MA])
+47.     w = ["%(x)-6s" % {"x": x[1]["osd"].get(osd,0)} for x in MA]
+48.     #print w
+49.     w.append("| %(x)-6s" % {"x": count})
+50.     DY += 'osd.%(osd)-3s %(osds)s\n' % {"osd": osd, "osds": " ".join(w)}
+51. SUM = " ".join(["%(x)-6s" % {"x": x[1]["count"]} for x in MA])
+52. 
+msg = {"pool": "pool", "pools": pools, "line": "-" * line, "dy": DY, "end": 
+SUM, "sun": "SUM"}
+53. print MSG % msg
+执行效果如下：
+1. root@OPS-ceph1:~# ./cal_pg_per_osd.py 
+2. dumped all in format plain
+3. pool  : 0      1      2      3      4      5      7      | SUM
+4. --------------------------------------------------------------------
+5. osd.0   2      9      11     10     5      6      1      | 44    
+6. osd.1   1      7      8      10     8      9      3      | 46    
+7. osd.2   2      11     7      6      6      8      4      | 44    
+8. osd.3   1      11     7      9      7      4      1      | 40    
+9. osd.4   2      12     12     12     11     13     0      | 62    
+10. osd.5   2      10     10     5      9      11     0      | 47    
+11. osd.6   3      56     47     49     38     43     16     | 252   
+12. osd.7   6      36     48     45     55     42     10     | 242   
+13. osd.8   4      41     42     37     35     49     15     | 223   
+14. osd.9   6      42     52     41     55     36     12     | 244   
+15. osd.10  10     36     47     51     39     43     15     | 241   
+16. osd.11  6      56     47     44     41     46     12     | 252   
+17. osd.12  6      40     45     45     51     46     11     | 244   
+18. osd.13  6      42     40     56     46     44     9      | 243   
+19. osd.14  5      44     41     49     48     52     7      | 246   
+9. 统计 OSD 上 PG 的数量
+- 127 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+20. osd.15  4      50     42     38     49     38     12     | 233   
+21. osd.16  3      9      5      11     8      8      2      | 46    
+22. osd.17  2      10     13     4      7      10     2      | 48    
+23. osd.18  0      12     10     10     10     9      6      | 57    
+24. osd.19  0      13     8      4      9      15     2      | 51    
+25. osd.20  1      11     7      9      9      15     2      | 54    
+26. osd.21  0      7      12     10     6      12     1      | 48    
+27. osd.22  4      39     45     30     43     46     12     | 219   
+28. osd.23  6      44     38     44     38     41     6      | 217   
+29. osd.24  7      37     50     49     49     36     8      | 236   
+30. osd.25  10     28     38     44     40     32     11     | 203   
+31. osd.26  1      44     33     47     47     37     13     | 222   
+32. osd.27  3      47     38     42     44     55     14     | 243   
+33. osd.28  4      47     47     34     33     48     11     | 224   
+34. osd.29  3      40     32     34     40     51     10     | 210   
+35. osd.30  8      39     46     47     55     35     10     | 240   
+36. osd.31  5      48     48     45     41     36     11     | 234   
+37. osd.32  5      46     48     53     42     48     7      | 249   
+38. 
+39. --------------------------------------------------------------------
+40. SUM   : 128    1024   1024   1024   1024   1024   256    |
+9. 统计 OSD 上 PG 的数量
+- 128 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+有时候删除 rbd image 会提示当前 rbd image 正在使用中，无法删除：
+1. rbd rm foo
+2. 
+2016-11-09 20:16:14.018332 7f81877a07c0 -1 librbd: image has watchers - not 
+removing
+3. Removing image: 0% complete...failed.
+4. rbd: error: image still has watchers
+5. 
+This means the image is still open or the client using it crashed. Try again 
+after closing/unmapping it or waiting 30s for the crashed client to timeout.
+所以希望能查看到底是谁在使用 rbd image。
+对于 rbd image 的使用，目前主要有两种形式：内核模块 map 后再 mount ；通过 libvirt 等
+供给虚拟机使用。都是利用  rados listwatchers  去查看，只是两种形式下需要读取的文件不一
+样。
+查看方法如下：
+1. # 查看 rbd pool 中的 image
+2. root@ceph1:~# rbd ls
+3. foo
+4. ltest
+5. test
+6. 
+7. # 查看 foo 的使用者
+8. root@ceph1:~# rados -p rbd listwatchers foo.rbd
+9. watcher=10.202.0.82:0/1760414582 client.1332795 cookie=1
+10. 
+11. # 去对应主机上检查
+12. root@ceph2:~#rbd showmapped |grep foo
+13. 0  rbd  foo   -    /dev/rbd0 
+查看方法如下：
+10. 查看使用 RBD 镜像的客户端
+内核模块 map
+虚拟机通过 libvirt 使用 rbd image
+10. 查看使用 RBD 镜像的客户端
+- 129 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+1. # 查看该虚拟机卷的信息
+2. root@ceph1:~# rbd info volumes/volume-ee0c4077-a607-4bc9-a8cf-e893837361f3
+3. rbd image 'volume-ee0c4077-a607-4bc9-a8cf-e893837361f3':
+4.         size 1024 MB in 256 objects
+5.         order 22 (4096 kB objects)
+6.         block_name_prefix: rbd_data.13c3277850f538
+7.         format: 2
+8.         features: layering, striping
+9.         flags: 
+10.         parent: images/3601459f-060b-460f-b73b-db74237d922e@snap
+11.         overlap: 40162 kB
+12.         stripe unit: 4096 kB
+13.         stripe count: 1
+14. 
+15. # 查看该 image 的使用者
+16. root@ceph1:~# rados -p volumes listwatchers rbd_header.13c3277850f538
+17. watcher=10.202.0.21:0/1043073 client.1298745 cookie=140256077850496
+我们登录控制节点，查看对应的 cinder 卷：
+1. root@controller:~# cinder list | grep ee0c4077-a607-4bc9-a8cf-e893837361f3
+2. 
+| ee0c4077-a607-4bc9-a8cf-e893837361f3 | in-use |      |  1   |      -      |   
+true   | 96ee1aad-af27-4c9d-968f-291dbb2766a1 |
+该卷挂载在 ID 为  96ee1aad-af27-4c9d-968f-291dbb2766a1  的虚拟机上。通过  nova show 
+命令验证该虚拟机是否在物理机 10.202.0.21 ( computer21 )上：
+1. root@controller:~# nova show 96ee1aad-af27-4c9d-968f-291dbb2766a1
+2. 
++--------------------------------------+---------------------------------------
+------------------------------------------+
+3. 
+| Property                             | Value                                   
+|
+4. 
++--------------------------------------+---------------------------------------
+------------------------------------------+
+5. 
+| OS-DCF:diskConfig                    | AUTO                                    
+|
+6. 
+| OS-EXT-AZ:availability_zone          | az_ip                                   
+|
+7. 
+| OS-EXT-SRV-ATTR:host                 | computer21                              
+|
+8. 
+| OS-EXT-SRV-ATTR:hostname             | byp-volume                              
+|
+10. 查看使用 RBD 镜像的客户端
+- 130 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+9. 
+| OS-EXT-SRV-ATTR:hypervisor_hostname  | computer21                              
+|
+10. 
+| OS-EXT-SRV-ATTR:instance_name        | instance-00000989                       
+|
+11. 
+| OS-EXT-SRV-ATTR:kernel_id            |                                         
+|
+12. 
+| OS-EXT-SRV-ATTR:launch_index         | 0                                       
+|
+13. 
+| OS-EXT-SRV-ATTR:ramdisk_id           |                                         
+|
+14. 
+| OS-EXT-SRV-ATTR:reservation_id       | r-hwiyx15c                              
+|
+15. 
+| OS-EXT-SRV-ATTR:root_device_name     | /dev/vda                                
+|
+16. 
+| OS-EXT-SRV-ATTR:user_data            | -                                       
+|
+17. 
+| OS-EXT-STS:power_state               | 1                                       
+|
+18. 
+| OS-EXT-STS:task_state                | -                                       
+|
+19. 
+| OS-EXT-STS:vm_state                  | active                                  
+|
+20. 
+| OS-SRV-USG:launched_at               | 2016-11-09T08:19:41.000000              
+|
+21. 
+| OS-SRV-USG:terminated_at             | -                                       
+|
+22. 
+| accessIPv4                           |                                         
+|
+23. 
+| accessIPv6                           |                                         
+|
+24. 
+| blue-net network                     | 192.168.50.27                           
+|
+25. 
+| config_drive                         |                                         
+|
+26. 
+| created                              | 2016-11-09T07:53:59Z                    
+|
+27. 
+| description                          | byp-volume                              
+|
+28. 
+| flavor                               | m1.small (2)                            
+|
+29. 
+| hostId                               | 
+5104ee1a0538048d6ef80b14563a0cbac461f86523c5c81f5d18069e                        
+|
+30. 
+| host_status                          | UP                                      
+|
+10. 查看使用 RBD 镜像的客户端
+- 131 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+31. 
+| id                                   | 96ee1aad-af27-4c9d-968f-291dbb2766a1    
+|
+32. 
+| image                                | Attempt to boot from volume - no image 
+supplied                                 |
+33. 
+| key_name                             | octavia_ssh_key                         
+|
+34. 
+| locked                               | False                                   
+|
+35. 
+| metadata                             | {}                                      
+|
+36. 
+| name                                 | byp-volume                              
+|
+37. 
+| os-extended-volumes:volumes_attached | [{"id": "ee0c4077-a607-4bc9-a8cf-
+e893837361f3", "delete_on_termination": true}] |
+38. 
+| progress                             | 0                                       
+|
+39. 
+| security_groups                      | default                                 
+|
+40. 
+| status                               | ACTIVE                                  
+|
+41. 
+| tenant_id                            | f21a9c86d7114bf99c711f4874d80474        
+|
+42. 
+| updated                              | 2016-11-09T08:19:41Z                    
+|
+43. 
+| user_id                              | 142d8663efce464c89811c63e45bd82e        
+|
+44. 
+| zq-test network                      | 192.168.6.6                             
+|
+45. 
++--------------------------------------+---------------------------------------
+------------------------------------------+
+10. 查看使用 RBD 镜像的客户端
+- 132 -
+本文档使用 书栈网 · BookStack.CN 构建

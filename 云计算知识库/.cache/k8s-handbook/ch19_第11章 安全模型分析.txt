@@ -1,0 +1,734 @@
+第11章 安全模型分析
+系统安全性比以往任何时候都更加重要，Kubernetes也不例外。
+好在，我们可以借助多种手段来提高Kubernetes的安全性，这些方法
+将在第12章展开讨论。不过在此之前，我们有必要对一些常见的安全
+威胁进行模型分析。
+11.1 安全模型
+安全模型分析（Thread modeling）即找出系统薄弱点的过程，它
+将有助于我们采取合理的措施来避免或降低安全风险。本章将采用
+STRIDE模型来对Kubernetes进行分析。
+STRIDE定义了6种潜在威胁。
+●伪装（Spoofing）。
+●篡改（Tampering）。
+●抵赖（Repudiation）
+●信息泄露（Information Disclosure）。
+●拒绝服务（Denial of Service）。
+●提升权限（Elevation of Privilege）。
+虽然这个模型很棒，不过请注意，没有任何模型能够确保覆盖所
+有潜在的安全威胁。不过，这样的模型有助于提供一种能够完整地审
+视系统的结构性方法。
+本章下面的内容将逐一分析这几类威胁。对于每一项威胁，本书
+将首先进行一个简要的介绍，然后探讨一些能够用于Kubernetes的，
+防范和降低安全威胁的方法。
+更多IT书籍请关注：www.cmsblogs.cn
+
+本章并不尝试涵盖所有内容，而是一种启发式的抛砖引玉。
+11.2 伪装
+所谓伪装（Spoofing），即冒充某物或某人。在信息安全领域，
+主要是指为了获得更多的系统权限，而冒充另一个人或主体。
+我们来看一下Kubernetes的用户认证是如何来防范“伪装”的。
+11.2.1 与API Server的安全通信
+Kubernetes是由许多小的组件共同协作、组合而成的，其中包括
+诸如API Server、控制器管理（Controller manager）、调度器
+（scheduler）、集群存储（cluster store）等控制层组件，还包括
+Kubelet和容器运行时等节点组件（node component）。每一个组件都
+有相应的一组权限，以便与其他组件进行交互和对集群作出变更。虽
+然Kubernetes实现了一套最小权限模型（least-privilege model），
+但是对任何一个组件的伪装都有可能导致不可预知的灾难性的结果。
+所幸，Kubernetes所实现的安全模型，要求组件使用mutual
+TSL（mTLS）认证。这就要求通信双方（发送方和接收方）必须通过加
+密的签名证书来相互认证。Kubernetes借助自旋证书（auto-rotating
+certificates）进一步简化了这一过程。不过仍需着重考虑以下问
+题。
+1.通常，Kubernetes会在部署过程中自动生成一个自签名的证书
+颁发机构（Certificate Authority, CA），这个CA将为集群的所有组
+件颁发证书。虽然聊胜于无，但是恐怕对于生产环境来说是不够的。
+2.mutual TLS的安全性依赖于颁发证书的CA。对CA安全性的忽视
+也会危及整个mTLS层。所以，请确保CA的安全！
+更多IT书籍请关注：www.cmsblogs.cn
+
+一种比较好的方法是，确保由Kubernetes内部CA颁发的证书仅在
+集群内部被使用和认可。这需要在批准证书签名请求的时候保持严
+谨，还需要确保Kubernetes的CA不会被系统外的任何组件设置为可信
+CA。
+在前面的章节中提到，所有与Kubernetes的交互都经由API
+Server处理，并需通过认证和鉴权。无论对内部还是外部的组件来说
+都是如此。因此，API Server需要一种认证内部或外部资源的方式。
+一种比较好的方式是拥有两对可信的密钥——分别用于认证内部组件
+和外部组件。为了实现这一点，Kubernetes利用一个内部自签名的CA
+向内部组件颁发密钥，而外部组件的密钥则交由至少一个第三方CA来
+颁发（显然，Kubernetes需要将这些第三方CA配置为可信的）。这样
+的配置确保了API Server既能够信任来自内部组件的、由集群自签名
+CA颁发的证书，又能够信任来自外部组件的、由第三方CA签名的证
+书。
+11.2.2 Pod间的安全通信
+与针对集群的伪装攻击类似，针对“应用与应用间”的伪装攻击
+的威胁同样不可忽视。这种攻击通常发生在伪装为某个Pod的时候。好
+在，我们可以利用Kubernetes Secret将证书挂载到Pod，来对Pod进行
+安全认证。
+每一个Pod都有一个关联的ServiceAccount，它用于在集群内部为
+该Pod提供身份证明。Kubernetes在具体实现时，会自动将一个服务账
+号令牌（Service account token）作为Secret挂载到每一个Pod中。
+有两点需要说明。
+●该服务账号令牌是被允许访问API Server的。
+●多数Pod恐怕并不需要访问API Server。
+更多IT书籍请关注：www.cmsblogs.cn
+
+鉴于这两点，对于不需要与API Server进行通信的Pod，我们建议
+将其automount ServiceAccountToken属性设置为false。具体如下。
+apiVersion: v1  
+kind: Pod  
+metadata:  
+  name: Service-account-example-Pod  
+spec:   
+  ServiceAccountName: some-Service-account 
+  automountServiceAccountToken: false   
+  <Snip>  
+如果需要挂载服务账号令牌，那么有些非默认的配置需要了解一
+下。
+●expirationSeconds。
+●audience。
+这两项配置分别用来设置令牌的过期时间，和限制令牌只能对哪
+些主体有效。下面的例子来自Kubernetes官方文档，其中对令牌设置
+了1h的过期时间，并限制了其只能用于投影卷（projected volume）
+中的vault audience。
+apiVersion: v1  
+kind: Pod  
+metadata:  
+  name: nginx  
+spec:  
+  containers:  
+  - image: nginx   
+    name: nginx  
+    volumeMounts:  
+    - mountPath: /var/run/secrets/tokens 
+      name: vault-token  
+  ServiceAccountName: my-Pod  
+  volumes:  
+  - name: vault-token 
+    projected:  
+      sources:  
+更多IT书籍请关注：www.cmsblogs.cn
+
+      - ServiceAccountToken:  
+          path: vault-token  
+          expirationSeconds: 3600  
+          audience: vault 
+11.3 篡改
+篡改（tampering）即进行恶意修改。在信息安全领域，篡改行为
+通常出于以下目的。
+●拒绝服务：篡改资源使其不可用。
+●提高权限：篡改资源以便获取额外的权限。
+篡改攻击难以避免，通常的应对策略就是让被篡改的内容变得更
+加“显眼”。药物包装就是常见的非信息安全领域的例子。大多数的
+非处方药的包装盒有防干扰密封。如果药物被动手脚，这种密封就会
+被撕坏，从而方便消费者鉴别。
+那么Kubernetes集群中有哪些组件可能会被动手脚呢？
+11.3.1 对Kubernetes组件的篡改
+如果以下Kubernetes组件被动手脚，将可能导致问题。
+●etcd。
+●配置文件：API Server、Controllermanager、scheduler和
+Kubelet。
+●容器运行时的二进制程序。
+●容器镜像。
+●Kubernetes的二进制程序。
+篡改行为通常发生于传输和保存过程中。“传输”表示数据通过
+网络被发送时，“保存”表示数据被存储在内存或磁盘上时。
+更多IT书籍请关注：www.cmsblogs.cn
+
+TLS能够确保数据的完整性，因此它是保护数据免于在传输过程中
+受到篡改攻击的很好的工具。当篡改行为发生时，TLS机制能够予以识
+别。
+以下的建议有助于防范对保存在Kubernetes集群中数据的篡改攻
+击。
+●严格限制对运行有Kubernetes的服务器的访问，尤其是部署了
+Kubernetes控制层组件的节点。
+●严格限制对保存有Kubernetes配置文件的库的访问。
+●仅在最初部署Kubernetes时进行远程SSH访问（记得安全保管读
+者的SSH密钥）。
+●对于下载的二进制文件一定进行SHA-2校验和的查验。
+●严格限制对镜像仓库及相关库的访问。
+以上虽未穷尽所有举措，但是如果能够付诸实施，将会显著降低
+数据被篡改的风险。
+除了上面列举的内容，对重要的二进制和配置文件进行审计和监
+控在生产环境中是很好的确保安全的方式。在正确的配置和监控下，
+这些举措将有助于检测潜在的篡改攻击。
+下面的例子使用了一种常见的Linux审计工具来审计对Docker二进
+制文件的访问。它还能审计到对二进制文件属性的修改。
+$ auditctl -w /var/lib/docker -p rwxa -k audit-docker
+本章稍后将会再次回到这个例子。
+11.3.2 对运行在Kubernetes中的应用的篡改
+更多IT书籍请关注：www.cmsblogs.cn
+
+与Kubernetes组件一样，其中运行的应用也是潜在的受篡改攻击
+的目标。
+若要使一个运行中的Pod免遭篡改攻击，设置其文件系统为只读模
+式是一种不错的办法。这样可以确保文件系统是不可修改的，我们可
+以通过在部署文件中设置Pod安全策略（Pod security policy）或指
+定securityContext的属性值来配置它。
+注：PodSecurityPolicy对象是相对比较新的功能，它允许用户强
+制对集群中的所有Pod或指定的一组Pod进行安全设置。它可以被用来
+设置通用的安全属性，而无须研发和运维人员为每一个Pod进行设置。
+我们可以通过将readOnlyRootFilesystem属性设置为true，使容
+器的root文件系统配置为只读。刚才提到，这个属性可以通过
+PodSecurityPolicy对象或Pod的部署文件进行设置。对于挂载到容器
+中的文件系统，则可以通过allowedHostPaths属性来设置。
+下面是一个演示如何在Pod部署文件中进行设置的例子。
+allowedHostPaths的配置使挂载在/test下的内容是只读的。
+apiVersion: v1  
+kind: Pod  
+metadata:  
+  name: readonly-test  
+spec:   
+  securityContext:  
+    readOnlyRootFilesystem: true 
+    allowedHostPaths:  
+      - pathPrefix: "/test"  
+        readOnly: true 
+如果用PodSecurityPolicy来配置的话，如下所示。
+apiVersion: policy/v1beta1  # 将来的版本会有变化 
+kind: PodSecurityPolicy  
+metadata:  
+  name: tampering-example  
+更多IT书籍请关注：www.cmsblogs.cn
+
+spec:   
+  readOnlyRootFilesystem: true  
+  allowedHostPaths:  
+  - pathPrefix: "/test"   
+    readOnly: true 
+11.4 抵赖
+简单来说，抵赖（repudiation）就是制造对某事的不确定性。不
+可抵赖（non-repudiation）则是提供证据（以证实某事）。在信息安
+全的范畴内，不可抵赖就是证明某些个体进行了某些操作。
+具体来说，“不可抵赖”包含了能够提供以下证据（下列问题的
+答案）的能力。
+●发生了什么？
+●什么时间发生的？
+●谁让其发生的？
+●在哪里发生的？
+●为什么发生？
+●如何发生的？
+要想回答后两个问题，通常需要一段时间内的多个相关事件的信
+息。
+好在，Kubernetes中对API Server事件的审计（auditing）功能
+有助于回答以上问题。下面是一个API Server审计事件（audit
+event）的例子（可能需要手动启用API Server的审计功能）。
+{  
+  "kind":"Event",  
+  "apiVersion":"audit.k8s.io/v1",  
+  "metadata":{ "creationTimestamp":"2019-03-03T10:10:00Z" 
+}, 
+  "level":"Metadata",  
+更多IT书籍请关注：www.cmsblogs.cn
+
+  "timestamp":"2019-03-03T10:10:00Z",  
+  "auditID":"7e0cbccf-8d8a-4f5f-aefb-60b8af2d2ad5",  
+  "stage":"RequestReceived",  
+  
+"requestURI":"/api/v1/namespaces/default/persistentvolumec
+laims",  
+  "verb":"list",  
+  "user": {   
+    "username":"fname.lname@example.com",   
+    "groups":[ "system:authenticated" ]  
+  },  
+  "sourceIPs":[ "123.45.67.123" ],  
+  "objectRef": {   
+    "resource":"persistentvolumeclaims",  
+    "namespace":"default",  
+    "apiVersion":"v1"  
+  },  
+  "requestReceivedTimestamp":"2010-03-
+03T10:10:00.123456Z",  
+  "stageTimestamp":"2019-03-03T10:10:00.123456Z"   
+} 
+虽然API Server是Kubernetes进行大多数操作的中心组件，但是
+并非唯一需要审计的组件。我们至少还应该收集来自容器运行时、
+Kubelet和各个应用的审计日志。当然，这里还未提到对网络防火墙之
+类的审计。
+如果要收集来自多个组件的日志，那么就需要一个中心化的日志
+库来实现对事件的保存和关联分析。一种常见的做法是借助DaemonSet
+在所有节点部署代理程序（agent），由代理程序收集日志（运行时、
+Kubelet、应用等）并发送至一个安全的中心日志库。
+这种实现方式的前提是，中心化的日志库必须是安全的。如果日
+志库被动手脚，那么日志将不可靠，其内容也将不是“不可抵赖”
+的。
+为了实现对篡改二进制和配置文件这种行为的“不可抵赖性”，
+可以运行后台审计程序来监测对Kubernetes各节点上指定文件或目录
+更多IT书籍请关注：www.cmsblogs.cn
+
+的写操作。比如在11.3节的例子中我们启用了对Docker二进制文件进
+行的审计监控。这时候如果通过执行docker run命令来启动一个新容
+器，则会生成一个类似如下的事件。
+type=SYSCALL msg=audit(1234567890.123:12345): arch=abc123 
+syscall=59 success=yes  
+exit=0 a0=12345678abc\ a1=0 a2=abc12345678 a3=a items=1 
+ppid=1234 pid=1234 auid=  
+0 uid=0 gid=0 euid=0 suid=0 fsuid=0 egid=0 s\ gid=0 
+fsgid=0 tty=pts0 ses=1 comm=  
+"docker" exe="/var/lib/docker" 
+subj=system_u:object_r:container_runt\ ime_exec_t:s0  
+key="audit-docker" type=CWD 
+msg=audit(1234567890.123:12345): cwd="/home/firstname" 
+type=PATH msg=audit(1234567890.123:12345): item=0 
+name="/var/lib/docker" inode=123456  
+dev=fd:00 mode=0\ 100600 ouid=0 ogid=0 rdev=00:00 
+obj=system_u:object_r:container_runtime_exec_t:s0
+有了这样的日志，配合Kubernetes的审计功能，就能够构建一个
+复杂而又可信的事件脉络，这是不可抵赖的。
+11.5 信息泄露
+信息泄露（information disclosure）主要是指敏感数据的泄
+露。许多事情都可能导致信息泄露的情况发生，比如将无安全保护的
+USB设备落在飞机上，数据存储被黑，API不小心暴露了敏感数据等。
+11.5.1 保护集群数据
+在Kubernetes中，所有的集群配置都保存在集群存储中（目前是
+etcd），包含网络和存储配置、以Secret形式保存的密码等敏感数
+更多IT书籍请关注：www.cmsblogs.cn
+
+据。显然，这会使集群存储成为被攻击的首要目标。
+我们应当至少对运行有集群存储程序的节点进行访问限制和审
+计。不过在下面将会看到，在获取到节点的访问权限之后，用户可以
+绕过一些安全层。
+Kubernetes 1.7引入了对Secret对象的加密功能，不过它并不是
+默认开启的。即使默认开启，数据加密密钥（Data Encryption Key,
+DEK）也是与Secret保存在同一个节点上的！也就是说，一旦登录到节
+点上，就可以绕过加密。这对于运行有集群存储的节点（etcd节点）
+是一种隐患。
+好在，Kubernetes 1.11启用了一个beta特性，允许将密钥加密密
+钥（key encryption key,KEK）保存在集群之外。这种密钥被用来对
+数据加密密钥（DEK）进行加解密，是应当被妥善保管的。具体可以考
+虑使用硬件安全模块（Hardware Security Module, HSM）或云上的密
+钥管理存储（Key Management Store, KMS）来保存密钥加密密钥。
+请留意后续版本的Kubernetes在Secret加密方面的更多改进。
+11.5.2 保护Pod中的数据
+前面提到，Kubernetes提供了一种名为Secret的API资源，以用来
+保存和分享诸如密码等的敏感数据。比如，一个前端容器要访问加密
+的后端数据库，就需要持有一个能够解密数据库的密钥，该密钥以
+Secret的形式提供。这种方式比起将密钥保存在text文件或环境变量
+中要好得多。
+我们经常将数据和配置信息保存在独立于Pod和容器的
+PersistentVolume或ConfigMap中，如果这些数据是加密的，那么用来
+解密的密钥也应当保存在Secret中。
+更多IT书籍请关注：www.cmsblogs.cn
+
+在这种情况下，请一定考虑前面提到的有关Secret及加密密钥如
+何保存的方案。读者一定不希望面临在锁门之后误将钥匙落在门内的
+窘境吧。
+11.6 拒绝服务
+拒绝服务（Denial of Service, DoS）攻击的目的在于使服务不
+可用。攻击方式有多种，最广为熟知的方式是通过对系统施加超高负
+载使其无法继续提供服务。对于Kubernetes来说，潜在的威胁就是用
+高负载攻击API Server使其瘫痪（即使重要的系统级服务也无法与API
+Server通信）。
+下面我们一起看一下哪些Kubernetes组件可能成为DoS攻击的目
+标，以及如何进行防范。
+11.6.1 保护集群资源免于DoS攻击
+关于如何对多节点分布式系统的控制平面实现高可用（High
+Availability, HA），有一些久经考验的最佳实践。Kubernetes也不
+例外，对生产环境来说，应当安装多个主节点并以HA的方式配置部
+署。这样可以避免由单个主节点带来到单点故障问题。对于某些类型
+的DoS来说，攻击者必须对多个主节点发起攻击才能造成影响。
+我们也可以考虑将控制平面的节点分布在多个可用域
+（availability zone）中。这样可以防范对可用域的网络发起DoS攻
+击而造成整个控制平面失能的情况。
+同样的防范原则也适用于工作节点。通过部署多个工作节点，可
+以使应用被跨节点甚至跨可用域完成调度。一方面，这样可以使当前
+运行中的应用在遭受DoS攻击的时候能够被调度到其他节点上；另一方
+更多IT书籍请关注：www.cmsblogs.cn
+
+面，跨多个节点或可用域部署的分布式应用，也能够在一定程度上化
+解或降低对某一节点或可用域所发起的DoS攻击的有效性。
+我们还应为以下资源配置适当的限制。
+●内存。
+●CPU。
+●存储。
+●Kubernetes对象。
+对Kubernetes对象的限制包括限制某命名空间中ReplicaSet、
+Pod、Service、Secret以及ConfigMap的数量。
+添加配额限制，将有助于避免重要系统资源被消耗殆尽，从而提
+高抵御DoS的能力。
+以下的例子可将命名空间skippy中的Pod数量限制在100以内。
+apiVersion: v1  
+kind: ResourceQuota  
+metadata:  
+  name: Pod-quota  
+spec:   
+  hard:  
+    Pods: "100"
+执行以下命令使限额生效（假设部署文件名为quota.yml）。
+$ kubectl apply -f quota.yml --namespace=skippy
+除此之外，PodPidsLimit可被用于限制Pod中的进程数量。
+我们设想这样一种场景，Pod成为fork炸弹攻击的目标，这种攻击
+手段会基于一个流氓进程不停地创建新的进程，直至耗尽所有的系统
+资源并导致系统瘫痪。对Pod能够创建的进程数量进行限制，可以避免
+更多IT书籍请关注：www.cmsblogs.cn
+
+这个Pod将节点资源耗尽的情况出现，从而限制针对该Pod的攻击所造
+成的影响。一旦PodPidsLimit被用光，Pod就将会被重启。
+这一限制还将确保某个Pod不会消耗掉节点上其他Pod的PID数量，
+包括Kubelet。需要注意的一点是，要想设置一个合适的值，需要对每
+个节点上同时运行的Pod的数量进行准确的估算。如果不做估算，将很
+有可能对Pod进程数量限制得过高或过低。
+11.6.2 保护API Server防范DoS攻击
+所有与Kubernetes的通信都经由API Server。API Server通过TCP
+socket暴露了一套RESTful的接口，使它更易受到僵尸网络DoS攻击。
+以下举措将有助于避免或降低类似攻击的发生。
+●高可用的主节点，在多个节点甚至多个可用域上部署多个API
+Server副本。
+●对到达API Server的请求进行合理的监控和预警。
+●不将API Server暴露在互联网上（借助防火墙规则等）。
+与僵尸网络DoS攻击类似，攻击者还可能冒充一个用户或其他控制
+层的服务来制造超高负载。好在Kubernetes有完善的认证和鉴权机制
+来防范伪装攻击。不过，纵使有完善的RBAC模型，也需要注意妥善保
+管具有较高权限的账号。
+11.6.3 保护集群存储防范DoS攻击
+集群的配置是保存在etcd中的，因此etcd的可用性和安全性就变
+得异常重要。以下的建议将有助于提高etcd的可用性和安全性。
+●将etcd部署为3个或5个节点的高可用集群。
+更多IT书籍请关注：www.cmsblogs.cn
+
+●对etcd收到的请求进行监控和预警。
+●在网络层面对etcd进行隔离，只允许控制层的组件与之交互。
+默认情况下，Kubernetes会将etcd安装到与其他控制层服务相同
+的节点上。对于开发环境或测试环境，这是可以的，不过大规模的生
+产环境集群应当考虑部署一个专门的etcd集群。这有助于提高系统的
+性能和弹性。
+在性能方面，etcd可能是大型Kubernetes集群的瓶颈所在。鉴于
+此，在集群部署阶段应当进行性能测试，以确保整体架构能够在较大
+规模的情况下维持较高性能。性能不足的etcd甚至有可能会表现得像
+是受到持续的DoS攻击一样。将etcd部署为一个独立的集群，也有助于
+在控制层其他组件被攻击的时候，保护自己免遭攻击。
+对etcd的监控和预警应当基于一个合理的阈值，不妨从对etcd日
+志的监控开始入手。
+11.6.4 保护应用组件防范DoS攻击
+多数Pod会将其服务暴露在网络上，因此如果没有施加合理的控
+制，任何人都可以访问该网络并对Pod发起DoS攻击。好在，
+Kubernetes能够对Pod进行资源请求限制，以防范那些旨在耗尽Pod和
+节点资源的攻击手段。故而以下措施是有帮助的。
+●对Pod之间和Pod与外部的通信配置Kubernetes网络安全策略。
+●利用mutual TLS和基于token的API认证来提供应用级的认证
+（拒绝一切未通过认证的请求）。
+另外，还应当通过应用层级的鉴权来实现最小化授权。
+图11.1演示了如何综合利用以上措施来提高对应用实施DoS攻击的
+门槛。
+更多IT书籍请关注：www.cmsblogs.cn
+
+图11.1
+11.7 提升权限
+提升权限（elevation of privilege，或privilege
+escalation），是指获取比应当赋予的权限更高的权限，来制造破坏
+或进行非法访问的攻击行为。
+在Kubernetes环境中是如何防范这种攻击的呢？
+11.7.1 保护API Server
+Kubernetes提供了多种鉴权模型以确保对API Server访问的安全
+性。
+●基于角色的访问控制（Role-based Access Control, RBAC）。
+●webhook。
+●节点（node）。
+我建议同时启用多个鉴权机制。例如，一种常见的最佳实践是同
+时启用RBAC和节点两种鉴权机制。
+更多IT书籍请关注：www.cmsblogs.cn
+
+RBAC模式能够限制仅对指定的用户开放某API操作的权限，此处的
+“用户”既可以是普通的用户账号，也包括系统服务。总体思路在
+于，所有发送至API Server的请求都必须通过认证（authenticated）
+和鉴权（authorized）。认证的目的是确保收到的请求来自有效的用
+户——请求发送者的真实身份应与其声明的身份是一致的。鉴权的目
+的是确定通过认证的有效用户能否对目标资源执行与请求相关的操
+作。比如，张三能够创建Pod吗？这个例子中，“张三”是用户，“创
+建”是操作，Pod是目标资源。认证机制将确定是否是张三发出的请
+求，而鉴权机制则决定张三是否被允许创建Pod。
+Webhook模式则是将鉴权工作交由外部的基于REST的（REST-
+based）策略引擎来完成。不过需要额外搭建和维护一套外部引擎。另
+外，该外部引擎也会带来API Server潜在的单点故障（single-point-
+of-failure）隐患。假设外部的webhook系统宕掉，将无法处理到达
+API Server的所有请求。鉴于此，应严格谨慎地对待webhook鉴权服务
+的设计与实现。
+节点鉴权是指对来自Kubelet（集群节点）的请求进行鉴权。由节
+点发出的请求与普通用户发出的请求显然是有差异的，节点的鉴权工
+作由节点鉴权器（node authorizer）来完成。
+RBAC和节点鉴权是被推荐使用的方式。RBAC模式是完全可配置
+的，应当用来为访问API Server的用户实现一个最小权限模型。最
+初，它应当是一个默认拒绝（deny-by-default）所有请求的系统，然
+后再指定开通哪些操作权限。配置成功的话，它应当能够确保用户和
+服务账号仅拥有其所需的权限。
+11.7.2 保护Pod
+更多IT书籍请关注：www.cmsblogs.cn
+
+下面介绍的一些技术手段，将有助于降低以Pod和容器为目标的
+“提升权限”攻击的风险。
+●避免进程以root身份运行。
+●限制capabilities。
+●过滤系统调用。
+●避免权限提升。
+在展开介绍之前，请注意：Pod就是一个或多个容器的执行环境—
+应用程序在容器中执行，也可以认为是运行在Pod中的。有些表述中会
+提到Pod或容器，但通常是指容器。
+1.避免进程以root身份运行
+root用户是Linux系统中最强大的用户，其用户ID（UID）总是0。
+绝大多数情况下不建议将应用中的进程以root身份运行，因为这样的
+话应用进程将拥有容器内的所有权限。如果读者觉得这还不足为惧，
+那么更加恐怖的是，容器中的root用户通常也会拥有所在节点上不受
+限制的root访问权限。
+所幸，Kubernetes能够让我们强制以非root用户来运行容器中的
+进程。
+以下部署文件的配置中，指定Pod进程以UID 1000的身份运行。如
+果Pod有多个容器，那么所有容器中的所有进程都是以UID 1000的身份
+运行的。
+apiVersion: v1  
+kind: Pod  
+metadata:  
+  name: demo  
+spec:  
+  securityContext: # 适用于Pod中的所有容器 
+更多IT书籍请关注：www.cmsblogs.cn
+
+    runAsUser: 1000 # 非root用户  
+  containers:   
+  - name: demo   
+    image: example.io/simple:1.0
+runAsUser是PodSecurityContext（spec.securityContext）的诸
+多配置项中的一个。
+我们可以将两个或多个Pod的runAsUser配置为同一个UID。在这种
+情况下，这些Pod中的所有容器都运行在同样的安全环境（security
+context）中，并且拥有同样的资源访问权限。如果它们是来自同一批
+Pod或容器的副本，也许是没问题的。不过如果它们是互不相同的容
+器，则有较大可能出现问题。假设有两个不同的容器，它们都拥有读
+写权限，而且挂载了节点上的同一个目录，那么就有可能引起数据污
+染（在没有对写操作进行协同的情况下写入同一批数据集）。共享同
+样的安全环境还会增加容器遭受篡改攻击的可能性。
+鉴于此，不妨考虑在容器层面而不是Pod层面来配置
+securityContext.runAsUser属性。
+apiVersion: v1  
+kind: Pod  
+metadata:  
+  name: demo  
+spec:  
+  securityContext: # 适用Pod中的所有容器 
+    runAsUser: 1000 # 非root用户  
+  containers:   
+  - name: demo   
+    image: example.io/simple:1.0   
+    securityContext:   
+      runAsUser: 2000 # 覆盖Pod设置 
+以上示例中，在Pod层面设置UID为1000，紧接着它被容器层面的
+设置覆盖，容器中的进程将以UID 2000的身份运行。在没有明确指定
+更多IT书籍请关注：www.cmsblogs.cn
+
+的情况下，Pod中的其他容器将以UID 1000的身份运行。
+除此之外，还有其他的措施来规避多个Pod和容器使用同一个UID
+的问题。
+●启用用户命名空间（user namespace）。
+●维护一个map来记录UID的使用情况。
+用户命名空间是Linux内核特性，它允许容器内的进程以root身份
+运行的同时在容器外作为另一个用户来运行。比如，可以将容器中的
+UID 0（root用户）映射到主机的UID 1000。对于需要以root身份运行
+的进程来说，这是不错的解决方案。请确认所使用版本的Kubernetes
+和容器运行时是否能够对此提供完整支持。
+维护一个map来记录UID的使用情况，是一种为了避免Pod或容器使
+用同一个UID所采取的笨方法。这种方式不太优雅，需要在将Pod发布
+到生产环境前落实严格把关的发布流程。
+注：对生产环境来说，对发布流程进行严格把关是有益的。之所
+以说UID map不太优雅，是因为它引入了外部依赖，以及增加了发布和
+问题排查过程的复杂性。
+2.限制capabilities
+前面提到，用户命名空间允许容器进程在内部作为root运行，同
+时在主机上作为非root运行。这是由于多数进程的运行是不需要root
+的所有权限的。然而不可否认的是，仍然有一定数量的进程，其运行
+所需的权限相比典型的非root用户更多。为了运行这些进程，我们需
+要某种方式能够为它们赋予所需的权限。这时就需要capabilities登
+场了。
+首先简要介绍一下背景。
+更多IT书籍请关注：www.cmsblogs.cn
+
+我们都知道，root是Linux系统中最强大的超级用户。而其强大之
+处是由许多细粒度的、被称为capabilities的权限组合而成的。比
+如，SYS_TIME capability允许用户设置系统时钟，NET_ADMIN
+capability允许用户执行网络相关的操作（如修改本地路由表、配置
+本地接口）。root用户拥有所有的capabilities，故而非常强大。
+capabilities的这种模块化的特点，使我们可以进行非常细粒度
+的赋权操作。与root和非root这种只有“两档可调”的方法相比，可
+以精准地为程序的运行提供所需的权限集合。
+如今capabilities总共有30个，如何选择合适的capabilities是
+个令人头疼的问题。考虑到此，Docker运行时提供了默认的开箱即用
+的capabilities组合，其中去掉了大约一半的capabilities。这是一
+套适用于大多数程序的默认配置，起码让我们不再毫无防备地“将钥
+匙留在门上”。默认配置总归好过没有，不过还是会时常遇到无法满
+足生产环境使用的情况。
+为了确定应用所需的最少capabilities组合，一种常用的方法是
+在测试环境中去掉所有的capabilities并进行测试。这样会导致应用
+程序失败，日志信息会报出缺失的权限。然后根据缺失的权限对应到
+capabilities，并添加到Pod的部署文件中，再次部署和运行应用。重
+复这一过程直至应用能够正常运行，此时的capabilities组合即为最
+小组合。
+这种方式是有效的，不过也有几点问题需要考虑。
+首先，必须对应用执行大量的测试。而且最不希望遇到的情况就
+是，生产环境中出现了在测试环境中未曾测出的极端问题。这种问题
+也可能导致生产环境的崩溃。
+其次，每次对应用进行修复和更新之后，都需要针对
+capabilities组合重复进行大量的测试。
+更多IT书籍请关注：www.cmsblogs.cn
+
+为了应对以上问题，应当搭建一套有效的测试流程以及生产环境
+发布流程。
+默认情况下，Kubernetes使用的capabilities组合来自容器运行
+时（如containerd或Docker）。不过，我们可以借助Pod的安全策略或
+容器的securityContextu属性来覆盖默认组合。
+下面的Pod部署文件演示了如何为容器增加NET_ADMIN和CHOWN两个
+capabilities。
+apiVersion: v1 
+kind: Pod 
+metadata:  
+  name: capability-test   
+spec:   
+  containers:   
+  - name: demo   
+    image: example.io/simple:1.0   
+    securityContext:   
+      capabilities:  
+        add: ["NET_ADMIN", "CHOWN"]
+3.过滤系统调用
+seccomp与capabilities的理念类似，不同之处在于前者是作用于
+系统调用（syscall）的。
+在Linux中，如果某个进程请求内核来执行某项操作，则需要对内
+核发起系统调用。seccomp能够为某个容器配置哪些系统调用是被允许
+执行的。与capabilities类似，我们建议对应用也定义一套最少权限
+模型（least privilege model），以配置某个容器正常运行所需的
+syscall组合。
+更多IT书籍请关注：www.cmsblogs.cn
+
+不过应当注意，Linux拥有300多个系统调用，而且至本书撰写
+时，Kubernetes中的seccomp特性尚处于alpha阶段。此外，还应查看
+容器运行时的支持情况。
+4.禁止容器中的权限扩大
+在Linux中，创建一个新进程的唯一方式就是由一个进程克隆自
+己，然后往新进程中加载新的指令。显然这一描述过于简单了。被克
+隆的进程称作父进程，克隆出来的进程称作子进程。
+默认情况下，Linux允许子进程申请比父进程更多的权限。不过这
+通常不是好主意。事实上，多数情况下我们希望子进程与父进程拥有
+同样的或更少的权限。对于容器来说尤其如此，因为对它设置的安全
+配置只能用来指定初始的权限，并不能配置未来可能增加的权限。
+好在，我们可以借助Pod的安全策略或容器的securityContext属
+性来防范权限扩大的情况发生。
+以下的Pod部署文件演示了如何防范容器中的权限扩大。
+apiVersion: v1  
+kind: Pod  
+metadata:  
+  name: demo 
+spec:  
+  containers:   
+  - name: demo   
+    image: example.io/simple:1.0   
+    securityContext:   
+      allowPrivilegeEscalation: false
+11.8 Pod安全策略
+更多IT书籍请关注：www.cmsblogs.cn
+
+本章多处提到，我们可以在Pod的YAML文件中对Pod的安全环境
+（security context）的属性进行设置。不过这种方式不能进行批量
+配置，需要开发或运维人员对每个Pod进行设置，并且容易导致错误的
+配置。更好的方式是配置Pod安全策略。
+Pod安全策略（security policy）是一个相对较新的特性，它能
+够从集群范围进行安全设置。然后在部署阶段从这些策略中选择并应
+用于所需的Pod。因此，这种方式更加适用于批量配置，降低了开发和
+运维人员的工作量，而且减少了错误发生的概率。而且，Pod安全策略
+的配置还可以交由专门的负责安全的团队来完成。
+Pod安全策略被作为准入控制器（admission controller）实现，
+Pod的ServiceAccount必须在被授权的情况下才可以使用。一旦被授
+权，相应的安全策略就会经由API准入链（admission chain）被应用
+到新创建的Pod。
+Pod安全策略示例
+在本章即将结束的时候，我们通过一个有关Pod安全策略的示例来
+快速温习一下本章探讨过的知识点，以及其他一些默认的安全配置。
+本示例基于Kubernetes官方文档中的例子修改而来。
+apiVersion: policy/v1beta1  
+kind: PodSecurityPolicy  
+metadata:  
+  name: restricted  
+  annotations:  
+    
+seccomp.security.alpha.kubernetes.io/allowedProfileNames: 
+'docker/default'   
+    
+apparmor.security.beta.kubernetes.io/allowedProfileNames: 
+'runtime/default'   
+    
+seccomp.security.alpha.kubernetes.io/defaultProfileName: 
+更多IT书籍请关注：www.cmsblogs.cn
+
+'docker/default'   
+    
+apparmor.security.beta.kubernetes.io/defaultProfileName: 
+'runtime/default'   
+spec: 
+ privileged: false  
+  allowPrivilegeEscalation: false  # 防止特权升级  
+  requiredDropCapabilities:  
+    - ALL # 删除所有root capabilities（非特权用户） 
+  # 允许核心卷类型  
+  volumes:   
+    - 'configMap'   
+    - 'emptyDir'   
+    - 'projected'   
+    - 'secret'   
+    - 'downwardAPI'  
+    # 假设集群管理员设置的PV可以安全使用  
+    - 'persistentVolumeClaim'   
+  hostNetwork: false # 禁止访问主机网络命名空间  
+  hostIPC: false # 禁止访问主机IPC命名空间  
+  hostPID: false # 禁止访问主机PID命名空间  
+  runAsUser:  
+    rule: 'MustRunAsNonRoot' # 禁止以root身份运行  
+  runAsGroup:  
+    rule: 'MustRunAs' # 主组ID容器运行时用的控件  
+    ranges:  
+      - min: 1   
+        max: 65535   
+  seLinux:  
+    rule: 'RunAsAny' # 可以使用任意SELinux选项  
+  supplementalGroups:  
+    rule: 'MustRunAs' # 允许除root(UID 0)以外的所有用户  
+    ranges:  
+      - min: 1   
+        max: 65535   
+  fsGroup:  
+    rule: 'MustRunAs' # 为拥有Pod卷的组设置范围  
+    ranges:  
+      - min: 1   
+        max: 65535   
+  readOnlyRootFilesystem: true # 强制根文件系统为R/O   
+  forbiddenSysctls:  
+  - '*' #禁止从Pod访问任何sysctls
+更多IT书籍请关注：www.cmsblogs.cn
+
+不可否认，配置一套有效的安全策略既重要又复杂。通常的做法
+是从一个类似以上的这种比较严格的策略开始，逐渐调整至满足需求
+的状态。这期间需要大量的测试。
+还有一种不错的做法是，配置多个严密程度不一的安全策略，然
+后让研发团队与集群管理者共同为应用选择合适的策略。
+11.9 Kubernetes安全展望
+2019年CNCF（Cloud Native Computing Foundation，云原生计算
+基金会）委托一个第三方机构对Kubernetes进行了安全审计。通过安
+全威胁建模、人工代码审查、动态渗透测试和加密审查等方面的审计
+方法发现了一些安全隐患（finding）。所有的隐患都给出了难度
+（difficulty）和严重程度（severity）的级别。这次审查非常细
+致，并且本着负责任的态度，所有严重级别的隐患都在对外发布前被
+修复了。
+不过，目前仍然有许多问题等待社区来解决。
+阅读审计报告也不失为一种非常棒的、了解更多Kubernetes内部
+原理的途径。在阅读本章之后学习审计报告将使读者对Kubernetes的
+理解更上一层楼。
+11.10 总结
+本章我们利用STRIDE模型对Kubernetes的安全威胁进行了分析。
+我们依次探讨了6种安全威胁，包括如何防范和降低其风险。
+一种安全威胁通常还会导致另一种安全威胁的出现。另外，针对
+某一个安全威胁，通常有多种降低其风险的办法。还是那句话，深度
+防御是核心战术。
+更多IT书籍请关注：www.cmsblogs.cn
+
+本章的最后我们讨论了Pod的安全策略，及其如何通过提供一种更
+加灵活且批量的方式，实现默认安全策略的。
+第12章，我们将共同探讨一些来自实际的Kubernetes生产环境的
+最佳实践与教训。
+更多IT书籍请关注：www.cmsblogs.cn

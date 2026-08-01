@@ -1,0 +1,115 @@
+7. Docker 的⽹络模式
+Bridge模式
+当 Docker 进程启动时，会在主机上创建⼀个名为 docker0 的虚拟⽹桥，此主机上启动的 Docker 容器
+会连接到这个虚拟⽹桥上。虚拟⽹桥的⼯作⽅式和物理交换机类似，这样主机上的所有容器就通过交
+换机连在了⼀个⼆层⽹络中。从 docker0 ⼦⽹中分配⼀个 IP 给容器使⽤，并设置 docker0 的 IP 地址
+为容器的默认⽹关。在主机上创建⼀对虚拟⽹卡 veth pair 设备，Docker 将 veth pair 设备的⼀端放
+在新创建的容器中，并命名为 eth0 （容器的⽹卡），另⼀端放在主机中，以 vethxxx 这样类似的名
+字命名，并将这个⽹络设备加⼊到 docker0 ⽹桥中。可以通过 brctl show 命令查看。
+ bridge 模式是 docker 的默认⽹络模式，不写 –net 参数，就是 bridge 模式。使⽤ docker run -
+p 时，docker 实际是在 iptables 做了 DNAT 规则，实现端⼝转发功能。可以使⽤ iptables -t nat -
+vnL 查看。 bridge 模式如下图所示： 
+Docker 的⽹络模式
+42
+
+演示：
+$ docker run -tid --net=bridge --name docker_bri1 \
+             ubuntu-base:v3
+             docker run -tid --net=bridge --name docker_bri2 \
+             ubuntu-base:v3 
+$ brctl show
+$ docker exec -ti docker_bri1 /bin/bash
+$ ifconfig –a
+$ route –n
+如果你之前有 Docker 使⽤经验，你可能已经习惯了使⽤ --link 参数来使容器互联。
+随着 Docker ⽹络的完善，强烈建议⼤家将容器加⼊⾃定义的 Docker ⽹络来连接多个容器，⽽不是使
+⽤ --link 参数。
+Docker 的⽹络模式
+43
+
+下⾯先创建⼀个新的 Docker ⽹络。
+$ docker network create -d bridge my-net
+ -d 参数指定 Docker ⽹络类型，有  bridge overlay 。其中 overlay ⽹络类型⽤于 Swarm mode，在
+本⼩节中你可以忽略它。
+运⾏⼀个容器并连接到新建的 my-net ⽹络
+$ docker run -it --rm --name busybox1 --network my-net busybox sh
+打开新的终端，再运⾏⼀个容器并加⼊到 my-net ⽹络
+$ docker run -it --rm --name busybox2 --network my-net busybox sh
+再打开⼀个新的终端查看容器信息
+$ docker container ls
+CONTAINER ID        IMAGE               COMMAND             CREATED             STATUS    
+          PORTS               NAMES
+b47060aca56b        busybox             "sh"                11 minutes ago      Up 11 minu
+tes                           busybox2
+8720575823ec        busybox             "sh"                16 minutes ago      Up 16 minu
+tes                           busybox1
+下⾯通过 ping 来证明 busybox1 容器和 busybox2 容器建⽴了互联关系。 在 busybox1 容器输⼊以下
+命令
+/ # ping busybox2
+PING busybox2 (172.19.0.3): 56 data bytes
+64 bytes from 172.19.0.3: seq=0 ttl=64 time=0.072 ms
+64 bytes from 172.19.0.3: seq=1 ttl=64 time=0.118 ms
+⽤ ping 来测试连接 busybox2 容器，它会解析成 172.19.0.3。 同理在 busybox2 容器执⾏ ping
+busybox1，也会成功连接到。
+/ # ping busybox1
+PING busybox1 (172.19.0.2): 56 data bytes
+64 bytes from 172.19.0.2: seq=0 ttl=64 time=0.064 ms
+64 bytes from 172.19.0.2: seq=1 ttl=64 time=0.143 ms
+这样，busybox1 容器和 busybox2 容器建⽴了互联关系。
+如果你有多个容器之间需要互相连接，推荐使⽤ Docker Compose 。
+Host 模式
+Docker 的⽹络模式
+44
+
+如果启动容器的时候使⽤ host 模式，那么这个容器将不会获得⼀个独⽴的 Network Namespace ，⽽是
+和宿主机共⽤⼀个 Network Namespace。容器将不会虚拟出⾃⼰的⽹卡，配置⾃⼰的 IP 等，⽽是使
+⽤宿主机的 IP 和端⼝。但是，容器的其他⽅⾯，如⽂件系统、进程列表等还是和宿主机隔离的。
+Host模式如下图所示：
+演示：
+$ docker run -tid --net=host --name docker_host1 ubuntu-base:v3
+$ docker run -tid --net=host --name docker_host2 ubuntu-base:v3
+$ docker exec -ti docker_host1 /bin/bash
+$ docker exec -ti docker_host1 /bin/bash
+$ ifconfig –a
+Docker 的⽹络模式
+45
+
+$ route –n
+Container 模式
+这个模式指定新创建的容器和已经存在的⼀个容器共享⼀个 Network Namespace，⽽不是和宿主机共
+享。新创建的容器不会创建⾃⼰的⽹卡，配置⾃⼰的 IP，⽽是和⼀个指定的容器共享 IP、端⼝范围
+等。同样，两个容器除了⽹络⽅⾯，其他的如⽂件系统、进程列表等还是隔离的。两个容器的进程可
+以通过 lo ⽹卡设备通信。 Container模式示意图： 
+ 
+演示：
+$ docker run -tid --net=container:docker_bri1 \
+              --name docker_con1 ubuntu-base:v3
+Docker 的⽹络模式
+46
+
+$ docker exec -ti docker_con1 /bin/bash
+$ docker exec -ti docker_bri1 /bin/bash
+$ ifconfig –a
+$ route -n
+None模式
+使⽤ none 模式，Docker 容器拥有⾃⼰的 Network Namespace，但是，并不为Docker 容器进⾏任何
+⽹络配置。也就是说，这个 Docker 容器没有⽹卡、IP、路由等信息。需要我们⾃⼰为 Docker 容器添
+加⽹卡、配置 IP 等。 None模式示意图: 
+ 
+演示：
+Docker 的⽹络模式
+47
+
+$ docker run -tid --net=none --name \
+                docker_non1 ubuntu-base:v3
+$ docker exec -ti docker_non1 /bin/bash
+$ ifconfig –a
+$ route -n
+Docker 的跨主机通信我们这⾥就先暂时不讲解，我们在后⾯的 Kubernetes 课程当中会⽤到。
+点击查看本⽂视频
+扫描下⾯的⼆维码(或微信搜索 k8s技术圈 )关注我们的微信公众帐号，在微信公众帐号中回复 加群 即
+可加⼊到我们的 kubernetes 讨论群⾥⾯共同学习。
+k8s技术圈⼆维码
+Copyright © qikqiak.com 2018 all right reserved，powered by GitbookUpdated: 2019-03-12 12:59:41
+Docker 的⽹络模式
+48

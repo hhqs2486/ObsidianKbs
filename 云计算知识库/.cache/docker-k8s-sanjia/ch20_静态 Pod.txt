@@ -1,0 +1,103 @@
+静态 Pod
+我们上节课给⼤家讲解了 YAML ⽂件的使⽤，也⼿动的创建了⼀个简单的 Pod，这节课开始我们就来
+深⼊的学习下我们的 Pod。在Kubernetes集群中除了我们经常使⽤到的普通的 Pod 外，还有⼀种特殊
+的 Pod，叫做 Static Pod ，就是我们说的静态 Pod，静态 Pod 有什么特殊的地⽅呢？
+静态 Pod 直接由特定节点上的 kubelet 进程来管理，不通过 master 节点上的 apiserver 。⽆法与我
+们常⽤的控制器 Deployment 或者 DaemonSet 进⾏关联，它由 kubelet 进程⾃⼰来监控，当 pod 崩溃
+时重启该 pod ， kubelete 也⽆法对他们进⾏健康检查。静态 pod 始终绑定在某⼀个 kubelet ，并且
+始终运⾏在同⼀个节点上。  kubelet 会⾃动为每⼀个静态 pod 在 Kubernetes 的 apiserver 上创建⼀
+个镜像 Pod（Mirror Pod），因此我们可以在 apiserver 中查询到该 pod，但是不能通过 apiserver 进
+⾏控制（例如不能删除）。
+创建静态 Pod 有两种⽅式：配置⽂件和 HTTP 两种⽅式
+配置⽂件
+配置⽂件就是放在特定⽬录下的标准的 JSON 或 YAML 格式的 pod 定义⽂件。⽤ kubelet --pod-
+manifest-path=<the directory> 来启动 kubelet 进程，kubelet 定期的去扫描这个⽬录，根据这个⽬
+录下出现或消失的 YAML/JSON ⽂件来创建或删除静态 pod。
+⽐如我们在 node01 这个节点上⽤静态 pod 的⽅式来启动⼀个 nginx 的服务。我们登录到node01节点
+上⾯，可以通过下⾯命令找到kubelet对应的启动配置⽂件
+$ systemctl status kubelet
+配置⽂件路径为：
+$ /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
+打开这个⽂件我们可以看到其中有⼀条如下的环境变量配置：
+ Environment="KUBELET_SYSTEM_PODS_ARGS=--pod-manifest-path=/etc/kubernetes/manifests --allow-
+privileged=true" 
+所以如果我们通过 kubeadm 的⽅式来安装的集群环境，对应的 kubelet 已经配置了我们的静态 Pod
+⽂件的路径，那就是 /etc/kubernetes/manifests ，所以我们只需要在该⽬录下⾯创建⼀个标准的 Pod
+的 JSON 或者 YAML ⽂件即可：
+如果你的 kubelet 启动参数中没有配置上⾯的 --pod-manifest-path 参数的话，那么添加上这个参数然
+后重启 kubelet 即可。
+[root@ node01 ~] $ cat <<EOF >/etc/kubernetes/manifest/static-web.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: static-web
+静态 Pod
+122
+
+  labels:
+    app: static
+spec:
+  containers:
+    - name: web
+      image: nginx
+      ports:
+        - name: web
+          containerPort: 80
+EOF
+通过 HTTP 创建静态 Pods
+kubelet 周期地从 –manifest-url= 参数指定的地址下载⽂件，并且把它翻译成 JSON/YAML 格式的
+pod 定义。此后的操作⽅式与 –pod-manifest-path= 相同，kubelet 会不时地重新下载该⽂件，当⽂件
+变化时对应地终⽌或启动静态 pod。
+静态pods的动作⾏为
+kubelet 启动时，由 --pod-manifest-path= or --manifest-url= 参数指定的⽬录下定义的所有 pod 都
+会⾃动创建，例如，我们示例中的 static-web。（可能要花些时间拉取nginx 镜像，耐⼼等待…）
+[root@node01 ~] $ docker ps
+CONTAINER ID IMAGE         COMMAND  CREATED        STATUS         PORTS     NAMES
+f6d05272b57e nginx:latest  "nginx"  8 minutes ago  Up 8 minutes             k8s_web.6f802a
+f4_static-web-fk-node1_default_67e24ed9466ba55986d120c867395f3c_378e5f3c
+现在我们通过 kubectl ⼯具可以看到这⾥创建了⼀个新的镜像 Pod：
+[root@node01 ~] $ kubectl get pods
+NAME                       READY     STATUS    RESTARTS   AGE
+static-web-my-node01        1/1       Running   0          2m
+静态 pod 的标签会传递给镜像 Pod，可以⽤来过滤或筛选。 需要注意的是，我们不能通过 API 服务器
+来删除静态 pod（例如，通过kubectl命令），kebelet 不会删除它。
+[root@node01 ~] $ kubectl delete pod static-web-my-node01
+[root@node01 ~] $ kubectl get pods
+NAME                       READY     STATUS    RESTARTS   AGE
+static-web-my-node01        1/1       Running   0          12s
+我们尝试⼿动终⽌容器，可以看到kubelet很快就会⾃动重启容器。
+[root@node01 ~] $ docker ps
+CONTAINER ID        IMAGE         COMMAND                CREATED       ...
+5b920cbaf8b1        nginx:latest  "nginx -g 'daemon of   2 seconds ago ...
+静态pods的动态增加和删除
+静态 Pod
+123
+
+运⾏中的kubelet周期扫描配置的⽬录（我们这个例⼦中就是/etc/kubernetes/manifests）下⽂件的变
+化，当这个⽬录中有⽂件出现或消失时创建或删除pods。
+[root@node01 ~] $ mv /etc/kubernetes/manifests/static-web.yaml /tmp
+[root@node01 ~] $ sleep 20
+[root@node01 ~] $ docker ps
+// no nginx container is running
+[root@node01 ~] $ mv /tmp/static-web.yaml  /etc/kubernetes/manifests
+[root@node01 ~] $ sleep 20
+[root@node01 ~] $ docker ps
+CONTAINER ID        IMAGE         COMMAND                CREATED           ...
+e7a62e3427f1        nginx:latest  "nginx -g 'daemon of   27 seconds ago
+其实我们⽤ kubeadm 安装的集群，master 节点上⾯的⼏个重要组件都是⽤静态 Pod 的⽅式运⾏的，
+我们登录到 master 节点上查看 /etc/kubernetes/manifests ⽬录：
+[root@master ~]# ls /etc/kubernetes/manifests/
+etcd.yaml  kube-apiserver.yaml  kube-controller-manager.yaml  kube-scheduler.yaml
+现在明⽩了吧，这种⽅式也为我们将集群的⼀些组件容器化提供了可能，因为这些 Pod 都不会受到
+apiserver 的控制，不然我们这⾥ kube-apiserver 怎么⾃⼰去控制⾃⼰呢？万⼀不⼩⼼把这个 Pod 删
+掉了呢？所以只能有 kubelet ⾃⼰来进⾏控制，这就是我们所说的静态 Pod。
+点击查看本⽂视频
+扫描下⾯的⼆维码(或微信搜索 k8s技术圈 )关注我们的微信公众帐号，在微信公众帐号中回复 加群 即
+可加⼊到我们的 kubernetes 讨论群⾥⾯共同学习。
+静态 Pod
+124
+
+k8s技术圈⼆维码
+Copyright © qikqiak.com 2018 all right reserved，powered by GitbookUpdated: 2019-03-12 13:00:57
+静态 Pod
+125

@@ -1,0 +1,2011 @@
+Chapter 3
+Hardware-Algorithm Co-optimizations
+This chapter is structured as follows. Section 3.1 gives a non-exhaustive overview of
+SotA techniques used to optimize hardware platforms for deep learning algorithms:
+(A.) dataﬂow optimizations, (B.) sparse optimizations, and (C.) exploitation of a
+neural network’s fault-tolerance. The rest of the chapter focuses on the system-level
+aspects of (C.). Section 3.2 is a high-level energy model to estimate the inﬂuence of
+ﬁxed-point computations on the energy consumption of neural networks. This model
+is based on the circuit-level techniques developed in Chap. 4 and the measurement
+results on the chips designed in Chap. 5. It is used here in an analysis on test-time
+ﬁxed-point neural networks in Sect. 3.3 and train-time quantized neural networks
+in Sect. 3.4. The latter networks are used to design minimum energy networks,
+by simultaneously optimizing the network topology and the hardware architecture
+it would run on. Finally, Sect. 3.5 uses the same model to estimate the effect of
+nonlinear quantization techniques.
+3.1
+An Introduction to Hardware-Algorithm
+Co-optimization
+This section is a non-exhaustive literature review of relevant techniques on the
+algorithmic and architectural level used to minimize the energy consumption in
+neural networks. All of the discussed techniques and implementations exploit one
+of the three key neural network characteristics (A,B,C):
+A. Deep learning networks exhibit a very particular dataﬂow with a large amount of
+potential parallelism and data reuse. This can be heavily exploited in application
+speciﬁc hardware designs.
+© Springer Nature Switzerland AG 2019
+B. Moons et al., Embedded Deep Learning,
+https://doi.org/10.1007/978-3-319-99223-5_3
+55
+
+56
+3
+Hardware-Algorithm Co-optimizations
+Fig. 3.1 An overview of the algorithmic and processor architecture techniques discussed to
+increase efﬁciency and enable the inference of deep neural networks in embedded devices
+B. Deep learning networks demonstrate large sparsity: Many parameters become
+very small, or even equal to zero after network training. Also many data
+values propagated with the network during evaluation become zero. This can
+be exploited to reduce operations and memory fetches in hardware, yet can also
+be stimulated further with innovative training techniques.
+C. Deep learning networks prove to be robust to approximations or fault introduc-
+tions. This is exploited in various reduced precision hardware implementations
+as discussed above. Ultimately this observation leads to very speciﬁc dynamic
+precision hardware architectures tailored to deep learning in Chaps. 4 and 5,
+as well as to speciﬁc analog circuits and architectures for low-power neural
+networks in Chap. 6.
+Some examples here are pure hardware optimizations made to run given neural
+networks more efﬁciently. Other works focus on redesigning or retraining slightly
+changed network architectures that perform better on a new hardware platform. An
+overview of the highlighted techniques is given in Fig. 3.1.
+3.1.1
+Exploiting Network Structure
+In many application areas, designers have improved energy-efﬁciency of algorithm
+evaluation by moving away from general purpose processors, and developing
+customized hardware accelerators, speciﬁcally for the target algorithms. Such
+accelerators can exploit the known dataﬂows within the algorithm, to (1) enhance
+the parallel execution of the algorithm, as well as (2) minimize the data move-
+ment Fig. 3.2. Several ASICs targeting the efﬁcient execution of convolutional and
+
+3.1
+An Introduction to Hardware-Algorithm Co-optimization
+57
+Fig. 3.2 Custom deep neural
+network processors gain
+efﬁciency by minimizing data
+movements and maximizing
+parallelism. Still, it is crucial
+not to lose all ﬂexibility in
+mapping a wide variety of
+networks. FSM stands for
+ﬁnite-state-machine
+fully connected layers have recently been published. All solutions exhibit a very
+large degree of parallelization, far beyond CPU parallelism. This demonstrates itself
+in a datapath easily containing a few hundreds to thousands multiply accumulators
+(MAC), with Google’s recent tensor processing unit (TPU) as an extreme example
+with 64,000MACs (Jouppi et al. 2017).
+Providing data to all these functional units in parallel would be nearly impossible,
+if the temporal and spatial locality of the data was not exploited. Indeed, many
+computations within one network layer share common inputs. More speciﬁcally, as
+highlighted in Fig. 1.5’s pseudo-code for a “plain” CNN, every weight parameter
+is reused approximately M2 times across multiple convolutions of the same slice
+in the output tensor, and every input data point is reused across F different slices
+of the output tensor. Moreover, the intermediate accumulation results o have to
+be accumulated C × k2 times. This can be exploited in several ways in a custom
+accelerator to further boost efﬁciencies beyond the highly parallel, yet not dataﬂow
+optimized GPU’s.
+On one hand, data reuse can be exploited by reusing the same data across multiple
+parallel execution units or, equivalently, across multiple time steps on the same
+execution unit. In this topology, three extreme cases can be distinguished.
+•
+In the “weight parallel” or “input stationary” approach (Fig. 3.3) the same
+input data is multiplied with several weights of different output channels of a
+layer. Here, ideally every input will only be loaded once into the system. This
+however has negative repercussions on the weight memory bandwidth (BW), as
+the weights have to be reloaded frequently every time a new input is applied.
+Moreover, the accumulation of the output cannot be done across different clock
+cycles, requiring intermediate results to be pushed into memory, and re-fetched
+later, strongly impacting the input/output memory bandwidth.
+•
+The “weight stationary” or “input parallelism” approach improves the weight
+memory bandwidth, yet at the expense of the input memory bandwidth. Here,
+every weight is fetched once and multiplied with many input values.
+•
+The “output stationary” scheme reloads new weights and inputs every single
+clock cycle, yet is able to accumulate the intermediate results across different
+clock cycles, to the beneﬁt of the output memory bandwidth.
+
+58
+3
+Hardware-Algorithm Co-optimizations
+Fig. 3.3 Different computer architectures allow data reuse to be maximized, reusing either inputs,
+weights, intermediate results, or a combination of the three
+In practice most realizations implement a hybrid form of the three presented extreme
+cases. Moons and Verhelst (2016), an example discussed in Chap.5, is a hybrid
+input–output and weight stationary implementation. In Shin et al. (2017) input and
+output are stationary to minimize the chip IO bandwidth. In Chen et al. (2016a)
+and Peemen et al. (2013) a more elaborate overview of the different parallelization
+schemes can be found, together with an assessment of their merits. Other notable
+early implementations are Conti and Benini (2015), Farabet et al. (2011), and Chen
+et al. (2014). All of these examples are optimized speciﬁcally for CNN dataﬂows.
+A complementary way to reduce the energy burden of continuous data fetches is
+to reduce the energy cost of every data fetch exploiting temporal data locality. Most
+realistic deep networks require so much weight and input/output memory (Mbytes
+to Gbytes), that it is impossible to ﬁt them in on-chip memory, hence requiring
+fetches from energy-costly external DRAM. Similar to traditional processors, this
+can however be mitigated by a memory hierarchy of one or more levels of on-chip
+SRAM or register ﬁles. Frequently accessed data can as such be stored locally to
+reduce its fetching cost (Fig. 3.4).
+An important difference with general purpose solutions is however that the sizes
+of the memories in the hierarchy can be optimized towards the network’s structure,
+e.g., foreseeing local memory capable of caching exactly one weight tensor. More
+importantly even, the networks can be trained with the processor memory hierarchy
+in mind. As such, networks have, e.g., been explicitly trained to completely ﬁt
+in on-chip memory. This optimization is of course highly interwoven with the
+parallelization scheme. By jointly optimizing them, one can adjust the degree
+of parallelization to the memory hierarchy to minimize the product of both the
+number of memory accesses with the cost of every memory access (Cecconi 2017).
+Distributed and systolic processing can be seen as an extreme of such hierarchical
+memories. In the systolic processing concept, a two-dimensional array of functional
+units processes data locally and passes inputs and intermediate results from unit to
+
+3.1
+An Introduction to Hardware-Algorithm Co-optimization
+59
+Fig. 3.4 A well-designed memory hierarchy avoids drawing all weights and input data from the
+costly DRAM interface and stores frequently accessed data locally
+unit, instead of to/from global memory. These functional units are each equipped
+with a very small SRAM (as in Chen et al. 2016b), or even only registers (as
+in Jouppi et al. 2017), to store data locally and maximize data reuse within the
+array. Processing happens as a systolic wavefront through the array, where weight
+coefﬁcients can be kept stationary in the functional units, input data is shifted in one
+direction through the array, and output data accumulates in the orthogonal direction.
+This allows performing a very large number of computations for convolution or
+matrix multiplication in parallel, by keeping all systolic elements busy without
+burdening the memory bandwidth. Interested readers are pointed to Annaratone
+(1987) and Jouppi et al. (2017) for more details.
+Another approach exploiting locality is in-memory computing, where the
+computation is integrated inside a memory array (Biswas and Chandrakasan
+2018; Gonugondla et al. 2018). While this is also pursued in traditional memory
+architectures, results look especially promising for emerging non-volatile memory
+arrays. For example, in resistive memory technologies (Shaﬁee et al. 2016) or Flash
+memories. An example designed by this author (among others) is given in detail in
+Chap. 6. The latter is an example of hardware-algorithm co-optimization, as several
+of the techniques used to make that design efﬁcient require a hardware-speciﬁc
+neural network topology and training algorithm.
+3.1.2
+Enhancing and Exploiting Sparsity
+A second opportunity for hardware platforms to be adapted to neural network
+algorithms is by exploiting their high levels of sparsity. Many of the weight values,
+as well as intermediate data values, are zero. Figure 3.5a shows the sparsity of
+AlexNet. As can be seen more than 70% of the activations are zero. At reduced
+bit width computations, also several weight values are quantized to zero. This opens
+up many opportunities: On the hardware side, this can be exploited by (Fig. 3.5b)
+(1) preventing any MAC with a zero-valued input, as this multiply and accumulate
+with zero would only waste energy; (2) not even fetch zero-valued data values from
+
+60
+3
+Hardware-Algorithm Co-optimizations
+Fig. 3.5 (a) The sparsity of inputs and weight values of a typical network in function of
+computational precision at which the network is evaluated. (b) This sparsity allows energy to be
+saved in the processor’s input/output interface, on-chip memories, and datapath
+memory; and (3) strongly compress the on/off chip datastream using, e.g., Huffman
+or other types of encoding. Several hardware implementations exploit these CNN-
+characteristics, among which the ones discussed in Chap. 5. Moons and Verhelst
+(2016) and Chen et al. (2016b) skip all unnecessary sparse operations by gating
+the inputs to their arithmetic units if the input data is zero and compresses off-
+chip datastreams. Commercial products apply similar techniques. The architectures
+presented in Albericio et al. (2016) and Kim et al. (2017) allow speeding up sparse
+network evaluation.
+Deep network training algorithms can also be modiﬁed to enhance the networks
+sparsity, by iteratively pruning the smallest weight values (quantizing them to zero),
+and retraining the network (Han et al. 2015b). One step further, energy-aware
+pruning techniques even take the energy consumption model of the hardware into
+account, to maximize pruning efﬁcacy (Sze et al. 2017). Traditional accelerators
+can beneﬁt from such compression, but only in terms of a reduction in memory
+size and amount of memory accessed. The EIE engine however (Han et al. 2016a)
+demonstrates that it is also possible to operate directly on the compressed data by
+adapting the datapath and memory interface to the compressed data format. In Yin
+et al. (2017), the deep-compression concept is expanded upon by enforcing neural
+networks to be structurally sparse, instead of randomly sparse in Han et al. (2015a).
+Other techniques are based on singular value decomposition (SVD) (Xue et al. 2013)
+or a combination of SVD and deep compression (Goetschalckx et al. 2018).
+If a hardware platform that can exploit sparsity is available, networks can be
+designed to be as sparse as possible. One approach is to use ReLU activation
+functions and to force weights to be zero or small through L1 or L2 regularization,
+respectively (see Sect. 1.3.4 in Chap.1).
+3.1.3
+Enhancing and Exploiting Fault-Tolerance
+A third important aspect of deep neural networks which can be exploited in custom
+processor designs is their fault-tolerance. Many studies observe the robustness of
+
+3.1
+An Introduction to Hardware-Algorithm Co-optimization
+61
+CNNs and other networks to perturbations on their weight parameters and their
+intermediate computational results (Moons et al. 2016; Gysel et al. 2016). This can
+be exploited both to develop more efﬁcient hardware (Chaps.4, 5 and 6). On the
+other hand, neural networks can also be explicitly trained to perform better on such
+platforms, as is illustrated in Sect. 3.4 in this chapter.
+A straightforward way to beneﬁt from the network’s fault-tolerance is to perform
+the computations at reduced computational accuracy with limited recognition loss.
+Typical benchmarks can be run at 1–9 bit ﬁxed-point rather than 32b ﬂoating-
+point at less than 1% accuracy loss (Moons et al. 2016; Jiang and Gielen 2003;
+Dundar and Rose 1995). This is possible by quantizing all weights of a ﬂoating-
+point trained network before execution, as is discussed in Sect. 3.3. Improved results
+can be obtained when already introducing quantization during the training step
+itself (Hubara et al. 2016b; Moons et al. 2017a), resulting in smaller or lower
+precision networks for the same application accuracy (Sect. 3.4). If the network
+architecture and hardware platform are jointly optimized, as is the case in Sect. 3.4,
+it is a hardware-algorithm co-optimization. As such, these techniques have been a
+major part of my work through this PhD. The algorithmic side of this is discussed in
+detail in this chapter. The possible energy gains in hardware are discussed in detail
+in Chaps. 4 and 5
+At its most extreme, networks have been speciﬁcally trained to operate with
+only 1b representations of weights only (Rastegari et al. 2016) and both weights
+and activations (Rastegari et al. 2016; Courbariaux and Bengio 2016) where all
+multiplications can be replaced by efﬁcient XNOR operations (Andri et al. 2016,
+2017). In Rastegari et al. (2016), a binary-weight version of ImageNet is only 2.9%
+less accurate (in top-1 measure) than the full-precision AlexNet (Krizhevsky et al.
+2012a). Chapter 6 discusses the BinaryNet ASIC implementations I’ve worked on
+as part of my PhD.
+As a summary and introduction to Chap. 4, this observation of fault-tolerance can
+lead to major energy savings, compared to the current CPU and GPU architectures
+that operate using 32-16b ﬂoating-point number formats. Reducing precision from
+32b ﬂoating-point to lower ﬁxed-point precision does not only reduce computational
+energy, but also minimizes the storage and data fetching cost needed for network
+weights and intermediate results. Moreover, for very low bit widths, this even allows
+to replace multipliers that have several data values with a common weight factor,
+by preloaded look-up tables (Shin et al. 2017). While most processors operate
+at constant 16-, 12-, or 8-bit word lengths, some recent implementations support
+variable world length computations, where the processor can change the used
+computational precision from operation to operation (Moons and Verhelst 2016;
+Shin et al. 2017; Moons et al. 2017c; Lee et al. 2018). This accommodates for the
+observation that the optimal word length for a deep network strongly varies from
+application to application, and even differs across various layers of a single deep
+network (Moons et al. 2016) (Fig. 3.6a). The variable-resolution processors use a
+technique termed dynamic-voltage-accuracy-frequency-scaling (DVAFS) (Moons
+and Verhelst 2015; Moons et al. 2017b) to jointly reduce the switching activity,
+the supply voltage, and the parallelization scheme when computational resolution
+
+62
+3
+Hardware-Algorithm Co-optimizations
+Fig. 3.6 (a) When quantizing all weight and data values in a ﬂoating-point AlexNet uniformly, the
+network can run at 9-b precision. Lower precision can be achieved without signiﬁcant classiﬁcation
+accuracy loss by running every layer at its own optimal precision. This allows (b) saving power in
+function of computational precision and (c) building multipliers whose energy consumption scales
+drastically with computational precision, through reduced activity factors and critical path scaling.
+This is further discussed in Chaps. 4 and 5
+drops (Fig. 3.6b). This results in a scaling of the systems energy consumption which
+is super-linearly with the computational resolution (Fig. 3.6c). The technique is
+discussed in detail in Chaps. 4 and 5.
+Another school of thoughts targets energy savings through tolerating non-
+deterministic, statistical errors. This can be done by executing the convolutional
+kernels in the noisy analog domain (Fick et al. 2017). Alternatively, in the digital
+domain, stochastic fault-tolerance can be exploited by operating the circuits (Lin
+et al. 2016; Bankman et al. 2018) and/or memory (Whatmough et al. 2017; Yang
+et al. 2018) in the energy-efﬁcient near threshold regions.
+Finally, also the operational circumstances can strongly inﬂuence the networks
+tolerance to approximations. In a given classiﬁcation application, the quality of the
+inputs might change dynamically, or some classes might be easier to observe than
+others. If one tries to learn one common network, which performs acceptable under
+all possible circumstances and classes, a large, complex, energy hungry network
+topology would be needed. Recent work however promotes to train hierarchical
+or staged networks (Huang et al. 2017), which perform classiﬁcations in several
+optional stages. At each stage, only a few layers of the network are executed, after
+which a classiﬁcation layer tries to guess the class from the current outputs. Only if
+the obtained probabilities are not outspoken enough, additional network layers and
+classiﬁers are run, until a classiﬁcation with distinct probabilities is obtained. Such
+dynamic evaluations can be performed on any hardware platform, but again heavily
+beneﬁts from implementation-aware training techniques, or topology-optimized
+implementations. In inference on the IMAGENET data set, (Huang et al. 2017)
+need up to 2.6× less operations than the prior SotA networks at iso-accuracy. My
+own approach to such hierarchical processing is discussed in Chap. 2.
+The rest of this chapter focuses on the system-level aspects—accuracy and
+high-level energy costs—of different types of reduced precision neural networks:
+networks operating at arbitrarily low ﬁxed-point precision. Chapter 4 illustrates the
+energy gains that can be expected in QNNs in real hardware. Chapter 5 discusses
+
+3.2
+Energy Gains in Low-Precision Neural Networks
+63
+two chip implementations that beneﬁt from the technique. Finally, Chap. 6 discusses
+several physical implementations of the most extreme form of QNN: binary (1b)
+neural networks.
+3.2
+Energy Gains in Low-Precision Neural Networks
+Exploiting a neural network’s fault-tolerance through precision scaling lowers
+the active power consumption of a digital circuit. Hardware and circuit-level
+considerations required for applying this in a real system are discussed in Chaps. 4
+and 5. However, a basic energy model is useful here already.
+The total power consumption in a digital system consists of a dynamic and a
+leakage component. It can be summarized as P = αCf V 2 + Pleakage where α is
+the circuit switching activity, f is the clock frequency, C is the total switching
+capacitance, and V is the circuit’s supply voltage. By scaling precision (i.e.,
+dynamically scaling the number of bits that encode the network’s weights and
+inputs), the switching activity α can be substantially reduced. Figure 3.6b illustrates
+the achievable energy-accuracy trade-off in a typical digital multiplier. Note that
+a striking 12× energy gain can be achieved at an output error of 1% root-
+mean-square-error (RMSE). As neural networks prove to be fault-tolerant, their
+performance may not degrade under these RMSE deviations in the intermediate
+computations. In order to estimate the energy consumption of reduced precision
+networks more accurately, a generic hardware energy model based on Chap. 5 is
+built below and in Fig. 3.7.
+Global energy per inference is the sum of the energy consumed in communication
+with an off-chip DRAM and the energy consumption of the processing platform
+itself. The total energy consumed per network inference is then:
+Einf = EDRAM + EHW
+(3.1)
+Fig. 3.7 Used energy model for a generic hardware platform. (a) High-level overview of the
+system architecture. (b) Relative energy consumption per equivalent multiply–accumulate (MAC)
+operation (EMAC), read/write from the local (EL) and main (EM) SRAM buffers and per read/write
+from a large DRAM memory (ED) of an intQ word
+
+64
+3
+Hardware-Algorithm Co-optimizations
+3.2.1
+Energy Consumption of Off-Chip Memory-Access
+The available memory in an always-on chip is inherently limited due to costs and
+leakage energy constraints and hence typically insufﬁcient to store full models and
+feature maps. If this is the case, the chip will constantly have to communicate with a
+larger off-chip memory system. The cost of this interface is two orders of magnitude
+higher than a single equivalent MAC-operation (Horowitz 2014). Using less bits
+for weights and activations can hence be potentially more energy-efﬁcient, if the
+achieved network compression, both for weights and activations, makes the network
+ﬁt completely in on-chip memory. Off-chip DRAM access energy is modeled as:
+EDRAM = ED × (s2
+in × cin × M/Q + 2 × fre−f etch + wre−f etch)
+(3.2)
+where ED is the energy consumed per intQ DRAM access, as in Fig. 3.7. sin,
+cin, and M/Q are respectively the input image’s dimensions, the number of input
+channels, and the ﬁrst-layer factor deﬁned in Sect. 3.4.1.2. fre−f etch and wre−f etch
+are the number of words that have to be re-fetched/stored from/to DRAM if an
+intermediate feature map or model does not ﬁt on-chip. These factors depend on the
+used tiling scheme and the available amount of on-chip memory.
+3.2.2
+Generic Hardware Platform Modeling
+The hardware platform, shown in Fig. 3.7, is a typical processing platform for
+CNNs. It contains a parallel neuron array, with a ﬁxed area for p MAC units and
+two levels of on-chip SRAM memory. A large main buffer enables storing MW -
+bits of weights and MA = MW -bits of activations, of which 50% is used for the
+current layer’s inputs and 50% is used for the current layer’s outputs. The small
+local SRAM buffers contain the currently used weights and activations. We model
+the relative energy consumption of SRAM-fetches and multiply–accumulate (MAC)
+operations according to Horowitz (Horowitz 2014). Here, the energy consumption
+of a read/write from/to the small local SRAM EL is modeled to be equal to the
+energy of a single MAC-operation EMAC, while accessing the main SRAM costs
+EM = 2 × EMAC. Other operations, such as bias additions, quantized-ReLU,
+and nonlinear batch normalization, are modeled to cost EMAC as well. All these
+numbers incorporate control, data transfer, and clocking overheads. The total on-
+chip energy per inference is then the sum of the compute energy EC and the cost
+of weight EW and activation accesses EA. In absolute numbers EMAC = 3.7 pJ
+for a 16-bit operation, as measured in a 28 nm technology in (Moons et al. 2017c).
+Energy consumption for a read/write operation to the SRAM buffers is modeled as
+ESL = 2EMAC and ESM = 10EMAC, according to (Horowitz 2014). The global
+energy consumption is:
+
+3.3
+Test-Time Fixed-Point Neural Networks
+65
+EHW = EC + EW + EA
+EC = EMAC(Q) × Nc + EMAC(16) × 3 × As
+EW = EM × Ns + EL × Nc/√p
+EA = 2 × EM × As + EL × Nc/√p
+(3.3)
+EC is the sum of all energy consumed in partial product generation, biasing, batch
+normalization, and activation. This is computed through evaluating Nc, the network
+complexity in number of necessary MAC-operations. Biasing, batch normalization,
+and activation functions are performed in high precision (16b) on each output
+feature, hence the factor 3 × As. Ns is the model size in number of weights and
+biases and As is the total number of intermediate output features throughout the
+whole network. Weights are transferred once from the main to the local buffer
+and are then reused from there, leading to an equation for EW. Here √p is a
+reduction in memory energy, due to activation-level parallelism, as one weight
+is used simultaneously on √p activations. A similar equation is derived for EA,
+as activations are fetched/stored from/to the main buffer. The number of local
+activation fetches is reduced by √p, as one activation is simultaneously multiplied
+with √p weights. The total level of parallelism p is a variable in these equations.
+Any on-chip memory can store a variable number of weights and activations,
+depending on the value of Q. A 2 Mb memory stores more than 2M 1b weights,
+but only 131k 16b weights. If either the weight size or feature map size exceeds the
+available on-chip size, communication with a larger off-chip DRAM memory will
+be necessary, as discussed in Sect. 3.2.1.
+3.3
+Test-Time Fixed-Point Neural Networks
+Test-time FPNNs are networks that operate at low precision. They are pre-trained
+using ﬂoating-point numbers and quantized before inference according to the result
+of a post-training ﬁxed-point analysis.
+The work discussed in this subsection was published as Moons et al. (2016). This
+study was used as a starting point and inspiration for the circuit techniques and chip
+implementations discussed in Chaps. 4 and 5, respectively. The contributions of this
+speciﬁc work are threefold:
+1. It shows computational precision can be scaled in several CNNs through test-
+time quantization of the layer’s inputs and weights. The necessary computational
+precision varies per architecture, per application, and even per layer within a
+single CNN.
+2. It shows CNNs are typically very sparse, deﬁnitely in networks using low
+precision. This is a characteristic that can be exploited to reduce their energy
+consumption, by skipping such redundant sparse computations.
+
+66
+3
+Hardware-Algorithm Co-optimizations
+3. The effect of reduced precision operating and sparse skipping on algorithmic
+accuracy and energy consumption is evaluated. The theoretically achievable
+energy-accuracy curves are derived for three popular CNN architectures in image
+classiﬁcation.
+3.3.1
+Analysis and Experiments
+The performance- and energy-related effects of test-time quantization are analyzed
+on three different network architectures for image classiﬁcation. Because it is
+impossible to cover the entire spectrum of architectures and applications, three
+popular networks are chosen as representatives of small-, medium-, and large-scale
+architectures that differ signiﬁcantly in their number of parameters:
+•
+LeNet-5 on MNIST (Le Cun et al. 1990): LeNet-5 is a small network with two
+convolutional and two fully connected layers.
+•
+CifarQuick on CIFAR-10 (Krizhevsky and Hinton 2009): CifarQuick is a
+medium-sized architecture with three convolutional and two fully connected
+layers. It has more ﬁlters per layer than LeNet-5 and operates on color images
+instead of grayscale images. It classiﬁes images of the Cifar-10 data set and
+reaches an accuracy of 75.3%.
+•
+AlexNet on ImageNet (Krizhevsky et al. 2012b): AlexNet is a large network with
+ﬁve convolutional and three fully connected layers. It reaches a top-5 accuracy
+of 80.0%.
+For these experiments the open-source deep learning framework Caffe (Jia et al.
+2014) was customized in order to be able to simulate quantization of the network’s
+weights and inputs. All experiments are run on the validation sets of the discussed
+benchmarks. The relative accuracy is reported, i.e., the ratio of the accuracy after
+quantization and the accuracy of the original network.
+3.3.2
+Inﬂuence of Quantization on Classiﬁcation Accuracy
+As highlighted before, neural networks are fault-tolerant. Hence, the energy spent
+in high-precision computations does not lead to more accurate classiﬁcation by the
+algorithm. To reduce the energy consumption of the CNN’s computations, the main
+strategy of this work is to quantize all network weights and the inputs to its layers at
+test-time. Such quantization leads to a network that is only an approximation of the
+original network. The goal is to ﬁnd out the inﬂuence of quantization on a network’s
+accuracy and whether the effects differ signiﬁcantly across network architectures.
+A weight or layer input on the [−1,1] interval (x) is quantized through the
+following function:
+
+3.3
+Test-Time Fixed-Point Neural Networks
+67
+q = clip
+round(2Q−1 × x)
+2Q−1
+, −1, 1 −2−(Q−1)
+
+(3.4)
+Before quantizing the weights and inputs, it is important to rescale them properly
+according to the distribution of their values onto this [−1,1] interval. If there is a
+mismatch between the interval in which these values lie and the interval over which
+is quantized, the accuracy will drop, even at high precision. For this reason, all layer
+inputs and weights are rescaled in the network with a scalar value that corresponds
+to the maximal input or weight value (rounded to the next factor of 2) observed
+during a complete run over the validation data set. This ensures the limits of the
+quantization interval correspond to the limits of the data, and no bits are wasted.
+Mathematically, this scaling is the same as multiplying the results with a factor of
+2, or shifting data in a ﬁxed-point number representation. An operation that can be
+performed very cheaply in hardware.
+3.3.2.1
+Uniform Quantization and Per-Layer Rescaling
+As a ﬁrst experiment a single quantization setting is used for all layers in the
+network, and call this uniform quantization. Later, per-layer quantization is used,
+where each layer is quantized separately.
+Figure 3.8a shows the relative accuracy of the three used networks as a function
+of the number of quantization bits. As can be seen in the ﬁgure, the relative accuracy
+stays equal to one for all three networks up to quantization with 19 bits, meaning that
+the quantized network reaches the exact same accuracy on its data set as the original
+0
+5
+10
+15
+20
+25
+30
+0
+0.2
+0.4
+0.6
+0.8
+1
+Quantization [bits]
+Relative accuracy [−]
+AlexNet
+CifarQuick
+Lenet−5
+(a)
+0
+5
+10
+15
+20
+25
+30
+0
+0.2
+0.4
+0.6
+0.8
+1
+Quantization [bits]
+Relative accuracy [−]
+AlexNet
+CifarQuick
+Lenet−5
+(b)
+Fig. 3.8 Relative accuracy of three architectures as a function of the number of quantization bits.
+Layer inputs and weights are ﬁrst rescaled so they can be quantized more effectively. We compare
+two rescaling strategies: (a) Uniform rescaling: all inputs and weights are scaled with the same
+value. (b) Per-layer rescaling: inputs and weights are scaled on a per-layer basis
+
+68
+3
+Hardware-Algorithm Co-optimizations
+−0.5
+0
+0.5
+0
+100
+200
+300
+400
+500
+Parameter value [−]
+PDF [−]
+min/max
+PDF
+(a) layer 1
+−0.06
+−0.04
+−0.02
+0
+0.02
+0.04
+0.06
+0
+0.5
+1
+1.5
+2
+2.5
+3 x 10
+5
+Parameter value [−]
+PDF [−]
+min/max
+PDF
+(b) layer 6
+Fig. 3.9 AlexNet’s ﬁrst and sixth layers weight statistics. Layer 1 should be projected on the
+[−0.5,0.5] interval and layer 6 on the [−0.0625,0.0625] interval to minimize the needed number
+of bits. If layer 6 would be projected on the [−1,1] interval, four extra bits would be needed
+network. At a quantization with 18-bit, however, the accuracy for AlexNet starts
+dropping quickly, rendering it useless for any practical application. At 11-bit the
+same effect can be seen for the smaller LeNet-5.
+We can do better than this by applying the scaling in a more ﬁne-grained way;
+we choose a different scaling factor for each layer. This is clariﬁed by a simple
+example: AlexNet’s ﬁrst and sixth layer weight statistics are shown in Fig. 3.9. All
+weights of layer 1 are within the [−0.5, 0.5] interval, while the weights of layer 6
+are within the [−0.0625, 0.0625] interval. By allowing to quantize the weights in
+layer 6 over this smaller interval instead of over [−0.5, 0.5] we recover 3 bits that
+would otherwise be wasted. A similar reasoning holds for the layer’s inputs.
+The effect of the per-layer scaling is signiﬁcant, as can be seen in Fig. 3.8b.
+Compared to the previous, a system can now quantize much more aggressively
+without sacriﬁcing accuracy. Each network performs at its original accuracy up to
+quantization with no more than 8 bits. After that, the accuracy again drops quickly.
+The reason for this improvement is the fact that input and weight statistics differ
+greatly among layers. Per-layer rescaling allows to set the optimal quantization
+interval in each layer. The concept of per-layer rescaling is also referred to as
+dynamic ﬁxed-point.
+3.3.2.2
+Per-Layer Quantization
+Just as in per-layer rescaling, a network can also have per-layer quantization: instead
+of quantizing all weights and inputs of the network with the same number of bits, a
+different setting is chosen in each layer. The idea is again to ﬁnd an optimal setting
+for each layer by exploiting the variations of the layer-speciﬁc input and weight
+distributions. Another effect of the per-layer quantization is that the operating point
+
+3.3
+Test-Time Fixed-Point Neural Networks
+69
+1
+2
+3
+4
+5
+0
+2
+4
+6
+8
+10
+Layer weight / output number [−]
+Quantization [bits]
+LeNet−5
+Uniform @ 100% accuracy
+Per−layer @ 99% accuracy
+(a)
+1
+2
+3
+4
+5
+6
+0
+2
+4
+6
+8
+10
+Layer weight / output number [−]
+Quantization [bits]
+CifarQuick
+Uniform @ 100% accuracy
+Per−layer @ 99% accuracy
+(b)
+2
+4
+6
+8
+0
+2
+4
+6
+8
+10
+Layer weight / output number [−]
+Quantization [bits]
+AlexNet
+Uniform @ 100% accuracy
+Per−layer @ 99% accuracy
+(c)
+Fig. 3.10 Comparison of uniform and optimal per-layer quantization. Data points at integer values
+show quantization of the layer weights. Other data points show quantization of the layer inputs.
+Maximum achievable quantizations: (a) LeNet-5: 1–6 bit. (b) CifarQuick: 5–8 bit. (c) AlexNet:
+5–9 bit
+(i.e., the desired minimal relative accuracy) can be set more precisely. This allows
+controlling the energy-accuracy trade-off tightly, as discussed later in Sect. 3.3.4.
+This is not possible with uniform quantization: e.g., between quantization with 5
+and 4 bits, the relative accuracy of LeNet-5 drops from 99.4% immediately to an
+unusable 86.6%.
+In order to ﬁnd a good quantization setting for each layer, a greedy search is
+performed over the parameters: starting at the ﬁrst layer, its input is quantized until
+the accuracy drops to the target accuracy. Next, the quantization of the input is kept
+ﬁxed while the quantization of its weights is maximized in the same way. The same
+process is applied in the next layers until the last one.
+The amount of bits that can be saved with per-layer quantization at a target
+accuracy of 99%, compared to uniform quantization at 100% relative accuracy,
+is visualized for each reference network in Fig. 3.10. The results are ad-hoc, but
+there is a general trend of needing less bits in the lower layers of the network than
+in the higher layers. This is partly a result of the forward parameter sweep, but
+I hypothesize that the difference in input and weight statistics between lower and
+higher layers also plays a signiﬁcant role.
+3.3.3
+Energy in Sparse FPNNs
+This section indicates how this increased quantization can lead to energy savings
+in real hardware architectures. To quantify the possible energy gains of reduced
+precision number representations in CNN-acceleration, the energy consumption of
+the necessary convolutional arithmetic (multiply and add) for a full CNN algorithm
+is modeled according to Sect. 3.2. As this analysis was part of my earliest work, it
+does not yet incorporate the energy overheads of control, I/O, data and program-
+memory interfacing, and the clock network. It can thus be considered as the
+
+70
+3
+Hardware-Algorithm Co-optimizations
+0
+5
+10
+15
+20
+0
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+1
+Quantization [bits]
+Mean zero ratio [−]
+weights
+features
+AlexNet
+CifarQuick
+Lenet−5
+(a)
+0
+5
+10
+15
+20
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+1
+Quantization [bits]
+Relative energy consumption [−]
+AlexNet
+CifarQuick
+Lenet−5
+(b)
+Fig. 3.11 (a) Impact of precision scaling on the average number of zeroes in the weights and
+input values of all three examples. (b) Relative energy reduction compared to the case without
+computation skipping
+maximum potential energy savings through ﬁxed-point compute. The energy model
+discussed above basically simpliﬁes to EDRAM == 0 and n == 2.
+What is added in this analysis is the effect of sparsity in the network, as the
+number of zero-valued weights and inputs of typical CNNs increases at higher
+quantization. This can be exploited by skipping unnecessary computations with
+zero-valued inputs. An interesting feature of many modern convolutional neural
+networks is the appearance of rectiﬁed linear unit layers (ReLU layers). These
+put all negative inputs to zero and pass on positive values unchanged, as in
+Output = max(0, Input). Since many layers in CNN-classiﬁcation algorithms only
+output positive values when certain features are present, a large amount of ReLU-
+outputs will be zero and do not have to be used for further computations. The ReLU
+layers thus allow for additional energy reductions by not computing unnecessary
+computations through computation skipping.
+Figure 3.11 shows the impact of precision scaling on the average number of
+zeroes in our CNN examples. For all architectures, the ratio of zeroed values lies
+between 50–90% of the total input values, depending on the used quantization
+setting. The number of zeroed values is signiﬁcantly larger under precision scaling,
+from an average of 45% on all LeNet-5 outputs at 16-bit to 65% at 5-bit.
+It is very difﬁcult to achieve such computation skipping in a pure software
+solution without hardware support, since checking for zero-valued inputs in a scalar
+core consumes time. However, computation skipping can be achieved in a hardware
+accelerator with dedicated hardware support. As the algorithm can be made more
+sparse in turn, this is an effective way of hardware-algorithm co-optimization. In
+such an accelerator, ﬂags can indicate if upcoming data is zero and prevent circuitry
+from switching if this is the case. As CNN-weights are ﬁxed, these ﬂags can be
+computed beforehand. An implementation of this idea is discussed in Chap. 5.
+
+3.3
+Test-Time Fixed-Point Neural Networks
+71
+0
+4
+8
+12
+16
+0
+0.2
+0.4
+0.6
+0.8
+1
+Quantization [bits]
+Relative energy [−]
+Precision Scaling (PS), no skipping
+PS + skipping, AlexNet
+PS + skipping, CifarQuick
+PS + skipping, LeNet−5
+(a)
+10−3
+10−2
+10−1
+100
+0.95
+0.955
+0.96
+0.965
+0.97
+0.975
+0.98
+0.985
+0.99
+0.995
+1
+Relative energy [−]
+Relative accuracy [−]
+uniform
+non−uniform
+AlexNet
+CifarQuick
+Lenet−5
+(b)
+Fig. 3.12 (a) Relative energy consumption for uniform quantization. A striking 5–20× lower
+energy consumption at 8-bit, compared to the commonly used 16-bit used in the previous literature.
+(b) Energy-accuracy plot for per-layer quantization and scaling and with computation skipping.
+All considered CNN-networks gain at least an additional factor of 2 in energy consumption if 99%
+accuracy is allowed
+3.3.4
+Results
+By combining both precision scaling and algorithmic computation skipping, major
+energy savings can be achieved in test-time quantized CNNs. Figure 3.12a shows
+the effect of uniform quantization on the energy consumption of our benchmark
+algorithms, if both precision scaling and computation skipping are combined. Note
+how the energy reduces 5 −20× for an 8-bit implementation.
+Figure 3.12b shows curves in the energy-accuracy space for our CNN bench-
+marks. It shows the trade-off for the 95–100% classiﬁcation accuracy window. All
+curves are given for both uniform and per-layer quantization, and are compared to
+the typically used uniform 16-bit number representation, without adequate precision
+scaling and computation skipping. If per-layer quantization is used, the trade-off is
+less steep than in the uniform case. This means more energy can be gained, while
+losing less classiﬁcation accuracy in the process. All discussed networks gain at least
+an additional factor of 2 in energy consumption if a reduced classiﬁcation accuracy
+of 99% is allowed.
+Figure 3.13 gives an overview of the effect of each improvement on the relative
+energy consumption. Per-layer rescaling and computation skipping lead to the
+largest energy gains. Per-layer quantization leads to additional major energy gains
+if a reduced accuracy of 99% can be allowed.
+It is important to note that the energy modeling used in this section is limited
+and can only be used as a ﬁrst order estimation. It is not sufﬁcient to look only at
+model size and the number of multiply–accumulate operations to estimate energy
+consumption accurately. In the next Sect. 3.4, which was part of my later work on
+
+72
+3
+Hardware-Algorithm Co-optimizations
+Lenet-5
+A
+B
+C
+D
+(a)
+CifarQuick
+A
+B
+C
+D
+(b)
+AlexNet
+A
+B
+C
+D
+Relative energy [-]
+10-3
+10-2
+10-1
+100
+Relative energy [-]
+10-3
+10-2
+10-1
+100
+Relative energy [-]
+10-3
+10-2
+10-1
+100
+(c)
+Fig. 3.13 Energy comparison between our three benchmarks in different cases. (A) 16-bit. (B)
+Per-layer scaling, uniform quantization at 100% accuracy. (C) Same as B, with computation
+skipping. Per-layer scaling, per-layer quantization and computation skipping at 99% accuracy
+train-time quantized neural networks, a more accuracy energy model, based on the
+work in chapter refchap:envision, is used. Here, the amount of on-chip memory and
+the cost of DRAM is taken into account as well.
+3.3.5
+Discussion
+By using ﬁxed-point number approximations of ﬂoating-point baseline networks,
+the energy consumption in a CNN-accelerator can be reduced in two complementary
+ways: precision scaling and skipping of sparse computations. The combination of
+these two techniques leads to signiﬁcant energy savings in several CNN-networks.
+This work shows energy reductions of up to 30× compared to the commonly used
+16-bit ﬁxed-point implementations, without sacriﬁcing algorithm performance. If
+the classiﬁcation accuracy can be reduced to 99%, additional energy savings can be
+achieved on the same network architecture, through per-layer optimization. In this
+case an additional 7.5× reduction can be achieved.
+However, test-time quantization is sub-optimal because of two reasons. First, it
+offers no control over the ultimately used number of bits. This means the technique
+does not allow optimizing networks with a speciﬁc constrained hardware platform
+in mind. Second, accuracy degrades quickly at a certain cut-off point. Below
+this computational precision, the algorithm fails. This is illustrated in Fig. 3.14a.
+Here, the same network architectures are tested under different circumstances on
+the same benchmarks: MNIST, CIFAR-10, a custom face detection benchmark,
+and IMAGENET. In this ﬁgure, resulting relative performance compared to their
+ﬂoating-point baseline is plotted. At bitwidths lower than 4b, accuracy degrades
+signiﬁcantly in FPNNs.
+
+3.4
+Train-Time Quantized Neural Networks
+73
+3.4
+Train-Time Quantized Neural Networks
+Train-time quantized neural networks (QNNs) are networks that operate at arbitrary
+low-precision, trained to be quantized from scratch. In train-time quantized net-
+works, both problems of FPNNs are thereby resolved. By offering explicit control
+over network quantization, networks can be optimized with a speciﬁc constrained
+hardware platform in mind. Second, even at 1b, network topologies can be found
+that achieve a high accuracy, the algorithm does not necessarily fail at low precision.
+A full comparison between FPNN and QNN is outside the scope of this text.
+However, proving QNNs outperform FPNN can trivially be done by using the
+following experiment in Fig. 3.14. In Fig. 3.14b, the same network architectures as
+in Fig. 3.14a are trained from scratch as QNN. As is obvious from this Fig. 3.14,
+QNNs maintain higher accuracy at the same computational precision (and hence
+in ﬁrst order energy consumption) than their FPNN counterparts at the same
+computational precision.
+This section is primarily based on the work published in Moons et al. (2017a),
+which was largely built on prior work on 1b BinaryNets (Courbariaux et al.
+2015; Hubara et al. 2016a,b). In this section, quantized neural networks are linked
+to the inference energy model from Sect. 3.2 that takes both quantization and
+network topology into account. Here, EDRAM is taken as in Fig. 3.7b and ϵ ==
+1.25, according to measurements on Envision V2 in Chap. 5. This model allows
+co-optimizing both the used algorithm and the hardware architecture to enable
+always-on embedded applications.
+More speciﬁcally, my contributions in this section are the following:
+•
+A generalization of the BinaryNet training setup from 1- to Q-bits (BinaryNet
+to intQ), where Q can be any value ∈N, both for plain CNN (Krizhevsky et al.
+2012a) and ResNet (He et al. 2016) CNN-architectures.
+1 2
+4
+8
+16
+Precision [bits]
+0
+0.2
+0.4
+0.6
+0.8
+1
+Relative Benchmark Accuracy [-]
+MNIST
+CIFAR-10
+IMAGENET
+(a)
+1 2
+4
+8
+16
+Precision [bits]
+0.9
+1
+Relative Benchmark Accuracy [-]
+MNIST
+CIFAR-10
+IMAGENET
+SVHN
+FACEDETECTION
+(b)
+Fig. 3.14 Comparing (a) FPNNs versus (b) QNNs. Because QNNs are trained from scratch in the
+quantized domain, they lose less relative accuracy at lower computational precision
+
+74
+3
+Hardware-Algorithm Co-optimizations
+•
+An evaluation of the energy-accuracy-computational precision trade-off for
+QNN inference by linking network complexity and model size to an energy-
+model for a QNN chip. This setup can be used to co-optimize a neural network
+topology, together with the hardware platform it will run on.
+•
+I conclude energy consumption at iso-accuracy varies depending on the required
+accuracy, computational precision, and the available on-chip memory. First,
+energy consumption varies orders of magnitude at iso-accuracy depending on
+the number of bits used in the QNN. Second, in a typical system BinaryNets or
+int4 operators lead to the minimum energy solution, outperforming int8 networks
+up to 2–10× at iso-accuracy. Third, BinaryNets are optimal in systems with tight
+on-chip memory constraints or at low accuracy.
+3.4.1
+Training QNNs
+This section details my formulation of train-time quantized neural networks
+(QNN), which use only ﬁxed-point representations for both weights and activations
+for network inference. In essence, QNNs are the generalization of binary and
+ternarynets (Hubara et al. 2016a; Zhu et al. 2016) to multiple bits, as in (Hubara
+et al. 2016b; Zhou et al. 2016).
+As said before modern CPUs and GPUSs only natively support a limited number
+computational precision settings, such as 32–64 ﬂoating point or 8–16 bit integer
+operators. These machines hence don’t beneﬁt from QNNs with arbitrary lower
+precision. In custom designed ASICS, the used computational precision can be
+optimally chosen in order to minimize energy consumption per network inference
+at a given level of accuracy. Neurons or dot-product operators can be directly
+implemented as integrated digital building blocks. The complexity and energy
+consumption of a single neuron accumulation increases with the used number of bits
+Q, as illustrated in Sect. 3.2. The outputs of these neurons are always fed through
+a nonlinear, non-differentiable activation function which rounds these accumulated
+high-precision outputs to Q-bits at the output. This concept is applied in the ASIC-
+prototypes discussed in Chaps. 5 and 6.
+3.4.1.1
+Train-Time Quantized Weights
+In QNNs, all weights are quantized to Q bits in a ﬁxed-point representation. The
+following deterministic quantization function is used to achieve this in the forward
+pass:
+q = clip
+round(2Q−1 × w)
+2Q−1
+, −1, 1 −2−(Q−1)
+
+(3.5)
+
+3.4
+Train-Time Quantized Neural Networks
+75
+-1
+0
+1
+Input
+-1
+-0.5
+0
+0.5
+1
+Output
+STE
+BinaryNet
+2-bit
+4-bit
+(a)
+-1
+0
+1
+Input
+-1
+-0.5
+0
+0.5
+1
+Output
+STE
+2-bit
+4-bit
+(b)
+-1
+0
+1
+Input
+-1
+-0.5
+0
+0.5
+1
+Output
+STE
+BinaryNet
+2-bit
+4-bit
+(c)
+Fig. 3.15 (a) Weight quantization. (b) Quantized ReLU activation function. (c) Quantized
+hardtanh activation function. Straight-through estimators (STE) are used to estimate gradients
+This is identical to the quantization in Eq. (3.4). The Q=1 case is regarded as a
+special case, where q = Sign(w), as in the original BinaryNet paper (Hubara et al.
+2016b). To successfully propagate gradients through discrete neurons, a “straight-
+through estimator” (STE) function is used for backpropagation. This STE leads to
+fastest training according to (Bengio et al. 2013). If an estimator gq of the gradient
+∂C
+∂q has been obtained, the STE of ∂q
+∂w is:
+ST E = hardtanh(w) = clip(w, −1, 1)
+(3.6)
+and the STE of ∂C
+∂w is
+gw = gq × hardtanh(w) = gq × clip(w, −1, 1)
+(3.7)
+As in (Hubara et al. 2016a), all real-valued weights are clipped during training
+onto the interval [−1, 1]. Otherwise real-valued weights would grow large, without
+impacting the quantized weights. The weight quantization function q(w) and STE
+are plotted in Fig. 3.15 for different Q.
+3.4.1.2
+Train-Time Quantized Activations
+In QNNs, all activations are quantized to Q bits in a ﬁxed-point representation. The
+following deterministic quantized activation functions are used in the forward pass:
+AReLU = max(0, q(a))
+Ahardtanh = qhardtanh(a)
+(3.8)
+
+76
+3
+Hardware-Algorithm Co-optimizations
+where qhardtanh is as in.1 In the BinaryNet-case, Ahardtanh simpliﬁes to Sign(a).
+The following STEs are used in the backward pass for gradient estimation:
+gReLU = max(0, hardtanh(a))
+ghardtanh = hardtanh(a)
+(3.9)
+Multiple setups have been evaluated. Best results are achieved with the quantized
+ReLU function for int2, int4, and int8 and with the symmetrically quantized
+hardtanh function for the Q=1 case. As in (Hubara et al. 2016a), all real valued
+activations are clipped during training onto the interval [−1, 1]. Every layer
+following an activation layer will then have intQ inputs. The weight quantized ReLU
+and hardtanh forward functions and STEs are plotted in Fig. 3.15b, c for different Q.
+3.4.1.3
+QNN Input Layers
+In a QNN all the inputs to a layer are quantized to intQ, with the exception of the
+ﬁrst layer, which typically has int8 pixels as its inputs. In a general case with M
+input bits where M>Q, an intQ layer can be performed as a sequence of shifted and
+added dot products. In the common case of an M = 8-bit input, with int4 hardware,
+a neuron can be computed as a series of 2 subsequent dot products, the results of
+which are shifted by the right amount and added together. In this case, the amount
+of input intQ words required to be loaded for an equivalent 8-bit representation is
+M/Q = 2.
+Hence, the following encoding can be used to run M>Q inputs on intQ hardware:
+s = x · wQ ⇐⇒s =
+M/Q
+
+n=1
+(2Q)(n−1)(xn · wQ)
+(3.10)
+Here, xM/Q is the most signiﬁcant and x1 is the least signiﬁcant number of the input
+vector x in base Q. wQ is a vector of weights quantized to intQ and s is the resulting
+weighted sum.
+3.4.1.4
+Quantized Training
+In this work, quantized neural networks are trained from scratch, as ﬂoating-point
+pre-trained networks are generally an unﬁt initialization point for QNN training,
+especially for BinaryNets and int2 and int4 networks. In all experiments, training is
+accelerated through batch normalization (Ioffe and Szegedy 2015), which reduces
+1qhardtanh(a)
+=
+2
+×
+hardtanh(round(hardsigmoid(a)
+×
+2Q−1)/2Q−1),
+with
+hardsigmoid(a) = clip((a + 1)/2, 0, 1).
+
+3.4
+Train-Time Quantized Neural Networks
+77
+the overall impact of the weights’ absolute scale. The ADAM learning rule (Kingma
+and Ba 2014) is used for weight updates, which also reduces the impact of the weight
+scale (Hubara et al. 2016a). All networks are trained using Theano and Lasagne for
+these experiments. My code in Tensorﬂow/Keras is available from https://github.
+com/BertMoons/ (Moons et al. 2017d).
+3.4.2
+Energy in QNNs
+This section indicates how trained quantization can lead to energy savings in real
+hardware architectures. Contrary to the analysis of FPNNs in Sect. 3.3, this section
+does incorporate the energy overheads of control, I/O, data and program-memory
+interfacing, and the clock network. In the results given in this section, n = 1.25 in
+the model of Sect. 3.2, which is based on measurements on Envision (see Chap. 5).
+Also, as opposed to the analysis in Sect. 3.3, sparsity is not taken into account
+throughout this section. The circuitry necessary to exploit sparsity will lead to
+overheads at very low precision (1-4b), while it will still lead to gains when high-
+precision (4-16b) arithmetic is used. Adding sparsity into the energy equation for
+QNNs can be part of the future work in this ﬁeld.
+3.4.3
+Experiments
+3.4.3.1
+Benchmarks
+Several experiments on plain and ResNet-QNNs are performed for three different
+benchmark data sets: MNIST, SVHN, and CIFAR-10. These benchmarks are
+described in more detail in Sect. 1.3.4.4 of Chap.1.
+•
+On MNIST plain QNN models are trained for a maximum of 100 epochs with a
+continuously decaying learning rate of 0.94 starting from 0.0001. ResNet models
+are trained for 100 epochs, with optimal learning rate and learning rate decay
+depending on Q. No data augmentation is performed on this data set.
+•
+For SVHN we use only 30% of the extra training set to limit training times.
+Plain QNN models are trained for a maximum of 150 epochs with a continuously
+decaying learning rate of 0.94 starting from 0.001. ResNet models are trained for
+100 epochs, with optimal learning rate and learning rate decay depending on Q.
+No data augmentation is performed on this task.
+•
+On CIFAR-10, plain QNN models are trained for a maximum of 150 epochs
+with a continuously decaying learning rate of 0.94 starting from 0.001. ResNet
+models are trained for 120 epochs, with optimal learning rate and learning rate
+decay depending on Q. The training set is expanded with its y-axis mirrored
+counterparts, but no other forms of data augmentation are applied. For testing,
+we only evaluate the original testing images.
+
+78
+3
+Hardware-Algorithm Co-optimizations
+Table 3.1 Used plain QNN and ResNet-QNN topologies
+Block
+Plain QNN
+ResNet-QNN
+Input
+–
+16 × 3 × 3
+Block A – 32 × 32
+A × FA × 3 × 3 + MaxPool(2,2)
+2n × 16 × 3 × 3
+Block B – 16 × 16
+B × FB × 3 × 3 + MaxPool(2,2)
+2n × 32 × 3 × 3
+Block C – 8 × 8
+C × FC × 3 × 3 + MaxPool(2,2)
+2n × 64 × 3 × 3
+Output
+Dense - 4 × 4 × FC + softmax
+GlobalPool + softmax
+A, B, C, FA, FB, FC, and n are taken as parameters. All used ﬁlters are 3 × 3
+3.4.3.2
+QNN Topologies
+To quantify the energy-accuracy trade-off in QNNs, multiple network topologies
+are evaluated. This is necessary, as network performance not only varies with the
+used computational accuracy, but also with the network depth and width, hence
+with its computational complexity and model size. Experiments are performed on
+two QNN-network topologies.
+•
+Plain QNNs are wide, rather than deep. Each network contains four stages:
+3 QNN-blocks, each followed by a max-pooling layer and 1 fully connected
+classiﬁcation stage as illustrated in Table 3.1. Each QNN-block is deﬁned by
+two parameters: the number of basic building blocks (A, B, C) and the layer
+width F. Every QNN-sequence is a cascade of a QNN-layer, followed by a batch-
+normalization layer and a quantized activation function, as shown in Fig. 3.16a.
+In this work FBlock is varied from 32 to 512 and nBlock from 1 to 3. The
+classiﬁcation stage is a sequence of a fully connected and a softmax layer. The
+total number of stacked weight layers is hence nA+nB+nC+1, with a maximum
+of 10.
+•
+ResNet-QNNs are based on the ResNet network architecture (He et al. 2016).
+ResNets are deep, rather than wide, state-of-the-art networks in a number of
+image recognition tasks. They are considerably harder to quantize than plain
+QNNs, as they have a shortcut forward path that accumulates the outputs of
+previous layers. Each network is a stack of 6n layers with 3 × 3 convolutions on
+feature maps of sizes {s, s/2, s/4} with 2n layers for each feature map size, with
+a total of 6n + 2 stacked weighted layers. The number of ﬁlters are {16, 32, 64}
+respectively as in the CIFAR-10 network in the original ResNet paper (He et al.
+2016) and as illustrated in Table 3.1. The residual architecture uses basic building
+blocks. All QNN-layers have intQ weights and intQ inputs, but the residual path
+operates at full precision.
+In order to reliably compare QNNs at iso-accuracy for different n, nBlock, FBlock,
+and Q, ﬁrst the pareto-optimal ﬂoating-point architectures in the energy-accuracy
+space are derived. This can be done through an evolutionary architecture optimiza-
+tion (Real et al. 2017), but here we apply a brute search method across the parameter
+space. Once this pareto-optimal front is found, the same network topologies are
+trained again from scratch, as QNNs with a varying number of bits.
+
+3.4
+Train-Time Quantized Neural Networks
+79
+Fig. 3.16 Visual representation of benchmark networks. All networks are built from small blocks
+according to Table 3.1. (a) Plain QNN. (b) ResNet-QNN
+3.4.4
+Results
+The pareto-optimal set of QNNs is analyzed in search for a minimum energy
+network. The list of pareto-optimal networks is given in Table 3.2 In this analysis,
+model parameters MW and MA are varied and p = 64. Based on measurements
+in (Moons et al. 2017c), we take EMAC = 3.7 pJ × (16/Q)1.25.
+Model sizes and inference complexity are shown in Fig. 3.17. Here, compu-
+tational complexity, model size, and the maximum feature map size are compared
+as a function of error rate and Q for the pareto-optimal plain QNN set on CIFAR-
+10. Figure 3.17a illustrates how the required computational complexity decreases
+at iso-accuracy if Q is varied from 1-to-16-bit, as networks with higher resolution
+require fewer and smaller neurons at the same accuracy. The int4 implementation
+achieves down to 9% error, while the ﬂoating-point implementation achieves down
+to 8.5%. At 12% error, for example, the required complexity of a ﬂoat16 network is
+
+80
+3
+Hardware-Algorithm Co-optimizations
+Table 3.2 Pareto-optimal topologies on CIFAR-10
+A, FA; B, FB; C, FC
+MWeights
+MMACs
+Error rate
+1, 64; 1, 64; 1, 64
+0.075456
+13.565952
+30.829327
+1, 64; 1, 64; 1, 128
+0.112320
+15.925248
+28.385417
+1, 64; 1, 64; 3, 64
+0.149184
+18.284544
+27.393830
+1, 64; 1, 64; 1, 256
+0.186048
+20.643840
+26.362179
+1, 64; 2, 64; 1, 64
+0.112320
+23.003136
+29.126603
+1, 64; 2, 64; 1, 128
+0.149184
+25.362432
+26.352163
+1, 64; 2, 64; 1, 256
+0.222912
+30.081024
+25.430689
+1, 128; 2, 64; 3, 64
+0.224640
+38.928384
+23.447516
+1, 64; 3, 64; 2, 128
+0.333504
+44.236800
+24.909856
+1, 128; 3, 64; 2, 128
+0.372096
+55.443456
+21.304087
+2, 64; 1, 64; 3, 128
+0.444096
+72.548352
+17.998798
+2, 64; 2, 64; 3, 128
+0.480960
+81.985536
+19.030449
+1, 64; 2, 128; 3, 128
+0.665280
+86.704128
+20.402644
+2, 64; 3, 128; 3, 128
+0.849600
+162.201600
+16.456330
+3, 128; 2, 128; 3, 256
+2.067840
+475.398144
+13.411458
+2, 128; 3, 256; 3, 256
+3.394944
+645.267456
+12.189503
+3, 128; 3, 256; 3, 512
+7.671168
+1060.503552
+10.840000
+3, 256; 3, 256; 3, 256
+4.725504
+1781.268480
+11.167869
+3, 256; 3, 384; 3, 512
+11.213568
+2536.243200
+10.757212
+Error rates are for the BinaryNet implementations
+10 1
+10 2
+10 3
+10 4
+Complexity [MMAC]
+0
+10
+20
+30
+Error Rate [%]
+BinaryNet
+int2
+int4
+int8
+float16
+(a)
+100
+102
+Model Size [Mb]
+0
+10
+20
+30
+40
+Error Rate [%]
+BinaryNet
+int2
+int4
+int8
+float16
+(b)
+10-2
+10-1
+100
+101
+Max Feature Map Size [Mb]
+0
+10
+20
+30
+Error Rate [%]
+BinaryNet
+int2
+int4
+int8
+float16
+(c)
+Fig. 3.17 Recognition accuracy for plain QNN networks on CIFAR-10 as a function of (a)
+computational complexity, (b) model size, and (c) maximum feature map size and the number
+of bits Q
+80 MMAC-operations. Model complexity at iso-accuracy increases by 10× to 800
+MMAC-operations. On the other hand, the model size in terms of absolute storage
+requirements increases with the used number of bits. This is illustrated in Fig. 3.17b.
+Here, an int4 implementation offers the minimum model size of only 2 Mb, at
+12% error rate. BinaryNets require 50% more model storage, while the ﬂoat16
+net requires at least 4× more. Figure 3.17c shows the maximum storage required
+for storing intermediate feature maps as a function of network accuracy. If this
+size exceeds the available on-chip memory, DRAM access will be necessary. Here,
+
+3.4
+Train-Time Quantized Neural Networks
+81
+100
+101
+102
+103
+104
+105
+Energy [uJ]
+0
+10
+20
+30
+Error Rate [%]
+BinaryNet
+int2
+int4
+int8
+float16
+(a)
+100
+101
+102
+103
+104
+105
+Energy [uJ]
+0
+1
+2
+3
+4
+5
+Error Rate [%]
+BinaryNet
+int2
+int4
+int8
+float16
+(b)
+100
+101
+102
+103
+104
+105
+Energy [uJ]
+0
+2.5
+5
+10
+Error Rate [%]
+BinaryNet
+int2
+int4
+int8
+float16
+(c)
+Fig. 3.18 Error rate as a function of energy consumption for a typical 4 Mb chip. (a) CIFAR-10.
+(b) MNIST. (c) SVHN
+1 2
+4
+8
+16
+Precision [bits]
+100
+101
+102
+103
+104
+105
+Energy [uJ]
+9.0% error
+11.0% error
+13.0% error
+17.0% error
+(a)
+1 2
+4
+8
+16
+Precision [bits]
+100
+101
+102
+103
+104
+105
+Energy [uJ]
+9.0% error
+11.0% error
+13.0% error
+17.0% error
+(b)
+1 2
+4
+8
+16
+Precision [bits]
+100
+101
+102
+103
+104
+105
+Energy [uJ]
+9.0% error
+11.0% error
+13.0% error
+17.0% error
+(c)
+Fig. 3.19 Minimum energy plots for plain QNNs on CIFAR-10 for different amounts of on-chip
+memory chip-models. (a) 1 Mb on-chip MEM. (b) 4 Mb on-chip MEM. (c) 100 Mb on-chip MEM
+BinaryNets offer a clear advantage over their intQ counterparts, offering almost a
+100× beneﬁt over a ﬂoat16 implementation. All plain QNN models converge at all
+values of Q. This is in stark contrast with (Gysel 2016), where the error rate on
+CIFAR-10 increases to 80% for int2 operators.
+Figures 3.18 and 3.19 illustrate the energy consumption and the minimum
+energy point for plain QNN architectures. Figure 3.18 shows the error rate vs
+energy trade-off for different intQ implementations, for chips with a typical 4 Mb of
+on-chip memory. The optimal intQ mode varies with the required precision for all
+benchmarks. At high error rates, BinaryNets tend to be optimal. For medium and
+low error rates mostly int4-nets are optimal. At an error rate of 13% on CIFAR-
+10 in Fig. 3.18a, int4 offers a > 6× advantage over int8 and a 2× advantage
+over a BinaryNet. At 11%, BinaryNet is the most energy-efﬁcient operating point
+and respectively 4× and 12× more energy-efﬁcient than the int8 and ﬂoat16
+implementations. The same holds for networks with 10% error. However, these
+networks come at a 3× higher energy cost than the 11% error rate networks, which
+illustrates the large energy costs of increased accuracy. In an int4 network run
+on a 4 Mb chip, energy increase 3× going from 17% to 13%, while it increases
+20× when going from 13% down to 10%. Hence, orders of magnitude of energy
+consumption can be saved, if the image recognition pipeline can tolerate slightly
+less accurate QNN architectures. Figure 3.19 compares the inﬂuence of the total on-
+
+82
+3
+Hardware-Algorithm Co-optimizations
+1 2
+4
+8
+16
+Precision [bits]
+10 0
+10 1
+10 2
+10 3
+10 4
+10 5
+Energy [uJ]
+9.0% error
+11.0% error
+13.0% error
+17.0% error
+(a)
+1 2
+4
+8
+16
+Precision [bits]
+10 0
+10 1
+10 2
+10 3
+10 4
+10 5
+Energy [uJ]
+9.0% error
+11.0% error
+13.0% error
+17.0% error
+(b)
+1 2
+4
+8
+16
+Precision [bits]
+10 0
+10 1
+10 2
+10 3
+10 4
+10 5
+Energy [uJ]
+9.0% error
+11.0% error
+13.0% error
+17.0% error
+(c)
+Fig. 3.20 Minimum energy plots for plain QNNs on CIFAR-10 for different amount of parallelism
+chip-models. (a) 16p. (b) 64p. (c) 256p
+10 0
+10 1
+10 2
+10 3
+10 4
+Energy [uJ]
+0
+5
+10
+15
+20
+25
+Error Rate [%]
+int4
+int8
+float16
+(a)
+10 0
+10 1
+10 2
+10 3
+10 4
+Energy [uJ]
+0
+0.5
+1
+1.5
+2
+Error Rate [%]
+int4
+int8
+float16
+(b)
+10 0
+10 1
+10 2
+10 3
+10 4
+Energy [uJ]
+0
+1
+2
+3
+4
+5
+Error Rate [%]
+int4
+int8
+float16
+(c)
+Fig. 3.21 Error rate versus energy for ResNet-QNNs. n can be ∈[1,3,9,18] in a 6n + 2-layer
+network. (a) ResNet—CIFAR10. (b) ResNet—MNIST. (c) ResNet—SVHN
+chip memory size MW +MA. In Fig. 3.20a, an implementation with limited on-chip
+memory, BinaryNets are the minimum energy solution for all accuracy-goals, as the
+costs of DRAM interfacing becomes dominant. In the typical case of 4 Mb, either
+BinaryNets, int2- or int4-networks are optimal depending on the required error rate.
+In a system with ∞Mb, hence without off-chip DRAM access, int2 and int4 are
+optimal. In all cases, int4 outperforms int8 by a factor of 2–5×, while the minimum
+energy point consumes 2–10× less energy than the int8 implementations.
+Figure 3.21 shows the energy-vs-error trade-off for ResNet-QNNs on all bench-
+marks for a typical 4 Mb chip. ResNet-QNNs do not converge in the BinaryNet
+and int2 form, but can be trained in the int4- and int8-form. For CIFAR-10 they
+achieve 10% error at half the energy of their int4 plain QNN counterparts. If low
+error rates down to 7.5% are to be achieved on CIFAR-10, the only choice is a
+ﬂoat16 ResNet-QNN implementation. Similarly, ResNet-QNNs achieve 1% error
+on MNIST at 60% of the energy consumption of the plain QNN. At a 3% error
+rate, int4 ResNets outperform their plain QNN counterpart by up to 6×. At the
+given error rates, int4 ResNet-QNNs are 5–6× more energy-efﬁcient than their int8
+counterparts at iso-accuracy for all benchmarks.
+
+3.5
+Clustered Neural Networks
+83
+3.4.5
+Discussion
+This section presented a methodology to minimize the energy consumption of
+embedded neural networks. It is hence an example of a hardware-algorithm co-
+optimization method. More speciﬁcally this is done by introducing QNNs, as well
+as a hardware energy model used for network topology selection. To this end,
+the BinaryNet training setup is generalized from 1-bit to Q-bit for intQ operators,
+both for plain and ResNet CNN architectures. This approach allows ﬁnding the
+minimum energy topology and deriving several trends. First, energy consumption
+varies by orders of magnitudes at iso-accuracy depending on the used number of
+bits. The optimal minimum energy point at iso-accuracy varies between 1- and
+4-bit for all tested benchmarks depending on the available on-chip memory and
+the required accuracy. ResNets are more energy-efﬁcient than their iso-accuracy
+plain QNN counterparts, but do not converge as BinaryNets or int2-networks.
+BinaryNet plain QNNs are minimum energy in systems with tight on-chip memory
+constraints or at low benchmark accuracy. In general, int4 networks outperform
+int8 implementations by up to 2 −6×. This suggests, the native ﬂoat32/ﬂoat16/int8
+precision support in both low-power always-on applications and high-performance
+computing should be expanded with int4 to enable optimal, minimum energy
+inference.
+3.5
+Clustered Neural Networks
+Linear quantization techniques offer the advantage of simpliﬁed arithmetic units in a
+hardware implementation. However, the energy-accuracy trade-off is not necessarily
+optimal for those networks, as linear quantization also reduces a network’s statistical
+efﬁciency. Two nonlinear quantization techniques are analyzed in the same frame-
+work as in Sect. 3.4: clustered quantization as used in deep compression (Han et al.
+2015b)(Han et al. 2016b).
+In clustered quantization, a ﬂoating-point network is compressed by clustering
+its weights and activations. In this process, a set of weights or activations is k-means
+clustered into n clusters, such that only a few different weights are possible. Each
+occurrence is then described by a small index of log2(n) bits pointing to the real
+value in a small look-up table. After an initial clustering step, the values of these
+clusters are retrained to again increase the accuracy of the network. The real value
+is then stored as a high-precision ﬂoating-point or ﬁxed-point number. In this case,
+computations are performed using complex 16b arithmetic, but the cost of all data
+transfers and storage are compressed. n = 16 is a default operating point that leads
+to good results.
+Figure 3.22a compares the clustered approach (·) to linear quantization (×). In
+retrained clustered quantization, the cluster values are a mathematical optimum,
+rather than arbitrarily linear. This enables to maintain a higher statistical efﬁciency,
+
+84
+3
+Hardware-Algorithm Co-optimizations
+Fig. 3.22 Basic building blocks and concepts of clustered quantization. Figure is taken from (Han
+et al. 2016b). (a) Clustered vs linear quantization. (b) Clustered block
+meaning a smaller network can achieve a higher accuracy on a benchmark. The
+downside of this approach is that an accurate number representation is necessary,
+leading to more complex arithmetic blocks than in the QNN case.
+Figure 3.22b shows the basic building block of clustered neural networks. Here,
+both the weights and output activations of a CONV layer are clustered to n clusters.
+This block is then repeatedly used throughout a network, as in Fig. 3.16. As a
+test case, the performance of such retrained clustered network on CIFAR-10 is
+evaluated. This analysis clearly shows linearly quantized networks are more efﬁcient
+at low accuracy (17% error rate), where models can be stored completely on chip.
+Clustered models are an order of magnitude more energy-efﬁcient at high accuracy
+(9% error rate) than linearly quantized models (Fig. 3.23).
+3.6
+Conclusion
+This chapter is both an introduction to various SotA means of hardware-software
+co-optimizations in the context of deep learning and a deeper dive in one speciﬁc
+method that was developed in this book: energy-efﬁcient networks through exploit-
+ing their computational and hardware-level fault-tolerance. This is done by reducing
+the internal computational precision of the networks. The book distinguishes
+between two approaches: test-time ﬁxed-point neural networks FPNN that are the
+result of an advanced ﬁxed-point analysis on a ﬂoating-point pre-trained network
+and train-time quantized neural networks QNN that are trained from scratch in
+ﬁxed-point. Because QNNs are explicitly trained at low precision, they outperform
+FPNNs in terms of energy-efﬁciency. It is shown optimal 4b quantized neural
+networks are generally optimal on the tested benchmarks, 3 −10× more efﬁcient
+than 8b and 16b implementations. Moving to nonlinearly quantized neural networks,
+using the approach ﬁrst discussed in (Han et al. 2016b), is up to 10× more efﬁcient
+than linear quantization at high accuracies.
+
+References
+85
+10 0
+10 1
+10 2
+10 3
+10 4
+10 5
+Energy [uJ]
+0
+10
+20
+30
+Error Rate [%]
+BinaryNet
+int2
+int4
+int8
+float16
+(a)
+10 0
+10 1
+10 2
+10 3
+10 4
+10 5
+Energy [uJ]
+0
+10
+20
+30
+Error Rate [%]
+c=2, 4 levels
+c=3, 8 levels
+c=4, 16 levels
+c=5, 32 levels
+c=6, 64 levels
+c=7, 128 levels
+(b)
+1 2
+4
+8
+16
+Precision [bits]
+10 0
+10 1
+10 2
+10 3
+10 4
+10 5
+Energy [uJ]
+9.0% error
+11.0% error
+13.0% error
+17.0% error
+(c)
+1
+2
+3
+4
+5
+6
+7
+8
+Cluster levels [bits]
+10 0
+10 1
+10 2
+10 3
+10 4
+10 5
+10 6
+Energy [uJ]
+9.0% error
+10.0% error
+11.0% error
+13.0% error
+15.0 % error
+17.0% error
+(d)
+Fig. 3.23 Comparing the performance of linearly quantized versus clustered quantization on
+CIFAR-10. (a) Binary energy. (b) Clustered energy. (c) Binary minimum energy. (d) Clustered
+minimum energy
+The energy gained from moving to ﬁxed-point representations is here estimated
+using a high-level energy model based on the theory and measurements from
+Chaps. 4 and 5. Speciﬁcally for QNNs, this energy model is used to ﬁnd the optimal
+hardware settings (the network quantization) together with the optimal network
+topology for a minimum energy solution.
+References
+Albericio J, Judd P, Jerger N, Aamodt T, Hetherington T, Moshovos A (2016) Cnvlutin:ineffectual-
+neuron-free deep neural network computing. In: International Symposium on Computer
+Architecture (ISCA)
+Andri R, Cavigelli L, Rossi D, Benini L (2016) Yodann: an ultra-low power convolutional neural
+network accelerator based on binary weights. In: IEEE computer society annual symposium on
+VLSI (ISVLSI), 2016. IEEE, pp 236–241
+
+86
+3
+Hardware-Algorithm Co-optimizations
+Andri R, Cavigelli L, Rossi D, Benini L (2017) Yodann: an architecture for ultra-low power binary-
+weight CNN acceleration. IEEE Trans Comput Aided Des Integr Circuits Syst 37:48–60
+Annaratone M, Arnould E, Gross T, Kung HT, Lam M, Menzilcioglu O, Webb JA (1987) The warp
+computer: architecture, implementation, and performance. IEEE Trans Comput 100(12):1523–
+1538
+Bankman D, Yang L, Moons B, Verhelst M, Murmann B (2018) An always-on 3.8 uj/classiﬁcation
+86accelerator with all memory on chip in 28 nm CMOS. In: International Solid-State Circuits
+Conference (ISSCC) technical digest
+Bengio Y, Léonard N, Courville A (2013) Estimating or propagating gradients through stochastic
+neurons for conditional computation. arXiv preprint:13083432
+Biswas A, Chandrakasan A (2018) Conv-ram: an energy-efﬁcient SRAM with embedded convo-
+lution computation for low-power CNN-based machine learning applications. In: International
+Solid-State Circuits Conference (ISSCC)
+Cecconi L (2017) Optimal tiling strategy for memory bandwidth reduction for CNNS. Ph.D. thesis
+Chen T, Du Z, Sun N, Wang J, Wu C, Chen Y, Temam O (2014) Diannao: a small-footprint
+high-throughput accelerator for ubiquitous machine-learning. In: Proceedings of the 19th
+international conference on architectural support for programming languages and operating
+systems. ACM, New York, pp 269–284
+Chen YH, Emer J, Sze V (2016a) Eyeriss: a spatial architecture for energy-efﬁcient dataﬂow
+for convolutional neural networks. In: ACM/IEEE 43rd annual International Symposium on
+Computer Architecture (ISCA), 2016. IEEE, pp 367–379
+Chen YH, Krishna T, Emer J, Sze V (2016b) Eyeriss: an energy-efﬁcient reconﬁgurable accelerator
+for deep convolutional neural networks. In: International Solid-State Circuits Conference
+(ISSCC) digest of technical papers, pp 262–263
+Conti F, Benini L (2015) A ultra-low-energy convolution engine for fast brain-inspired vision in
+multicore clusters. In: Proceedings of the 2015 design, automation & test in Europe conference
+& exhibition. EDA Consortium, San Jose, pp 683–688
+Courbariaux M, Bengio Y (2016) Binarynet: training deep neural networks with weights and
+activations constrained to +1 or -1. CoRR abs/1602.02830
+Courbariaux M, Bengio Y, David JP (2015) Binaryconnect: training deep neural networks with
+binary weights during propagations. In: Cortes C, Lawrence ND, Lee DD, Sugiyama M, Garnett
+R (eds) Advances in neural information processing systems, vol 28. Curran Associates, Inc.,
+Red Hook, pp 3123–3131
+Dundar G, Rose K (1995) The effects of quantization on multilayer neural networks. IEEE Trans
+Neural Netw 6(6):1446–1451
+Farabet C, Martini B, Corda B, Akselrod P, Culurciello E, LeCun Y (2011) Neuﬂow: a runtime
+reconﬁgurable dataﬂow processor for vision. In: IEEE computer society conference on
+Computer Vision and Pattern Recognition Workshops (CVPRW), 2011. IEEE, pp 109–116
+Fick L, Blaauw D, Sylvester D, Skrzyniarz S, Parikh M, Fick D (2017) Analog in-memory
+subthreshold deep neural network accelerator. In: IEEE Custom Integrated Circuits Conference
+(CICC), 2017. IEEE, pp 1–4
+Goetschalckx K, Moons B, Wambacq P, Verhelst M (2018) Improved deep neural network com-
+pression by combining deep compression and singular value decomposition. In: International
+Joint Conference on Artiﬁcial Intelligence and the 23rd European Conference on Artiﬁcial
+Intelligence (IJCAI-ECAI)
+Gonugondla SK, Kang M, Shanbhag N (2018) A 42pj/decision 3.12tops/w robust in-memory
+machine learning classiﬁer with on-chip training. In: International Solid-State Circuits Con-
+ference (ISSCC)
+Gysel P (2016) Ristretto: hardware-oriented approximation of convolutional neural networks.
+arXiv preprint:160506402
+Gysel P, Motamedi M, Ghiasi S (2016) Hardware-oriented approximation of convolutional neural
+networks. Workshop contribution to International Conference on Learning Representations
+(ICLR)
+
+References
+87
+Han S, Mao H, Dally WJ (2015a) Deep compression: compressing deep neural networks with
+pruning, trained quantization and Huffman coding. arXiv preprint:151000149
+Han S, Pool J, Tran J, Dally W (2015b) Learning both weights and connections for efﬁcient neural
+network. Proceedings of advances in neural information processing systems, pp 1135–1143
+Han S, Liu X, Mao H, Pu J, Pedram A, Horowitz MA, Dally WJ (2016a) EIE: Efﬁcient Inference
+Engine on compressed deep neural network. In: International Symposium on Computer
+Architecture (ISCA)
+Han S, Mao H, Dally WJ (2016b) Deep compression: compressing deep neural network with
+pruning, trained quantization and Huffman coding. In: International Conference on Learning
+Representations (ICLR)
+He K, Zhang X, Ren S, Sun J (2016) Deep residual learning for image recognition. In: Conference
+on Computer Vision and Pattern Recognition (CVPR)
+Horowitz M (2014) Energy table for 45 nm process. Stanford VLSI wiki
+Huang G, Chen D, Li T, Wu F, van der Maaten L, Weinberger KQ (2017) Multi-scale dense
+convolutional networks for efﬁcient prediction. arXiv preprint arXiv:170309844
+Hubara I, Courbariaux M, Soudry D, El-Yaniv R, Bengio Y (2016a) Binarized neural networks.
+In: Advances in Neural Information Processing Systems (NIPS)
+Hubara I, Courbariaux M, Soudry D, El-Yaniv R, Bengio Y (2016b) Quantized neural networks:
+training neural networks with low precision weights and activations. arXiv preprint:160907061
+Ioffe S, Szegedy C (2015) Batch normalization: accelerating deep network training by reducing
+internal covariate shift. arXiv preprint:150203167
+Jia Y, Shelhamer E, Donahue J, Karayev S, Long J, Girshick R, Guadarrama S, Darrell T (2014)
+CAFFE: Convolutional Architecture for Fast Feature Embedding. arXiv:14085093 [cs]. http://
+arxiv.org/abs/1408.5093, arXiv: 1408.5093
+Jiang M, Gielen G (2003) The effects of quantization on multi-layer feedforward neu-
+ral networks. Int J Pattern Recognit Artif Intell 17(04):637–661. https://doi.org/10.1142/
+S0218001403002514. http://www.worldscientiﬁc.com/doi/abs/10.1142/S0218001403002514
+Jouppi NP, Young C, Patil N, Patterson D, Agrawal G, Bajwa R, Bates S, Bhatia S, Boden N,
+Borchers A, et al (2017) In-datacenter performance analysis of a tensor processing unit. In:
+International Symposium on Computer Architecture (ISCA)
+Kim D, Ahn J, Yoo S (2018) Zena: zero-aware neural network accelerator. IEEE Design & Test
+35:39–46
+Kingma D, Ba J (2014) Adam: a method for stochastic optimization. arXiv preprint:14126980
+Krizhevsky A, Hinton G (2009) Learning multiple layers of features from tiny images. Technical
+report
+Krizhevsky A, Sutskever I, Hinton GE (2012a) Imagenet classiﬁcation with deep convolutional
+neural networks. In: Proceedings of advances in neural information processing systems, pp
+1097–1105
+Krizhevsky A, Sutskever I, Hinton GE (2012b) ImageNet Classiﬁcation with deep convo-
+lutional neural networks. In: Pereira F, Burges CJC, Bottou L, Weinberger KQ (eds)
+Advances in neural information processing systems, vol 25. Curran Associates, Inc., Red
+Hook, pp 1097–1105. http://papers.nips.cc/paper/4824-imagenet-classiﬁcation-with-deep-
+convolutional-neural-networks.pdf
+Le Cun BB, Denker JS, Henderson D, Howard RE, Hubbard W, Jackel LD (1990) Handwritten
+digit recognition with a back-propagation network. In: Advances in neural information
+processing systems, Citeseer
+Lee J, Kim C, Kang S, Shin D, Kim S, Yoo HY (2018) Unpu: A 50.6 tops/w uniﬁed deep neural
+network accelerator with 1b-to-16b fully-variable weight bit-precision. In: International Solid-
+State Circuits Conference (ISSCC)
+Lin Y, Zhang S, Shanbhag NR (2016) Variation-tolerant architectures for convolutional neural
+networks in the near threshold voltage regime. In: IEEE international workshop on Signal
+Processing Systems (SiPS), 2016. IEEE, pp 17–22
+
+88
+3
+Hardware-Algorithm Co-optimizations
+Moons B, Verhelst M (2015) DVAS: Dynamic Voltage Accuracy Scaling for increased energy-
+efﬁciency in approximate computing. In: International Symposium on Low Power Electronics
+and Design (ISLPED). https://doi.org/10.1109/ISLPED.2015.7273520
+Moons B, Verhelst M (2016) A 0.3-2.6 tops/w precision-scalable processor for real-time large-
+scale convnets. In: Proceedings of the IEEE symposium on VLSI circuits, pp 178–179
+Moons B, De Brabandere B, Van Gool L, Verhelst M (2016) Energy-efﬁcient convnets through
+approximate computing. In: Proceedings of the IEEE Winter Conference on Applications of
+Computer Vision (WACV), pp 1–8
+Moons B, Goetschalckx K, Van Berckelaer N, Verhelst M (2017a) Minimum energy quantized
+neural networks. In: Asilomar conference on signals, systems and computers
+Moons B, Uytterhoeven R, Dehaene W, Verhelst M (2017b) DVAFS: Trading computational
+accuracy for energy through dynamic-voltage-accuracy-frequency-scaling. In: 2017 Design,
+Automation & Test in Europe conference & exhibition (DATE). IEEE, pp 488–493
+Moons B, Uytterhoeven R, Dehaene W, Verhelst M (2017c) Envision: a 0.26-to-10 tops/w
+subword-parallel dynamic-voltage-accuracy-frequency-scalable convolutional neural network
+processor in 28 nm FDSOI. In: International Solid-State Circuits Conference (ISSCC)
+Moons B, et al (2017d) Bertmoons github page. http://github.com/BertMoons. Accessed: 01 Jan
+2018
+Peemen M, Setio AA, Mesman B, Corporaal H (2013) Memory-centric accelerator design for
+convolutional neural networks. In: 2013 IEEE 31st International Conference on Computer
+Design (ICCD). IEEE, pp 13–19
+Rastegari M, Ordonez V, Redmon J, Farhadi A (2016) XNOR-net: Imagenet classiﬁcation using
+binary convolutional neural networks. In: European conference on computer vision. Springer,
+Berlin, pp 525–542
+Real E, Moore S, Selle A, Saxena S, Suematsu YL, Le Q, Kurakin A (2017) Large-scale evolution
+of image classiﬁers. arXiv preprint:170301041
+Shaﬁee A, Nag A, Muralimanohar N, Balasubramonian R, Strachan JP, Hu M, Williams RS,
+Srikumar V (2016) Isaac: a convolutional neural network accelerator with in-situ analog
+arithmetic in crossbars. In: Proceedings of the 43rd international symposium on computer
+architecture. IEEE Press, pp 14–26
+Shin D, Lee J, Lee J, Yoo HJ (2017) 14.2 dnpu: an 8.1 tops/w reconﬁgurable CNN-RNN
+processor for general-purpose deep neural networks. In: IEEE International Solid-State Circuits
+Conference (ISSCC), 2017. IEEE, pp 240–241
+Sze V, Yang TJ, Chen YH (2017) Designing energy-efﬁcient convolutional neural networks using
+energy-aware pruning. In: Computer Vision and Pattern Recognition (CVPR)
+Whatmough PN, Lee SK, Lee H, Rama S, Brooks D, Wei GY (2017) 14.3 a 28 nm soc with
+a 1.2 ghz 568 nj/prediction sparse deep-neural-network engine with >0.1 timing error rate
+tolerance for IOT applications. In: IEEE International Solid-State Circuits Conference (ISSCC),
+2017. IEEE, pp 242–243
+Xue J, Li J, Gong Y (2013) Restructuring of deep neural network acoustic models with singular
+value decomposition. In: Interspeech, pp 2365–2369
+Yang L, Bankman D, Moons B, Verhelst M, Murmann B (2018) Bit error tolerance of a CIFAR-
+10 binarized convolutional neural network processor. In: IEEE International Symposium on
+Circuits and Systems (ISCAS)
+Yin S, et al (2017) Minimizing area and energy of deep learning hardware design using collective
+low precision and structured compression. In: Asilomar conference on signals, systems and
+computers
+Zhou S, Wu Y, Ni Z, Zhou X, Wen H, Zou Y (2016) Dorefa-net: training low bitwidth convolutional
+neural networks with low bitwidth gradients. arXiv preprint:160606160
+Zhu C, Han S, Mao H, Dally WJ (2016) Trained ternary quantization. arXiv preprint:161201064

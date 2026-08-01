@@ -1,0 +1,388 @@
+ 
+84 
+ 
+第5 章 
+迭代器和生成器 
+读完本章之后你将能够回答下列问题 
+• 
+生成器是怎样节约内存的？ 
+• 
+使用生成器的最佳时机是什么？ 
+• 
+我如何使用itertools 来创建复杂的生成器工作流？ 
+• 
+延迟估值何时有益，何时无益？ 
+当许多其他语言的使用者开始学习Python 时，他们在for 循环的记法差异上吓了
+一跳。这是因为，在其他语言中的写法可能是这样： 
+# 其他语言 
+for (i=0; i<N; i++) { 
+    do_work(i); 
+} 
+ 
+而在Python 中他们遇到了一个叫range 或xrange 的新函数： 
+# Python 
+for i in range(N): 
+    do_work(i) 
+ 
+这两个函数让我们见识到了使用生成器编程的范例。为了彻底理解生成器，让我们
+首先试着简单实现range 和xrange 函数： 
+def range(start, stop, step=1): 
+    numbers = [] 
+    while start < stop: 
+        numbers.append(start) 
+        start += step 
+
+ 
+图迭代器和生成器 
+85 
+ 
+    return numbers 
+ 
+def xrange(start, stop, step=1): 
+    while start < stop: 
+        yield start #X 
+        start += step 
+ 
+for i in range(1,10000): 
+    pass 
+ 
+for i in xrange(1,10000): 
+    pass 
+ 
+X 这个函数会yield 很多值而不是只返回一个。这就让一个看上去很普通的函数
+转变成一个生成器，一种可以被重复轮询下一个可用值的函数。 
+首先要注意的是range 的实现必须预先创建一个列表保存范围内的所有数字。所
+以，如果范围从1 到10000，这个函数会对numbers 列表进行10000 次append
+（在第3 章我们已经讨论过这部分开销），然后返回整个列表。而另一方面，生成器
+则能够“返回”很多值。每次代码运行到yield，该函数都会发射出一个值，然
+后当外部代码需求另一个值时，该函数才会继续运行（之前的状态保持不变）并发
+射新的值。当该函数运行结束时，一个StopIteration 异常会被抛出表明该生
+成器已经没有更多的值了。结果就是，虽然两个函数最终运行了同样的计算次数，
+使用range 版本的循环多消耗了10000 倍的内存（如果范围从1 到N 则是N 倍）。 
+牢记这段代码，我们就能在for 循环中使用自己实现的range 和xrange。在
+Python 语言中，for 循环要求被循环的对象支持迭代。这意味着我们必须能够在循
+环对象上创建一个迭代器。而在任何对象上创建迭代器，我们都只需要使用Python
+内建的iter 函数。这个函数，对于列表、元组、字典和集合都返回一个对象内部
+元素或键的迭代器。对于更复杂的对象，iter 函数会返回对象的__iter__属性。
+由于xrange 已经返回了一个迭代器，对其调用iter 就不会做任何事，只是简单
+返回原始的对象（因此type(xrange(1, 10)) == type(iter(xrange(1, 
+10)))）。不过，由于range 返回的是一个列表，我们就不得不创建一个新的对象，
+一个列表的迭代器，来迭代列表中的所有值。一旦一个迭代器被创建，我们只需要
+对其调用next()函数，来获得新值，直到StopIteration 异常被抛出。这给
+我们提供了一个能够很好解析for 循环的视图，如例5-1 所示。 
+例5-1  Python 的for 循环解析 
+# python 循环 
+for i in object: 
+
+86 
+第5 章 
+    do_work(i) 
+ 
+# 等同于 
+object_iterator = iter(object) 
+while True: 
+    try: 
+        i = object_iterator.next() 
+        do_work(i) 
+    except StopIteration: 
+        break 
+ 
+for 循环的代码显示了我们在使用range 而不是xrange 时需要额外调用iter。
+在使用xrange 时，我们不需要做任何事情（因为它已经是一个迭代器了！）；然而
+在使用range 时，我们需要分配一个新的列表并预先计算其内的值，然后我们还
+要创建一个迭代器！ 
+更重要的是，预先计算range 列表需要为整个数据集分配足够的空间并为每一个
+元素赋正确的值，即使我们每次仅需要一个值。为列表分配的空间其实并没有什么
+意义。实际上，循环甚至根本无法运行，因为range 尝试去分配的内存可能根本
+无法被满足（range(100,000,000)会创建一个3.1GB 大小的列表！）。通过对结
+果计时，我们可以很明显地看到这一点： 
+def test_range(): 
+    """ 
+    >>> %timeit test_range() 
+    1 loops, best of 3: 446 ms per loop 
+    """ 
+    for i in range(1, 10000000): 
+        pass 
+ 
+def test_xrange(): 
+    """ 
+    >>> %timeit test_xrange() 
+    1 loops, best of 3: 276 ms per loop 
+    """ 
+    for i in xrange(1, 10000000): 
+        pass 
+ 
+这个问题现在看上去可能并不算什么——我们只需要将所有的range 调用替换成
+xrange——但是实际的问题可能隐藏在非常深的角落。比如假设我们有一个数字
+的长列表，我们想要知道其中有多少个数字可以被3 整除。你可能会这样写： 
+divisible_by_three = len([n for n in list_of_numbers if n % 3 == 0]) 
+ 
+然而，这种写法的问题跟range 一样。因为我们使用了列表表达式，我们预先生
+成了一个能被3 整除的数字的列表，仅仅只是为了对其进行计算并丢弃。如果这个
+
+ 
+图迭代器和生成器 
+87 
+列表很长，这可能会导致无意义地分配大量内存——大到根本无法被满足。 
+我们的列表表达式使用了如下公式[<value> for <item> in <sequence> if 
+<condition>]。这会创建一个列表，内含所有满足条件的值。相对的，我们也可以
+使用一个类似的语法(<value> for <item> in <sequence> if <condition>)
+来创建一个满足条件的值的生成器而不是一个列表。 
+利用列表表达式和生成器表达式之间的这种细微的差别，我们就能对divisible_ 
+by_three 的代码进行优化。然而，生成器并没有一个length 属性，所以我们
+必须要干的聪明点： 
+divisible_by_three = sum((1 for n in list_of_numbers if n % 3 == 0)) 
+ 
+这里，我们的生成器在每当遇到一个能被3 整除的数字时就会发射一个1，而不是
+别的数字。对该生成器发射的所有值求和，我们就能得到跟列表表达式一样的结果。
+这两个版本的代码性能几乎一样，但是生成器表达式需要的内存远小于列表表达
+式。另外，我们可以将列表版本轻易转化成生成器版本的原因是我们只关心列表中
+每个元素的当前值——该值要么可以被3 整除要么不可以，而跟它在列表中的位置
+无关，跟其前后的数字也无关。更复杂的函数也可以被转成生成器，但是根据它们
+的复杂度，这种转换有可能会比较困难。 
+5.1  无穷数列的迭代器 
+如果我们只需要保存有限个状态并只发射当前值，生成器可以被用来产生无穷数
+列。斐波那契数列就是一个很好的例子——它是一个具有两个状态变量（最后两个
+斐波那契数）的无穷数列： 
+def fibonacci(): 
+    i, j = 0, 1 
+    while True: 
+        yield j 
+        i, j = j, i + j 
+ 
+这里可以看到，虽然j 是那个被发射的值，我们依然需要保留i 的记录，因为它
+保存了斐波那契数列的状态。生成器计算所需要的状态的数量非常关键，因为它最
+终会被转化成对象的内存足迹。如果我们有一个函数需要使用很多的状态，却输出
+很少的数据，那么使用预先计算的列表可能比生成器更合适。 
+生成器并没有想象中使用的那么广泛的一个原因是它们的逻辑可以被包含在你的
+代码中。这意味着生成器其实是用更聪明的循环组织你代码的一种方式。比如，我
+
+88 
+第5 章 
+们可以有多种方式回答问题“5000 以内的斐波那契数中有几个奇数？”： 
+def fibonacci_naive(): 
+    i, j = 0, 1 
+    count = 0 
+    while j <= 5000: 
+        if j % 2: 
+            count += 1 
+        i, j = j, i + j 
+    return count 
+ 
+def fibonacci_transform(): 
+    count = 0 
+    for f in fibonacci(): 
+        if f > 5000: 
+            break 
+        if f % 2: 
+            count += 1 
+    return count 
+ 
+from itertools import islice 
+def fibonacci_succinct(): 
+    is_odd = lambda x : x % 2 
+    first_5000 = islice(fibonacci(), 0, 5000) 
+    return sum(1 for x in first_5000 if is_odd(x)) 
+ 
+所有这些方法都有近似的运行时属性（也就是说它们都有相同的内存足迹和同样的
+性能），但fibonacci_transform 函数具有多个优势。首先，它看上去比
+fibonacci_succinct 直观很多，可以轻易被另一个开发者调试和理解。关于后
+者的警告见下一节，我们会讨论一些itertools 的常见用法——该模块在大大简
+化了很多迭代器的简单操作的同时也会迅速让Python 代码变得不那么像Python。
+另一方面，fibonacci_naive 一次做了多件事情，隐藏了它实际的计算逻辑！
+而使用斐波那契数列的生成器函数则不会阻碍我们理解实际的计算逻辑。最后，
+fibonacci_transform 可以变得更加通用。这个函数可以被重命名为num_ 
+odd_under_5000 并接受一个生成器参数，这样它就可以工作在任意数列上。 
+Fibonacci_transform 函数的最后一个好处是它标注了计算的两个阶段：数据
+的生成和数据的转化。该函数很明显是在进行数据的转化，而fibonacci 函数则
+是生成数据。这一界限的划分增加了额外的清晰度和功能：我们可以让一个转化函
+数工作在一组新的数据上，或在一组数据上进行多个转化。这一规范在创建复杂程
+序时十分重要，而使用生成器则可以明确地表示：生成器用于创建数据，而普通函
+数则操作生成的数据。 
+
+ 
+图迭代器和生成器 
+89 
+5.2  生成器的延迟估值 
+之前提到，生成器之所以能够节约我们的内存是因为它只处理当前感兴趣的值。在
+我们计算的任意点，我们都只能访问当前的值，而无法访问数列中的其他元素（这
+种算法我们通常称为“单通”或“在线”）。有时候这会令生成器难以被使用，不过
+有很多模块和函数可以帮助解决这一问题。 
+我们主要关注标准库中的itertools 库。它提供了Python 内建函数map、reduce、
+filter 和zip 的生成器版本（在itertools 中分别是imap、ireduce、ifilter
+和izip），以及其他很多有用的函数。特别值得注意的有： 
+islice 
+允许对一个无穷生成器进行切片。 
+chain 
+将多个生成器链接到一起。 
+takewhile 
+给生成器添加一个终止条件。 
+cycle 
+通过不断重复将一个有穷生成器变成无穷。 
+让我们创建一个使用生成器来分析大数据集的例子。假设我们现在有一个分析函数
+用于处理时间点数据，数据每秒会产生一个，对于过去的20 年—我们有
+631 152 000 个数据点！该数据被保存在一个文件中，每秒生成一行，我们无法将
+整个数据集读入内存。如果我们想要进行一些简单的异常检测，我们可以使用生成
+器而无须分配任何列表！ 
+我们需要解决的问题是：对于一个格式为“timestamp, value”的数据文件，需要找
+到所有含有异常值的日期，比该日均值超出3 倍标准差之外的数字被视为异常值。
+我们首先写读取文件的代码，文件以一行接着一行的方式读取，然后将每一行的值
+输出为一个Python 对象。我们还会创建一个read_fake_data 生成器用于生成
+伪造数据来测试我们的算法。对于这个函数，我们依然会提供一个filename 参
+数，来让它具有和read_data 相同的函数签名，不过该参数会被丢弃。这两个函
+数，如例5-2 所示，使用了延迟估值——我们仅当生成器的next()属性被调用时
+
+90 
+第5 章 
+才会去读取文件的下一行，或生成新的伪造数据。 
+例5-2  延迟读取数据 
+from random import normalvariate, rand 
+from itertools import count 
+ 
+def read_data(filename): 
+    with open(filename) as fd: 
+        for line in fd: 
+            data = line.strip().split(',') 
+            yield map(int, data) 
+ 
+def read_fake_data(filename): 
+    for i in count(): 
+        sigma = rand() * 10 
+        yield (i, normalvariate(0, sigma)) 
+ 
+现在，我们可以使用itertools 提供的groupby 函数将同一天的timestamp
+分在一组（例5-3）。这个函数的输入参数是一组数据和一个用于分组的关键字函数。
+返回的则是一个生成器，生成的每一个值都是一个元组，元组内包含该组的关键字
+和该组所有元素的生成器。对于关键字函数，我们会创建一个lambda 函数返回一
+个date 对象。对于同一天的数据会产生相同的date 对象，这样就能以天来分组。
+这个关键字函数可以是任何东西——我们可以以小时、年或数据值的某个属性来分
+组。唯一的限制是数据必须是连续的。也就是说，如果我们有一个输入是A A A A 
+B B A A 并以字母分组，我们就会得到3 个组，分别是(A, [A, A, A, A])、
+(B, [B, B])以及(A, [A, A])。 
+例5-3  对我们的数据分组 
+from datetime import date 
+from itertools import groupby 
+ 
+def day_grouper(iterable): 
+    key = lambda (timestamp, value) : date.fromtimestamp(timestamp) 
+    return groupby(iterable, key) 
+ 
+现在来进行实际的异常检测。我们会遍历一天内的值并记录平均值和最大值。平均
+值的计算会使用一个在线的平均值和标准差算法。
+①保留最大值是因为它将是我们
+异常数据的最佳代表——如果最大值比平均值的3sigma 大，那么我们就返回代表
+这一天的date 对象。否则，我们返回False。不过，我们也可以直接终止函数
+                        
+① 我们使用Knuth 的在线平均数算法。这让我们能够使用一个临时变量同时计算出平均数和一阶矩（也就
+是标准差）。我们还可以稍稍修改公式并添加更多的状态变量来计算高阶矩的值（每个阶一个变量）。 
+
+ 
+图迭代器和生成器 
+91 
+（并返回None）。我们输出这些值是因为这个check_anomaly 函数被定义为一个
+数据过滤器——一种对需要保留的数据返回True 而对需要丢弃的数据返回False
+的函数。这让我们可以过滤原始的数据集并只保留符合我们条件的日子。
+check_anomaly 函数如例5-4 所示。 
+例5-4  基于生成器的异常检测 
+import math 
+ 
+def check_anomaly((day, day_data)): 
+    # We find the mean, standard deviation, and maximum values for the day. 
+    # Using a single-pass mean/standard deviation algorithm allows us to only 
+    # read through the day's data once. 
+    n = 0 
+    mean = 0 
+    M2 = 0 
+    max_value = None 
+    for timestamp, value in day_data: 
+        n += 1 
+        delta = value - mean 
+        mean = mean + delta/n 
+        M2 += delta*(value - mean) 
+        max_value = max(max_value, value) 
+    variance = M2/(n - 1) 
+    standard_deviation = math.sqrt(variance) 
+ 
+    # Here is the actual check of whether that day's data is anomalous. If it 
+    # is, we return the value of the day; otherwise, we return false. 
+    if max_value > mean + 3 * standard_deviation: 
+        return day 
+    return False 
+ 
+这个函数一个看上去可能有点奇怪的地方是参数定义中额外的一组小括号。这不是
+打字错误，而是因为该函数的输入来自groupby 生成器。记住groupby 返回的
+元组会成为这个check_anomaly 函数的参数。因此，我们必须进行元组展开来
+正确获取组的关键字和组的数据。由于我们使用了ifilter，另一种不需要在函数
+定义中进行元组展开的处理方式是定义istarfilter，类似于istarmap 对imap
+做的处理那样（更多信息参见itertools 文档）。 
+最后，我们可以将生成器链接来获得所有具有异常数据的日子（例5-5）。 
+例5-5  将我们的生成器链接起来 
+from itertools import ifilter, imap 
+ 
+data = read_data(data_filename) 
+ 
+data_day = day_grouper(data) 
+
+92 
+第5 章 
+anomalous_dates = ifilter(None, imap(check_anomaly, data_day)) #X 
+ 
+first_anomalous_date, first_anomalous_data = anomalous_dates.next() 
+print "The first anomalous date is: ", first_anomalous_date 
+ 
+X ifilter 会移除所有不满足给定过滤器的元素。默认情况（第一个参数为None）
+下，ifilter 会过滤掉所有被估值为False 的元素。这样我们就不会包含那些
+check_anomaly 认为不存在异常的日子。 
+这个方法非常简单地允许我们获得异常日子的列表而不需要读取整个数据集。
+需要注意的一件事是这段代码并没有真正进行任何计算，它只是为计算逻辑设
+置了一条流水线。在我们执行anomalous_dates.next()或以某种方式对
+anomalous_dates 进行遍历之前，文件永远不会被读取。事实上，如果我们
+的整个数据集中有5 个异常日子，而我们的代码在读取了第一个之后就停止，
+那么文件就只会被读到第一个日子的数据出现为止。这就叫延迟估值——只有
+被明确要求的计算才会被执行，如果出现了一个提前终止的条件，那么就可以
+大幅降低整体的运行时间。 
+用这种方式组织代码的另一个好处是它允许我们在不需要重写大部分代码的情况
+下轻松改换更复杂的计算逻辑。比如，如果我们想要一个日内移动窗口的分组而不
+是按日分组，我们可以简单写一个新的day_grouper 来替换： 
+from datetime import datetime 
+ 
+def rolling_window_grouper(data, window_size=3600): 
+    window = tuple(islice(data, 0, window_size)) 
+    while True: 
+        current_datetime = datetime.fromtimestamp(window[0][0]) 
+        yield (current_datetime, window) 
+        window = window[1:] + (data.next(),) 
+ 
+现在，我们只需用这个rolling_window_grouper 简单替换例5-5 中的
+day_grouper 就能获得我们想要的结果。使用这种模式，我们还能看到这两个方
+法都具有十分清晰的内存保证——它将仅保存窗口内的数据作为其状态（两个方法
+分别需要保存一整日的数据或3600 个数据点）。如果就连数据集的这部分采样都依
+然无法全部放入内存，那么我们还可以通过多次打开文件并使用不同的文件描述符
+来指向我们实际需要的数据（或使用linecache 模块）来解决这个问题。 
+最后一点：在rolling_window_grouper 函数中，我们对window 列表进行了
+很多pop 和append 操作。我们可以使用collections 模块的deque 对象来大
+大优化这部分代码。这个对象可以在列表的头部和尾部均提供O(1)的添加和删除
+
+ 
+图迭代器和生成器 
+93 
+操作（传统的列表只能对列表尾部提供O(1)的添加删除操作，而对列表的头部进
+行同样的操作则是O(n)）。使用deque 对象，我们可以使用append 将新数据添
+加到列表的右侧（或者说尾部），并使用deque.popleft()来删除列表左侧（或
+者说头部）的数据而无须分配更多空间或进行耗时的O(n)操作。 
+5.3  小结 
+通过使用迭代器组织我们的异常检测算法，我们能处理的数据就远远超过了内存的
+限制。另外，使用迭代器的性能也好于使用列表，因为我们避免了昂贵的append
+操作。 
+因为迭代器是Python 的原始类型，我们应该始终使用这个方法来减少应用程序的
+内存足迹。这么做带来的好处是结果可以被延迟估值，你只需要处理必需的数据，
+而内存就会被节省下来，因为我们不需要保存之前的结果，除非我们明确知道需要
+它们。在第11 章，我们会讨论其他一些适用于更独特的问题的方法并介绍一些新
+的思路来解决内存问题。 
+我们将在第9 章和第10 章看到，使用迭代器来解决问题的另一个好处是它让你的代
+码能够适用于多CPU 或多计算机的场合。我们在5.1 节中讨论过，使用迭代器必须
+预先考虑算法所需的各种状态变量。只要你封装好了这些算法运行时必需的状态变
+量，算法跑在什么数据上就变得无关紧要了。比如我们在使用multiprocessing
+和ipython 模块时就可以看到这种示范，它们都使用了一个类似于map 的函数来
+启动并发任务。 
+ 

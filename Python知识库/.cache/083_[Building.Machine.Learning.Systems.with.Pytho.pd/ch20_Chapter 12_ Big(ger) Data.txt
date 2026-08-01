@@ -1,0 +1,615 @@
+Big(ger) Data
+While computers keep getting faster and have more memory, the size of the data 
+has grown as well. In fact, data has grown faster than computational speed, and this 
+means that it has grown faster than our ability to process it.
+It is not easy to say what is big data and what is not, so we will adopt an operational 
+definition: when data is so large that it becomes too cumbersome to work with, we 
+refer to it as big data. In some areas, this might mean petabytes of data or trillions of 
+transactions; data that will not fit into a single hard drive. In other cases, it may be 
+one hundred times smaller, but just difficult to work with.
+We will first build upon some of the experience of the previous chapters and work 
+with what we can call the medium data setting (not quite big data, but not small 
+either). For this we will use a package called jug, which allows us to do the following:
+•	
+Break up your pipeline into tasks
+•	
+Cache (memoize) intermediate results
+•	
+Make use of multiple cores, including multiple computers on a grid
+The next step is to move to true "big data", and we will see how to use the cloud 
+(in particular, the Amazon Web Services infrastructure). We will now use another 
+Python package, starcluster, to manage clusters.
+Learning about big data
+The expression "big data" does not mean a specific amount of data, neither in the 
+number of examples nor in the number of gigabytes, terabytes, or petabytes taken  
+up by the data. It means the following:
+•	
+We have had data growing faster than the processing power
+•	
+Some of the methods and techniques that worked well in the past now need 
+to be redone, as they do not scale well
+
+Big(ger) Data
+[ 242 ]
+•	
+Your algorithms cannot assume that the entire data is in RAM
+•	
+Managing data becomes a major task in itself
+•	
+Using computer clusters or multicore machines becomes a necessity and  
+not a luxury
+This chapter will focus on this last piece of the puzzle: how to use multiple cores 
+(either on the same machine or on separate machines) to speed up and organize  
+your computations. This will also be useful in other medium-sized data tasks.
+Using jug to break up your pipeline into 
+tasks
+Often, we have a simple pipeline: we preprocess the initial data, compute features, 
+and then we need to call a machine learning algorithm with the resulting features.
+Jug is a package developed by Luis Pedro Coelho, one of the authors of this book. It is 
+open source (using the liberal MIT License) and can be useful in many areas but was 
+designed specifically around data analysis problems. It simultaneously solves several 
+problems, for example:
+•	
+It can memorize results to a disk (or a database), which means that if you ask 
+it to compute something you have computed before, the result is instead read 
+from the disk.
+•	
+It can use multiple cores or even multiple computers on a cluster. Jug was 
+also designed to work very well in batch computing environments that use 
+a queuing system such as Portable Batch System (PBS), the Load Sharing 
+Facility (LSF), or the Oracle Grid Engine (OGE, earlier known as Sun Grid 
+Engine). This will be used in the second half of the chapter as we build online 
+clusters and dispatch jobs to them.
+About tasks
+Tasks are the basic building block of jug. A task is just a function and values for its 
+arguments, for example:
+def double(x):
+    return 2*x
+
+Chapter 12
+[ 243 ]
+A task could be "call double with argument 3". Another task would be "call double 
+with argument 642.34". Using jugs, we can build these tasks as follows:
+from jug import Task
+t1 = Task(double, 3)
+t2 = Task(double, 642.34)
+Save this to a file called jugfile.py (which is just a regular Python file). Now, we 
+can run jug execute to run the tasks. This is something you run on the command 
+line, not at the Python prompt! Instead of Python's jugfile.py file (which should  
+do nothing), you run jug execute.
+You will also get some feedback on the tasks (jug will say that two tasks named 
+"double" were run). Run jug execute again and it will tell you that it did nothing! 
+It does not need to. In this case, we gained little, but if the tasks took a long time to 
+compute, it would be very useful.
+You may notice that a new directory named jugfile.jugdata also appeared on 
+your hard drive, with a few other weirdly named files. This is the memoization 
+cache. If you remove it, jug execute will run all your tasks (both of them) again.
+Often it is good to distinguish between pure functions, which simply 
+take their inputs and return a result, from more general functions 
+that can perform actions such as reading from files, writing to files, 
+accessing global variables, modifying their arguments, or anything that 
+the language allows. Some programming languages, such as Haskell, 
+even have syntactic ways in which to distinguish pure from impure 
+functions.
+With jug, your tasks do not need to be perfectly pure. It is even 
+recommended that you use tasks to read your data or write your 
+results. However, accessing and modifying global variables will not 
+work well; the tasks may be run in any order in different processors. 
+The exceptions are global constants, but even this may confuse the 
+memoization system (if the value is changed between runs). Similarly, 
+you should not modify the input values. Jug has a debug mode (use 
+jug execute—debug), which slows down your computation, but 
+would give you useful error messages if you make this sort of mistake.
+The preceding code works but it is a bit cumbersome; you are always repeating the 
+Task(function, argument) construct. Using a bit of Python magic, we can make 
+the code even more natural:
+from jug import TaskGenerator
+from time import sleep
+@TaskGenerator
+def double(x):
+
+Big(ger) Data
+[ 244 ]
+    sleep(4)
+    return 2*x
+@TaskGenerator
+def add(a, b):
+    return a + b
+@TaskGenerator
+def print_final_result(oname, value):
+    with open(oname, 'w') as output:
+        print >>output, "Final result:", value
+y = double(2)
+z = double(y)
+y2 = double(7)
+z2 = double(y2)
+print_final_result('output.txt', add(z,z2))
+Except for the use of TaskGenerator, the preceding code could have been a standard 
+Python file. However, using TaskGenerator, it actually creates a series of tasks, 
+and it is now possible to run it in a way that takes advantage of multiple processors. 
+Behind the scenes, the decorator transforms your functions so that they do not 
+actually execute but create a task. We also take advantage of the fact that we can pass 
+tasks to other tasks and this results in a dependency being generated.
+You may have noticed that we added a few sleep(4) calls in the preceding code. 
+This simulates running a long computation. Otherwise, this code is so fast that there 
+is no point in using multiple processors.
+We start by running jug status:
+Now we start two processes simultaneously (in the background):
+jug execute &
+jug execute &
+
+Chapter 12
+[ 245 ]
+Now we run jug status again:
+We can see that the two initial double operators are running at the same time.  
+After about 8 seconds, the whole process will finish and the output.txt file will  
+be written.
+By the way, if your file was called anything other than jugfile.py, you would  
+then have to specify it explicitly on the command line: 
+jug execute MYFILE.py 
+This is the only disadvantage of not using the name jugfile.py by the way.
+Reusing partial results
+For example, let's say you want to add a new feature (or even a set of features).  
+As we saw in Chapter 10, Computer Vision–Pattern Recognition Finding Related Posts, 
+this can easily be done by changing the computation code feature. However, this 
+would imply recomputing all the features again, which is wasteful, particularly if 
+you want to test new features and techniques quickly:
+@TaskGenerator
+def new_features(im):
+    import mahotas as mh
+    im = mh.imread(fname, as_grey=1)
+    es = mh.sobel(im, just_filter=1)
+    return np.array([np.dot(es.ravel(), es.ravel())])
+hfeatures = as_array([hfeature(f) for f in filenames])
+efeatures = as_array([new_feature(f) for f in filenames])
+features = Task(np.hstack, [hfeatures, efeatures])
+ # learning code...
+Now when you run jug execute again, the new features will be computed, but the 
+old features will be loaded from the cache. The logistic regression code will also be 
+run again as those results also depend on the features and those are different now.
+This is when jug can be very powerful; it ensures that you always get the results  
+you want without wasteful overcomputation.
+
+Big(ger) Data
+[ 246 ]
+Looking under the hood
+How does jug work? At the basic level, it is very simple; a task is a function plus  
+its argument. Its arguments may be either values or other tasks. If a task takes other 
+tasks, there is dependency between the two tasks (and the second one cannot be run 
+until the results of the first task are available).
+Based on this, jug recursively computes a hash for each task. This hash value encodes 
+the whole computation to get there. When you run jug execute, there is a little loop 
+as shown in the following code snippet:
+for t in alltasks:
+    if t.has_not_run() and not backend_has_value(t.hash()):
+        value = t.execute()
+        save_to_backend(value, key=t.hash())
+The real loop is much more complex because of locking issues, but the general idea  
+is the one that appears in the preceding code snippet.
+The default backend writes the file to the disk (in this funny directory named 
+jugfile.jugdata/) but another backend is available which uses a Redis database. 
+With proper locking, which jug takes care of, this also allows for many processors  
+to execute tasks; they will independently look at all the tasks and run the ones which 
+have not run yet and then write them back to the shared backend. This works on 
+either the same machine (using multicore processors) or in multiple machines as long 
+as they all have access to the same backend (for example, using a network disk or the 
+Redis databases). In the next half of this chapter, we will discuss computer clusters, 
+but for now, let us focus on multiple cores.
+You can also understand why it is able to memoize intermediate results. If the backend 
+already has the result of a task, it is not run anymore. On the other hand, if you change 
+the task, even in minute ways (by altering one of the parameters), its hash will change. 
+Therefore, it will be recomputed. Furthermore, all tasks that depend on it will also 
+have their hashes changed and they will be recomputed as well.
+Using jug for data analysis
+Jug is a generic framework, but it is ideally suited for medium-scale data analysis. 
+As you develop your analysis pipeline, it is good to have intermediate results be 
+saved. If you already computed the preprocessing step before and are only changing 
+the features you compute, you do not want to recompute the preprocessing. If you 
+already computed the features but want to try combining a few new ones into the 
+mix, you also do not want to recompute all your other features.
+
+Chapter 12
+[ 247 ]
+Jug is also specially optimized to work with numpy arrays. So, whenever your tasks 
+return or receive numpy arrays, you are taking advantage of this optimization. Jug is 
+another piece of this ecosystem where everything works together.
+We will now look back at Chapter 10, Computer Vision–Pattern Recognition Finding 
+Related Posts. We learned how to compute features on images. Remember that we 
+were loading image files, computing features, combining these, normalizing them, 
+and finally learning how to create a classifier. We are going to redo that exercise but 
+this time with the use of jug. The advantage of this version is that it is now possible 
+to add a new feature without having to recompute all of the previous versions.
+We start with a few imports as follows:
+from jug import TaskGenerator
+Now we define the first task generator, the feature computation:
+@TaskGenerator
+def hfeatures(fname):
+    import mahotas as mh
+    import numpy as np
+    im = mh.imread(fname, as_grey=1)
+    im = mh.stretch(im)
+    h = mh.features.haralick(im)
+    return np.hstack([h.ptp(0), h.mean(0)])
+Note how we only imported numpy and mahotas inside the function. This is a small 
+optimization; this way, only if the task is run are the modules loaded. Now we set  
+up the image filenames as follows:
+filenames = glob('dataset/*.jpg')
+We can use TaskGenerator on any function, even on the ones that we did not write, 
+such as numpy.array:
+import numpy as np
+as_array = TaskGenerator(np.array)
+# compute all features:
+features = as_array([hfeature(f) for f in filenames])
+# get labels as an array as well
+labels = map(label_for, f)
+res = perform_cross_validation(features, labels)
+@TaskGenerator
+
+Big(ger) Data
+[ 248 ]
+def write_result(ofname, value):
+    with open(ofname, 'w') as out:
+        print >>out, "Result is:", value
+write_result('output.txt', res)
+One small inconvenience of using jug is that we must always write functions to 
+output the results to files as shown in the preceding examples. This is a small  
+price to pay for the extra convenience of using jug.
+Not all features of jug could be mentioned in this chapter, but here is a 
+summary of the most potentially interesting ones that we didn't cover in 
+the main text:
+•	
+jug invalidate: This feature declares that all results from 
+a given function should be considered invalid and in need 
+of recomputation. This will also recompute any downstream 
+computation that depended (even indirectly) on the invalidated 
+results.
+•	
+jug status --cache: If jug status takes too long, you can 
+use the --cache flag to cache the status and speed it up. Note 
+that this will not detect any changes to jugfile.py, but you 
+can always use --cache --clear to remove the cache and 
+start again.
+•	
+jug cleanup: This feature removes any extra files in the 
+memoization cache. This is a garbage collection operation.
+There are other more advanced features, which allow you to look at 
+values that have been computed inside jugfile.py. Read up on the 
+use of "barriers" in the jug documentation (online at http://jug.
+rtfd.org).
+Using Amazon Web Services (AWS)
+When you have a lot of data and a lot of computation, you might start to crave for 
+more computing power. Amazon (aws.amazon.com/) allows you to rent computing 
+power by the hour. Thus, you can access a large amount of computing power 
+without having to precommit by purchasing a large number of machines (including 
+the costs of managing the infrastructure). There are other competitors in this market, 
+but Amazon is the largest player, so we briefly cover it here.
+Amazon Web Services (AWS) is a large set of services. We will focus only on the 
+Elastic Compute Cluster (EC2) service. This service offers you virtual machines  
+and disk space, which can be allocated and deallocated quickly.
+
+Chapter 12
+[ 249 ]
+There are three modes of use: a reserved mode, whereby you prepay to have  
+cheaper per-hour access; a fixed per-hour rate; and a variable rate which depends  
+on the overall compute market (when there is less demand, the costs are lower;  
+when there is more demand, the prices go up).
+For testing, you can use a single machine in the free tier. This allows you to play 
+around with the system, get used to the interface, and so on. However, this is a  
+very slow CPU machine. Thus, doing heavy computation using it is not advised.
+On top of this general system, there are several types of machines available with 
+varying costs; from a single core to a multicore system with a lot of RAM, or even 
+graphical processing units (GPUs). We will later see that you can also get several  
+of the cheaper machines and build yourself a virtual cluster. You can also choose to 
+get a Linux or Windows server, with Linux being slightly cheaper. In this chapter, 
+we will work our examples on Linux but most of this information would be valid  
+for Windows machines as well.
+The resources can be managed through a web interface. However, it is also possible 
+to do so programmatically and by setting up scripts which allocate virtual machines, 
+setting up disks, and all the operations that are possible through the web interface. 
+In fact, while the web interface changes very frequently (and some of the screenshots 
+that we show in the book may be out-of-date by the time it goes to the press), the 
+programmatic interface is more stable and the general architecture has remained 
+stable since the service was introduced.
+Access to AWS services is performed through a traditional username/password 
+system, although Amazon calls the username an access key and the password a secret 
+key. They probably do so to keep it separate from the username/password you use 
+to access the web interface. In fact, you can create as many access/secret key pairs 
+as you wish and give them different permissions. This is helpful for a larger team 
+where a senior user with access to the full web panel can create other keys  
+for developers with less privileges.
+Amazon regions
+Amazon.com has several regions. These correspond to physical regions 
+of the world: West Coast U.S., East Coast US, several Asian locations, 
+a South American one, and a European one. If you will be transferring 
+data, it is best to keep it close to where you will be transferring to and 
+from. Additionally, if you are handling user information, there may be 
+regulatory issues if you transfer it to another jurisdiction. In that case, do 
+check with an informed counsel on what the implications of transferring 
+data about European customers to the US or vice versa are.
+
+Big(ger) Data
+[ 250 ]
+Amazon Web Services is a very large topic, and there are various books exclusively 
+available which cover AWS entirely. The purpose of this chapter is to give you 
+an overall impression of what is available and what is possible with AWS. In the 
+practical spirit of this book, we do this by working through examples, but we will 
+not exhaust all possibilities.
+Creating your first machines
+The first step is to go to http://aws.amazon.com/ and create an account. These 
+steps are similar to any other online service. If you want to have more than a single 
+low-powered machine, you will need a credit card. In this example, we will use a 
+few machines, so it may cost you a few dollars if you want to run through it. If you 
+are not ready to take out a credit card just yet, you can certainly read the chapter to 
+learn what AWS provides without going through the examples. Then you can make 
+a more informed decision on whether to sign up.
+Once you sign up for AWS and log in, you will be taken to the console. Here you  
+will see the many services that AWS provides:
+
+Chapter 12
+[ 251 ]
+We pick and click on EC2 (the second element on the leftmost column—this  
+panel is shown as it was when this book was written; Amazon regularly makes 
+minor changes, so you may see something slightly different). We now see the  
+EC2 management console as shown in the following screenshot:
+In the top-right corner, you can pick your region (see the Amazon regions information 
+box). Note that you will only see information about the region that you have selected 
+at the moment. Thus, if you mistakenly select the wrong region (or have machines 
+running in multiple regions), they may not appear (from casual conversations 
+with other programmers, this seems to be a common pitfall of using the EC2 web 
+management console).
+
+Big(ger) Data
+[ 252 ]
+In EC2 parlance, a running server is called an instance. So now, we want to select 
+Launch Instance. Now, follow the classic wizard. Select the Amazon Linux option 
+(if you are familiar with one of the other offered Linux distributions, such as Red 
+Hat, SuSe, or Ubuntu, you can also select one of those, but the configurations will be 
+slightly different). We will start with one instance of the T1.micro type. This is the 
+smallest possible machine, and it is free. Accept all of the defaults until you come to 
+the screen mentioning a key pair:
+We will pick the name awskeys for the key pair. Then, click on the Create & 
+Download your Key Pair button to download the awskeys.pem file. Save that  
+file somewhere safe! This is the Secure Shell (SSH) key that will enable you to  
+log in to your cloud machine. Accept the remaining defaults and your instance  
+will launch.
+You will now need to wait for about a minute for your instance to come up. 
+Eventually, the instance will be shown in green with the status "running."  
+Right-clicking on it and selecting the Connect option will bring up instructions  
+on how to connect. The following will be a standard SSH command of the form:
+ssh -i awskeys.pem ec2-user@ec2-54-244-194-143.us-west-2.compute.
+amazonaws.com
+
+Chapter 12
+[ 253 ]
+Therefore, we will be calling the ssh command and passing it the key files that we 
+downloaded earlier as the identity (using the -i option). We are logging in as user 
+ec2-user at the machine with the address ec2-54-244-194-143.us-west-2.
+conompute.amazonaws.com. This address will, of course, be different in your case.  
+If you choose another distribution for your instance, the username may also change. 
+In any case, the web panel will give you the correct information.
+Finally, if you are running an Unix-style operating system (including Mac OS), you 
+may have to tweak its permissions by calling the following code:
+chmod 600 awskeys.pem
+This sets the read/write permission for the current user only. SSH will otherwise 
+give you an ugly warning.
+Now, you should be able to log in to your machine. If everything is OK, you should 
+see the banner as shown in the following screenshot:
+This is a regular Linux box where you have the sudo permission; you can run any 
+command as the super user by prefixing it with sudo. You can run the update 
+command it recommends to get your machine up to speed.
+Installing Python packages on Amazon Linux
+If you preferred another distribution, you can use your knowledge of that 
+distribution to install Python, NumPy, and others. Here, we will do it on the 
+standard Amazon distribution. We start by installing several basic Python 
+packages as follows:
+sudo yum -y install python-devel python-dev python-pip numpy scipy 
+python-matplotlib
+For compiling mahotas, we will also need a C++ compiler:
+sudo yum -y install gcc-c++
+
+Big(ger) Data
+[ 254 ]
+In this system, pip is installed as python-pip. For convenience, we will use pip  
+to upgrade itself. We will then use pip to install the necessary packages:
+sudo pip-python install -U pip
+sudo pip install scikit-learn jug mahotas
+At this point, you can install any other package you like using pip.
+Running jug on our cloud machine
+We can now download the data and code from Chapter 10, Computer Vision–Pattern 
+Recognition Finding Related Posts, as follows:
+wget FIXME-LET'S-BUILD-A-TAR-GZ-PACKAGE
+tar xzf chapter10.tar.gz
+cd chapter10
+Finally, we can do the following:
+jug execute
+This would work just fine, but we would have to wait a long time for the results. 
+Our free tier machine (of type t1.micro) is not very fast and it only has a single 
+processor. So we will upgrade our machine.
+We go back to the EC2 console and right-click on the running instance to get the 
+pop-up menu. We need to first stop the instance. Stopping an instance in a virtual 
+machine is equivalent to powering it off. You can stop your machines at any time.  
+At that point, you stop paying for them (you are still using disk space, which also 
+has a cost that is billed separately).
+Once the machine is stopped, the change instance type option becomes available. 
+Now we can select a more powerful instance, for example, a c1.xlarge instance, 
+which has eight cores. The machine is still off, so you need to start it again (the 
+virtual equivalent to booting up).
+AWS offers several instance types at different price points. Because 
+this information is constantly being revised as more powerful options 
+are introduced and prices are changed (generally getting cheaper), we 
+cannot give you many details in this book; however, you can find the 
+most up-to-date information on Amazon's website.
+We need to wait for the instance to appear once again. Once it has, right-click on 
+Connect as described earlier to get the connection information as it will almost 
+surely have changed. When you change instance types, your instance will get a  
+new address assigned to it.
+
+Chapter 12
+[ 255 ]
+You can assign a fixed IP to an instance using Amazon's Elastic IPs 
+functionality, which you will find on the left-hand side of the EC2 
+console. This is useful if you find yourself creating and modifying 
+instances very often. There is a small cost associated with this feature.
+With eight cores, you can run eight jug processes simultaneously, as illustrated in the 
+following code:
+jug execute &
+jug execute &
+    (repeat to get 8 jobs going)
+Use jug status to check whether these eight jobs are in fact running. After your 
+jobs are finished (which should now happen pretty fast), you can stop the machine 
+and downgrade it again to a t1.micro instance to save money; the micro instance is 
+free, while the extra large one costs 0.58 dollars per hour (as of April 2013—check the 
+AWS website for up-to-date information).
+Automating the generation of clusters with 
+starcluster
+As we just learned, we can spawn machines using the web interface, but it quickly 
+becomes tedious and error prone. Fortunately, Amazon has an API. This means 
+that we can write scripts which perform all the operations we discussed earlier 
+automatically. Even better, others have already developed tools which can be used for 
+mechanizing and automating many of the processes you want to perform with AWS.
+A group at MIT developed exactly such a tool called starcluster. It happens to be a 
+Python package, so you can install it with Python tools:
+sudo pip install starcluster
+You can run this from an Amazon machine or from your local machine. Either  
+option will work.
+We will need to specify what our cluster will look like. We do so by editing 
+a configuration file. We generate a template configuration file by running the 
+following code:
+starcluster help
+Then, pick the option for generating the configuration file in ~/.starcluster/
+config. Once this is done, we will manually edit it.
+
+Big(ger) Data
+[ 256 ]
+Keys, keys, and more keys
+There are three completely different types of keys that are important 
+when dealing with AWS:
+•	
+A standard username/password combination, which you use to 
+log in to the website
+•	
+The SSH key system, which is a public/private key system 
+implemented with files; with your public key file, you can log in 
+to remote machines
+•	
+The AWS access key/secret key system, which is just a form of 
+username/password, which allows you to have multiple users on 
+the same account (including adding different permissions to each 
+one, but we will not cover those advanced features in this book)
+To look up our access/secret keys, we go back to the AWS console 
+and click on our name in the top-right corner; then select Security 
+Credentials. Now at the bottom of the screen, there should be our access 
+key that may look something like AAKIIT7HHF6IUSN3OCAA, which we 
+will use as an example in this chapter.
+Now edit the configuration file. This is a standard .ini file: a text file where sections 
+start by having their names in brackets and options are specified in the name=value 
+format. The first section is the aws info section and you should copy and paste your 
+keys there:
+[aws info]
+AWS_ACCESS_KEY_ID =  AAKIIT7HHF6IUSN3OCAA
+AWS_SECRET_ACCESS_KEY = <your secret key>
+Now, we come to the fun part that is defining a cluster. Starcluster allows you 
+to define as many different clusters as you wish. The starting file has one called 
+smallcluster. It is defined in the cluster smallcluster section. We will edit  
+it to read as follows:
+[cluster mycluster]
+KEYNAME = mykey
+CLUSTER_SIZE = 16
+This changes the number of nodes to 16 instead of the default of two. We can 
+additionally specify which type of instance each node will be and what the initial 
+image is (remember, an image is the initial disk, which defines what operating 
+system you will be running and what software is installed). Starcluster has a few 
+predefined images, but you can also build your own.
+
+Chapter 12
+[ 257 ]
+We need to create a new ssh key with the following:
+starcluster createkey mykey -o .ssh/mykey.rsa
+Now that we have configured a 16 node cluster and set up the keys, let's try it out.
+starcluster start mycluster
+This may take a few minutes as it allocates 17 new machines. Why 17 when our 
+cluster is only 16 nodes? We always have a master node. All of these nodes have  
+the same filesystem, so anything we create on the master will also be seen by the 
+slaves. This also means that we can use jug on these clusters.
+These clusters can be used as you wish, but they come pre-equipped with a job 
+queue engine, which makes them ideal for batch processing. The process of using 
+them is simple:
+1.	 You log in to the master node.
+2.	 You prepare your scripts on the master (or better yet, have them prepared 
+before hand).
+3.	 You submit jobs to the queue. A job can be any Unix command. The 
+scheduler will find free nodes and run your job.
+4.	 You wait for the jobs to finish.
+5.	 You read the results on the master node. You can also now kill all the slave 
+nodes to save money. In any case, do not forget that your system is running 
+over the long term. Otherwise, this will cost you (in the dollars and cents 
+meaning of the word).
+We can log in to the master node with a single command:
+starcluster sshmaster mycluster
+We could also have looked up the address of the machine that was generated and 
+used an ssh command as we did earlier, but when using the preceding command, 
+it does not matter what the address was, as starcluster takes care of it behind the 
+scenes for us.
+As we said earlier, starcluster provides a batch queuing system for its clusters; you 
+write a script to perform your actions, put it on the queue, and it will run in any 
+available node.
+At this point, you will need to repeat the actions to install the needed packages  
+on the cluster. If this was a real project, we would set up a script to perform all  
+the initialization for us, but since it is a tutorial, you should just run the installation 
+steps again.
+
+Big(ger) Data
+[ 258 ]
+We can use the same jugfile.py system as before, except that now, instead of 
+running it directly on the master, we schedule it on the cluster. First, write a very 
+simple wrapper script:
+#!/usr/bin/env bash
+jug execute jugfile.py
+Call it using run-jugfile.sh and use chmod +x run-jugfile.sh to give it an 
+executable permission:
+For c in 'seq 16'; do qsub run-jugfile.sh; done
+This will create 16 jobs, each of which will run the run-jugfile.sh script, which 
+will simply call jug. You can still use the master as you wish. In particular, you can at 
+any moment run jug status and see the status of the computation. In fact, jug was 
+developed in exactly such an environment, so it works very well in it.
+Eventually, the computation will be finished and we can kill off all the nodes. Be sure 
+to save the desired results somewhere and run the following:
+starcluster terminate mycluster
+Note that terminating will really destroy the filesystem and all your results. Of 
+course, it is possible to change this default. You can have the cluster write to a 
+filesystem which is not allocated and destroyed by starcluster but is available to you 
+on a regular instance; in fact the flexibility of these tools is immense. However, these 
+advanced manipulations could not all fit in this chapter.
+Starcluster has excellent documentation online at http://star.mit.edu/cluster/, 
+which you should read for more information about all the possibilities of this tool. 
+We have seen only a small fraction of the functionality and used only the default 
+settings here.
+
+Chapter 12
+[ 259 ]
+Summary
+We saw how to use jug, a little Python framework, to manage computations in a 
+way that takes advantage of multiple cores or multiple machines. Although this 
+framework is generic, it was built specifically to address the data analysis needs of 
+its author (who is also an author of this book). Therefore, it has several aspects that 
+make it fit in with the rest of the Python machine learning environment.
+We also learned about AWS, the Amazon cloud. Using cloud computing is often  
+a more effective use of resources than building an in-house computing capacity.  
+This is particularly true if your needs are not constant, but changing. Starcluster  
+even allows for clusters that automatically grow as you launch more jobs and shrink 
+as they terminate.
+This is the end of the book. We have come a long way. We learned how to perform 
+classification when we have labeled data and clustering when we do not. We learned 
+about dimensionality reduction and topic modeling to make sense of large datasets. 
+Towards the end, we looked at some specific applications, such as music genre 
+classification and computer vision. For implementations, we relied on Python. This 
+language has an increasingly expanding ecosystem of numeric computing packages 
+built on top of NumPy. Whenever possible, we relied on scikit-learn but also used 
+other packages when necessary. Due to the fact that they all use the same basic data 
+structure (the NumPy multidimensional array), it is possible to mix functionality 
+from different packages seamlessly. All of the packages used in this book are open 
+source and available for use in any project.
+Naturally, we did not cover every machine learning topic. In the Appendix, Where 
+to Learn More About Machine Learning, we provide pointers to a selection of other 
+resources that will help interested readers learn more about machine learning.
+

@@ -1,0 +1,2379 @@
+ 
+ 
+ 
+第6 章  数据库编程 
+你真的为你儿子起名叫Robert')； 
+DROP TABLE Students;--吗? 
+—Randall Munroe，XKCD，2007 年10 月 
+ 
+本章内容： 
+• 简介； 
+• Python 的DB-API； 
+• 对象关系映射（ORM）； 
+• 非关系数据库； 
+• 相关文献。 
+6 
+
+第6 章  数据库编程 199 
+ 
+本章会讨论如何使用Python 与数据库进行通信。文件或简单的持久化存储可以满足一些
+小应用的需求，而大型服务器或高数据容量的应用则需要更加成熟的数据库系统。本章会对
+关系数据库、非关系数据库以及对象关系映射（ORM）进行介绍。 
+6.1  简介 
+本节会对数据库的需求进行讨论，提出结构化查询语言（SQL），并介绍Python 的数据
+库应用编程接口（API）。 
+6.1.1  持久化存储 
+在任何应用中，都需要持久化存储。一般有3 种基础的存储机制：文件、数据库系统以及
+一些混合类型。这种混合类型包括现有系统上的API、ORM、文件管理器、电子表格、配置文
+件等。 
+Core Python Language Fundamentals 或Core Python Programming 的“Files”一章讨论了
+两种持久化存储，一种是使用普通文件或Python 的特定文件进行访问，另一种是使用数据库
+管理器（DBM）访问。其中，DBM 是一种比较古老的UNIX 持久化存储机制，它基于文件，
+包括：*dbm、dbhash/bsddb 文件、shelve（pickle 和DBM 的组合），以及使用类似字典的对
+象接口。 
+当文件或创建的数据存储系统不适用于大项目时，需要转而使用数据库，这种情况正是本
+章所关注的内容。在这种情况下，你需要做出很多决定。因此，本章将介绍数据库基础，并展
+示尽可能多的选择（以及如何让其在Python 中运转起来），以便你能够做出正确的决定。我们
+首先会从SQL 和关系数据库开始，因为它们目前依旧是持久化存储中最流行的解决方案。 
+6.1.2  数据库基本操作和SQL 
+在深入了解数据库以及如何在Python 中使用它们之前，我们先会给出一个快速的介绍（如
+果你已经有一些经验，可以将其作为复习），包括一些基础的数据库概念以及SQL 语句等。 
+底层存储 
+数据库通常使用文件系统作为基本的持久化存储，它可以是普通的操作系统文件、专用
+的操作系统文件，甚至是原始的磁盘分区。 
+用户接口 
+大多数数据库系统提供了命令行工具，可以用其执行SQL 语句或查询。此外还有一些
+GUI 工具，使用命令行客户端或数据库客户端库，向用户提供更加便捷的界面。 
+
+200 第1 部分  通用应用主题 
+ 
+数据库 
+一个关系数据库管理系统（RDBMS）通常可以管理多个数据库，比如销售、市场、用
+户支持等，都可以在同一个服务端（如果RDBMS 基于服务器，可以这样。不过一些简单
+的系统通常不是基于服务器的）。在本章将要看到的例子中，MySQL 是一种基于服务的
+RDBMS，因为它有一个服务器进程始终运行以等待命令行输入；而SQLite 和Gadfly 则不
+会运行服务器。 
+组件 
+数据库存储可以抽象为一张表。每行数据都有一些字段对应于数据库的列。每一列的表
+定义的集合以及每个表的数据类型放到一起定义了数据库的模式（schema）。 
+数据库可以创建（create）和删除（drop），表也一样。往数据库里添加新行叫做插入（insert），
+修改表中已存在的行叫做更新（update），而移除表中已存在的行叫做删除（delete）。这些动
+作通常称为数据库命令或操作。使用可选的条件请求获取数据库中的行称为查询（query）。 
+当查询一个数据库时，可以一次性取回所有结果（行），也可以逐条遍历每个结果行。一
+些数据库使用游标的概念来提交SQL 命令、查询以及获取结果，不管是一次性获取还是逐行
+获取都可以使用该概念。 
+SQL 
+数据库命令和查询操作是通过SQL 语句提交给数据库的。虽然并非所有数据库都使用
+SQL 语句，但是大多数关系数据库使用。下面是一些SQL 命令示例。请注意，大部分数据
+库都是不区分大小写的，尤其是针对数据库命令而言。一般来说，对数据库关键字使用大
+写字母是最为广泛接受的风格。大多数命令行程序需要一条结尾的分号（;）来结束这条SQL
+语句。 
+创建数据库 
+ 
+CREATE DATABASE test; 
+GRANT ALL ON test.* to user(s); 
+ 
+第一行创建了一个名为“test”的数据库，假设你是数据库的管理员，第二行语句可以为
+指定用户（或所有用户）提升权限，以便他们可以执行下述数据库操作。 
+使用数据库 
+ 
+USE test; 
+ 
+如果你已经登录一个数据库系统，但还没有选择你希望使用的数据库，这条简单的语句
+可以让你指定一个数据库，用来执行数据库操作。 
+
+第6 章  数据库编程 201 
+ 
+删除数据库 
+ 
+DROP DATABASE test; 
+ 
+这条简单的语句可以从数据库中移除所有表和数据，并将其从系统中删除。 
+创建表 
+ 
+CREATE TABLE users (login VARCHAR(8), userid INT, projid INT); 
+ 
+这条语句创建一个新表，其中包含字符串列login，以及两个整型列：userid 和projid。 
+删除表 
+ 
+DROP TABLE users; 
+ 
+这条简单的语句可以删除数据库中的一个表，并清空其中的所有数据。 
+插入行 
+ 
+INSERT INTO users VALUES('leanna', 2111, 1); 
+ 
+可以使用INSERT 语句向数据库中插入一个新行。需要指定表名以及其中每列的值。对
+于本例而言，字符串“leanna”对应于login 参数，而2111 和1 分别对应于userid 和projid。 
+更新行 
+ 
+UPDATE users SET projid=4 WHERE projid=2; 
+UPDATE users SET projid=1 WHERE userid=311; 
+ 
+为了修改表中已经存在的行，需要使用UPDATE 语句。使用SET 来确定要修改的列，
+并提供条件来确定要修改的行。在第一个例子中，所有“project ID”（即projid）为2 的用户
+需要改为4。而在第二个例子中，将指定用户（这里是UID 为311 的用户）移到编号为#1 的
+项目组中。 
+删除行 
+ 
+DELETE FROM users WHERE projid=%d; 
+DELETE FROM users; 
+ 
+为了删除表中的行，需要使用DELETE FROM 命令，指定准备删除的行的表名以及可选
+的条件。如果没有这个条件，就会像第二个例子一样，把所有行都删除了。 
+既然你对数据库的基本概念已经有了一个大致的了解，这就会使本章剩余部分及其示例
+的学习变得更加简单。如果你还需要额外的帮助，有很多数据库教程书籍可供参考。 
+6.1.3  数据库和Python 
+下面我们将学习Python 的数据库API，并了解如何使用Python 访问关系数据库。访问
+数据库包括直接通过数据库接口访问和使用ORM 访问两种方式。其中使用ORM 访问的方
+式不需要显式给出SQL 命令，但也能完成相同的任务。 
+
+202 第1 部分  通用应用主题 
+ 
+诸如数据库原理、并发性、模式、原子性、完整性、恢复、比较复杂的左连接、触发器、
+查询优化、事务性、存储过程等主题都不在本书要讲解的范围之内，因此本章中不会对其进
+行讨论，而是直接在Python 应用中使用。本章将介绍如何在Python 框架下对RDBMS 进行
+存储和获取数据的操作。之后你可以决定使用哪种方式更适合于你当前的项目或应用，而示
+例代码的学习可以让你更加快速地起步。如果你需要将Python 应用与某种数据库系统结合起
+来，我们的目标就是能够让你尽快掌握所有相关的事情。 
+我们还会打破只使用“功能齐备”的Python 标准库的模式（尽管我们的最初目标是只使
+用标准库）。可以明确的是，在Python 的领域中，与数据库协同工作已经变成日常应用开发
+中的一个核心组件。 
+作为一名软件工程师，到目前为止的职业生涯中，你可能还没学习数据库相关的一些
+知识，比如：如何使用数据库（命令行和/或GUI），如何使用SQL 语句获取数据，如何
+添加或更新数据库中的信息等。如果Python 是你的编程工具，一旦你向Python 应用中添
+加了数据库访问，就会使很多麻烦的工作由Python 为你代劳了。首先我们会描述什么是
+Python 的数据库API，或者说是DB-API，然后会给出一些符合这一标准的数据库接口的
+例子。 
+我们将展示几个使用流行的开源RDBMS 的例子。不过，我们不会对开源产品和商业产
+品之间的对比进行讨论。如果要适配其他RDBMS，使用方法也会非常直接。此外，有一个
+数据库需要特别提及，这就是Aaron Watter 的Gadfly，因为这是一个完全使用Python 编写的
+简单的RDBMS。 
+在Python 中数据库是通过适配器的方式进行访问的。适配器是一个Python 模块，使用
+它可以与关系数据库的客户端库（通常是使用C 语言编写的）接口相连。一般情况下会推荐
+所有的Python 适配器应当符合Python 数据库特殊兴趣小组（DB-SIG）的API 标准。适配器
+将会是本章中首先要讨论的主题。 
+图6-1 所示为编写Python 数据库应用的结构，包括使用和没有使用ORM 的情况。从图
+6-1 中可以看出，DB-API 是连接到数据库客户端的C 语言库的接口。 
+ 
+图6-1  应用与数据库的多层通信。第一个框一般是C/C++程序，而在Python 中应用程序 
+使用DB-API 兼容的适配器。ORM 可以通过处理数据库具体细节来简化应用 
+
+第6 章  数据库编程 203 
+ 
+6.2  Python 的DB-API 
+从哪里可以找到数据库相关的接口呢？很简单，只需要前往Python 官网的数据库主题部
+分即可。在那里，你可以找到全面的当前版本DB-API（2.0 版本）的链接，包括数据库模块、
+文档、特殊兴趣小组等。从一开始起，DB-API 就被移动至PEP 249 中（PEP 248 中的老版
+DB-API 1.0 标准已经废弃）。那么，DB-API 是什么呢？ 
+DB-API 是阐明一系列所需对象和数据库访问机制的标准，它可以为不同的数据库适配
+器和底层数据库系统提供一致性的访问。就像很多基于社区的成果一样，DB-API 也是强需
+求驱动的。 
+在过去的日子里，曾有这样一种场景：有很多种数据库，并且很多人实现了他们自己
+的数据库适配器。就像做无用功一样。这些数据库和适配器是在不同的时间被不同的人实
+现的，在功能上完全没有一致性可言。但是，这意味着使用这些接口的应用代码需要与他
+们选择使用的数据库模块进行定制化处理，接口的任何改变都会导致应用代码的变更。 
+由此，为了解决Python 数据库连接问题的特殊兴趣小组成立了，并且撰写了1.0 版本的
+DB-API。该API 为不同的关系数据库提供了一致性的接口，并且使不同数据库间移植代码变
+得更加简单，通常只需要修改几行代码即可。本章后面的部分你会看到一个相关的示例。 
+6.2.1  模块属性 
+DB-API 标准要求必须提供下文列出的功能和属性。一个兼容DB-API 的模块必须定义表
+6-1 所示的几个全局属性。 
+表6-1  DB-API 模块属性 
+属    性 
+描    述 
+apilevel 
+需要适配器兼容的DB-API 版本 
+threadsafety 
+本模块的线程安全级别 
+paramstyle 
+本模块的SQL 语句参数风格 
+connect()  
+Connect()函数 
+（多种异常） 
+（参见表6-4） 
+ 
+数据属性 
+apilevel 
+该字符串（注意，不是浮点型）指明了模块需要兼容的DB-API 最高版本，比如，1.0、
+2.0 等。该属性的默认值是1.0。 
+
+204 第1 部分  通用应用主题 
+ 
+threadsafety 
+这是一个整型值，可选值如下。 
+• 
+0：不支持线程安全。线程间不能共享模块。 
+• 
+1：最小化线程安全支持：线程间可以共享模块，但是不能共享连接。 
+• 
+2：适度的线程安全支持：线程间可以共享模块和连接，但是不能共享游标。 
+• 
+3：完整的线程安全支持：线程间可以共享模块、连接和游标。 
+如果有资源需要进行共享，那么就需要诸如自旋锁、信号量之类的同步原语来达到原子
+锁定的目的。由于此目的，磁盘文件和全局变量都并不可靠，甚至还会干扰到标准的互斥操
+作。查阅threading 模块，或回顾第4 章，以获取如何使用锁的更多信息。 
+参数风格 
+DB-API 支持以不同的方式指明如何将参数与SQL 语句进行整合，并最终传递给服务器中执
+行。该参数是一个字符串，用于指定构建查询行或命令时使用的字符串替代形式（见表6-2）。 
+表6-2  数据库参数风格paramstyle 
+参 数 风 格 
+描    述 
+示    例 
+numeric 
+数值位置风格 
+WHERE name=:1 
+named 
+命名风格 
+WHERE name=:name 
+pyformat 
+Python 字典printf()格式转换 
+WHERE name=%(name)s 
+qmark 
+问号风格 
+WHERE name=? 
+format 
+ANSIC 的printf()格式转换 
+WHERE name=%s 
+函数属性 
+connect()函数通过Connection 对象访问数据库。兼容模块必须实现connect()函数，该函
+数创建并返回一个Connection 对象。表6-3 所示为connect()的参数。 
+可以使用包含多个参数的字符串（DSN）来传递数据库连接信息，也可以按照位置传递每个
+参数，或者是使用关键字参数的形式传入。下面是PEP 249 中给出的使用connect()函数的例子。 
+ 
+connect(dsn='myhost:MYDB',user='guido',password='234$') 
+表6-3  connect()函数属性 
+参    数 
+描    述 
+user 
+用户名 
+password 
+密码 
+host 
+主机名 
+database 
+数据库名 
+dsn 
+数据源名 
+ 
+
+第6 章  数据库编程 205 
+ 
+使用DSN 还是独立参数主要基于所连接的系统。比如，如果你使用的是像ODBC（Open 
+Database Connectivity）或JDBC（Java Database Connectivity）的API，则需要使用DSN；
+而如果你直接使用数据库，则更倾向于使用独立的登录参数。另一个使用独立参数的原因
+是很多数据库适配器并没有实现对DSN 的支持。下面是一些没有使用DSN 的connect()调
+用。需要注意的是，并不是所有的适配器都会严格按照标准实现，比如MySQLdb 使用了
+db 而不是database。 
+ 
+• 
+MySQLdb.connect(host='dbserv', db='inv', user='smith') 
+• 
+PgSQL.connect(database='sales') 
+• 
+psycopg.connect(database='template1', user='pgsql') 
+• 
+gadfly.dbapi20.connect('csrDB', '/usr/local/database') 
+• 
+sqlite3.connect('marketing/test') 
+ 
+异常 
+异常同样需要包含在兼容的模块中，如表6-4 所示。 
+表6-4  DB-API 异常类 
+异    常 
+描    述 
+Warning  
+警告异常基类 
+Error 
+错误异常基类 
+  InterfaceError 
+数据库接口（非数据库）错误 
+  DatabaseError 
+数据库错误 
+   DataError 
+处理数据时出现问题 
+   OperationlError 
+数据库操作执行期间出现错误 
+   IntegrityError 
+数据库关系完整性错误 
+   InternalError 
+数据库内部错误 
+   ProgrammingError 
+SQL 命令执行失败 
+   NotSupportedError 
+出现不支持的操作 
+ 
+6.2.2  Connection 对象 
+应用与数据库之间进行通信需要建立数据库连接。它是最基本的机制，只有通过数据库
+连接才能把命令传递到服务器，并得到返回的结果。当一个连接（或一个连接池）建立后，
+可以创建一个游标，向数据库发送请求，然后从数据库中接收回应。 
+Connection 对象方法 
+Connection 对象不需要包含任何数据属性，不过应当定义表6-5 所示的几个方法。 
+
+206 第1 部分  通用应用主题 
+ 
+表6-5  Connection 对象方法 
+方  法  名 
+描    述 
+close () 
+关闭数据库连接 
+commit() 
+提交当前事务 
+rollback() 
+取消当前事务 
+cursor() 
+使用该连接创建（并返回）一个游标或类游标的对象 
+errorhandler (cxn, cur, errcls, errval ) 
+作为给定连接的游标的处理程序 
+ 
+当使用close()时，这个连接将不能再使用，否则会进入到异常处理中。 
+如果数据库不支持事务处理，或启用了自动提交功能，commit()方法都将无法使用。如
+果你愿意，可以实现单独的方法用来启动或关闭自动提交功能。因为本方法是DB-API 中的
+一部分，所以对于不支持事务处理的数据库而言，只需要在方法中实现“pass”即可。 
+和commit()相似，rollback()方法也只有在支持事务处理的数据库中才有用。发生异常之
+后，rollback()会将数据库的状态恢复到事务处理开始时。根据PEP 249 所述，“关闭连接而不
+事先提交变更，将会导致执行隐式回滚。” 
+如果RDBMS 不支持游标，那么cursor()仍然会返回一个尽可能模仿真实游标的对象。这
+是最基本的要求。每个适配器开发者都可以为他的接口或数据库专门添加特殊属性。 
+DB-API 建议适配器开发者为连接编写所有的数据库模块异常（见表6-4），但并没
+有做强制要求。如果没有，则认为Connection 对象将会抛出对应模块级别的异常。当你
+完成数据库连接并关闭游标时，需要对所有操作执行commit()，并对你的连接执行
+close()。 
+6.2.3  Cursor 对象 
+当建立连接后，就可以和数据库进行通信了。正如6.1 节所述，游标可以让用户提交数
+据库命令，并获得查询的结果行。Python DB-API 游标对象总能提供游标的功能，即使是那
+些不支持游标的数据库。此时，如果你创建了一个数据库适配器，还必须要实现cursor 对象，
+以扮演类似游标的角色。这样，无论你将数据库系统切换到支持游标的数据库还是不支持游
+标的数据库，都能保持Python 代码的一致性。 
+当游标创建好后，就可以执行查询或命令（或多个查询和命令），并从结果集中取回一行
+或多行结果。表6-6 所示为Cursor 对象的数据属性和方法。 
+游标对象最重要的属性是execute*()和fetch*()方法，所有针对数据库的服务请求都
+是通过它们执行的。arraysize 数据属性在为fetchmany()设置默认大小时非常有用。当然，
+在不需要时关闭游标是个好主意，而如果你的数据库支持存储过程，可能会用到
+callproc()。 
+
+第6 章  数据库编程 207 
+ 
+表6-6  Cursor 对象属性 
+对 象 属 性 
+描    述 
+arraysize 
+使用fetchmany()方法时，一次取出的结果行数，默认为1 
+connection 
+创建此游标的连接（可选） 
+description 
+返回游标活动状态（7 项元组）：(name, type_code, display_size, internal_ size, 
+precision, scale, null_ok)，只有name 和type_code 是必需的 
+lastrowid 
+上次修改行的行ID（可选；如果不支持行ID，则返回None） 
+rowcount 
+上次execute*()方法处理或影响的行数 
+callproc( func [,args]) 
+调用存储过程 
+close() 
+关闭游标 
+execute (op[,args]) 
+执行数据库查询或命令 
+executemany (op，args) 
+类似execute()和map()的结合，为给定的所有参数准备并执行数据库查询
+或命令 
+fetchone() 
+获取查询结果的下一行 
+fetchmany([size=cursor. arraysize]) 
+获取查询结果的下面size 行 
+fetchall() 
+获取查询结果的所有（剩余）行 
+__iter__() 
+为游标创建迭代器对象（可选，参考next()） 
+messages 
+游标执行后从数据库中获得的消息列表（元组集合，可选） 
+next () 
+被迭代器用于获取查询结果的下一行（可选，类似fetchone()，参考
+__iter__()） 
+nextset() 
+移动到下一个结果集合（如果支持） 
+rownumber 
+当前结果集中游标的索引（以行为单位，从0 开始，可选） 
+setinputsizes(sizes) 
+设置允许的最大输入大小（必须有，但是实现是可选的） 
+setoutputsize(size[,col]) 
+设置大列获取的最大缓冲区大小（必须有，但是实现是可选的） 
+ 
+6.2.4  类型对象和构造函数 
+通常，两个不同系统间的接口是最脆弱的。比如在Python 对象和C 类型中进行转换就是
+这样。类似地，在Python 对象和原生数据库对象间也存在这个问题。作为一个使用Python
+的DB-API 的程序员，虽然你传递给数据库的参数是字符串，但是数据库可能需要将其转换
+为多种不同的类型，从而可以对任何特定查询都能给出正确的数据类型。 
+例如，一个Python 字符串是应该转换成VARCHAR、TEXT、BLOB，还是原生BINARY
+对象，抑或是DATE 或TIME 对象呢？为数据库提供期望格式的输入必须非常小心，因此，
+DB-API 的另一个需求是创建构造函数，从而构建可以简单地转换成适当数据库对象的特
+殊对象。表6-7 给出了用于此目标的一些类。SQL 的NULL 值对应于Python 的NULL     
+对象None。 
+
+208 第1 部分  通用应用主题 
+ 
+表6-7  类型对象和构造函数 
+类 型 对 象 
+描    述 
+Date (yr, mo, dy) 
+日期值对象 
+Time (hr, min, sec) 
+时间值对象 
+Timestamp (yr, mo, dy, hr, min, sec) 
+时间戳值对象 
+DateFromTicks (ticks)  
+日期对象，给出从新纪元时间（1970 年1 月1 日 00:00:00 UTC）以来的秒数 
+TimeFromTicks (ticks) 
+时间对象，给出从新纪元时间（1970 年1 月1 日 00:00:00 UTC）以来的秒数 
+TimestampFromTicks (ticks) 
+时间戳对象，给出从新纪元时间（1970 年1 月1 日 00:00:00 UTC）以来的秒数 
+Binary (string)  
+对应二进制（长）字符串对象 
+STRING 
+表示基于字符串列的对象，比如VARCHAR 
+BINARY  
+表示（长）二进制列的对象，比如RAW、BLOB 
+NUMBER  
+表示数值列的对象 
+DATETIME  
+表示日期/时间列的对象 
+ROWID 
+表示“行ID”列的对象 
+ 
+API 版本变更 
+从1.0 版本（1996 年）修订为2.0 版本（1999 年），DB-API 做了几个重要的变更。 
+• 
+从API 中移除了之前必须的dbi 模块。 
+• 
+更新了类型对象。 
+• 
+添加了新属性用于提供更好的数据库绑定。 
+• 
+重新定义了callproc()的语义以及execute()的返回值。 
+• 
+转换为基于类的异常。 
+DB-API 2.0 版本发布后，曾在2002 年添加了一些刚才提到过的可选的扩展。自此之后，
+就再也没有重大变更了。关于DB-API 的持续讨论一直在DB-SIG 的邮件列表中进行。过去
+五年，对DB-API 的下一版本的可能性进行了讨论，该版本暂时命名为DB-API 3.0。它将包
+含如下特性。 
+• 
+当有一个新的结果集时，nextset()可以给出一个更好的结果值。 
+• 
+将float 转为Decimal。 
+• 
+改善参数风格的灵活性以及对其的支持情况。 
+• 
+预编译语句或语句缓存。 
+• 
+完善事务模型。 
+• 
+确定DB-API 可移植性的角色。 
+• 
+添加单元测试。 
+
+第6 章  数据库编程 209 
+ 
+如果你对DB-API 或其未来感兴趣，可以自由加入相关的讨论。下面是一些可用的资源。 
+• 
+http://python.org/topics/database  
+• 
+http://linuxjournal.com/article/2605（已过时，但具有历史意义） 
+• 
+http://wiki.python.org/moin/DbApi3  
+6.2.5  关系数据库 
+现在我们可以准备开始学习了，不过首先会有一个问题摆在我们面前：“Python 有哪些
+数据库系统的接口呢？”或者说是：“Python 支持哪些平台呢？”答案是：“几乎所有的数据
+库系统。”下面是一个大概（但不详尽）的接口列表。 
+商业RDBMS 
+• 
+IBM Informix 
+• 
+Sybase 
+• 
+Oracle 
+• 
+Microsoft SQL Server 
+• 
+IBM DB2 
+• 
+SAP 
+• 
+Embarcadero Interbase 
+• 
+Ingres 
+开源RDBMS 
+• 
+MySQL 
+• 
+PostgreSQL 
+• 
+SQLite 
+• 
+Gadfly 
+数据库API 
+• 
+JDBC 
+• 
+ODBC 
+非关系数据库 
+• 
+MongoDB 
+• 
+Redis 
+• 
+Cassandra 
+• 
+SimpleDB 
+• 
+Tokyo Cabinet 
+• 
+CouchDB 
+• 
+Bigtable（通过Google App Engine 的数据库API） 
+
+210 第1 部分  通用应用主题 
+ 
+要了解更新的（但不一定是最新的）数据库支持列表，可以访问下面的网址： 
+http://wiki.python.org/moin/DatabaseInterfaces 
+6.2.6  数据库和Python：适配器 
+对于每种支持的数据库，Python 都有一个或多个适配器用于连接Python 中的目标数
+据库系统。比如Sybase、SAP、Oracle 和SQLServer 这些数据库就都存在多个可用的适配
+器。我们需要做的事情就是挑选出最合适的适配器。你的挑选标准可能包括：它的性能如
+何，它的文档和/或网站是否有用，是否有一个活跃的社区，驱动的质量和稳定性如何等。    
+需要记住的是，大多数适配器只提供给你连接数据库的基本需求，所以你还需要寻找一些  
+额外的特性。请记住，你需要负责编写更高级别的代码，比如线程管理和数据库连接池管
+理等。 
+如果你不希望有太多的交互操作，比如你希望少写一些SQL 语句，或者尽可能少地参与
+数据库管理的细节，那么你可以考虑ORM，本话题将在本章后面的小节中进行展开。 
+现在，让我们看几个使用适配器模块与关系数据库进行通信的例子。真正的秘密在于建
+立连接。一旦你建立连接，并使用DB-API 的对象、属性和对象方法，你的核心代码就会看
+起来很相似，而无须去管它使用了哪个适配器以及RDBMS。 
+6.2.7  使用数据库适配器的示例 
+首先，让我们看一些代码片段，包括创建数据库、创建表和使用表。这里会给出使用
+MySQL、PostgreSQL 和SQLite 的例子。 
+MySQL 
+本例中我们将使用MySQL，以及Python 中著名的MySQL 适配器：MySQLdb（即
+MySQL-Python）。而当我们的话题转为Python 3 时，会讨论另一个MySQL 适配器：MySQL 
+Connector/Python。在下面的代码中，我们会故意留下错误，从而让你能够自己想到创建   
+处理程序。 
+首先我们以管理员的身份登录数据库，创建数据库并赋予权限，然后再以普通用户的身
+份重新登录数据库客户端，具体代码如下所示。 
+ 
+>>> import MySQLdb 
+>>> cxn = MySQLdb.connect(user='root') 
+>>> cxn.query('DROP DATABASE test') 
+Traceback (most recent call last): 
+  File "<stdin>", line 1, in ? 
+_mysql_exceptions.OperationalError: (1008, "Can't drop, database 
+'test'; database doesn't exist") 
+
+第6 章  数据库编程 211 
+ 
+>>> cxn.query('CREATE DATABASE test') 
+>>> cxn.query("GRANT ALL ON test.* to ''@'localhost'") 
+>>> cxn.commit() 
+>>> cxn.close() 
+ 
+在上面的代码中，并没有使用游标。一些适配器有Connection 对象，这些对象可以使用
+query()方法执行SQL 查询，不过不是所有的适配器都能这样。因此，建议或者不要使用这个
+方法，或者事先检查适配器中该方法是否可用。 
+commit()方法是可选的，因为MySQL 默认开启了自动提交。下面我们要重新作为普通用
+户登录这个新数据库，创建表，然后通过Python 执行一些常用的SQL 查询和命令。这次会
+使用游标以及execute()方法。 
+下面的代码展示了创建表的方法。重复创建表（在没有事先删除表的情况下）会导致一
+个错误发生。 
+ 
+>>> cxn = MySQLdb.connect(db='test') 
+>>> cur = cxn.cursor() 
+>>> cur.execute('CREATE TABLE users(login VARCHAR(8), userid INT)') 
+0L  
+现在，向数据库中添加一些行，并对其进行查询。 
+ 
+>>> cur.execute("INSERT INTO users VALUES('john', 7000)") 
+1L 
+>>> cur.execute("INSERT INTO users VALUES('jane', 7001)") 
+1L 
+>>> cur.execute("INSERT INTO users VALUES('bob', 7200)") 
+1L 
+>>> cur.execute("SELECT * FROM users WHERE login LIKE 'j%'") 
+2L 
+>>> for data in cur.fetchall(): 
+... print '%s\t%s' % data 
+... 
+john     7000 
+jane     7001 
+ 
+最后一个功能是更新表，包括更新和删除行。 
+ 
+>>> cur.execute("UPDATE users SET userid=7100 WHERE userid=7001") 
+1L 
+>>> cur.execute("SELECT * FROM users") 
+3L 
+>>> for data in cur.fetchall(): 
+... print '%s\t%s' % data 
+... 
+
+212 第1 部分  通用应用主题 
+ 
+john    7000 
+jane    7100 
+bob     7200 
+>>> cur.execute('DELETE FROM users WHERE login="bob"') 
+1L 
+>>> cur.execute('DROP TABLE users') 
+0L 
+>>> cur.close() 
+>>> cxn.commit() 
+>>> cxn.close() 
+ 
+MySQL 是目前最流行的开源数据库之一，因此存在可用的Python 适配器并不令人意外。 
+PostgreSQL 
+另一个流行的开源数据库是PostgreSQL。与MySQL 不同，Postgres 至少包含3 种Python
+适配器：psycopg、PyPgSQL 和PyGreSQL。还有一种适配器，叫PoPy，目前已废弃，并且
+在2003 年将其项目与PyGreSQL 进行了合并。目前剩下的这三种适配器都有其自己的特性和
+优缺点，所以根据实践对其进行选择更加明智。 
+当我们介绍各种适配器的使用方法时，需要注意PyPgSQL 自2006 年起就不再开发了，
+而PyGreSQL 则是在2009 年发布的最新版本（4.0）。这两种适配器不再活跃，使得psycopg
+成为PostgreSQL 适配器的唯一引领者，因此本书的示例最终将使用该适配器。psycopg 目前
+已进入到第二个版本，这意味着虽然相关的示例中使用了版本1 的psycopg 模块，但是当下
+载它时，需要使用psycopg2 来代替。 
+庆幸的是，这几种适配器的接口都很相似，所以可以创建一个应用，并对比这三种适配器
+的性能（如果性能对你来说很重要）。下面的代码是每种适配器创建Connection 对象的代码。 
+psycopg 
+ 
+>>> import psycopg 
+>>> cxn = psycopg.connect(user='pgsql') 
+ 
+PyPgSQL 
+ 
+>>> from pyPgSQL import PgSQL 
+>>> cxn = PgSQL.connect(user='pgsql') 
+ 
+PyGreSQL 
+ 
+>>> import pgdb 
+>>> cxn = pgdb.connect(user='pgsql') 
+ 
+下面是一些可以用于这三种适配器的通用代码。 
+ 
+>>> cur = cxn.cursor() 
+>>> cur.execute('SELECT * FROM pg_database') 
+
+第6 章  数据库编程 213 
+ 
+>>> rows = cur.fetchall() 
+>>> for i in rows: 
+... print i 
+>>> cur.close() 
+>>> cxn.commit() 
+>>> cxn.close() 
+ 
+最后，你可以看到每种适配器的输出结果有些许不同。 
+PyPgSQL 
+ 
+sales 
+template1 
+template0 
+ 
+psycopg 
+ 
+('sales', 1, 0, 0, 1, 17140, '140626', '3221366099', '', None, None) 
+('template1', 1, 0, 1, 1, 17140, '462', '462', '', None, '{pgsql=C*T*/ 
+pgsql}') 
+('template0', 1, 0, 1, 0, 17140, '462', '462', '', None, '{pgsql=C*T*/ 
+pgsql}') 
+ 
+PyGreSQL 
+ 
+['sales', 1, 0, False, True, 17140L, '140626', '3221366099', '', None, 
+None] 
+['template1', 1, 0, True, True, 17140L, '462', '462', '', None, 
+'{pgsql=C*T*/pgsql}'] 
+['template0', 1, 0, True, False, 17140L, '462', '462', '', None, 
+'{pgsql=C*T*/pgsql}'] 
+SQLite 
+对于非常简单的应用而言，使用文件作为持久化存储通常就足够了，但是大多数复杂的
+数据驱动的应用则需要全功能的关系数据库。SQLite 的目标则是介于两者之间的中小系统。
+它量级轻、速度快，没有服务器，很少或不需要进行管理。 
+SQLite 正在迅速流行起来，并且它还适用于不同的平台。Python 2.5 中引入了SQLite 数
+据库适配器作为sqlite3 模块，这是Python 首次将数据库适配器纳入到标准库当中。 
+SQLite 被打包在Python 中，并不是因为它比其他数据库和适配器更加流行，而是因为它
+足够简单，像DBM 模块一样使用文件（或内存）作为其后端存储，不需要服务器，也没有
+许可证问题。它是Python 中其他类似的持久化存储解决方案的一个替代品，不过除此之外，
+它还拥有SQL 接口。 
+在标准库中拥有该模块，可以使你在Python 中使用SQLite 开发更加快速，并且使你
+在有需要时，能够更加容易地移植到更加强大的RDBMS（比如，MySQL、PostgreSQL、
+ 
+
+214 第1 部分  通用应用主题 
+ 
+Oracle 或SQL Server）中。如果你并不需要那些强大的数据库，那么sqlite3 已经是一个
+很好的选择了。 
+尽管标准库中已经提供了该数据库适配器，但是你还需要自己下载这个数据库本身。当
+安装数据库后，就可以启动Python（并导入适配器模块）来直接进行访问了： 
+ 
+>>> import sqlite3 
+>>> cxn = sqlite3.connect('sqlite_test/test') 
+>>> cur = cxn.cursor() 
+>>> cur.execute('CREATE TABLE users(login VARCHAR(8), 
+      userid INTEGER)') 
+>>> cur.execute('INSERT INTO users VALUES("john", 100)') 
+>>> cur.execute('INSERT INTO users VALUES("jane", 110)') 
+>>> cur.execute('SELECT * FROM users') 
+>>> for eachUser in cur.fetchall(): 
+...      print eachUser 
+... 
+(u'john', 100) 
+(u'jane', 110) 
+>>> cur.execute('DROP TABLE users') 
+<sqlite3.Cursor object at 0x3d4320> 
+>>> cur.close() 
+>>> cxn.commit() 
+>>> cxn.close() 
+ 
+这个小例子就到此为止。下面我们会看到一个与之前MySQL 例子比较相似的应用，不
+过会执行更多的操作，包括以下几个。 
+• 
+创建数据库（如果必要） 
+• 
+创建表 
+• 
+在表中插入行 
+• 
+更新表中的行 
+• 
+删除表中的行 
+• 
+删除表 
+在这个例子中，我们还将使用另外两个开源数据库。SQLite 目前已经变得非常流行了。
+它体积小、量级轻，并且在大多数数据库操作中都能够拥有较快的执行速度。而另一个要引
+入的数据库是Gadfly，这是一个完全使用Python 编写的兼容SQL 的RDBMS（一些关键数据
+结构也包含C 编写的模块，不过Gadfly 可以不依赖其运行［当然，速度会慢一些］）。 
+在进入代码之前，需要说明一些注意事项。SQLite 和Gadfly 都需要你指定数据库文件存
+储的位置（MySQL 拥有一个默认区域，所以不需要额外设置）。另外，Gadfly 目前还没有良
+好地兼容DB-API 2.0 标准，因此会有一些功能上的缺失，其中在本例中最需要注意的是游标
+属性rowcount。 
+
+第6 章  数据库编程 215 
+ 
+6.2.8  数据库适配器示例应用 
+在下面的例子中，我们将演示如何使用Python 来访问数据库。为了能够尽可能多地演示
+多样性和代码，这里添加了对3 种不同数据库系统的支持：Gadfly、SQLite 以及MySQL。为
+了后续加入更多的东西，首先会给出Python 2.x 下的完整源码，但不会给出逐行解释。 
+应用的运行与之前小节中描述的要点非常相似，所以你应该可以在没有完整解释的情况
+下理解其功能，只需要从底部的main()函数开始即可（为了保持简单，对于拥有服务器的完
+整系统，如MySQL，我们将直接作为root 用户进行登录，当然这种做法在生产环境中不提
+倡）。下面是应用的源码，其文件名为ushuffle_db.py。 
+ 
+#!/usr/bin/env python 
+ 
+import os 
+from random import randrange as rand 
+ 
+COLSIZ = 10 
+FIELDS = ('login', 'userid', 'projid') 
+RDBMSs = {'s': 'sqlite', 'm': 'mysql', 'g': 'gadfly'} 
+DBNAME = 'test' 
+DBUSER = 'root' 
+DB_EXC = None 
+NAMELEN = 16 
+ 
+tformat = lambda s: str(s).title().ljust(COLSIZ) 
+cformat = lambda s: s.upper().ljust(COLSIZ) 
+ 
+def setup(): 
+    return RDBMSs[raw_input(''' 
+Choose a database system: 
+ 
+(M)ySQL 
+(G)adfly 
+(S)QLite 
+ 
+Enter choice: ''').strip().lower()[0]] 
+ 
+def connect(db): 
+    global DB_EXC 
+    dbDir = '%s_%s' % (db, DBNAME) 
+ 
+    if db == 'sqlite': 
+        try: 
+            import sqlite3 
+        except ImportError: 
+
+216 第1 部分  通用应用主题 
+ 
+         try: 
+             from pysqlite2 import dbapi2 as sqlite3 
+         except ImportError: 
+             return None 
+ 
+    DB_EXC = sqlite3 
+    if not os.path.isdir(dbDir): 
+        os.mkdir(dbDir) 
+    cxn = sqlite3.connect(os.path.join(dbDir, DBNAME)) 
+ 
+elif db == 'mysql': 
+    try: 
+        import MySQLdb 
+        import _mysql_exceptions as DB_EXC 
+ 
+    except ImportError: 
+        return None 
+ 
+    try: 
+        cxn = MySQLdb.connect(db=DBNAME) 
+    except DB_EXC.OperationalError: 
+        try: 
+            cxn = MySQLdb.connect(user=DBUSER) 
+            cxn.query('CREATE DATABASE %s' % DBNAME) 
+            cxn.commit() 
+            cxn.close() 
+            cxn = MySQLdb.connect(db=DBNAME) 
+        except DB_EXC.OperationalError: 
+            return None 
+ 
+elif db == 'gadfly': 
+    try: 
+        from gadfly import gadfly 
+        DB_EXC = gadfly 
+    except ImportError: 
+        return None 
+ 
+    try: 
+        cxn = gadfly(DBNAME, dbDir) 
+    except IOError: 
+        cxn = gadfly() 
+        if not os.path.isdir(dbDir): 
+            os.mkdir(dbDir) 
+        cxn.startup(DBNAME, dbDir) 
+ 
+else: 
+    return None 
+
+第6 章  数据库编程 217 
+ 
+    return cxn 
+ 
+def create(cur): 
+    try: 
+        cur.execute(''' 
+            CREATE TABLE users ( 
+               login VARCHAR(%d), 
+               userid INTEGER, 
+               projid INTEGER) 
+         ''' % NAMELEN) 
+    except DB_EXC.OperationalError: 
+        drop(cur) 
+        create(cur) 
+ 
+drop = lambda cur: cur.execute('DROP TABLE users') 
+ 
+NAMES = ( 
+    ('aaron', 8312), ('angela', 7603), ('dave', 7306), 
+    ('davina',7902), ('elliot', 7911), ('ernie', 7410), 
+    ('jess', 7912), ('jim', 7512), ('larry', 7311), 
+    ('leslie', 7808), ('melissa', 8602), ('pat', 7711), 
+    ('serena', 7003), ('stan', 7607), ('faye', 6812), 
+    ('amy', 7209), ('mona', 7404), ('jennifer', 7608), 
+) 
+ 
+def randName(): 
+    pick = set(NAMES) 
+    while pick: 
+        yield pick.pop() 
+ 
+def insert(cur, db): 
+    if db == 'sqlite': 
+        cur.executemany("INSERT INTO users VALUES(?, ?, ?)", 
+        [(who, uid, rand(1,5)) for who, uid in randName()]) 
+    elif db == 'gadfly': 
+        for who, uid in randName(): 
+            cur.execute("INSERT INTO users VALUES(?, ?, ?)", 
+            (who, uid, rand(1,5))) 
+    elif db == 'mysql': 
+        cur.executemany("INSERT INTO users VALUES(%s, %s, %s)", 
+        [(who, uid, rand(1,5)) for who, uid in randName()]) 
+ 
+getRC = lambda cur: cur.rowcount if hasattr(cur, 'rowcount') else -1 
+ 
+def update(cur): 
+    fr = rand(1,5) 
+    to = rand(1,5) 
+    cur.execute( 
+
+218 第1 部分  通用应用主题 
+ 
+        "UPDATE users SET projid=%d WHERE projid=%d" % (to, fr)) 
+    return fr, to, getRC(cur) 
+ 
+def delete(cur): 
+    rm = rand(1,5) 
+    cur.execute('DELETE FROM users WHERE projid=%d' % rm) 
+    return rm, getRC(cur) 
+ 
+def dbDump(cur): 
+    cur.execute('SELECT * FROM users') 
+    print '\n%s' % ''.join(map(cformat, FIELDS)) 
+    for data in cur.fetchall(): 
+        print ''.join(map(tformat, data)) 
+ 
+def main(): 
+    db = setup() 
+    print '*** Connect to %r database' % db 
+    cxn = connect(db) 
+    if not cxn: 
+       print 'ERROR: %r not supported or unreachable, exiting' % db 
+        return 
+    cur = cxn.cursor() 
+ 
+    print '\n*** Create users table (drop old one if appl.)' 
+    create(cur) 
+    print '\n*** Insert names into table' 
+    insert(cur, db) 
+    dbDump(cur) 
+ 
+    print '\n*** Move users to a random group' 
+    fr, to, num = update(cur) 
+    print '\t(%d users moved) from (%d) to (%d)' % (num, fr, to) 
+    dbDump(cur) 
+ 
+    print '\n*** Randomly delete group' 
+    rm, num = delete(cur) 
+    print '\t(group #%d; %d users removed)' % (rm, num) 
+    dbDump(cur) 
+ 
+    print '\n*** Drop users table' 
+    drop(cur) 
+    print '\n*** Close cxns' 
+    cur.close() 
+    cxn.commit() 
+    cxn.close() 
+ 
+if __name__ == '__main__': 
+    main() 
+ 
+
+第6 章  数据库编程 219 
+ 
+请相信，应用是可以运行的。如果你想尝试一下，可以从本书的网站中下载到该段代
+码。不过，在执行这段代码之前，还有一件事情需要注意，我们将不会给出这段代码的逐
+行解释。 
+请不要担心，逐行解释很快就会出现，因为我们使用本例还有另一个用途：展示另一个
+移植到Python 3 的例子，并学习如何构建一个可以在Python 2 和Python 3 中都可以运行的脚
+本（.py 文件），而不需要使用像2to3 或3to2 这样的工具进行转换。移植完成后，我们将其
+称为示例6-1。此外，我们还会在本章后面的示例中使用和复用这个例子的属性，将其移植
+到使用ORM 的例子和非关系数据库的例子中。 
+移植到Python 3 
+在Core Python Language Fundamentals 这本书的“Best Practices”一章中曾提供了一些移
+植建议，不过这里将分享几个具体的提示，并使用ushuffle_db.py 对其进行实现。 
+在Python 2 和Python 3 移植中最大的一个区别是print，在Python 2 中它是一条语句，但
+是在Python 3 中是一个内置函数。作为两者的替代，可以使用distutils.log.warn()函数，至少
+可以在本代码中使用。该函数在Python 2 和Python 3 中是一致的，因此它不需要任何变更。
+为了防止代码变得混乱，本应用中将把该函数重命名为printf()，以向C/C++中等效的
+print/print()致敬。此外，本章结尾处还会有相关的练习。 
+第二个提示是针对Python 2 的内置函数raw_input()的。在Python 3 中它的名字变更
+为input()。比较麻烦的是在Python 2 中也有一个input()函数，但是因为存在安全风险在
+Python 3 中被移除了。换句话说，raw_input()取代了input()函数，并在Python 3 中重命名
+为input()。同样，为了表达对C/C++的敬意，我们在本应用中将使用scanf()来调用这个   
+函数。 
+下一个提示是关于异常处理时语法的改变。该主题在Core Python Language Fundamentals
+和Core Python Programming 中的“Errors and Exceptioons”一章中已经详细介绍。你可以从
+那了解到关于这个变更的更多内容，不过就现在而言，你需要知道的主要改变如下。 
+旧：except Exception, instance 
+新：except Exception as instance 
+不过，只有在你关心异常产生的原因时，才会使用这个实例，从而受到影响。如果你并
+不关心异常产生的原因，或是你根本没有使用它，就不需要关注。即使只写作except Exception
+也没有错误。 
+异常的语法在Python 2 和Python 3 之间并没有什么改变。在本书的早期版本中，我们使
+用了except Exception, e。而在本版中，我们将把所有的“, e”移除，而不是变更为“as e”，
+这样可以使移植更简单。 
+ 
+
+220 第1 部分  通用应用主题 
+ 
+最后要进行的改变是专门针对本例的，而不再是通用的移植建议。在本书写作时，基于
+C 语言编写的主要MySQL-Python 适配器（包名为MySQLdb）还没有移植到Python 3 中。所
+以我们需要另一个MySQL 适配器，它称为MySQL Connector/Python ，其包名为
+mysql.connector。 
+MySQL Connector/Python 使用纯Python 实现了MySQL 客户端协议，因此MySQL 库和
+编译都不再是必需的了，其最大的优点就是可以移植到Python 3 中。为什么这是一个大问题
+呢？因为它能够让用户在Python 3 中访问MySQL 数据库，就是这样。 
+在对ushuffle_db.py 进行了上述所有改变和添加后，可以得到这个应用的通用版本：
+ushuffle_dbU.py，如示例6-1 所示。 
+示例6-1  数据库适配器示例（ushuffle_dbU.py） 
+本脚本使用不同数据库（MySQL、SQLite 和Gadfly）执行一些基础操作。它在Python 2 和Python 3 下都可
+以运行，而不需要进行任何代码的改变，此外其中的组件将会在本章的后续小节中进行复用。 
+ 
+   22   tformat = lambda s：str(s).title( ).l just(COLSIZ) 
+   23   cformat = lambda s：s.opper( ).ljust(COLSIZ) 
+
+第6 章  数据库编程 221 
+ 
+ 
+ 
+
+222 第1 部分  通用应用主题 
+ 
+ 
+ 
+
+第6 章  数据库编程 223 
+ 
+ 
+ 
+逐行解释 
+第1～32 行 
+脚本的最开始部分导入了必需的模块，创建了一些全局常量（用于显示列的大小，以及
+支持的数据库种类等），并实现了tformat()、cformat()和setup()几个函数的功能。 
+在import 语句之后，你会发现一些奇怪的代码（第7～12 行）用于找到正确的函
+数以重命名为scanf()，即我们指定的用户命令行输入的函数。elif 和else 语句则比较容
+易解释：我们会检查内置函数中是否包括raw_input()。如果包括，则表示我们处于Python
+（1 或）2 中，并且可以使用该函数。否则，我们处于Python 3 中，应该使用它的新名字：
+input()。 
+ 
+
+224 第1 部分  通用应用主题 
+ 
+而if 语句就有些复杂了。__builtins__只是应用中的一个模块。如果导入了该模块，
+__builtins__就成为一个字典。这个条件语句是说如果导入它，那么需要检查字典中是否存在
+“raw_input”这个名字，如果不存在，就说明它是一个模块，需要向下进入elif 和else 中了。
+希望这是有意义的。 
+而对于tformat()和cformat()这两个函数，前者用于格式化字符串以显示标题，也就是
+说“tformat”表示“标题样式格式化函数”。从数据库中获取名字是一种廉价的方法，它可
+以全小写（如我们得到的那样）、首字母大写或全大写，这样所有的名字就可以统一了。后
+面的函数表示“全大写格式化函数”。它所做的就是接受每个列名并使用str.upper()方法把
+它转换为头部的全大写形式。 
+这两个格式化函数都会将其输出左对齐，并且限制为10 个字符的宽度，这是因为
+在样本数据中不会有数据超出这个限制，而当你自己使用时，可以修改COLSIZ 来适应
+你的数据。尽管可以将这两个函数写成传统的函数，但是这里使用了更简单的lambda
+语法。 
+有人可能会认为，我们在scanf()上做了这么多的努力，却只是用于在setup()函数中提示
+用户选择RDBMS，以用于本脚本的任何特定执行（或者本章后面部分的衍生版本）。不过，
+这里展示的代码可以在其他地方进行使用。我们并没有声明这是一个在生产环境中使用的脚
+本，不是吗？ 
+如前所述，我们已经拥有了用户输出函数，即使用distutils.log.warn()来替代Python 2 中
+的print 和Python 3 中的print()。在该应用中，将其导入（第3 行）并重命名为printf()。 
+大多数常量都非常简单明了。一个异常名为DB_EXC，它表示数据库异常（DataBase 
+EXCeption）。这个变量最终会根据用户选择运行本应用的数据库系统的不同来指定数据库异
+常模块。换句话说，如果用户选择了MySQL，那么DB_EXC 就会是_mysql_exceptions。如
+果将本应用以更加面向对象的方式进行构建，则会有一个类，在其中作为一个实例属性出现，
+比如self.db_exc_module。 
+第35～99 行 
+connect()函数是数据库一致性访问的核心。在每部分的开始处（这里指每个数据库的if
+语句处），我们都会尝试加载对应的数据库模块。如果没有找到合适的模块，就会返回None，
+表示无法支持该数据库系统。 
+当连接建立后，所有剩下的代码就都是与数据库和适配器不相关的了，这些代码在所有
+连接中都应该能够工作（只有在本脚本的insert()中除外）。在本部分代码的3 个子部分中，
+你会发现最终都会返回一个有效连接cxn。 
+如果选择的是SQLite，我们会尝试加载一个数据库适配器。首先我们会尝试加载标准库
+中的sqlite3 模块（Python 2.5+）。如果加载失败，则会寻找第三方pysqlite 包。pysqlite 适配
+器可以支持2.4.x 或更老的版本。如果两个配器中任何一个加载成功，接下来就需要检查目录
+是否存在，这是因为该数据库是基于文件的（也可以使用:memory:作为文件名，从而在内存
+
+第6 章  数据库编程 225 
+ 
+中创建数据库）。当对SQLite 调用connect()时，会使用已存在的目录，如果没有，则创建一
+个新目录。 
+MySQL 使用默认区域来存放数据库文件，因此不需要由用户指定文件位置。最流行的
+MySQL 适配器是MySQLdb 包，所以首先尝试导入该包。和SQLite 一样，还有一个“B 计
+划”，也就是mysql.connector 包，这也是一个不错的选择，因为它可以兼容Python 2 和Python 
+3。如果两者都没有找到，则说明不支持MySQL，因此返回None 值。 
+本应用中最后一个支持的数据库是Gadfly（在本书写作时，该数据库还没有完全实现对
+DB-API 的兼容，你会在本应用中看到与该问题相关的内容）。它使用了一个和SQLite 相似的
+启动机制：启动时会首先设定数据库文件应当存放的目录。如果存在则好说；否则，需要采
+取一种迂回方式来建立新的数据库（我们也不确定为什么需要这样。相信startup()函数未来
+应该会合并到构造函数gadfly.gadfly()中）。 
+第101～113 行 
+create()函数在数据库中创建了一个新表users。如果发生错误，几乎总是因为这个表已经
+存在了。如果是这种情况，就删除该表并通过递归调用该函数重新创建。这段代码存在一定
+的风险，如果重新创建该表的过程仍然失败，将会陷入到无限递归当中，直到应用耗尽内存。
+在本章结尾处的一个练习中你将对该风险进行修复。 
+删除数据库表的操作是通过drop()函数完成的，该函数只有一行，是一个lambda
+函数。 
+第115～127 行 
+下面一段代码是由用户名和用户ID 组成的常量集NAMES，然后是生成器
+randName()。NAMES 是一个元组，不过在randName()中使用时需要将其转化为集合，
+这是由于我们需要在生成器中修改它的值，每次删除一个名字，直到所有名字耗尽为止。
+因为该行为具有破坏性，且在应用中会经常用到，因此最好的方法是将NAMES 作为标
+准源，将其内容复制到另一个数据结构中，以便在每次使用生成器时销毁的是新的数据
+结构。 
+第129～139 行 
+insert()函数是代码中仅剩的一处依赖于数据库的地方。这是因为每个数据库都在某些方
+面存在细微的差别。比如，SQLite 和MySQL 的适配器都是兼容DB-API 的，所以它们的游
+标对象都存在executemany()函数，但是Gadfly 就只能每次插入一行。 
+另一个差别是SQLite 和Gadfly 都使用的是qmark 参数风格，而MySQL 使用的是format
+参数风格。因此，格式化字符串也存在一些差别。不过，如果你仔细看，会发现它们的参数
+创建实际上非常相似。 
+这段代码的功能是：对于每个用户名-用户ID 对，都会被分配到一个项目组中（给予其
+项目ID，即projid）。项目ID 是从4 个不同的组中随机选出的。 
+
+226 第1 部分  通用应用主题 
+ 
+第141 行 
+该行是一个条件表达式（也可以解读为是Python 的三元操作符），用于返回最后一次操
+作后影响的行数，不过如果游标对象不支持该属性（即不兼容DB-API），则返回−1。 
+条件表达式是从Python 2.5 开始引入的，所以如果你使用的是2.4.x 或更老的版本，则需
+要将其转回到旧式写法。 
+ 
+getRC = lambda cur: (hasattr(cur, 'rowcount') \ 
+    and [cur.rowcount] or [-1])[0] 
+ 
+如果你对这行代码感到一定的困惑，不需要太担心。你可以查阅FAQ 来看看为什么它是
+这样的，以及为什么在Python 2.5 版本中会引入条件表达式。如果你已经弄清楚这些了，就
+可以对Python 对象及其布尔值拥有扎实的认识。 
+第143～153 行 
+update()和delete()函数会随机选择项目组中的成员。如果是更新操作，则会将其从当前
+组移动到另一个随机选择的组中；如果是删除操作，则会将该组的成员全部删除。 
+第155～159 行 
+dbDump()函数会从数据库中拉取所有行，将其按照打印格式进行格式化，然后显示
+给用户。输出显示需要用到cformat()（用于显示列标题）和tformat()（用于格式化每个用
+户行）。 
+首先，在通过fetchall()方法执行的SELECT 语句之后，所有数据都提取出来了。所以当
+迭代每个用户时，将3 列数据（login、userid、projid）通过map()传递给tformat()，使数据转
+化为字符串（如果它们还不是），将其格式化为标题风格，且字符串按照COLSIZ 的列宽度进
+行左对齐（右侧使用空格填充）。 
+第161～195 行 
+这个示例的核心是main()。它会执行上面描述的每个函数，并定义脚本如何执行（假设
+不存在由于找不到数据库适配器或无法获得连接而中途退出的情况[第164～166 行]）。这段
+代码的大部分都非常简单明了，它们会与输出语句相接近。代码的最后一段则是把游标和连
+接包装了起来。 
+6.3  ORM 
+正如前面章节所看到的，现在有很多不同的数据库系统，并且其中的大部分系统都包含
+Python 接口，能够使你更好地利用它们的功能。而这些系统唯一的缺点是需要你了解SQL。
+如果你是一个更愿意操纵Python 对象而不是SQL 查询的程序员，并且仍然希望使用关系数
+据库作为你的数据后端，那么你可能更倾向于使用ORM。 
+
+第6 章  数据库编程 227 
+ 
+6.3.1  考虑对象，而不是SQL 
+这些ORM 系统的作者将纯SQL 语句进行了抽象化处理，将其实现为Python 中的
+对象，这样你只操作这些对象就能完成与生成SQL 语句相同的任务。一些系统也允许
+一定的灵活性，可以让你执行几行SQL 语句，但是大多数情况下，都应该避免普通的
+SQL 语句。 
+数据库表被神奇地转化为Python 类，其中的数据列作为属性，而数据库操作则会作为方
+法。让你的应用支持ORM 与标准数据库适配器有些相似。由于ORM 需要代替你执行很多
+工作，因此一些事情变得更加复杂，或者需要比直接使用适配器更多的代码行。不过，值得
+欣慰的是，你的这一点额外工作可以获得更高的生产率。 
+6.3.2  Python 和ORM 
+目前最知名的Python ORM 是SQLAlchemy（http://sqlalchemy.org）和SQLObject
+（http://sqlobject.org）。我们将分别给出这两种ORM 的例子，由于设计哲学的不同，这两种
+ORM 也会存在些许区别。不过，一旦你学会了其中的一种，迁移到其他ORM 就会变得更加
+容易。 
+其他一些Python ORM 还包括：Storm、PyDO/PyDO2、PDO、Dejavu、Durus、QLime
+和ForgetSQL。基于Web 的大型系统也会包含它们自己的ORM 组件，如WebWare 
+MiddieKit 和Django 的数据库API。需要提醒的是，知名的ORM 并不意味着适合于你的
+应用。尽管这些ORM 并不在我们的讨论范围内，但这不意味着这些ORM 就不适用于你
+的应用。 
+安装 
+由于SQLAlchemy 和SQLObject 都不在标准库当中，因此需要手动下载以及安装它们（通
+常可以使用easy_install 或pip 工具比较方便地安装）。 
+在本书写作时，上面描述的所有包都支持Python 2，只有SQLAlchemy、SQLite 和
+MySQL Connector/Python 适配器还支持Python 3。sqlite3 包在Python 2.5+或Python 3.x 中
+已经作为标准库的一部分了，所以除非你使用的是2.4 或更老的版本，否则不需要做任何
+其他事情。 
+如果你的计算机中只安装了Python 3，那么你需要先获取Distribute（包含了easy_install）。你
+需要一个Web 浏览器（或者curl 命令）来下载安装文件（http://python-distribute.org/distribute 
+_setup.py），然后使用easy_install 获取SQLAlchemy。下面是在一台Windows PC 上的整个过
+程示意。 
+ 
+
+228 第1 部分  通用应用主题 
+ 
+ 
+C:\WINDOWS\Temp>C:\Python32\python distribute_setup.py 
+Extracting in c:\docume~1\wesley\locals~1\temp\tmp8mcddr 
+Now working in c:\docume~1\wesley\locals~1\temp\tmp8mcddr\distribute- 
+0.6.21 
+Installing Distribute 
+warning: no files found matching 'Makefile' under directory 'docs' 
+warning: no files found matching 'indexsidebar.html' under directory 
+'docs' 
+creating build 
+creating build\src 
+        : 
+Installing easy_install-3.2.exe script to C:\python32\Scripts 
+ 
+Installed c:\python32\lib\site-packages\distribute-0.6.21-py3.2.egg 
+Processing dependencies for distribute==0.6.21 
+Finished processing dependencies for distribute==0.6.21 
+After install bootstrap. 
+Creating C:\python32\Lib\site-packages\setuptools-0.6c11-py3.2.egg-info 
+Creating C:\python32\Lib\site-packages\setuptools.pth 
+C:\WINDOWS\Temp> 
+C:\WINDOWS\Temp>C:\Python32\Scripts\easy_install sqlalchemy 
+Searching for sqlalchemy 
+Reading http://pypi.python.org/simple/sqlalchemy/ 
+Reading http://www.sqlalchemy.org 
+Best match: SQLAlchemy 0.7.2 
+Downloading http://pypi.python.org/packages/source/S/SQLAlchemy/ 
+SQLAlchemy-0.7.2.tar.gz#md5=b84a26ae2e5de6f518d7069b29bf8f72 
+        : 
+Adding sqlalchemy 0.7.2 to easy-install.pth file 
+Installed c:\python32\lib\site-packages\sqlalchemy-0.7.2-py3.2.egg 
+Processing dependencies for sqlalchemy 
+Finished processing dependencies for sqlalchemy 
+ 
+6.3.3  员工角色数据库示例 
+我们将把用户洗牌应用ushuffle_db.py 移植到SQLAlchemy 和SQLObject 两种ORM 上。
+这两种情况下，MySQL 都是后端数据库服务器。相比于在数据库适配器中使用原始SQL 语
+
+第6 章  数据库编程 229 
+ 
+句而言，你会注意到这里是以类的形式实现，这是因为使用ORM 更有面向对象的感觉。两
+个例子都导入了ushuffle_db.py 中的NAMES 集合以及随机姓名选择器。这样可以避免到处复
+制、粘贴相同的代码，毕竟代码能够复用是件很好的事情。 
+6.3.4  SQLAlchemy 
+我们从SQLAlchemy 开始是因为这个接口相比于SQLObject 的接口更加接近于SQL 语
+句。SQLObject 更加简单、更加类似Python、更快速，而在SQLAlchemy 中对象的抽象化十
+分完美，如果你愿意，还可以给你更好的灵活性用来提交原生SQL 语句。 
+示例6-2 和示例6-3 可以说明用户洗牌示例在使用两种ORM 移植的情况下，在设置、
+访问甚至代码行数上都非常相似。两个示例中都借用了ushuffle_db{,U}.py 中的同一组函数
+和常量。 
+示例6-2  SQLAlchemy ORM 示例（ushuffle_sad.py） 
+这个兼容Python 2.x 和3.x 版本的用户洗牌应用使用SQLAlchemy ORM 搭配后端数据库MySQL 或
+SQLite。 
+ 
+
+230 第1 部分  通用应用主题 
+ 
+ 
+
+第6 章  数据库编程 231 
+ 
+ 
+ 
+ 
+逐行解释 
+第1～13 行 
+和预想中的一样，我们从模块和常量导入开始。我们遵循风格指南的建议，首先导入
+Python 标准库中的模块（distutils、os.path、random），然后是第三方或外部模块
+（sqlalchemy），最后是应用的本地模块（ushuffle_dbU），该模块会给我们提供主要的常量
+和工具函数。 
+另一个常量是数据库源名称（DSN），你可以将其想象为数据库连接的URI。在本书之前
+的版本中，这个应用只支持MySQL。所以这里又加入了对SQLite 的支持。在之前看到的
+ushuffle_dbU.py 应用中，我们曾使用过SQLite 的文件系统，而在这里将使用它的内存版本（第
+12 行）。 
+
+232 第1 部分  通用应用主题 
+ 
+ 
+  核心提示：Active Record 模式 
+Active Record 是一种软件设计模式（https://en.wikipedia.org/wiki/Active_record_pattern），它
+会把对象的操作与数据库的动作对应起来。ORM 对象本质上表示的是数据库中的一行记
+录，所以当创建一个对象时，也就自动在数据库中写入了其表示的数据。更新对象也一样，
+会更新对应的行。同理，移除一个对象时，也会在数据库中删除对应的行。 
+起初，SQLAlchemy 并没有在声明层中使用可以让ORM 复杂性降低的Active 
+Record，而是使用了“数据映射器”模式，在这种模式下对象没有修改数据库本身的能
+力，相反地，它会随着用户要求的行为来使那些改变发生。一个ORM 可以作为提交原
+生SQL 语句的替代品，但是开发者仍然需要为将持久性的插入、更新和删除显示对应到
+数据库操作而负责。 
+对于类Active Record 接口的渴望，催生了诸如ActiveMapper 和TurboEntity 等项目的
+创建。最终，这两种接口都被Elixir（http://elixir.ematia.de）所替代，Elixir 也成为了
+SQLAlchemy 最流行的声明层。一些开发者认为它在本质上与Rails 类似，而其他开发者
+则认为它过于简单，抽象掉了太多的功能。 
+然而，SQLAlchemy 最终也将其自带的声明层修改为Active Record 模式。它更加
+轻量级、简单，能够更好地完成任务，所以我们会在例子中使用这个对初学者更友好
+的声明层。不过，如果你觉得它过于轻量级，也可以使用__table__对象进行更加传统
+的访问。 
+ 
+第15～23 行 
+下一个代码块使用了SQLAlchemy 的声明层。本部分会定义与数据库操作等效的对象。
+正如前面的核心提示所述，它可能没有第三方工具的功能丰富，但是在这个简单的例子中已
+经足够了。 
+为了使用它，必须先导入sqlalchemy.ext.declarative_base（第7 行），然后使用它创建一
+个Base 类（第15 行），最后让你的数据子类继承自这个Base 类（第16 行）。 
+类定义的下一个部分包含了一个__tablename__属性，它定义了映射的数据库表名。也可
+以显式地定义一个低级别的sqlalchemy.Table 对象，在这种情况下需要将其写为__table__。在
+本应用中，使用了一种混合方法，大多数情况下使用对象进行数据行的访问，不过也会使用
+表级别的行为（创建和删除）保存表（第41 行）。 
+接下来是“列”属性，可以通过查阅文档来获取所有支持的数据类型。最后，有一个
+__str()__方法定义，用来返回易于阅读的数据行的字符串格式。因为该输出是定制化的（通
+过tformat()函数的协助），所以不推荐在实践中这样使用。如果你想在其他应用中复用这段代
+码，会发现很困难，因为你可能会希望输出的格式有所不同。更可能的方法是，对其进行子
+类化，并修改子类的__str()__方法。SQLAlchemy 是支持表的继承的。 
+
+第6 章  数据库编程 233 
+ 
+第25～42 行 
+和ushuffle_dbU.connect()相似，类的初始化方法执行了所有可能的操作以便得到一个可
+用的数据库，然后保存其连接。首先，它会尝试使用DSN 来创建数据库引擎。引擎是主要的
+数据库管理器。为了便于调试，你可能会希望看到ORM 生成的SQL 语句。为了做到这点，
+只需要设置一个echo 参数即可，比如：create_engine('sqlite:///:memory:', echo=True)。 
+如果引擎创建失败（第29～30 行），则意味着SQLAlchemy 不支持所选的数据库，通常
+会抛出ImportError，因为它没有找到已安装的适配器。在这种情况下，我们会回到setup()函
+数中并向用户通知失败。 
+假设引擎已经创建成功，下一步是尝试数据库连接。通常情况下，连接失败意味着数据
+库本身（或其服务器）是不可达的，不过在本例中则是因为我们准备用来存储数据的数据库
+不存在造成的，所以我们会尝试在这里创建这个数据库，并重新进行连接（第34～37 行）。
+需要注意的是，这里使用了os.path.dirname()来截取掉数据库名，并保留了DSN 中的剩余部
+分，从而使数据库连接可以正常运行（第35 行）。 
+这里是本应用中唯一使用原生SQL 语句的地方（第36 行），因为这是一个典型的操作任
+务，而不是面向应用的任务。所有其他的数据库操作都是发生在表上的，它们通过对象操作
+或者通过用委托调用数据库表的方法（更多内容会在第44～70 行的解释中讲解）。 
+这段代码的最后一部分（第39～42 行）会创建一个会话对象，用于管理单独的事务对象，
+当涉及一个或多个数据库操作时，可以保证所有要写入的数据都必须提交。然后将这个会话
+对象保存，并将用户的表和引擎作为实例属性一同保存下来。引擎与表的元数据进行了额外
+的绑定（第42 行），意味着这张表的所有操作都会绑定到这个指定的引擎中（也可以将其绑
+定到其他引擎或连接上）。 
+第44～70 行 
+接下来的3 个方法是应用中核心的数据库功能，包括行的插入（第44～49 行）、更新
+（第51～60 行）和删除（第62～70 行）。插入使用了session.add_all()方法，这将使用迭代
+的方式产生一系列的插入操作。最后，你还可以决定是像我们一样进行提交（第49 行）
+还是进行回滚。 
+update()和delete()方法都存在会话查询的功能，它们使用query.filter_by()方法进行查找。
+随机更新会选择一个成员，通过改变ID 的方法，将其从一个项目组（fr）移动到另一个项目
+组（to）。计数器（i）会记录有多少用户会受到影响。删除操作则是根据ID（rm）随机选择
+一个理论公司项目并假设已将其取消，因此项目中的所有员工都将被解雇。当操作要执行时，
+需要通过会话对象进行提交。 
+需要注意的是，还有一些在应用中没有使用到的查询对象，它们与update()和delete()相
+等效。由于它们可以批量操作并返回行数，因此可以减少必要的代码行数。在本章最后的练
+习中，会要求使用这些方法对ushuffle_sad.py 进行修改。 
+下面是一些比较常用的查询方法。 
+
+234 第1 部分  通用应用主题 
+ 
+• 
+filter_by()：将指定列的值作为关键字参数以获取查询结果。 
+• filter()：与filter_by()相似，不过更加灵活，还可以使用表达式。比如query.filter_by(userid=1)
+与query.filter(User.userid==1)相同。 
+• 
+order_by()：与SQL 的ORDER BY 指令类似。默认情况下是升序的。需要导入
+sqlalchemy.desc()使其降序排列。 
+• 
+limit()：与SQL 的LIMIT 指令类似。 
+• 
+offset()：与SQL 的OFFSET 指令类似。 
+• 
+all()：返回匹配查询的所有对象。 
+• 
+one()：返回匹配查询的唯一一个（下一个）对象。 
+• 
+first()：返回匹配查询的第一个对象。 
+• 
+join()：按照给定的JOIN 条件创建SQL JOIN 语句。 
+• 
+update()：批量更新行。 
+• 
+delete()：批量删除行。 
+这些方法中的大多数都会返回另一个Query 对象，因此可以将它们串联起来，比如，
+query.order_by(desc(Users.userid)).limit(5).offset(5)。 
+如果你想要使用LIMIT 和OFFSET，还有一种更加Python 化的方法，即对查询对象
+进行切片操作，比如，query.order_by(Users.userid)[10:20]可以表示用户ID 最小的第11～
+20 个用户。 
+如果想了解Query 方法，可以查阅在http://www. sqlalchemy.org/docs/orm/query.html#sqlalchemy. 
+orm.query.Query 上的文档。JOIN 本身就是一个很大的话题，可以在http://www.sqlalchemy.org/docs/ 
+orm/t utorial. html#ormtutorial-joins 获取更多具体信息。在本章的练习中，你可以有机会操作这其中
+的一些方法。 
+到目前为止，我们只讨论了查询这种行级别的操作。那么表的创建和删除行为呢？是不
+是也有类似下面这样的函数呢？ 
+ 
+def drop(self): 
+    self.users.drop() 
+ 
+这里，我们决定再次使用委托（在Core Python Language Fundamentals 或Core Python 
+Programming 中关于面向对象编程的一章中介绍过）。委托是指一个实例中缺失的属性需要从
+另一个包含该属性的对象实例（self.users）中获得的方法。比如，当你看到__getattr__()、
+self.users.create()、self.users.drop()等方法时（第79～80 行、第98～99 行、第116 行），就可以
+考虑使用委托。 
+第72～77 行 
+dbDump()方法负责向屏幕上显示正确的输出。该方法从数据库中获取数据行，并按照
+ushuffle_dbU.py 中相似的样式输出数据。实际上，它们几乎是相同的。 
+
+第6 章  数据库编程 235 
+ 
+第79～83 行 
+我们刚才讨论了委托，通过使用__getattr__()可以让我们有意地避开创建drop()和create()
+方法，因为创建这两个方法实际上只是分别调用了表的drop()和create()方法而已。在这里并没
+有新增的功能，那么为什么还要创建额外的函数来维护呢？需要提醒的是，__getattr__()方法只
+有在属性查找失败时才会被调用（这和无论如何都会调用的__getattribute__()正相反）。 
+当我们调用orm.drop()并且发现没有这个方法时，就会调用getattr(orm,'drop')。此时，调
+用__getattr__()，并且将属性名委托给self.users。解释器会发现self.users 存在一个drop 属性，
+然后传递这个方法调用到self.users.drop()中。 
+最后一个方法是finish()，用于最后关闭连接的清理工作。是的，我们本可以将其写为一
+个lambda 函数，不过这里没有这样做是因为清理游标、连接等需要不止一条语句。 
+第85～122 行 
+main()函数驱动应用的运行。该函数中创建了一个SQLAlchemyTest对象，并将其用于所
+有的数据库操作。本部分脚本与最初的应用ushuffle_dbU.py是一样的。注意数据库的参数db
+是可选的，不过在这个脚本ushuffle_sad.py和接下来的SQLObject版本脚本ushuffle_so.py中并
+没有起到任何作用。该参数只是一个占位符，方便你在应用中添加对其他RDBMS的支持（参
+见本章结尾的练习）。
+①
+                                 
+① 这段话和本书第2 版相同，但是在第3 版中实际上已经使用了MySQL 和SQLite 两个数据库，db 参数并
+不再无用，且该脚本中参数名为dsn。——译者注 
+ 
+当运行该脚本时，Windows PC 上的输出会和下面所示的输出相似。 
+ 
+C:\>python ushuffle_sad.py 
+*** Connect to 'test' database 
+ 
+Choose a database system: 
+ 
+(M)ySQL 
+(G)adfly 
+(S)QLite 
+ 
+Enter choice: s 
+ 
+*** Create users table (drop old one if appl.) 
+*** Insert names into table 
+ 
+LOGIN 
+USERID 
+PROJID 
+Faye  
+6812  
+2 
+Serena 
+7003  
+4 
+Amy  
+7209  
+2 
+Dave  
+7306  
+3 
+
+236 第1 部分  通用应用主题 
+ 
+Larry 
+7311  
+2 
+Mona  
+7404  
+2 
+Ernie 
+7410  
+1 
+Jim  
+7512  
+2 
+Angela 
+7603  
+1 
+Stan  
+7607  
+2 
+Jennifer 7608  
+4 
+Pat   
+7711  
+2 
+Leslie  7808  
+3 
+Davina  7902  
+3 
+Elliot  7911  
+4 
+Jess  
+7912  
+2 
+Aaron  
+8312  
+3 
+Melissa  8602  
+1 
+ 
+*** Move users to a random group 
+        (3 users moved) from (1) to (3) 
+ 
+LOGIN  
+USERID  
+PROJID 
+Faye  
+6812  
+2 
+Serena  7003  
+4 
+Amy   
+7209  
+2 
+Dave  
+7306  
+3 
+Larry  
+7311  
+2 
+Mona  
+7404  
+2 
+Ernie  
+7410  
+3 
+Jim   
+7512  
+2 
+Angela  7603  
+3 
+Stan  
+7607  
+2 
+Jennifer  7608  
+4 
+Pat   
+7711  
+2 
+Leslie  7808  
+3 
+Davina  7902  
+3 
+Elliot  7911  
+4 
+Jess  
+7912  
+2 
+Aaron  
+8312  
+3 
+Melissa  8602  
+3 
+ 
+*** Randomly delete group 
+        (group #3; 7 users removed) 
+ 
+LOGIN  
+USERID  
+PROJID 
+Faye  
+6812  
+2 
+Serena  7003  
+4 
+Amy   
+7209  
+2 
+
+第6 章  数据库编程 237 
+ 
+Larry  
+7311  
+2 
+Mona  
+7404  
+2 
+Jim   
+7512  
+2 
+Stan  
+7607  
+2 
+Jennifer  7608  
+4 
+Pat   
+7711  
+2 
+Elliot  7911  
+4 
+Jess  
+7912  
+2 
+ 
+*** Drop users table 
+ 
+*** Close cxns 
+C:\> 
+显式/“经典”的ORM 访问 
+之前曾提到过，在本例中选择使用的是SQLAlchemy 的声明层。不过，我们认为学习
+ushuffle_sad.py（用户洗牌应用的SQLAlchemy 声明层版本）的 “显式”形式同样也具有教
+育意义，这里将其命名为ushuffle_sae.py（用户洗牌应用的SQLAlchemy 显式版本）。你会发
+现这两个脚本看起来会非常相似。 
+由于该脚本和ushuffle_sad.py 非常相似，因此不再需要提供逐行的解释，不过可以从
+http://corepython.com 上下载到这个版本的逐行解释。这里给出该版本一方面是为了将本书之
+前两版中的脚本保留下来，另一方面是为了让读者能够对显式使用和声明层使用进行对比。
+在本书之前的版本发行后，SQLAlchemy 也逐渐变成熟，所以我们也希望能够与时俱进。下
+面是ushuffle_sae.py 的程序。 
+ 
+#!/usr/bin/env python 
+ 
+from distutils.log import warn as printf 
+from os.path import dirname 
+from random import randrange as rand 
+from sqlalchemy import Column, Integer, String, create_engine, 
+    exc, orm, MetaData, Table 
+from sqlalchemy.ext.declarative import declarative_base 
+from ushuffle_dbU import DBNAME, NAMELEN, randName, FIELDS, 
+    tformat, cformat, setup 
+ 
+DSNs = { 
+     'mysql': 'mysql://root@localhost/%s' % DBNAME, 
+    'sqlite': 'sqlite:///:memory:', 
+} 
+ 
+class SQLAlchemyTest(object): 
+
+238 第1 部分  通用应用主题 
+ 
+    def __init__(self, dsn): 
+        try: 
+            eng = create_engine(dsn) 
+    except ImportError, e: 
+        raise RuntimeError() 
+ 
+    try: 
+        cxn = eng.connect() 
+    except exc.OperationalError: 
+        try: 
+            eng = create_engine(dirname(dsn)) 
+            eng.execute('CREATE DATABASE %s' % DBNAME).close() 
+            eng = create_engine(dsn) 
+            cxn = eng.connect() 
+        except exc.OperationalError: 
+            raise RuntimeError() 
+ 
+    metadata = MetaData() 
+    self.eng = metadata.bind = eng 
+    try: 
+        users = Table('users', metadata, autoload=True) 
+    except exc.NoSuchTableError: 
+        users = Table('users', metadata, 
+            Column('login', String(NAMELEN)), 
+            Column('userid', Integer), 
+            Column('projid', Integer), 
+        ) 
+    self.cxn = cxn 
+    self.users = users 
+ 
+def insert(self): 
+    d = [dict(zip(FIELDS, [who, uid, rand(1,5)])) \ 
+        for who, uid in randName()] 
+    return self.users.insert().execute(*d).rowcount 
+ 
+def update(self): 
+    users = self.users 
+    fr = rand(1,5) 
+    to = rand(1,5) 
+    return (fr, to, 
+        users.update(users.c.projid==fr).execute( 
+        projid=to).rowcount) 
+ 
+def delete(self): 
+    users = self.users 
+
+第6 章  数据库编程 239 
+ 
+    rm = rand(1,5) 
+    return (rm, 
+        users.delete(users.c.projid==rm).execute().rowcount) 
+ 
+def dbDump(self): 
+    printf('\n%s' % ''.join(map(cformat, FIELDS))) 
+    users = self.users.select().execute() 
+    for user in users.fetchall(): 
+        printf(''.join(map(tformat, (user.login, 
+            user.userid, user.projid)))) 
+ 
+    def __getattr__(self, attr): 
+        return getattr(self.users, attr) 
+ 
+    def finish(self): 
+        self.cxn.close() 
+ 
+def main(): 
+    printf('*** Connect to %r database' % DBNAME) 
+    db = setup() 
+    if db not in DSNs: 
+        printf('\nERROR: %r not supported, exit' % db) 
+        return 
+ 
+    try: 
+        orm = SQLAlchemyTest(DSNs[db]) 
+    except RuntimeError: 
+        printf('\nERROR: %r not supported, exit' % db) 
+        return 
+ 
+    printf('\n*** Create users table (drop old one if appl.)') 
+    orm.drop(checkfirst=True) 
+    orm.create() 
+ 
+    printf('\n*** Insert names into table') 
+    orm.insert() 
+    orm.dbDump() 
+ 
+    printf('\n*** Move users to a random group') 
+    fr, to, num = orm.update() 
+    printf('\t(%d users moved) from (%d) to (%d)' % (num, fr, to)) 
+    orm.dbDump() 
+ 
+    printf('\n*** Randomly delete group') 
+    rm, num = orm.delete() 
+
+240 第1 部分  通用应用主题 
+ 
+    printf('\t(group #%d; %d users removed)' % (rm, num)) 
+    orm.dbDump() 
+ 
+    printf('\n*** Drop users table') 
+    orm.drop() 
+    printf('\n*** Close cxns') 
+    orm.finish() 
+ 
+if __name__ == '__main__': 
+    main() 
+ 
+ushuffle_sad.py 和ushuffle_sae.py 的主要区别包括以下几方面。 
+• 
+创建Table 对象，而不是声明Base 对象。 
+• 
+没有使用Session，而是执行单独的工作单元，进行自动提交，并且没有事务性。 
+• 
+使用Table 对象进行所有的数据库交互，而不是Session Query。 
+为了说明会话和显式操作并不是关联在一起的，你可以尝试将Session 混入到ushuffle_sae.py
+中作为练习。既然你已经对SQLAlchemy 进行了学习，下面就让我们转到SQLObject 上，来看
+一个相似的工具。 
+6.3.5  SQLObject 
+SQLObject 是Python 第一个主要的ORM。实际上，它已经存在超过十年了！其作者Ian 
+Bicking 在2002 年10 月发布了SQLObject 的第一个alpha 版本（SQLAlchemy 直到2006 年2
+月才出现）。在本书写作时，SQLObject 仅支持Python 2。 
+正如之前所提到的，SQLObject 更加面向对象（会有更加Python 化的感觉），并且在早
+期就已经实现了隐式的对象-数据库访问的Active Record 模式，不过它无法让你更自由地使
+用原生SQL 语句进行更加即席或定制化的查询。许多用户认为学习SQLAlchemy 更加简单，
+不过哪种ORM 更加易学还需要读者自行判断。下面让我们看下示例6-3 中的ushuffle_so.py，
+该脚本是ushuffle_dbU.py 和ushuffle_sad.py 针对SQLObject 的移植版本。 
+示例6-3  SQLObject ORM 示例（ushuffle_so.py） 
+这个兼容Python 2.x和3.x版本的用户洗牌应用使用SQLObject ORM搭配后端数据库MySQL或SQLite。
+① 
+ 
+                                 
+① 如本节所述，SQLObject 并不支持Python 3.x 版本。——译者注 
+
+第6 章  数据库编程 241 
+ 
+ 
+ 
+
+242 第1 部分  通用应用主题 
+ 
+ 
+ 
+逐行解释 
+第1～12 行 
+除了使用SQLObject 代替SQLAlchemy 之外，本模块中的导入和常量声明都和
+ushuffle_sad.py 完全相同。 
+第14～20 行 
+Users 表扩展了SQLObject.SQLObject 类。我们定义了和之前相同的列，同样也提供了用
+于显示输出的__str__()方法。 
+第22～34 行 
+这个类的构造函数进行了所有可能的操作，以确保得到一个可用的数据库，然后返回其
+连接，这里和SQLAlchemy 的例子是类似的。同样地，这里也是本脚本中唯一能看到真实SQL
+语句的地方。代码会按照如下描述运行，并在所有错误发生时进行异常处理。 
+
+第6 章  数据库编程 243 
+ 
+• 
+尝试对已存在的表建立连接（第29 行），如果运行成功，则本步完成。它必须规避
+像RDBMS 适配器不可用、服务器不在线以及数据库不存在等异常。 
+• 
+否则，创建表，如果创建成功，则本步完成（第31～33 行）。 
+• 
+成功后，在self.cxn 中保存连接对象。 
+第36～55 行 
+数据库操作将会在这些行产生，包括插入（第36～38 行）、更新（第40～47 行）和删除
+（第49～55 行）。这些函数会和SQLAlchemy 中的函数相等价。 
+ 
+  核心提示（黑客角）：在Python 中简化insert()方法为一个（长）行 
+可以将insert()方法的代码简化为单行比较难理解的代码。 
+[Users(**dict(zip(FIELDS, (who, userid, rand(1,5))))) \ 
+    for who, userid in randName()] 
+我们并不会鼓励使用这种降低可读性或者显式使用列表推导执行代码的方法，不过要
+清楚的是，已有的解决方法存在一个缺陷：它需要你在创建新对象时显式地为列命名，并
+用它作为关键字参数。通过使用FIELDS，你不再需要知道列名，也不需要在列名改变时
+修改大量代码，尤其是当FIELDS 在某个配置（非应用）模块中时。 
+ 
+第57～63 行 
+这段代码还是从相同的（且为预料中的）dbDump()方法开始，该方法会从数据库中拉取
+数据行，然后在屏幕上进行显示。而finish()方法（第62～63 行）用于关闭连接。在这里，
+不能使用SQLAlchemy 例子中的委托方式进行表的删除操作，因为这里本应是委托的方法称
+为dropTable()，而不是drop()。 
+第65～102 行 
+这里是main()函数。它和ushuffle_sad.py 中的运行很相似。同样地，db 参数和DSN 常量
+可以用于在这些应用中添加对其他RDBMS 的支持（参见本章最后的练习）。 
+下面是你在运行ushuffle_so.py 时的输出结果示例（和ushuffle_dbU.py 以及
+ushuffle_sa?.py 脚本的输出非常相似）。 
+ 
+$ python ushuffle_so.py 
+*** Connect to 'test' database 
+ 
+Choose a database system: 
+ 
+(M)ySQL 
+(G)adfly 
+(S)QLite 
+ 
+Enter choice: s 
+ 
+
+244 第1 部分  通用应用主题 
+ 
+*** Create users table (drop old one if appl.) 
+ 
+*** Insert names into table 
+ 
+LOGIN  
+USERID  
+PROJID 
+Jess  
+7912  
+2 
+Ernie  
+7410  
+1 
+Melissa  8602  
+1 
+Serena  7003  
+1 
+Angela  7603  
+1 
+Aaron  
+8312  
+4 
+Elliot  7911  
+3 
+Jennifer  7608  
+1 
+Leslie  7808  
+4 
+Mona  
+7404  
+4 
+Larry  
+7311  
+1 
+Davina  7902  
+3 
+Stan  
+7607  
+4 
+Jim   
+7512  
+2 
+Pat   
+7711  
+1 
+Amy   
+7209  
+2 
+Faye  
+6812  
+1 
+Dave  
+7306  
+4 
+ 
+*** Move users to a random group 
+        (5 users moved) from (4) to (2) 
+ 
+LOGIN  
+USERID  
+PROJID 
+Jess  
+7912  
+2 
+Ernie  
+7410  
+1 
+Melissa  8602  
+1 
+Serena  7003  
+1 
+Angela  603   
+1 
+Aaron  
+8312  
+2 
+Elliot  7911  
+3 
+Jennifer  7608  
+1 
+Leslie  7808  
+2 
+Mona  
+7404  
+2 
+Larry  
+7311  
+1 
+Davina  7902  
+3 
+Stan  
+7607  
+2 
+Jim   
+7512  
+2 
+Pat   
+7711  
+1 
+Amy   
+7209  
+2 
+Faye  
+6812  
+1 
+Dave  
+7306  
+2 
+ 
+
+第6 章  数据库编程 245 
+ 
+*** Randomly delete group 
+        (group #3; 2 users removed) 
+ 
+LOGIN  
+USERID 
+PROJID 
+Jess  
+7912  
+2 
+Ernie  
+7410  
+1 
+Melissa  8602  
+1 
+Serena  7003  
+1 
+Angela  7603  
+1 
+Aaron  
+8312  
+2 
+Jennifer  7608  
+1 
+Leslie  7808  
+2 
+Mona  
+7404  
+2 
+Larry  
+7311  
+1 
+Stan  
+7607  
+2 
+Jim   
+7512  
+2 
+Pat   
+7711  
+1 
+Amy   
+7209  
+2 
+Faye  
+6812  
+1 
+Dave  
+7306  
+2 
+ 
+*** Drop users table 
+ 
+*** Close cxns 
+$ 
+6.4  非关系数据库 
+本章开始介绍了SQL 以及关系数据库。然后展示了如何从此类系统中获得和写入数据，
+并且给出了移植到Python 3 的简短教程。之后又讲述了ORM，以及ORM 是如何让用户更多
+地通过“对象”的方式来避免SQL 语句的。不过，从底层上来说，无论是SQLAlchemy 还是
+SQLObject 都是代替你来生成SQL 的。本章最后一节仍然会关注对象，不过会将目光转移出
+关系数据库。 
+6.4.1  NoSQL 介绍 
+Web 和社交服务的流行趋势会导致产生大量的数据，并且/或者数据产生的速率可能要比
+关系数据库能够处理得更快。可以想象Facebook 或Twitter 生成的大量数据。比如，Facebook
+游戏或者Twitter 流数据处理应用的开发者可能会在应用中以每小时数百万行（或对象）的速
+率向持久化存储中进行写入。这个可扩展性问题最终造就了非关系数据库或者NoSQL 数据
+库的创建、爆炸性增长以及部署。 
+
+246 第1 部分  通用应用主题 
+ 
+有很多此类数据库可以进行选择，不过它们的类型并不完全相同。单就非关系数据库而言，
+就有对象数据库、键-值对存储、文档存储（或者数据存储）、图形数据库、表格数据库、列/可扩
+展记录/宽列数据库、多值数据库等很多种类。本章结尾会给出一些链接来帮助你对NoSQL 进行
+进一步研究。在本书写作时，有一个非常流行的文档存储非关系数据库叫做MongoDB。 
+6.4.2  MongoDB 
+MongoDB 近期的流行度正在大幅提升。除了用户、文档、社区和专业支持外，它还有自
+己的定期会议。有很多主流网站都是其优质用户，比如Craigslist、Shutterfly、foursquare、bit.ly、
+SourceForge 等。可以在http://www.mongodb.org/display/DOCS/Production+Deployments 上获取
+到更多相关信息。除了其用户群外，我们还认为MongoDB 对于向读者介绍NoSQL 以及文档
+数据存储而言是个非常好的选择。其中，MongoDB 的文档存储系统是使用C++编写的。 
+如果你对比过文档存储（MongoDB、CouchDB、Riak、Amazon SimpleDB）与其他非
+关系数据库的区别，就会发现它介于简单的键-值对存储（如Redis、Voldemort、Amazon 
+Dynamo 等）与列存储（如Cassandra、Google Bigtable 和HBase）之间。它有点像关系数
+据库的无模式衍生品，比基于列的存储更简单、约束更少，但是比普通的键-值对存储更加
+灵活。一般情况下其数据会另存为JSON 对象，并且允许诸如字符串、数值、列表甚至嵌
+套等数据类型。 
+MongoDB（以及NoSQL）的一些术语也和关系数据库系统不同。比如，关系数据库中需
+要考虑的是行和列，而在这里则是讨论文档、集合等
+①
+http://www.mongodb.org/display/DOCS/SQL+to+Mongo+Mapping+Chart
+。如果想要了解更多关于术语变更的
+内容，可以查阅
+上的
+SQL-Mongo术语映射表。 
+MongoDB 将数据存储于其特殊的JSON 串（文档）中，可以将其想象为一个Python 字
+典，由于它是一个二进制编码的序列化，因此通常也会称其为BSON 格式。不过，不用去管
+它的存储机制，对于开发者而言，其主要想法就是它和JSON 或者Python 字典都很相似，可
+以让我们使用起来得心应手。MongoDB 非常流行，所以在大多数平台上都有其适配器，其
+中也包括Python。 
+6.4.3  PyMongo：MongoDB 和Python 
+尽管Python 中有很多MongoDB 驱动程序，不过其中最正式的一个是PyMongo。其他适
+配器或者过于轻量级，或者有专门用途。可以在http://pypi.python.org 上搜索mongo 来查找和
+MongoDB 相关的Python 包。可以依据自己的意愿尝试其中的任何一个，不过在本例中我们
+将使用PyMongo。 
+                                 
+① 原文将关系数据库的列和MongoDB 的集合放到一起，会产生列和集合等价的误解。实际上关系数据库的
+列对应的应该是MongoDB 的字段（field），而MongoDB 的集合对应的是关系数据库的表。——译者注 
+
+第6 章  数据库编程 247 
+ 
+使用pymongo 包的另一个好处是它已经移植到Python 3 中了。鉴于本章前面所使用的技
+术，这里只需要编写一个Python 应用就同时可以在Python 2 和Python 3 中运行，根据你执行
+脚本使用的解释器，它会利用合适的pymongo 安装版本。 
+我们不会花费时间来具体讲解其安装方法，因为这已经超出了本书的范围，不过，你可以从
+mongodb.org 上下载MongoDB，通过easy_install 或pip 安装PyMongo 和/或PyMongo3（注意，我
+在Mac 上安装pymongo3 没有任何问题，但是在Windows 上安装时遇到了进程阻塞的问题）。无论
+你安装的是哪个版本（或者两个版本都安装了），其导入代码都是一样的：import pymongo。 
+为了确认MongoDB 已经安装且可以正常运行，可以查看MongoDB 的快速入门指南，
+其网址是http://www.mongodb.org/display/DOCS/Quickstart；而要确认PyMongo 正常运行，可
+以通过导入pymongo 包进行检测。要了解Python 中MongoDB 是如何使用的，可以查阅
+PyMongo 的教程，其网址是http://api.mongodb.org/python/current/tutorial.html。 
+我们在这里要做的是将已有的用户洗牌应用（ushuffle_*.py）进行修改，使其使用
+MongoDB 作为持久化存储。注意，本应用和之前使用SQLAlchemy 以及SQLObject 的应用
+都很相似，不过MongoDB 的开销要比诸如MySQL 的典型关系数据库系统小得多。示例6-4
+所示为兼容Python 2 和Python 3 的ushuffle_mongo.py，接下来是其解行解释。 
+示例6-4  MongoDB 示例（ushuffle_mongo.py） 
+兼容Python 2 和Python 3 的用户洗牌应用，其中使用了MongoDB 和PyMongo。 
+ 
+
+248 第1 部分  通用应用主题 
+ 
+ 
+ 
+逐行解释 
+第1～8 行 
+这里主要导入的是PyMongo 的Connection 对象及其包异常（errors）。其他的导入行在本
+章中都已经见过。和ORM 例子中一样，我们借用了之前的ushuffle_dbU.py 应用中的大多数
+
+第6 章  数据库编程 249 
+ 
+常量和通用函数。最后一句设置了集合（“表”）名。 
+第10～17 行 
+MongoTest 类的初始化方法中最开始的部分创建了一个连接，如果服务器不可达，则抛
+出异常（第12～15 行）。接下来的两行很容易被忽略，因为它们很像是普通的赋值语句，不
+过实际上，它们会创建并复用数据库（第16 行）及“users”集合，你可以将集合看成数据
+库中的表。 
+关系数据库中的表会对列的格式进行定义，然后使遵循这个列定义的每条记录成为一行；
+而在非关系数据库中，集合并没有任何模式的需求，每条记录都可以有其特定的文档。可以
+看到，在这段代码中并没有“数据模型”的类定义。每条记录都定义了其自己的模式，所以
+可以说你保存的任何记录都会写入集合中。 
+第19～22 行 
+insert()方法会向MongoDB 的集合中添加值。集合是由一系列文档组成的。可以将文档
+想象为Python 字典格式的一条记录。通过使用dict()工厂函数为每条记录创建一个文档，然
+后将所有文档通过生成器表达式的方式传递给集合的insert()方法。 
+第24～31 行 
+update()方法和本章之前应用的运行方式相同。区别是集合的update()方法可以给开发者
+相比于典型的数据库系统更多的选项。在这里（第29～30 行），使用了MongoDB 的$set 指
+令，该指令可以显式地修改已存在的值。 
+每条MongoDB 指令都代表一个修改操作，使得开发者在修改已存在的值时更加高效、
+有用以及便捷。除了$set 外，还有一些操作可以用于递增字段值、删除字段（键-值对）、对
+数组添加/删除值等。 
+不过，在更新之前，首先需要查询系统中项目ID（projid）与要更新的项目组相匹配的
+所有用户（第28 行）。为此，需要使用集合的find()方法，并将查询条件传进去。这就和SQL
+的SELECT 语句一样。 
+Collection.update()方法还可以用来修改多个文档，只需要将multi 标志设为True 即可。
+唯一的坏消息是目前该操作还不能返回被修改的文档总数。 
+对于更为复杂的查询，可以查看官方文档的相关页面，其地址为http://www.mongodb.org/ 
+display/DOCS/Advanced+Queries。 
+第33～38 行 
+delete()方法使用了和update()方法一样的查询。当我们得到所有匹配查询的用户后，就
+会一次性对其执行remove()操作进行删除（第36～37 行），然后返回结果。如果你不关心被
+删除的文档数量，可以调用更简单的self.user.remove()删除集合中的所有文档。 
+第40～44 行 
+因为dbDump()方法执行的查询是没有条件的（第42 行），所以会返回集合中的所有用户，
+然后对数据进行字符串格式化并向用户显示（第43～44 行）。 
+
+250 第1 部分  通用应用主题 
+ 
+第46～47 行 
+最后这个方法在应用执行关闭MongoDB 服务器的连接时会定义和调用。 
+第49～77 行 
+main()函数无需文档即可理解，并且随后的脚本和本章之前看到的应用基本相同：连接
+数据库服务器并进行准备工作，向集合（“表”）中插入用户并转储数据库内容，将用户从一
+个项目转移到另一个项目（并转储内容），删除一个完整的项目组（并转储内容），删除整个
+集合，最后关闭连接。 
+尽管本节给出了Python 中非关系数据库的使用方法，但是这只是开始。正如本节开始部
+分所述，还有很多种NoSQL 数据库可以供你选择，你需要仔细研究每种NoSQL 数据库，甚
+至可能为其编写原型，才能找到更适合你任务的那种数据库。下一节会给出更多的参考文献
+供读者深入阅读。 
+6.4.4  总结 
+我们希望已经为你提供了在Python 中使用关系数据库的一个不错的介绍。当你的应用需
+要超出纯文本文件或特定文件（比如DBM、pickled 等）的功能时，你还可以有很多选择。
+这里面包括很多的RDBMS，还有上面没有提及的一个完全使用Python 实现的数据库系统，
+可以把你从安装、维护和管理真实数据库系统中解放出来。 
+在下一节中，你会看到很多数据库的Python 适配器，然后是一些ORM 系统。此外，现
+在社区中还增强了非关系数据库的相关信息，用于应对那些关系数据库无法处理应用需要的
+数据规模的情况。 
+我们还建议你查阅DB-SIG 页面，以及因特网上所有相关系统的网页和邮件列表。与其
+他软件开发领域相似，Python 易于学习并且实践简单。 
+6.5  相关文献 
+表6-8 列出了大多数可用的数据库及其Python 适配器的模块和包。需要注意的是，并不
+是所有适配器都是兼容DB-API 的。 
+表6-8  数据库相关模块/包及其网站 
+名    称 
+在线参考文献 
+关系数据库 
+Gadfly 
+gadfly.sf.net 
+MySQL 
+mysql.com or mysql.org 
+MySQLdb，即MySQL-python 
+sf.net/projects/mysql-python 
+MySQL Connector/Python 
+launchpad.net/myconnpy 
+
+第6 章  数据库编程 251 
+ 
+（续表） 
+名    称 
+在线参考文献 
+关系数据库 
+PostgreSQL 
+postgresql.org 
+psycopg 
+initd.org/psycopg 
+PyPgSQL 
+pypgsql.sf.net 
+PyGreSQL 
+pygresql.org 
+SQLite 
+sqlite.org 
+pysqlite 
+trac.edgewall.org/wiki/PySqlite 
+sqlite3
+① 
+docs.python.org/library/sqlite3 
+APSW 
+code.google.com/p/apsw 
+MaxDB (SAP) 
+maxdb.sap.com 
+sdb.dbapi 
+maxdb.sap.com/doc/7_7/46/702811f2042d87e10000000a1553f6/content.htm 
+sdb.sql 
+maxdb.sap.com/doc/7_7/46/71b2a816ae0284e10000000a1553f6/content.htm 
+sapdb 
+sapdb.org/sapdbPython.html 
+Firebird (InterBase) 
+firebirdsql.org 
+KInterbasDB 
+firebirdsql.org/en/python-driver 
+SQL Server 
+microsoft.com/sql 
+pymssql 
+code.google.com/p/pymssql（需要FreeTDS[freetds.org]） 
+adodbapi 
+adodbapi.sf.net 
+Sybase 
+sybase.com 
+sybase 
+www.object-craft.com.au/projects/sybase 
+Oracle  
+oracle.com 
+cx_Oracle 
+cx-oracle.sf.net 
+DCOracle2 
+zope.org/Members/matt/dco2（已过时，仅支持Oracle8） 
+Ingres 
+ingres.com 
+Ingres DBI  
+community.actian.com/wiki/Ingres_Python_Development_Center 
+ingmod 
+www.informatik.uni-rostock.de/~hme/software/ 
+NoSQL 文档数据存储 
+MongoDB 
+mongodb.org 
+PyMongo 
+pypi.python.org/pypi/pymong 
+文档：api.mongodb.org/python/current 
+PyMongo3 
+pypi.python.org/pypi/pymongo3 
+Other adapters 
+Other adapters api.mongodb.org/python/current/tools.html 
+CouchDB 
+couchdb.apache.org 
+couchdb-python 
+code.google.com/p/couchdb-python 
+文档：packages.python.org/CouchDB 
+ORM 
+SQLObject 
+sqlobject.org 
+SQLObject2 
+sqlobject.org/2 
+SQLAlchemy 
+sqlalchemy.org 
+Storm 
+storm.canonical.com 
+PyDO/PyDO2 
+skunkweb.sf.net/pydo.html 
+① 自Python 2.5 起，pysqlite 作为sqlite3 模块添加进标准库中。 
+
+252 第1 部分  通用应用主题 
+ 
+除了数据库相关的模块/包外，下面还有一些网上的参考文献可供学习。 
+Python 和数据库 
+• 
+wiki.python.org/moin/DatabaseProgramming 
+• 
+wiki.python.org/moin/DatabaseInterfaces 
+数据库格式、结构及开发模式 
+• 
+en.wikipedia.org/wiki/DSN 
+• 
+www.martinfowler.com/eaaCatalog/dataMapper.html 
+• 
+en.wikipedia.org/wiki/Active_record_pattern 
+• 
+blog.mongodb.org/post/114440717/bson 
+非关系数据库 
+• 
+en.wikipedia.org/wiki/Nosql 
+• 
+nosql-database.org/ 
+• 
+www.mongodb.org/display/DOCS/MongoDB,+CouchDB,+MySQL+Compare+Grid 
+6.6  练习 
+数据库 
+6-1  数据库API。什么是Python 的DB-API？它是一个好东西吗？为什么是（或为什么
+不是）？ 
+6-2  数据库API。描述不同的数据库模块参数风格的区别（参考paramstyle 模块属性）。 
+6-3  游标对象。游标的execute*()方法之间有哪些区别？ 
+6-4  游标对象。游标的fetch*()方法之间有哪些区别？ 
+6-5  数据库适配器。研究你的RDBMS 及其Python 模块。它是否兼容DB-API？它提供
+了可用于Python 模块但DB-API 中没有的哪些额外功能？ 
+6-6  类型对象。学习使用针对你的数据库及其DB-API 适配器的Type 对象，并编写一
+个小脚本，它至少使用一种类型对象。 
+6-7  重构。在ushuffle_dbU.create()函数中，已存在的表会被删除，然后再递归调用create()
+重新创建。这样做其实非常危险，因为一旦创建表（再次）失败，就会陷入到无限
+递归当中。请创建一个更实用的解决方案来修正该问题，而不再是在异常处理程序
+中简单地再次复制创建查询（cur.execute()）。选做题：在向调用者返回失败前，最
+多重新创建表3 次。 
+6-8  数据库和HTML。使用你的Web 编程知识创建一个输出内容的处理程序，将已存
+在的数据库表中的内容作为HTML 在浏览器中显示出来。 
+6-9  Web 编程和数据库。为用户洗牌示例（ushuffle_db.py）创建一个Web 接口。 
+
+第6 章  数据库编程 253 
+ 
+6-10  GUI 编程和数据库。为用户洗牌示例（ushuffle_db.py）创建一个GUI 应用。 
+6-11  股票投资组合类。创建一个应用，它可以是多用户管理股票投资组合。使用关系
+数据库作为后端，并提供一个基于Web的用户接口。可以使用Core Python Language 
+Fundamentals或Core Python Programming中关于面向对象一章中的股票数据库类。 
+6-12  调试与重构。update()和remove()函数各有一个小的缺陷：update()可能将用户从某
+个项目组移动到同一个项目组。修改随机产生的项目组使其与用户本身的项目组不
+能相同。相似地，remove()可能会尝试从没有员工的项目组中进行移除操作（比如
+项目组不存在或者已经使用update()移出员工）。 
+ORM 
+6-13  股票投资组合类。使用ORM 代替直接访问RDBMS，为股票投资组合（练习6-11）
+创建另一个解决方案。 
+6-14  调试与重构。将练习6-13 的解决方案移植到SQLAlchemy 和SQLObject 示例中。 
+6-15  支持不同的RDBMS 。对SQLAlchemy （ushuffle_sad.py ）或SQLObject
+（ushuffle_so.py）应用进行修改，使其除了目前已经支持的MySQL 和SQLite 外，
+再增加对你选择的其他关系数据库的支持。 
+ 
+下述四个练习将专注于ushuffle_dbU.py 脚本，其靠近顶部的一些代码（第7～12 行）
+决定了哪个函数会用于获取用户的命令行输入。 
+6-16  导入和Python。请重新阅读代码。为什么我们需要检查__builtins__是dict 还是模块呢？ 
+6-17  移植到Python 3。使用distutils.log.warn()并不是print/print()的完美代替品。请证明
+这一点，并提供代码片段用于展示warn()并不兼容print()。 
+6-18  移植到Python 3。一些开发者认为他们可以像在Python 3 中那样在Python 2 中使
+用print()。请证明这种想法是错误的。提示：来自Guido 自己的证明：print(x, y)。 
+6-19  Python 语言。假设你希望在Python 3 中使用print()，而在Python 2 中使用
+distutils.log.warn()，并且仍希望使用printf()这个函数名。下面的代码有什么错误？ 
+ 
+from distutils.log import warn 
+if hasattr(__builtins__, 'print'): 
+    printf = print 
+else: 
+    printf = warn 
+ 
+6-20  异常。当我们在ushuffle_sad.py 中使用指定的数据库名建立到服务器的连接时，
+会出现错误（exc.OperationalError），指出我们指定的表并不存在，所以我们又回过
+头先创建数据库，再重新尝试数据库连接。然而，并不只有这一种错误源：如果使
+用MySQL 并且服务器本身没有正常工作，也会抛出相同的异常。在这种情况下，
+
+254 第1 部分  通用应用主题 
+ 
+CREATE DATABASE 也无法执行。请添加一个处理程序来应对这种情况，并为尝
+试创建实例的代码抛出RuntimeError 异常。 
+6-21  SQLAlchemy。增强ushuffle_sad.dbDump()函数的功能，为其添加一个新的默认参
+数newest5，并将其默认值设为False。当传入True 时，不再显示所有用户，而是
+逆序排列Users.userid，只显示最新雇用的5 名员工。将该调用放置在main()函数
+的orm.insert()和orm.dbDump()调用之后。 
+a）使用Query limit()和offset()方法。 
+b）使用Python 的切片语法。 
+修改后的输出如下所示。 
+ 
+. . . 
+Jess  
+7912  
+4 
+Aaron  
+8312  
+3 
+Melissa  8602  
+2 
+ 
+*** Top 5 newest employees 
+ 
+LOGIN  
+USERID  
+PROJID 
+Melissa  8602  
+2 
+Aaron  
+8312  
+3 
+Jess  
+7912  
+4 
+Elliot  7911  
+3 
+Davina  7902  
+3 
+ 
+*** Move users to a random group 
+        (4 users moved) from (3) to (1) 
+ 
+LOGIN  
+USERID  
+PROJID 
+Faye  
+6812  
+4 
+Serena  7003  
+2 
+Amy   
+7209  
+1 
+. . . 
+ 
+6-22  SQLAlchemy。修改ushuffle_sad.update()方法，向下5 行代码，改为使用Query 
+update()方法。使用timeit 模块测试是否比直接使用更加快速。 
+6-23  SQLAlchemy。与练习6-22 相同，不过这次使用Query delete() 方法修改
+ushuffle_sad.delete()。 
+6-24  SQLAlchemy。在ushuffle_sad.py 的显式非声明版本ushuffle_sae.py 中，移除了声
+明层和会话。尽管使用Active Record 是可选的，但是使用Session 这个概念并不是
+一个坏主意。修改ushuffle_sae.py 中执行数据库操作的所有代码，以便它们都能够
+如声明层版本ushuffle_sad.py 中那样使用/共享Session 对象。 
+
+第6 章  数据库编程 255 
+ 
+6-25  Django 数据模型。使用Django ORM 创建等效于SQLAlchemy 或SQLObject 示例
+中实现的Users 数据模型类。你可能需要提前阅读第11 章的内容。 
+6-26  Storm ORM。将ushuffle_s*.py 应用移植到Storm ORM 上。 
+非关系（NoSQL）数据库 
+6-27  NoSQL。非关系数据库变得越来越流行有哪些原因？NoSQL 比传统的关系数据库
+多提供了哪些功能？ 
+6-28  NoSQL。非关系数据库至少有4 种不同类型。对各主要类型进行分类，并给出每
+个类别中最出名的几个项目的名称。请注意那些包含多个Python 适配器的数据库。 
+6-29  CouchDB。CouchDB 是另一个经常与MongoDB 相比较的文档数据存储。查看本
+章最后一节中提及的网站中的一些在线对比，然后下载并安装CouchDB。将
+ushuffle_mongo.py 修改为兼容CouchDB 的ushuffle_couch.py。 
+ 

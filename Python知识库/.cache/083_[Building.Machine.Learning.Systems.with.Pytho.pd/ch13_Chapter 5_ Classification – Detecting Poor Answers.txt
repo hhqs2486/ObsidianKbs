@@ -1,0 +1,840 @@
+Classification – Detecting 
+Poor Answers
+Now that we are able to extract useful features from text, we can take on the 
+challenge of building a classifier using real data. Let's go back to our imaginary 
+website in Chapter 3, Clustering – Finding Related Posts, where users can submit 
+questions and get them answered.
+A continuous challenge for owners of these Q&A sites is to maintain a decent 
+level of quality in the posted content. Websites such as stackoverflow.com take 
+considerable efforts to encourage users to score questions and answers with badges 
+and bonus points. Higher quality content is the result, as users are trying to spend 
+more energy on carving out the question or crafting a possible answer.
+One particular successful incentive is the possibility for the asker to flag one  
+answer to their question as the accepted answer (again, there are incentives for  
+the asker to flag such answers). This will result in more score points for the author  
+of the flagged answer.
+Would it not be very useful for the user to immediately see how good their answer is 
+while they are typing it in? This means that the website would continuously evaluate 
+their work-in-progress answer and provide feedback as to whether the answer shows 
+signs of being a poor one or not. This will encourage the user to put more effort into 
+writing the answer (for example, providing a code example, including an image, and 
+so on). So finally, the overall system will be improved.
+Let us build such a mechanism in this chapter.
+
+Classification – Detecting Poor Answers
+[ 90 ]
+Sketching our roadmap
+We will build a system using real data that is very noisy. This chapter is not for the 
+fainthearted, as we will not arrive at the golden solution for a classifier that achieves 
+100 percent accuracy. This is because even humans often disagree whether an answer 
+was good or not (just look at some of the comments on the stackoverflow.com 
+website). Quite the contrary, we will find out that some problems like this one are 
+so hard that we have to adjust our initial goals on the way. But on that way, we will 
+start with the nearest neighbor approach, find out why it is not very good for the 
+task, switch over to logistic regression, and arrive at a solution that will achieve a 
+good prediction quality but on a smaller part of the answers. Finally, we will spend 
+some time on how to extract the winner to deploy it on the target system.
+Learning to classify classy answers
+While classifying, we want to find the corresponding classes, sometimes also called 
+labels, for the given data instances. To be able to achieve this, we need to answer the 
+following two questions:
+•	
+How should we represent the data instances?
+•	
+Which model or structure should our classifier possess?
+Tuning the instance
+In its simplest form, in our case, the data instance is the text of the answer and the 
+label is a binary value indicating whether the asker accepted this text as an answer 
+or not. Raw text, however, is a very inconvenient representation to process for most 
+of the machine learning algorithms. They want numbers. It will be our task to extract 
+useful features from raw text, which the machine learning algorithm can then use to 
+learn the right label.
+Tuning the classifier
+Once we have found or collected enough (text and label) pairs, we can train a 
+classifier. For the underlying structure of the classifier, we have a wide range of 
+possibilities, each of them having advantages and drawbacks. Just to name some of 
+the more prominent choices, there is logistic regression, and there are decision trees, 
+SVMs, and Naive Bayes. In this chapter, we will contrast the instance-based method 
+from the previous chapter with model-based logistic regression.
+
+Chapter 5
+[ 91 ]
+Fetching the data
+Luckily for us, the team behind stackoverflow provides most of the data behind the 
+StackExchange universe to which stackoverflow belongs under a CC Wiki license. 
+While writing this, the latest data dump can be found at http://www.clearbits.
+net/torrents/2076-aug-2012. Most likely, this page will contain a pointer to an 
+updated dump when you read it.
+After downloading and extracting it, we have around 37 GB of data in the XML 
+format. This is illustrated in the following table:
+File
+Size (MB)
+Description
+badges.xml
+309
+Badges of users
+comments.xml
+3,225
+Comments on questions or answers
+posthistory.xml
+18,370
+Edit history
+posts.xml
+12,272
+Questions and answers—this is what 
+we need
+users.xml
+319
+General information about users
+votes.xml
+2,200
+Information on votes
+As the files are more or less self-contained, we can delete all of them except posts.
+xml; it contains all the questions and answers as individual row tags within the root 
+tag posts. Refer to the following code:
+<?xml version="1.0" encoding="utf-8"?>
+<posts>
+  <row Id="4572748" PostTypeId="2" ParentId="4568987"  
+    CreationDate="2011-01-01T00:01:03.387" Score="4"  
+    ViewCount="" Body="&lt;p&gt;IANAL, but &lt;a  
+    href=&quot;http://support.apple.com/kb/HT2931&quot; 
+    rel=&quot;nofollow&quot;&gt;this&lt;/a&gt; indicates to me  
+    that you cannot use the loops in your  
+    application:&lt;/p&gt;&#xA;&#xA;&lt;blockquote&gt;&#xA; 
+    &lt;p&gt;...however, individual audio loops may&#xA;  not  
+    be commercially or otherwise&#xA;  distributed on a  
+    standalone basis, nor&#xA;  may they be repackaged in whole  
+    or in&#xA;  part as audio samples, sound effects&#xA;  or  
+    music beds.&quot;&lt;/p&gt;&#xA;  &#xA;  &lt;p&gt;So don't  
+    worry, you can make&#xA;  commercial music with GarageBand, 
+    you&#xA;  just can't distribute the loops as&#xA; 
+    loops.&lt;/p&gt;&#xA;&lt;/blockquote&gt;&#xA;"  
+    OwnerUserId="203568" LastActivityDate="2011-01- 
+    01T00:01:03.387" CommentCount="1" />
+
+Classification – Detecting Poor Answers
+[ 92 ]
+Name
+Type
+Description
+Id
+Integer
+This is a unique identifier
+PostType
+Integer
+This describes the category of the post. The 
+following values are of interest to us:
+•	 Question
+•	 Answer
+Other values will be ignored
+ParentId
+Integer
+This is a unique identifier of the question 
+to which this answer belongs (missing for 
+questions)
+CreationDate
+DateTime
+This is the date of submission
+Score
+Integer
+This is the score of the post
+ViewCount
+Integer 
+or empty
+This tells us the number of user views for this 
+post
+Body
+String
+This is the complete post as it is encoded in 
+HTML text
+OwnerUserId
+Id
+This is a unique identifier of the poster. If it is 1, 
+it is a wiki question
+Title
+String
+This is the title of the question (missing for 
+answers)
+AcceptedAnswerId
+Id
+This is the ID of the accepted answer (missing 
+for answers)
+CommentCount
+Integer
+This tells us the number of comments for the 
+post
+Slimming the data down to chewable chunks
+To speed up our experimentation phase, we should not try to evaluate our 
+classification ideas on a 12 GB file. Instead, we should think of how we can trim it 
+down so that we can still keep a representable snapshot of it while being able to 
+quickly test our ideas. If we filter an XML for row tags that have a CreationDate 
+of 2011 or later, we still end up with over 6 million posts (2,323,184 questions and 
+4,055,999 answers), which should be enough training data for now. We also do not 
+operate on the XML format as it will slow us down. The simpler the format, the 
+better it is. That's why we parse the remaining XML using Python's cElementTree 
+and write it out to a tab-separated file.
+
+Chapter 5
+[ 93 ]
+Preselection and processing of attributes
+We should also only keep those attributes that we think could help the classifier 
+in determining the good from the not-so-good answers. Certainly, we need the 
+identification-related attributes to assign the correct answers to the questions.  
+Read the following attributes:
+•	
+The PostType attribute, for example, is only necessary to distinguish 
+between questions and answers. Furthermore, we can distinguish between 
+them later by checking for the ParentId attribute. So, we keep it for 
+questions too, and set it to 1.
+•	
+The CreationDate attribute could be interesting to determine the time span 
+between posting the question and posting the individual answers, so we 
+keep it.
+•	
+The Score attribute is, of course, important as an indicator of the 
+community's evaluation.
+•	
+The ViewCount attribute, in contrast, is most likely of no use for our task. 
+Even if it is able to help the classifier distinguish between good and bad, we 
+will not have this information at the time when an answer is being submitted. 
+We will ignore it.
+•	
+The Body attribute obviously contains the most important information. As it 
+is encoded in HTML, we will have to decode it to plain text.
+•	
+The OwnerUserId attribute is useful only if we will take the user-dependent 
+features into account, which we won't. Although we drop it here, we 
+encourage you to use it (maybe in connection with users.xml) to build a 
+better classifier.
+•	
+The Title attribute is also ignored here, although it could add some more 
+information about the question.
+•	
+The CommentCount attribute is also ignored. Similar to ViewCount, it could 
+help the classifier with posts that were posted a while ago (more comments 
+are equal to more ambiguous posts). It will, however, not help the classifier 
+at the time that an answer is posted.
+•	
+The AcceptedAnswerId attribute is similar to the Score attribute, that is, it is 
+an indicator of a post's quality. As we will access this per answer, instead of 
+keeping this attribute, we will create a new attribute, IsAccepted, which will 
+be 0 or 1 for answers and ignored for questions (ParentId = 1).
+
+Classification – Detecting Poor Answers
+[ 94 ]
+We end up with the following format:
+Id <TAB> ParentId <TAB> IsAccepted <TAB> TimeToAnswer <TAB> Score 
+<TAB> Text
+For concrete parsing details, please refer to so_xml_to_tsv.py and choose_
+instance.py. It will suffice to say that in order to speed up the process, we  
+will split the data into two files. In meta.json, we store a dictionary, mapping  
+a post's Id to its other data (except Text in the JSON format) so that we can read 
+it in the proper format. For example, the score of a post would reside at meta[Id]
+['Score']. In data.tsv, we store Id and Text, which we can easily read with  
+the following method:
+def fetch_posts():
+      for line in open("data.tsv", "r"):
+      post_id, text = line.split("\t")
+      yield int(post_id), text.strip()
+Defining what is a good answer
+Before we can train a classifier to distinguish between good and bad answers, we 
+have to create the training data. So far, we have only a bunch of data. What we still 
+have to do is to define labels.
+We could, of course, simply use the IsAccepted attribute as a label. After all, it 
+marks the answer that answered the question. However, that is only the opinion of 
+the asker. Naturally, the asker wants to have a quick answer and accepts the first best 
+answer. If more answers are submitted over time, some of them will tend to be better 
+than the already accepted one. The asker, however, seldom gets back to the question 
+and changes his/her mind. So we end up with many questions with accepted 
+answers that have not been scored the highest.
+At the other extreme, we could take the best and worst scored answer per question 
+as positive and negative examples. However, what do we do with questions that 
+have only good answers, say, one with two and the other with four points? Should 
+we really take the answer with two points as a negative example?
+We should settle somewhere between these extremes. If we take all answers that are 
+scored higher than zero as positive and all answers with 0 or less points as negative, 
+we end up with quite reasonable labels as follows:
+>>> all_answers = [q for q,v in meta.iteritems() if v['ParentId']!=-1]
+>>> Y = np.asarray([meta[aid]['Score']>0 for aid in all_answers])
+
+Chapter 5
+[ 95 ]
+Creating our first classifier
+Let us start with the simple and beautiful nearest neighbor method from the previous 
+chapter. Although it is not as advanced as other methods, it is very powerful. As it 
+is not model-based, it can learn nearly any data. However, this beauty comes with a 
+clear disadvantage, which we will find out very soon.
+Starting with the k-nearest neighbor (kNN) 
+algorithm
+This time, we won't implement it ourselves, but rather take it from the sklearn 
+toolkit. There, the classifier resides in sklearn.neighbors. Let us start with a simple 
+2-nearest neighbor classifier:
+>>> from sklearn import neighbors
+>>> knn = neighbors.KNeighborsClassifier(n_neighbors=2)
+>>> print(knn)
+KNeighborsClassifier(algorithm=auto, leaf_size=30, n_neighbors=2, p=2, 
+warn_on_equidistant=True, weights=uniform)
+It provides the same interface as all the other estimators in sklearn. We train it using 
+fit(), after which we can predict the classes of new data instances using predict():
+>>> knn.fit([[1],[2],[3],[4],[5],[6]], [0,0,0,1,1,1])
+>>> knn.predict(1.5)
+array([0])
+>>> knn.predict(37)
+array([1])
+>>> knn.predict(3)
+NeighborsWarning: kneighbors: neighbor k+1 and neighbor k have the 
+same distance: results will be dependent on data order.
+  neigh_dist, neigh_ind = self.kneighbors(X)
+array([0])
+To get the class probabilities, we can use predict_proba(). In this case, where  
+we have two classes, 0 and 1, it will return an array of two elements as in the 
+following code:
+>>> knn.predict_proba(1.5) 
+array([[ 1.,  0.]]) 
+>>> knn.predict_proba(37) 
+array([[ 0.,  1.]]) 
+>>> knn.predict_proba(3.5)
+array([[ 0.5,  0.5]])
+
+Classification – Detecting Poor Answers
+[ 96 ]
+Engineering the features
+So, what kind of features can we provide to our classifier? What do we think will 
+have the most discriminative power?
+The TimeToAnswer attribute is already present in our meta dictionary, but it 
+probably won't provide much value on its own. Then there is only Text, but in its 
+raw form, we cannot pass it to the classifier as the features must be in numerical 
+form. We will have to do the dirty work of extracting features from it.
+What we could do is check the number of HTML links in the answer as a proxy for 
+quality. Our hypothesis would be that more hyperlinks in an answer indicate better 
+answers, and thus have a higher likelihood of being up-voted. Of course, we want to 
+only count links in normal text and not in code examples:
+import re
+code_match = re.compile('<pre>(.*?)</pre>',
+                        re.MULTILINE|re.DOTALL)
+link_match = re.compile('<a href="http://.*?".*?>(.*?)</a>',
+                        re.MULTILINE|re.DOTALL)
+def extract_features_from_body(s):
+    link_count_in_code = 0
+    # count links in code to later subtract them
+    for match_str in code_match.findall(s):
+          link_count_in_code +=
+          len(link_match.findall(match_str))
+    return len(link_match.findall(s)) – link_count_in_code
+For production systems, we should not parse HTML content with 
+regular expressions. Instead, we should rely on excellent libraries 
+such as BeautifulSoup that does a marvelous job of robustly handling 
+all the weird things that typically occur in everyday HTML.
+With this in place, we can generate one feature per answer. But before we train 
+the classifier, let us first have a look at what we will train it with. We can get a first 
+impression with the frequency distribution of our new feature. This can be done by 
+plotting the percentage of how often each value occurs in the data as shown in the 
+following graph:
+
+Chapter 5
+[ 97 ]
+With the majority of posts having no link at all, we now know that this feature alone 
+will not make a good classifier. Let us nevertheless try it out to get a first estimation 
+of where we are.
+Training the classifier
+We have to pass the feature array together with the previously defined Y labels to the 
+kNN learner to obtain a classifier:
+X = np.asarray([extract_features_from_body(text) for post_id,  
+  text in fetch_posts() if post_id in all_answers])
+knn = neighbors.KNeighborsClassifier()
+knn.fit(X, Y)
+Using the standard parameters, we just fitted a 5NN (meaning NN with k = 5) to our 
+data. Why 5NN? Well, with the current state of our knowledge about the data, we 
+really have no clue what the right k should be. Once we have more insight, we will 
+have a better idea of how to set the value for k.
+Measuring the classifier's performance
+We have to be clear about what we want to measure. The naive but easiest way is to 
+simply calculate the average prediction quality over the test set. This will result in a 
+value between 0 for incorrectly predicting everything and 1 for perfect prediction. 
+Accuracy can be obtained through knn.score().
+
+Classification – Detecting Poor Answers
+[ 98 ]
+But as we learned in the previous chapter, we will not do it just once, but apply 
+cross-validation here using the ready-made KFold class from sklearn.cross_
+validation. Finally, we will average the scores on the test set of each fold and see 
+how much it varies using standard deviation. Refer to the following code:
+from sklearn.cross_validation import KFold
+scores = []
+cv = KFold(n=len(X), k=10, indices=True)
+for train, test in cv:
+  X_train, y_train = X[train], Y[train]
+  X_test, y_test = X[test], Y[test]
+  clf = neighbors.KNeighborsClassifier()
+  clf.fit(X, Y)
+  scores.append(clf.score(X_test, y_test))
+print("Mean(scores)=%.5f\tStddev(scores)=%.5f"%(np.mean(scores,  
+np.std(scores)))
+The output is as follows:
+Mean(scores)=0.49100  Stddev(scores)=0.02888
+This is far from being usable. With only 49 percent accuracy, it is even worse 
+than tossing a coin. Apparently, the number of links in a post are not a very good 
+indicator of the quality of the post. We say that this feature does not have much 
+discriminative power—at least, not for kNN with k = 5.
+Designing more features
+In addition to using a number of hyperlinks as proxies for a post's quality, using 
+a number of code lines is possibly another good option too. At least it is a good 
+indicator that the post's author is interested in answering the question. We can find 
+the code embedded in the <pre>…</pre> tag. Once we have extracted it, we should 
+count the number of words in the post while ignoring the code lines:
+def extract_features_from_body(s):
+  num_code_lines = 0
+  link_count_in_code = 0
+  code_free_s = s
+# remove source code and count how many lines
+  for match_str in code_match.findall(s):
+    num_code_lines += match_str.count('\n')
+    code_free_s = code_match.sub("", code_free_s)
+# sometimes source code contain links,
+
+Chapter 5
+[ 99 ]
+# which we don't want to count
+  link_count_in_code += len(link_match.findall(match_str))
+  links = link_match.findall(s)
+  link_count = len(links)
+  link_count -= link_count_in_code
+  html_free_s = re.sub(" +", " ", tag_match.sub('',  
+    code_free_s)).replace("\n", "")
+  link_free_s = html_free_s
+# remove links from text before counting words
+  for anchor in anchors:
+    if anchor.lower().startswith("http://"):
+    link_free_s = link_free_s.replace(anchor,'')
+    num_text_tokens = html_free_s.count(" ")
+  return num_text_tokens, num_code_lines, link_count
+Looking at the following graphs, we can notice that the number of words in a post 
+show higher variability:
+Training on the bigger feature space improves accuracy quite a bit:
+Mean(scores)=0.58300  Stddev(scores)=0.02216
+
+Classification – Detecting Poor Answers
+[ 100 ]
+But still, this would mean that we could classify roughly four out of the ten wrong 
+answers. At least we are heading in the right direction. More features lead to higher 
+accuracy, which leads us to adding more features. Therefore, let us extend the feature 
+space with even more features:
+•	
+AvgSentLen: This feature measures the average number of words in a 
+sentence. Maybe there is a pattern that particularly good posts don't overload 
+the reader's brain with very long sentences.
+•	
+AvgWordLen: This feature is similar to AvgSentLen; it measures the average 
+number of characters in the words of a post.
+•	
+NumAllCaps: This feature measures the number of words that are written in 
+uppercase, which is considered a bad style.
+•	
+NumExclams: This feature measures the number of exclamation marks.
+The following charts show the value distributions for average sentences and word 
+lengths as well as the number of uppercase words and exclamation marks:
+
+Chapter 5
+[ 101 ]
+With these four additional features, we now have seven features representing 
+individual posts. Let's see how we have progressed:
+Mean(scores)=0.57650  Stddev(scores)=0.03557
+Now that's interesting. We added four more features and got worse classification 
+accuracy. How can that be possible?
+To understand this, we have to remind ourselves of how kNN works. Our 5NN 
+classifier determines the class of a new post by calculating the preceding seven 
+described features, namely LinkCount, NumTextTokens, NumCodeLines, AvgSentLen, 
+AvgWordLen, NumAllCaps, and NumExclams, and then finds the five nearest other 
+posts. The new post's class is then the majority of the classes of those nearest posts. 
+The nearest posts are determined by calculating the Euclidean distance. As we did 
+not specify it, the classifier was initialized with the default value p = 2, which is the 
+parameter in the Minkowski distance. This means that all seven features are treated 
+similarly. kNN does not really learn that, for instance, NumTextTokens is good to 
+have but much less important than NumLinks. Let us consider the following two 
+posts, A and B, which only differ in the following features, and how they compare  
+to a new post:
+Post
+NumLinks
+NumTextTokens
+A
+2
+20
+B
+0
+25
+New
+1
+23
+Although we would think that links provide more value than mere text,  
+post B would be considered more similar to the new post than post A.
+Clearly, kNN has a hard time correctly using the available data.
+Deciding how to improve
+To improve on this, we basically have the following options:
+•	
+Add more data: It may be that there is just not enough data for the learning 
+algorithm and that we simply need to add more training data.
+•	
+Play with the model complexity: It may be that the model is not complex 
+enough or is already too complex. In this case, we could either decrease k  
+so that it would take less nearest neighbors into account and thus would  
+be better at predicting non-smooth data, or we could increase it to achieve 
+the opposite.
+
+Classification – Detecting Poor Answers
+[ 102 ]
+•	
+Modify the feature space: It may be that we do not have the right set of 
+features. We could, for example, change the scale of our current features  
+or design even more new features. Or rather, we could remove some of  
+our current features in case some features are aliasing others.
+•	
+Change the model: It may be that kNN is generally not a good fit for our 
+use case, such that it will never be capable of achieving good prediction 
+performance no matter how complex we allow it to be and how sophisticated 
+the feature space will become.
+In real life, at this point, people often try to improve the current performance by 
+randomly picking one of the preceding options and trying them out in no particular 
+order, hoping to find the golden configuration by chance. We could do the same 
+here, but it will surely take longer than making informed decisions. Let's take the 
+informed route, for which we need to introduce the bias-variance tradeoff.
+Bias-variance and its trade-off
+In Chapter 1, Getting Started with Python Machine Learning, we tried to fit polynomials 
+of different complexities controlled by the dimensionality parameter, d, to fit the 
+data. We realized that a two-dimensional polynomial, a straight line, did not fit the 
+example data very well because the data was not of a linear nature. No matter how 
+elaborate our fitting procedure would have been, our two-dimensional model will 
+see everything as a straight line. We say that it is too biased for the data at hand; it  
+is under-fitting.
+We played a bit with the dimensions and found out that the 100-dimensional 
+polynomial was actually fitting very well into the data on which it was trained (we 
+did not know about train-test splits at the time). However, we quickly found that it 
+was fitting too well. We realized that it was over-fitting so badly that with different 
+samples of the data points, we would have gotten totally different 100-dimensional 
+polynomials. We say that the model has too high a variance for the given data or that 
+it is over-fitting.
+These are the extremes between which most of our machine learning problems 
+reside. Ideally, we want to have both low bias and low variance. But, we are in a bad 
+world and have to trade off between them. If we improve on one, we will likely get 
+worse on the other.
+Fixing high bias
+Let us assume that we are suffering from high bias. In this case, adding more training 
+data clearly will not help. Also, removing features surely will not help as our model 
+is probably already overly simplistic.
+
+Chapter 5
+[ 103 ]
+The only possibilities we have in this case is to either get more features, make the 
+model more complex, or change the model.
+Fixing high variance
+If, on the contrary, we suffer from high variance that means our model is too 
+complex for the data. In this case, we can only try to get more data or decrease the 
+complexity. This would mean to increase k so that more neighbors would be taken 
+into account or to remove some of the features.
+High bias or low bias
+To find out what actually our problem is, we have to simply plot the train and test 
+errors over the data size.
+High bias is typically revealed by the test error decreasing a bit at the beginning, but 
+then settling at a very high value with the train error approaching a growing dataset 
+size. High variance is recognized by a big gap between both curves.
+Plotting the errors for different dataset sizes for 5NN shows a big gap between the 
+train and test error, hinting at a high variance problem. Refer to the following graph:
+
+Classification – Detecting Poor Answers
+[ 104 ]
+Looking at the previous graph, we immediately see that adding more training data 
+will not help, as the dashed line corresponding to the test error seems to stay above 
+0.4. The only option we have is to decrease the complexity either by increasing k or 
+by reducing the feature space.
+Reducing the feature space does not help here. We can easily confirm this by plotting 
+the graph for a simplified feature space of LinkCount and NumTextTokens. Refer to 
+the following graph:
+We will get similar graphs for other smaller feature sets as well. No matter what 
+subset of features we take, the graph will look similar.
+At least reducing the model complexity by increasing k shows some positive impact. 
+This is illustrated in the following table:
+k
+mean(scores)
+stddev(scores)
+90
+0.6280
+0.02777
+40
+0.6265
+0.02748
+5
+0.5765
+0.03557
+
+Chapter 5
+[ 105 ]
+But this is not enough, and it comes at the price of lower classification runtime 
+performance. Take, for instance, the value of k = 90, where we have a very low test 
+error. To classify a new post, we need to find the 90 nearest other posts to decide 
+whether the new post is a good one or not:
+Clearly, we seem to be facing an issue with using the nearest neighbor algorithm 
+for our scenario. It also has another real disadvantage. Over time, we will get more 
+and more posts to our system. As the nearest neighbor method is an instance-based 
+approach, we will have to store all the posts in our system. The more posts we get, 
+the slower the prediction will be. This is different with model-based approaches 
+where you try to derive a model from the data.
+So here we are, with enough reasons now to abandon the nearest neighbor approach 
+and look for better places in the classification world. Of course, we will never know 
+whether there is the one golden feature we just did not happen to think of. But for 
+now, let's move on to another classification method that is known to work great in 
+text-based classification scenarios.
+Using logistic regression
+Contrary to its name, logistic regression is a classification method, and is very 
+powerful when it comes to text-based classification. It achieves this by first 
+performing regression on a logistic function, hence the name.
+
+Classification – Detecting Poor Answers
+[ 106 ]
+A bit of math with a small example
+To get an initial understanding of the way logistic regression works, let us first take a 
+look at the following example, where we have an artificial feature value at the X axis 
+plotted with the corresponding class range, either 0 or 1. As we can see, the data is 
+so noisy that classes overlap in the feature value range between 1 and 6. Therefore, 
+it is better to not directly model the discrete classes, but rather the probability that a 
+feature value belongs to class 1, P(X). Once we possess such a model, we could then 
+predict class 1 if P(X) > 0.5 or class 0 otherwise:
+Mathematically, it is always difficult to model something that has a finite range, 
+as is the case here with our discrete labels 0 and 1. We can, however, tweak the 
+probabilities a bit so that they always stay between 0 and 1. For this, we will need  
+the odds ratio and its logarithm.
+Let's say a feature has the probability of 0.9 that it belongs to class 1, that is, P(y=1) = 
+0.9. The odds ratio is then P(y=1)/P(y=0) = 0.9/0.1 = 9. We could say that the chance 
+is 9:1 that this feature maps to class 1. If P(y=0.5), we would consequently have a 
+1:1 chance that the instance is of class 1. The odds ratio is bounded by 0, but goes to 
+infinity (the left graph in the following screenshot). If we now take the logarithm of 
+it, we can map all probabilities between 0 and 1 to the full range from negative to 
+positive infinity (the right graph in the following screenshot). The best part is that  
+we still maintain the relationship that higher probability leads to a higher log of 
+odds—it's just not limited to 0 or 1 anymore:
+
+Chapter 5
+[ 107 ]
+This means that we can now fit linear combinations of our features (ok, we have only 
+one feature and a constant, but that will change soon) to the 
+ values. Let's 
+consider the linear equation in Chapter 1, Getting Started with Python Machine Learning 
+shown as follows:
+This can be replaced with the following equation (by replacing y with p):
+We can solve the equation for 
+ as shown in the following formula:
+We simply have to find the right coefficients such that the formula will give the 
+lowest errors for all our pairs (xi, pi) in the dataset, which will be detected by  
+Scikit-learn.
+After fitting the data to the class labels, the formula will give the probability for 
+every new data point, x, that belongs to class 1. Refer to the following code:
+>>> from sklearn.linear_model import LogisticRegression
+>>> clf = LogisticRegression()
+>>> print(clf)
+LogisticRegression(C=1.0, class_weight=None, dual=False, fit_
+intercept=True, intercept_scaling=1, penalty=l2, tol=0.0001)
+
+Classification – Detecting Poor Answers
+[ 108 ]
+>>> clf.fit(X, y)
+>>> print(np.exp(clf.intercept_), np.exp(clf.coef_.ravel()))
+[ 0.09437188] [ 1.80094112]
+>>> def lr_model(clf, X):
+return 1 / (1 + np.exp(-(clf.intercept_ + clf.coef_*X)))
+>>> print("P(x=-1)=%.2f\tP(x=7)=%.2f"%(lr_model(clf, -1), lr_
+model(clf, 7)))
+P(x=-1)=0.05	
+P(x=7)=0.85
+You might have noticed that Scikit-learn exposes the first coefficient through the 
+special field intercept_.
+If we plot the fitted model, we see that it makes perfect sense given the data:
+Applying logistic regression to our 
+postclassification problem
+Admittedly, the example in the previous section was created to show the beauty of 
+logistic regression. How does it perform on the extremely noisy data?
+Comparing it to the best nearest neighbour classifier (k = 90) as a baseline, we see 
+that it performs a bit better, but also won't change the situation a whole lot:
+Method
+mean(scores)
+stddev(scores)
+LogReg C=0.1        
+0.6310
+0.02791
+LogReg C=100.00      
+0.6300
+0.03170
+LogReg C=10.00       
+0.6300
+0.03170
+LogReg C=0.01        
+0.6295
+0.02752
+
+Chapter 5
+[ 109 ]
+Method
+mean(scores)
+stddev(scores)
+LogReg C=1.00        
+0.6290
+0.03270
+90NN                
+0.6280
+0.02777
+We have seen the accuracy for the different values of the regularization parameter 
+C. With it, we can control the model complexity, similar to the parameter k for the 
+nearest neighbor method. Smaller values for C result in a higher penalty, that is,  
+they make the model more complex.
+A quick look at the bias-variance chart for our best candidate, C = 0.1, shows  
+that our model has high bias—test and train error curves approach closely but  
+stay at unacceptably high values. This indicates that logistic regression with the 
+current feature space is under-fitting and cannot learn a model that captures the  
+data correctly.
+So what now? We switched the model and tuned it as much as we could with our 
+current state of knowledge, but we still have no acceptable classifier.
+It seems more and more that either the data is too noisy for this task or that our set  
+of features is still not appropriate to discriminate the classes that are good enough.
+
+Classification – Detecting Poor Answers
+[ 110 ]
+Looking behind accuracy – precision  
+and recall
+Let us step back and think again what we are trying to achieve here. Actually, we do 
+not need a classifier that perfectly predicts good and bad answers, as we measured 
+it until now using accuracy. If we can tune the classifier to be particularly good in 
+predicting one class, we could adapt the feedback to the user accordingly. If we had 
+a classifier, for example, that was always right when it predicted an answer to be 
+bad, we would give no feedback until the classifier detected the answer to be bad. 
+Contrariwise, if the classifier succeeded in predicting answers to be always good,  
+we could show helpful comments to the user at the beginning and remove them 
+when the classifier said that the answer is a good one.
+To find out which situation we are in here, we have to understand how to measure 
+precision and recall. To understand this, we have to look into the four distinct 
+classification results as they are described in the following table:
+Classified as
+Positive
+Negative
+In 
+reality 
+it is
+Positive
+True positive (TP)
+False negative (FN)
+Negative
+False positive (FP)
+True negative (TN)
+For instance, if the classifier predicts an instance to be positive and the instance 
+indeed is positive in reality, this is a true positive instance. If on the other hand,  
+the classifier misclassified that instance saying that it is negative while in reality  
+it is positive, that instance is said to be a false negative.
+What we want is to have a high success rate when we are predicting a post as either 
+good or bad, but not necessarily both. That is, we want as many true positives as 
+possible. This is what precision captures:
+
+Chapter 5
+[ 111 ]
+If instead our goal would have been to detect as much good or bad answers as 
+possible, we would be more interested in recall:
+The next screenshot shows all the good answers and the answers that have been 
+classified as being good ones:
+In terms of the previous diagram, precision is the fraction of the intersection of  
+the right circle while recall is the fraction of the intersection of the left circle.
+So, how can we optimize for precision? Up to now, we have always used 0.5 as  
+the threshold to decide whether an answer is good or not. What we can do now  
+is to count the number of TP, FP, and FN instances while varying that threshold 
+between 0 and 1. With these counts, we can then plot precision over recall.
+The handy function precision_recall_curve() from the metrics module does  
+all the calculations for us as shown in the following code:
+>>> from sklearn.metrics import precision_recall_curve
+>>> precision, recall, thresholds = precision_recall_curve(y_test, 
+clf.predict(X_test)
+
+Classification – Detecting Poor Answers
+[ 112 ]
+Predicting one class with acceptable performance does not always mean that the 
+classifier will predict the other classes acceptably. This can be seen in the following 
+two graphs where we plot the Precision/Recall curves for classifying bad (left graph 
+of the next screenshot) and good (right graph of the next screenshot) answers:
+In the previous graphs, we have also included a much better description 
+of a classifier's performance: the area under curve (AUC). This can be 
+understood as the average precision of the classifier and is a great way 
+of comparing different classifiers.
+We see that we can basically forget about predicting bad answers (the left graph of 
+the previous screenshot). This is because the precision for predicting bad answers 
+decreases very quickly, at already very low recall values, and stays at an unacceptably 
+low 60 percent.
+Predicting good answers, however, shows that we can get above 80 percent precision 
+at a recall of almost 40 percent. Let us find out what threshold we need for that with 
+the following code:
+>>> thresholds = np.hstack(([0],thresholds[medium]))
+>>> idx80 = precisions>=0.8
+>>> print("P=%.2f R=%.2f thresh=%.2f" % \ (precision[idx80][0],  
+  recall[idx80][0], threshold[idx80][0]))
+P=0.81 R=0.37 thresh=0.63
+
+Chapter 5
+[ 113 ]
+Setting the threshold at 0.63, we see that we can still achieve a precision of above 
+80 percent, detecting good answers when we accept a low recall of 37 percent. This 
+means that we will detect only one in three bad answers, but those answers that we 
+manage to detect we would be reasonably sure of.
+To apply this threshold in the prediction process, we have to use predict_
+proba(), which returns per class probabilities, instead of predict(), which 
+returns the class itself:
+>>> thresh80 = threshold[idx80][0]
+>>> probs_for_good = clf.predict_proba(answer_features)[:,1]
+>>> answer_class = probs_for_good>thresh80
+We can confirm that we are in the desired precision/recall range using 
+classification_report:
+>>> from sklearn.metrics import classification_report
+>>> print(classification_report(y_test, clf.predict_proba [:,1]>0.63, 
+target_names=['not accepted', 'accepted']))
+                 precision    recall   f1-score    support
+not accepted         0.63      0.93      0.75       108
+accepted             0.80      0.36      0.50        92
+avg / total          0.71      0.67      0.63       200
+Using the threshold will not guarantee that we are always above the 
+precision and recall values that we determined previously together 
+with its threshold.
+
+Classification – Detecting Poor Answers
+[ 114 ]
+Slimming the classifier
+It is always worth looking at the actual contributions of the individual features. 
+For logistic regression, we can directly take the learned coefficients (clf.coef_) 
+to get an impression of the feature's impact. The higher the coefficient of a feature 
+is, the more the feature plays a role in determining whether the post is good 
+or not. Consequently, negative coefficients tell us that the higher values for the 
+corresponding features indicate a stronger signal for the post to be classified as bad:
+We see that LinkCount and NumExclams have the biggest impact on the overall 
+classification decision, while NumImages and AvgSentLen play a rather minor role. 
+While the feature importance overall makes sense intuitively, it is surprising that 
+NumImages is basically ignored. Normally, answers containing images are always 
+rated high. In reality, however, answers very rarely have images. So although in 
+principal it is a very powerful feature, it is too sparse to be of any value. We could 
+easily drop this feature and retain the same classification performance.
+
+Chapter 5
+[ 115 ]
+Ship it!
+Let's assume we want to integrate this classifier into our site. What we definitely do 
+not want is to train the classifier each time we start the classification service. Instead, 
+we can simply serialize the classifier after training and then deserialize it on that site:
+>>> import pickle
+>>> pickle.dump(clf, open("logreg.dat", "w"))
+>>> clf = pickle.load(open("logreg.dat", "r"))
+Congratulations, the classifier is now ready to be used as if it had just been trained.
+Summary
+We made it! For a very noisy dataset, we built a classifier that suits part of our goal. 
+Of course, we had to be pragmatic and adapt our initial goal to what was achievable. 
+But on the way, we learned about the strengths and weaknesses of the nearest 
+neighbor and logistic regression algorithms. We learned how to extract features, 
+such as LinkCount, NumTextTokens, NumCodeLines, AvgSentLen, AvgWordLen, 
+NumAllCaps, NumExclams, and NumImages, and how to analyze their impact on the 
+classifier's performance.
+But what is even more valuable is that we learned an informed way of how to debug 
+badly performing classifiers. This will help us in the future to come up with usable 
+systems much faster.
+After having looked into the nearest neighbor and logistic regression algorithms, 
+in the next chapter we will get familiar with yet another simple yet powerful 
+classification algorithm: Naive Bayes. Along the way, we will also learn how  
+to use some more convenient tools from Scikit-learn.
+

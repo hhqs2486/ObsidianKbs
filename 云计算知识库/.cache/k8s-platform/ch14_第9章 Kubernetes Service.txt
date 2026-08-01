@@ -1,0 +1,942 @@
+仅供｜
+翩．．
+ 
+．．
+ 
+·
+a
+·
+m
+·
+－
+·
+·
+ 
+．
+．．．．
+ 
+．．．．
+”
+”
+E
+I
+－
+－
+血
+阜
+．．．
+ 
+··
+nHU
+a
+－
+－
+·
+·
+1
+ 
+．．
+ 
+噩
+－
+M幸
+B
+·
+E
+·
+。叼
+AY
+ 
+ι，ph
+ 
+d
+ 
+／
+r
+a’’
+ 
+一ι
+……………·．．．．．．．．．．．．．．．．．．．．．．．· 
+Kubernetes Service 
+Kubernetes网络模型设计的一个基础原则是：每个Pod都拥有一个独立的IP地址，而
+且假定所有Pod都在一个可以直接连通的、扁平的网络空间中。所以不管它们是否运行在
+同一个Node（宿主机）中，都要求它们可以直接通过对方的IP进行访问。设计这个原则的
+原因是用户不需要额外考虑如何建立Pod之间的连接，也不需要考虑将容器端口映射到主
+机端端口等问题。
+实际上在Kubernetes世界里，IP是以Pod为单位进行分配的。
+一个Pod内部的所有容
+器共享一个网络堆钱（实际上就是一个网络命名空间，包括它们的IP地址、网络设备、配
+置等都是共享的）。按照这个网络原则抽象出来的
+“一个Pod一个IP
+” 的设计模型也被称作
+IP-per-Pod模型。
+由于Kubernetes的网络模型假设Pod之间访问时使用的是对方Pod的实际地址，所以
+一个Pod内部的应用程序看到的自己的IP地址和端口与集群内其他Pod看到的一样。它们
+都是Pod实际分配的IP地址（从Docker上分配的）。将IP地址和端口在Pod内部和外部都
+保持一致，我们可以不使用NAT来进行转换。地址空间也自然是扁平的。Kubernetes的网
+络之所以这么设计，主要原因就是可以兼容过去的应用，所以这种IP-per-Pod的方案能很
+好地利用现有的各种域名解析和发现机制。
+另外，
+“一个Pod一个IP
+” 的模型还有另外一层含义，那就是同一个Pod内的不同容
+器将会共享一个网络命名空间，也就是说同一个Linux网络协议楼。这就意味着同一个Pod
+内的容器可以通过localhost来连接对方的端口。这种关系与同一个VM内的进程之间的关
+系是一样的，看起来Pod内的容器之间的隔离性降低了，而且Pod内不同容器之间的端口
+是共享的，没有所谓的私有端口的概念了。如果某些应用必须要使用一些特定的端口范围，
+仅供11,nw才k川途或交流学习佼用
+
+仅供a1,n,i业用途或交流学习侦Ill
+第9章
+Kubernetes Service 令115
+那么也可以为这些应用单独创建一些Pod。反之，对那些没有特殊需要的应用，这样做的好
+处是Pod内的容器是共享部分资源的，通过共享资源互相通信显然更加容易和高效。针对
+这些应用，虽然损失了可接受范围内的部分隔离性也是值得的。
+IP-per-Pod模式和Docker原生的通过动态端口映射方式实现的多节点访问模式有什么
+区别呢？主要区别是后者的动态端口映射会引入端口管理的复杂性，而且访问者看到的IP
+地址和端口与服务提供者实际绑定的不同（因为NAT的缘故，它们都被映射成新的地址和
+端口了），这也会引起应用配置的复杂化。同时，标准的DNS等名字解析服务也不适用了。
+甚至服务注册和发现机制都将受到挑战，因为在端口映射情况下，服务自身很难知道自己
+对外暴露的真实的服务IP和端口，而外部应用也无法通过服务所在容器的私有IP地址和端
+口来访问服务。
+总的来说，IP-per-Pod模型是一个简单的兼容性较好的模型。从该模型的网络的端口分
+配、域名解析、服务发现、负载均衡、应用配置和迁移等角度来看，Pod都能够被看作一台
+独立的
+“虚拟机
+” 或者
+“物理机
+” 。
+按照这个网络抽象原则，Kubernetes对集群的网络有如下要求：
+1 ）所有容器都可以在不用NAT的方式下同其他容器通信。
+2）所有节点都可以在不用NAT的方式下同所有容器通信，反之亦然。
+3 ）容器的地址和别人看到的地址是同一个地址。
+这些基本要求意味着并不是只要两台机器运行Docker, Kubernetes就可以工作了。具
+体的集群网络实现必须保障上述基本要求，原生的Docker网络目前还不能很好地支持这
+些要求。实际上，这些对网络模型的要求并没有降低整个网络系统的复杂度。如果程序
+原来在VM上运行，而那些VM拥有独立凹，并且它们之间可以直接透明地通信，那么
+Kubernetes的网络模型就与VM使用的网络模型是一样的。所以使用这种模型可以很容易
+地将己有应用程序从VM或者物理机迁移到容器上。
+当然，Google设计Kubernetes的一个主要运行基础就是其云环境GCE ( Google 
+Compute Engine），在GCE下这些网络要求都是默认支持的。另外，常见的其他公用云服务
+商，如亚马逊等，在它们的公有云计算环境下也是默认支持这个模型的。
+由于部署私有云的场景会更普遍，所以在私有云中运行Kubernetes和Docker集群之
+前，就需要自己搭建出符合Kubernetes要求的网络环境。现在的开源世界有很多开源组件
+可以帮助我们打通Docker容器和容器之间的网络，实现Kubernetes要求的网络模型。当然
+每种方案都有适合的场景，我们要根据自己的实际需要进行选择。
+9.1 
+容器及Pod间通信
+下面讲讲KubernetesPod网络设计模型：
+1 ）基本原则：每个Pod都拥有一个独立的IP地址（IP per Pod），而且假定所有的Pod
+
+116
+令基于Kubernetes 的容器云平台实战
+都在一个可以直接连通的、扁平的网络空间中。
+2 ）设计原因：用户不需要额外考虑如何建立Pod 之间的连接，也不需要考虑将容器端
+口映射到主机端口等问题。
+3 ）网络要求：所有的容器都可以在不用NAT 的方式下同其他容器通信；所有节点都
+可在不用NAT 的方式下同所有容器通信；容器的地址和别人看到的地址是同一个地址。
+1. 容器间通信
+同一个Pod 的容器共享同一个网络命名空间，它们之间的访问可以通过localhost 地址
+和容器端口实现。图9-1 所示为容器间通信。
+2. 同－Node 中Pod 间通信
+同－Node 中Pod 的默认路由都是DockerO 的地址，由于它们关联在同一个DockerO 网
+桥上，地址网段相同，所以它们之间能直接通信。图9-2 所示为Pod 间通信。
+Node! 
+Node! 
+Pod! 
+Pod! 
+Pod2 
+DockerO 网桥
+DockerO 网桥（IP3)
+图9-1
+容器间通信
+图9-2
+Pod 间通信
+Podl 和Pod2 通过Veth 连接在DockerO 网桥上，
+它们的IP 地址IPl 、IP2 都是从
+DockerO 的网段上动态获取的，它们与网桥本身的IP3 是同一个网段。在Podl 、Pod2 的
+Linux 协议枝上，默认路由都是DockerO 的地址，也就是所有非本地地址的网络数据都会默
+认发送到DockerO 网桥，由DockerO 网桥直接中转。
+3.不同Node 中Pod 间通信
+DockerO 网桥与宿主机网卡是两个完全不同的IP 网段，并且Node 之间的通信只能通
+过宿主机的物理网卡进行，因此要想实现位于不同Node 上的Pod 容器之间的通信，就必须
+想办法通过主机的IP 地址进行寻址和通信。
+另一方面，这些动态分配并且隐藏在DockerO 之后的所谓
+“私有IP 地址
+” 也是可以找
+到的。Kubernetes 会记录所有正在运行的Pod 的IP 分配信息，并且将这些信息保存在巳tcd
+中（作为Service 的Endpoint），这些私有IP 对Pod 到Pod 之间的通信是非常重要的。
+综上，要想支持不同Node 上Pod 之间的通信，就要达到两个条件：
+
+第9章
+Kubernetes Service •!• 117 
+1 ）在整个Kubernetes集群中对Pod的IP进行规划，不能有冲突。
+2）找到一种方法，将Pod的IP和所在Node 关联起来，通过这个关联让Pod可以相互
+访问。
+根据条件l在部署Kubernetes的时候，对DockerO的IP地址进行规划，保证每一个
+Node上的DockerO地址没有冲突。我们可以在规划后手工配置到每个Node上，或者做一
+个分配规则，由安装的程序自己去分配占用，Kubernetes的网络增强软件Flannel就能够管
+理资源的分配。
+根据条件2的要求，Pod中的数据在发出时需要有一个机制，能够知道对方Pod的回
+地址挂在哪个具体的Node上，也就是说先要找到Node对应宿主机的IP地址，将数据发送
+到这个宿主机的网卡上，然后在宿主机上将相应的数据发送到具体的DockerO上。
+一旦数
+据到达宿主机Node，则该Node内部的DockerO便知道如何将数据发送到Pod。
+跨节点的Pod通信模型如图9-3所示。
+Node! 
+Node2 
+Pod! 
+Pod2 
+DockerO网桥
+图9-3
+跨节点通信
+9.2 
+kube-proxy 
+kube-proxy是－个简单的网络代理和负载均衡器，它的作用主要是负责Service的实
+现：实现从Pod到Service，
+以及从NodePort向Service的访问。
+实现方式：
+• userspace方式。通过kube-proxy 实现LB的代理服务，是kube-proxy的最初版本，
+较为稳定，但是效率不高。
+• iptables方式。采用iptables来实现LB，是当前kube-proxy的默认方式。
+下面是iptables模式下kube-proxy的实现方式（如图9-4所示）：
+• kube-proxy监视Kubernetes 主服务器对服务／端点对象的各种增、删、改等操作。
+对于每个服务，它配置iptables规则，捕获Service的ClusterIP和端口的流量，并
+
+118令基于Kubernetes的窑器云平台实战
+将流量重定向到服务的后端之一。对于每个Endpoint对象，
+它选择后端Pod的
+iptables规则。
+·默认情况下，后端的选择是随机的。可通过service.spec.sessionAffinity设置为
+“ClientlP
+” 来选择基于客户端IP的会话关联。
+·与用户空间代理一样，最终结果是绑定到服务的IP：端口的任何流量被代理到适当
+的后端，而客户端不知道关于Kubernetes或服务或Pod的任何信息。
+图9-4
+Service实现（kube-proxy)
+9.3 
+DNS服务发现机制
+在Kubernetes系统中，当Pod需要访问其他Service时，可通过两种方式来发现服务，
+即环境变量和DNS方式。不过，使用环境变量是有限制条件的，
+如Service必须先于Pod
+之前创建，系统才能在新建Pod时自动设置与Service相关的环境变量。而DNS则没有这
+个限制，其通过提供全局的DNS服务器来完成服务的注册和发现。
+kube-dns用来为Service分配子域名，以便集群中的Pod可通过DNS域名获取Servic巳
+的民问地址；通常kube:dns会为Service赋予一个名为
+“ service_nam巳.namespace_ name. 
+svc.cluster domain
+，，的记录，用来解析Service的ClusterIP。Kubernetes vl .4版本之前，
+其主要由Kube2sky、Etcd、Skydns、Exechealthz四个组件组成。Kubernetes v 1.4版本及之后，
+其主要由Kubedns、Dnsmasq、Exechealthz三个组件组成（如图9-5所示）。
+Kubedns通过Kubernetes API监视Service资源变化并更新DNS记录，并使用树形结
+构在内存中保存DNS记录，主要为Dnsmasq提供查询服务，服务端口是10053。
+Dnsmasq是一款小巧的DNS配置工具，其在kube-dns插件中的作用是：通过kube­
+dns容器获取DNS规则，在集群中提供DNS查询服务；提供DNS缓存，提高查询性能；
+降低kube-dns容器的压力、提高稳定性。
+Exechealthz主要提供健康检查功能。
+
+第9 章
+Kubernetes Service •!• 119 
+Kubemetes 
+Service 
+Service resources 
+Service ClusterIP 
+kube-dns Pod 
+图9 -5
+DNS 服务
+health AP! 
+Kubemetes 
+LivenessProbe 
+Kubemetes 提供了一个DNS 插件Service ，它使用skydns 自动为其他Service 指派
+DNS 名字。如果它在集群中处于运行状态，可以通过如下命令来检查：
+# Kubectl get services kube- dns --n缸nespace=kube-system
+NAME 
+CLUSTER-IP 
+EXTERNAL-IP 
+PORT ( S) 
+AGE 
+kube-dns 
+10.0.0.10 
+<none> 
+53/UDP,53/TCP 
+Bm 
+如果没有运行，可以启用它。下面假设已经有一个Service ，它具有一个长久存在的IP
+(my-nginx ），以及一个为该IP 指派名称的DNS 服务器（kube-dns 集群插件），所以可以通过
+标准做法，使得在集群中的任何Pod 都能与该Service 通信（如gethostbyname ）。让我们运
+行另一个curl 应用来进行测试：
+# Kubectl run curl --image=radial/busyboxplus:curl -i --tty 
+Waiting for pod default/curl-131556218-9fnch to be running, status is Pending, 
+pod ready: false 
+Hit enter for command prompt 
+然后，按回车并执行命令nslookup my-nginx: 
+# nslookup my-nginx 
+Server: 
+10 .0.0. 10 
+Address 1: 10.0.0.10 
+Name: 
+my-nginx 
+Address 1: 10.0.162.149 
+9.4 
+Headless 服务
+对于不想做负载均衡或者不希望只有一个Cluster IP 时，可以创建－个Headless 类型
+的Service ，将spec.clusterIP 字段设置为“ None ，，。对于这样的Service ，系统不会为它们
+分配对应的IP ，也不会在Pod 中为其创建对应的全局变量。
+DNS 则会为Service 的name 添
+加一系列的A 记录(IP 地址指向），直接指向后端映射的Pod 。此外，
+kube-proxy 也不会处
+
+120
+令
+基于Kubernetes 的窑器云平台实战
+理这类S ervice ，没有负载均衡也没有请求映射。
+Endpoint Controller 则会依然创建对应的
+Endpoint 。
+这个操作的目的是为了让用户减少对Kubernetes 系统的依赖，如想自己实现自动发现
+机制等。
+Application 可以通过API 轻松地结合其他自动发现系统。
+Statefu!Set 需要Headless Service 负责Pod 的网络的一致性（必须创建此服务）。
+apiVersion: vl 
+kind: Service 
+metadata: 
+name: nginx 
+labels: 
+app: nginx 
+spec: 
+ports: 
+- port: 80 
+name: web 
+clusterIP: None 
+selector: 
+app: nginx 
+9.5 
+Kubernetes 服务
+Service 是Kub巳metes 最核心的概念，通过创建Service ，可以为一组具有相同功能的容
+器应用提供一个统一的人口地址，并且将请求进行负载分发到后端的各个容器应用上。如
+图9-6 所示。
+Serv ic巳（服务）是一个虚拟概念，逻辑上代理
+后端Pod 。众所周知，
+Pod 生命周期短，状态不稳
+定，
+Pod 异常后新生成的Pod IP 会发生变化，之前
+Pod 的访问方式均不可达。通过S巳rvice 对Pod 做代
+理，因为Service 有固定的IP 和Port, IP : Port 组
+合自动关联后端Pod ，所以，
+即使Pod 发生改变，
+Kubernetes 内部会更新这组关联关系，使得Service
+能够匹配到新的Pod 。这样，通过Service 提供的固
+定IP ，用户再也不用关心需要访问哪个Pod ，
+以及
+Pod! 
+I 0.1 .66.86:80 
+Pod2 
+I 0.1 .66.87:80 
+图9-6
+Service 
+Pod 是否发生改变，大大提高了应用的服务质量。如果Pod 使用RC 创建了多个副本，那么
+Service 就能代理多个相同的Pod ，通过kube-proxy 实现负载均衡。
+集群中每个Node 节点都有一个组件kube-proxy ，它实际上是为Service 服务的。通过
+kube-proxy ，实现流量从S ervice 到Pod 的转发，
+kube-proxy 也可以实现简单的负载均衡
+功能。
+
+第9 章
+Kubernetes Service •!• 121 
+kube-proxy 代理模式：
+userspace 方式。
+kube-proxy 在节点上为每一个服务创建一个临
+时端口，从Service 的IP:
+Port 过来的流量转发到这个临时端口上，
+kube『proxy 会用内部的
+负载均衡机制（轮询），选择一个后端Pod ，然后建立iptables ，通过ip tables 把流量导人这
+个Pod 里面。
+yam！格式的Service 定义文件的完整内容如下：
+apiVersion:vl 
+kind:Service 
+metadata: 
+n缸ne: string 
+namespace:string 
+labels: 
+- name:string 
+annotations: 
+-
+n缸ne:string
+spec : 
+selector: [ ] 
+type:string 
+clusterIP:string 
+sessionAffinity:string 
+ports: 
+- name:string 
+qd nt 
+·-
+n 
+r·
+-
+t 
+t··n 
+st
+-- 
+tr·
+- 
+ltot 
+onpr 
+c
+--to 
+o
+--
+ep 
+ttqe 
+orr
+‘q 
+roao 
+pptn 
+status: 
+loadBalancer: 
+qd 
+n 
+-l 
+r 
+＋
+」
+s 
+qd·· 
+ne 
+--
+m 
+ra 
+tn 
+··st 
+s··S 
+SD
+&
+O 
+e
+---
+n 
+r 
+同
+回d
+n 
+-L 
+定义文件中描述了Service 的属性和行为，其中的主要要素如下：
+1 ) apiVersion ：声明Kubernetes 的API 版本，目前是vi 。
+2) kind ：声明API 对象的类型，这里类型是Service 。
+3) metadata ：设置Service 的元数据。
+•name ：指定Service 的名称，名称必须在namespace 内唯一。
+4) spec ：配置Service 的具体规格。
+• namespace ：命名空间，不指定系统时将使用名为“ default ”的命名空间。
+• 
+selector ：指定Service 的Label Selector 来选择具有指定Pod 的Label 。
+• type : Service 的类型，指定Service 的访问方式，默认为ClusterIP 。
+ClusterIP ，虚拟
+服务IP 地址，该地址用于Kub巳metes 集群内部的Pod 访问，在Node 上kube-proxy
+通过设置的iptables 规则进行转发。
+NodePort ，使用宿主机的端口，使能够访问各
+Node 的外部客户端通过Node 的IP 地址和端口号就能访问服务。
+LoadBalancer ，使
+
+122 
+•！•
+基于Kubernetes 的窑器云平台实战
+用外部负载均衡器完成到服务的负载分发，需要在spec . status . loadBalancer 字段指定
+外部负载均衡器的IP 地址，并同时定义nodePort 和clusterIP ，用于公有云环境。
+• 
+clusterIP ：虚拟服务IP 地址，当type=ClusterIP 时，如果不指定，则系统进行自动分
+配，也可以手动指定；当type=LoadBalancer 时，则需要指定。
+5 ) Ports: Service 需要暴露的端口列表。
+•name ：端口名称。
+•protocol ：端口协议，支持TCP 和UDP ，默认为TCP 。
+•port ：服务监听的端口号。
+• targetP。此：需要转发到后端Pod 的端口号。
+• nodePort ：当spec.type=NodePort 时，指定映射到物理机的端口号。
+6) Statu s ：当spec.
+p巳＝LoadBal ancer 时，设置外部负载均衡的地址，用于公有云环境。
+• 
+loadBalancer.ingress.ip：外部负载均衡的IP 地址。
+• 
+loadBalancer.ingress.hostname ：外部负载均衡的主机名。
+通过定义文件创建Service:
+Kubectl create - f my- app-service.yaml 
+9.5.1 
+Cluste 「I P
+Cluster IP 服务是Kubernetes 默认的服务类型，如图9 - 7 所示。如果用户在集群内部创
+建一个服务，则在集群内部的其他应用程序可以对这个服务进行访问，但是不具备集群外
+部访问的能力。
+回
+Pod! 
+Pod2 
+Pod3 
+10. 1.66 . 86:80 川10.1.66.87:80 11 10.1.66.88:80 
+图9-7 ClusterIP 
+Service 的ClusterIP 地址是Kubemetes 系统中虚拟的IP 地址，
+由系统动态分配。
+
+第9 章
+Kubernetes Service 令
+123
+Kubemetes 集群中的每个节点都运行kube-proxy ; kube-proxy 负责为Extema!Name 以
+外的服务实现一个虚拟IP 形式；从Kubernetes v 1.2 起，
+iptables 代理是默认的。
+从Kubernetes vl.0 起，服务由第3 层（TCP/UDP over IP）构造。在Kubemetes v 1.1 中，
+添加了Ingress API ，该接口提供了第7 层（HTTP ）服务。
+Cluster IP 服务的yam ！文件内容如下：
+咱
+4
+ve 
+c 
+n
+-L 
+ov 
+lr 
+se 
+rnb 
+e
+-- 
+vd 
+-ln 
+pl 
+ak 
+metadata: 
+narne:my-internal-service 
+selector: 
+app:my-app 
+spec: 
+type:ClusterIP 
+ports: 
+- narne:http 
+port: 80 
+targetPort:BO 
+protocol:TCP 
+如果要从互联网访问ClusterIP 服务，可以通过Kubernetes 代理进行访问。
+启动Kubemetes 代理：
+# kubectl proxy --port=8080 
+现在，可以通过Kubemetes API 及以下模式来访问这个服务：
+http://localhost:8080/api/vl/proxy/namespaces/<NAMESPACE>/services/<SERVICE-
+NAME>: <PORT-NAME>/ 
+通过这种方式可以使用以下地址来访问我们上述定义的服务：
+http://localhost:8080/api/vl/proxy/namespaces/default/servi ces/my-internal-
+service:http/ 
+使用Kubemetes 代理的方式来访问服务的场景如下：
+I ）调试服务或者某些情况下通过笔记本电脑直接连接服务。
+2 ）允许内部通信，显示内部的仪表盘（dashboards ）等。
+因为此种方式需要作为一个授权用户运行kubectl ，因此不应该用于互联网访问或者用
+于生产环境。
+9.5.2 
+NodePort 
+NodePort 服务是外部访问服务的最基本方式。顾名思义，
+NodePort 就是在所有节点或
+者虚拟机上开放特定的端口，该端口的流量将被转发到对应的服务，如图9 - 8 所示。
+
+124 令
+基于Kubernetes 的窑器云平台实战
+~ 
+~ 
+~ 
+~ 
+~ 
+~ 
+Service Bl 
+type ClusterIP 
+192.168.1.22/24 
+Service Al 
+type ClusterIP 
+192.168.1.32/24 
+selector 
+app=Al 
+图9”8
+NodePort 服务的yaml 文件内容如下：
+apiVersion :vl 
+kind:Service 
+metadata: 
+name :my- nodeport-service 
+selector: 
+app:Al 
+spec : 
+type:NodePort 
+ports : 
+- name:http 
+port: 80 
+targetPort:BO 
+nodePort:31500 
+protocol:TCP 
+NodePort 
+. 
+.. 
+NodePort 
+在具有集群内部IP 的基础上，在集群的每个节点上的端口（每个节点上的相同端口）
+上公开服务。用户可以在任何＜NodelP>:NodePort 地址上访问服务。
+将类型宇段设置为“ NodePort ”，
+Kubernetes 主机将从配置的范围中（默认值：
+30000 ～32767 ）分配一个端口，每个节点将代理该端口（每个节点上相同的端口号）到用
+户的服务。
+NodePort 方式的服务类型是NodePort ，这需要指定一个称作nodePort 的附加端口，并
+在所有节点上打开对应的端口。如果不具体指定端口，集群会选择一个随机的端口。在大
+多数情况下，可以通过Kubernetes 选择合适的端口。
+NodePort 方式的缺点主要有：
+1 ）每个服务占用一个端口。
+2 ）可以使用的范围端口为30000 ～32767 （可以通过api-server 启动参数service-node­
+port-range ，指定限制范围，默认为30000 ～32767 ）。
+
+·:· 
+第9 章
+125 
+3 ）如果节点／虚拟机IP 地址发生更改，需要进行相关处理。
+基于上述原因，笔者不建议在生产环境中使用直接暴露服务。如果运行的服务不要求
+高可用或者非常关注成本，这种方法则比较适合，很好的例子就是用于演示或临时使用的
+程序。
+Kubernetes Service 
+Load Balancer 
+LoadBalancer 服务是暴露服务至互联网最标准的方式。除了具有集群内部IP 以及在
+NodePort 上公开服务之外，还要求云提供商负载均衡器将请求转发到每个Node 节点的
+NodePort 端口上，如图9-9 所示。
+9.5.3 
+GET 40.30.20. I 01 A I 
+Load Balancer 
+Service:AI 
+I 0.10.1.2:31500 
+10.10.1.3:31500 
+Service:BI 
+I 0.10.1.2:31600 
+10.10.1.3:31600 
+loadBalancer 
+VIF:40.30.20. I 0 
+Service Bl 
+type ClusterIP 
+192.168.1.22/24 
+Service Al 
+type ClusterlP 
+192.168.1.32/24 
+咀
+画
+画
+画
+画
+画
+NodePort 
+selector 
+app=AI 
+LoadBalancer 
+来自外部负载均衡器的流量将被定向到后端Pod ，尽管其工作原理取决于云提供商。一
+些云提供商允许指定LoadBalancerIP 。在这些情况下，将使用用户指定的LoadBalancerIP
+创建负载均衡器。如果未指定LoadBalancerlP 宇段，则会分配临时IP 给LoadBalancer。如
+果指定了LoadBalancetIP ，但云提供程序不支持该功能，则该字段将被忽略。
+何时使用这种访问方式？这是公开服务的默认方法。指定的端口上流量都将被转发到
+对应的服务，不经过过滤和其他路由等操作。这种方式意味着转发几乎任何类型的流量，
+如HTTP 、
+TCP 、UDP 、
+Websockets 、
+gRPC 等。
+这种方式最大的缺点是，负载均衡器公开的每个服务都将获取独立IP 地址，而我们则
+必须为每个暴露的服务对应的负载均衡器支付相关费用，这可能会非常昂贵。
+图9-9
+Ingress 
+Ingress 并不是服务类型中的一种，它位于多个服务的前端，充当一个智能路由或者集
+群的人口点，如图9-10 所示。
+GKE 默认的Ingress 控制器将启动一个HTTP
+(S ）的负载均衡器，这将使用户可以基于
+9.5.4 
+
+126 
+•！•
+基于Kubernetes 的容器云平台实战
+访问路径和子域名将流量路由到后端服务。例如，你可以将“ app.sample.com ”下的流量转
+发到App 服务，将“ sample.com/app 11 ”路径下的流量转发到Appl 服务。
+Kubernetes Cluster 
+Ingress 
+app.sample.com 
+s缸nple.com/app I 
+other 
+图9-10
+Ingress 
+在GKE 上定义L7 层HTTP 负载均衡器的Ingress 对象定义的yam！文件内容如下：
+apiVersion:extensions/vlbetal 
+kind:Ingress 
+metadata: 
+n缸ne:my-ingress
+spec: 
+backend: 
+serviceName:other 
+servicePort:8080 
+rules: 
+- host:app.sample.com 
+http: 
+paths: 
+- backend: 
+serviceName:app 
+servicePort:8080 
+- host:sample.com 
+http: 
+paths: 
+- path:/appl/* 
+backend: 
+serviceName:appl 
+servicePort:8080 
+何时使用这种方式？
+Ingress 方式可能是暴露服务的最强大方式，但也最复杂。现在有
+不同类型的Ingress 控制器，包括Google 云负载均衡器、
+Nginx 、
+Contour 、
+Istio 等，它们
+的功能各有不同。此外，还有Ingress 控制器的许多插件，如cert-manager 可以用来自动为
+服务提供SSL 证书。
+如果希望在同一个IP 地址下暴露多个服务，并且它们都使用相同的L7 协议（通常是
+
+第9 章
+Ku由bernetes Service •!• 127 
+HTTP ），则Ingress 方式最有用。如果使用本地GCP 集成，则只需支付一台负载均衡器费
+用，并且是“智能”性Ingress ，可以获得许多开箱即用的功能（如SSL 、Auth 、路由等）。
+9.6 
+网络策略
+NetworkPolicy 说明一组Pod 之间是否被允许互相通信，以及如何与其他网络端点进行
+通信。N巳tworkPolicy 资源使用标签来选择Pod ，通过定义规则来指明允许什么流量可以进
+入选中的Pod 中。
+默认情况下，
+Pod 是未隔离的，可以从任何的源接收请求；一旦Pod 设置网络策略后，
+Pod 就变成隔离的。一旦Namespace 中配置的网络策略选中某Pod ，该Pod 将拒绝任何该
+网络策略不允许的连接，其他未被网络策略选中的Pod 将继续接收所有流量。
+下面是一个NetworkPolicy 的例子：
+apiVersion:networking.kubernetes.io/vl 
+kind:NetworkPolicy 
+metadata: 
+name:test-network-policy 
+namespace:default 
+spec: 
+podSelector: 
+matchLabels: 
+role:db 
+ingress: 
+- from: 
+- namespaceSelector: 
+matchLabels: 
+project:myproject 
+- podSelector: 
+matchLabels: 
+role:frontend 
+ports: 
+- protocol:TCP 
+port:6379 
+~ 注
+NetworkPolicy 是通过网络插件来实现的，所以必须使用一种支持NetworkPolicy 的
+？叫网络方案才能实现。
+• spec: NetworkPolicy spec 具有在给定命名空间中定义特定网络的全部信息。
+• podSelector ：每个N etworkPolicy 包含一个pod Selector ，它可以选择一组Pod 实施
+网络策略。由于NetworkPolicy 当前只支持定义Ingress 规则，
+podSelector 实际上为
+该策略定义了一组
+Pod 。一个空的podSelector 选择该命名空间中的所有Pod 。
+
+128 
+•！•
+基于Kubernetes 的容器云平台实战
+• ingress ：每个NetworkPolicy 包含了一个白名单Ingress 规则列表。每个规则只允许
+能够匹配上from 和ports 配置段的流量。示例中的NetworkPolicy 包含单个规则，从
+这两个源中匹配单个端口上的流量，第一个是通过namespaceSelector 指定的，第二
+个是通过podSelector 指定的。
+因此，对于上面示例的NetworkPolicy:
+1 ）在“ default ”命名空间中隔离了标签“ role=db ”的Pod 。
+2 ）在“ default ”命名空间中，允许任何具有“ role=frontend ”的Pod 连接到标签为
+“ role=db ”的Pod 的TCP 端口6379 。
+3 ）允许在Namespace 中任何具有标签“ project=myproject ”的Pod 连接到“ default ”
+Names pace 中标签为“ role=db ”的Pod 的TCP 端口6379 。
+通过创建一个可以选择所有Pod 但不允许任何流量的NetworkPolicy ，可以为一个
+Namespace 创建一个“默认的”隔离策略，如下所示：
+apiVersion : networking.kubernetes.io/vl 
+Kind: NetworkPolicy 
+Metadata: 
+Name: default-deny 
+spec: 
+podSelector: 
+这确保了即使是没有被任何NetworkPolicy 选中的Pod ，其仍然是被隔离的。
+在命名空间中，如果允许所有流量进入所有Pod ，可以通过创建一个策略来显式地指定
+允许所有流量：
+apiVersion:networking.kubernetes.io/vl 
+kind:NetworkPolicy 
+metadata: 
+name:allow-all 
+spec: 
+podSelector: 
+ingress: 
+-
+{} 
+9.7 
+完整的Kubernetes 服务发布实践
+本章前几节介绍了在Kubernetes 标准体系架构下的服务发布方式，各种服务发布的方
+式有其适用的场景，比如：
+1 ) ClusterIP ：是Kubernetes 默认的服务发布方式，由于ClusterIP 属于Kubernetes 内
+部的虚拟网络IP 地址，外部无法寻址，因此主要适用于Kubernetes 集群内部的服务调用。
+2) NodePort: NodePort 是Kubernetes 提供给集群外部客户访问服务的一种方式，用于
+弥补ClusterIP 只供Kubernetes 集群内部调用的不足。
+
+第9 章
+Kubernetes Service •!• 129 
+3 ) LoadBalancer ：类型为LoadBalancer 的服务，也是提供给外部客户访问服务的一种
+方式，
+LoadBalancer 服务建立在NodePort 服务的基础上，而且需要通过第三方平台创建负
+载均衡实例，并将每个Node 节点加为该负载均衡的成员，这样负载均衡实例接收到请求
+后，会转发请求到各Node 节点。
+4) Ingress ：一种基于HTTP 方式的路由转发机制，会将外部的HTTP 服务请求转发给
+内部的服务（ClusterIP 、
+NodePort 或者LoadBalancer ）。这种方式的主要应用场景是使用户
+可以基于访问路径和子域名将流量路由到后端服务，避免暴露多个IP 地址给外部。
+为了让读者更深刻地理解Kubernetes 体系中各服务之间的关系，现举例介绍一个更为
+复杂的应用场景。金融类应用对连续性、可靠性要求很高，需要双活部署在同城的两个数
+据中心，应用对外提供统一的服务地址。
+虽然Kubernetes 借助Replicaset（或ReplicationController ）天然支持Pod 级别的高可用，
+但我们不能假定数据中心永远不会出问题，数据中心也可能遭遇区域断电、地震等大规模
+灾难。
+自
+1.2 版本开始，
+Kub巳metes 开始引入Federation 提供跨集群的高可用，通过将不同
+AZ 、不同Region 的Kubernetes 集群组成同一个联邦，我们可以实现使Kubernetes 满足生
+产系统的要求。
+要实现上述应用场景的部署需求，采用如图9-1 1 所示软件架构，底层I aaS 采
+用OpenStack 的双分区（Aviailablity Zone, AZ ）部署架构，每个AZ 部署一个完整的
+Kubernetes 集群，
+Kubernetes 集群间形成Kubernetes 联邦集群，
+PaaS 集群管理平台中的
+Federation API Server 作为Kubernetes 集群联邦统一的面向用户的管理接口，接受用户对各
+类Kubernetes 对象的增、删、改、查处理要求，并根据PaaS 集群管理平台内的调度器和控
+制器的控制指令，将分布在全球各地的服务请求转发至Kub ernetes 集群。
+1. Cluste r Controller 
+集群要加入联邦，首先要通过Federation API Server 创建Kubernetes 集群对象，集群控
+制器负责针对Kubernetes 集群做健康检查。
+2. Federation Re plicaset Controller 
+Federation Replicaset Controller 负责将用户定义的Replicaset ，依据特定的调度算法，
+转发至目标Kubemetes 集群。当用户定义了Replicaset ，包括Replica 、
+Pod 、
+Container 等
+信息，可以通过Annotation 指定该Replicaset 在每个目标Kubernetes 集群要部署的副本数
+量。如果未指定，那么该Replicaset 会被平均分配到每个Kubemetes 集群中。
+Federation Replicaset Controller 同时会监控每个集群中Replicaset 的状态，确保所有集
+群中的Pod 副本总和与用户期望吻合，并承担弹性伸缩或者故障迁移等职责。
+3. Fede ration ServiceControlle r 
+Federation Service Controller 负责将用户定义的Service spec 转发到所有状态正常的
+Kubernetes 集群中（Replicaset Controller 是依据调度算法调度，Service 和Ingress 不涉及调度）。
+
+130 
+.》
+基于Kubernetes 的窑器云平台实战
+PaaS 集群管理平台
+I 
+Federation API Server 
+，－』－－－－－－‘－－－－－－－－－－－”－－－－－－－－·· ’” －－－、
+t
+AZ! 
+API Server 
+区域数据中心
+: AZ2 
+图9-11
+服务发布整体架构图
+API Server 
+' ’ 
+$ 
+每个Kubernetes 集群的Service Controller 接收到Service 创建或更新事件后，如果该服
+务类型为LoadBalancer ，则调用Open Stack 负载均衡服务为其负载均衡外部访问IP ，并将
+状态汇报给Kubernetes 集群联邦。
+Federation Service Controller 承担更多的监控和协调职责，包括：
+·监控所有Kubernetes 集群的Service 状态，如果LoadBalancer IP 发生变化，则更新
+Federation API Server 。
+·监控所有Kubernetes 集群中Service 对应的Endpoint 信息。
+图9- 12 展示了集群拓扑下，服务创建的流程。
+9.7.1 
+各Kubernetes 集群Load Balancer 服务发布
+每个Kubernetes 的管理节点中都有Controller Manager ，其内部都包含Service
+Controller 模块，
+Service Controller 负责监控Service 的变化，如果发生变化的Service 是
+LoadBalancer 类型的，则Service Controller 确保外部的LoadBalancer 被成功地创建和删除。
+Service Controller 定期检查集群的Service ，确保相应的外部LoadBalancer 存在。
+Service
+
+第9 章
+Kubernetes Service 令
+131
+Controller 定期检查集群Node 节点的状态，确保外部LoadBalancer 被更新。
+2. 捕获各种，
+服务事件’
+I. 创建联邦服务
+Federation Server 
+8. 更新负载均衡服务IP
+Federation Service Controller 
+3. 将服务推送给各
+集群AP! Server 
+: 7. 捕获状态：10 . 捕获状态变化
+变化
+LoadBalancer 提供者
+4. 捕获各种，
+服务事件’
+AP! Server 
+6. 报告状态
+I
+9. 更新端点信息
+Service Controller 
+EndPoint Controller 
+5 配置负载均衡和VIP
+图9-12
+服务创建流程
+图9-13 展示的是当Service Controller 模块调用OpenStack 负载均衡服务时的业务处理
+流程。每个Kubernetes 集群为每个OpenStack 的AZ 区域创建一个负载均衡实例，并接收
+Service Controller 的配置。
+Service 控制器监测到
+Service 有更新
+Openstack 
+LoadBalancer 
+LoadBalance 服务
+通知Openstack 创建负载J
+创建负载均衡服务
+均衡实例
+’｜创建负载均衡监昕服务
+返回负载均衡创建结果
+创建负载均衡池
+创建负载均衡池中添加
+负载均衡成员
+（使用NodeIP: NodePort) 
+创建负载均衡监控服务
+创建负载均衡浮动IP
+图9-13
+负载均衡服务发布过程
+最终，每个Service Controller 成功创建一个负载均衡池实例（通过LoadBalancer 服务
+对象的创建接口来指定服务均衡的对外访问接口，井将Kubernetes 集群所创建的NodePort
+服务端点（各Node 节点的NodeIP:
+NodePort）以负载均衡成员的方式加入）。
+如图9-14 所示，这种配制方式可确保业务请求能根据负载均衡实例配置规则跳转到
+Kubernetes 各Node 节点的NodePort 端口。
+
+132 
+•！•
+基于Kubernetes 的窑器云平台实战
+VIP 
+nodelP: NodePort 
+nodeIP: NodePort 
+Minion Node 
+Minion Node 
+Minion Node 
+~ ~ ~ 
+图9-14
+NodePort 
+9.7.2 
+Ingress 服务发布
+用户通过向API 服务器提交请求创建Ingress 对象，而我们需要对应的Ingress
+Controller 来操作Ingress 对象，
+以实现Loadbalancer 的配制。
+因为流量管理的需要，我们采用两层LB 设备的拓扑结构，如图9-15 所示：每个集
+群内的本地负载均衡，在此之上还有区域负载均衡（Region load balancer ）。其中本地负
+载均衡承担Kubenretes LoadBalancer 服务的实施，
+区域负载均衡承担Kubernetes Ingress 
+服务的实施，针对同一应用，所有的本地负载均衡的VIP 都作为区域负载均衡池的成员
+(member ）。
+Ingress 服务发布
+Load Balancer 服务发布
+图9-15
+服务全景图
+基于此拓扑，我们采用自己实现的Ingress Controller 来监控Ingress 对象，针对任何
+Ingress 的创建和更新，查找对应的本地负载均衡VIP ，并且将这些VIP 作为区域负载均衡
+的成员，创建区域负载均衡服务的配制。
+
+第9 章
+Kubernetes Service •!• 133 
+9.7.3 
+服务发现
+假定我们在Kubern 巳te s 集群中部署了一个Web 服务，在集群联邦的视角下，一个来自
+互联网的访问，经历如下转发最终到达应用本身，如图9-16 所示。
+Ingress 服务发布
+图9-16
+服务调用过程

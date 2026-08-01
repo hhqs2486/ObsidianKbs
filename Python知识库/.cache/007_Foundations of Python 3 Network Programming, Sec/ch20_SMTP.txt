@@ -1,0 +1,867 @@
+C H A P T E R   13 
+ 
+■ ■ ■ 
+217
+SMTP 
+As we outlined at the beginning of the previous chapter, the actual movement of e-mail between systems 
+is accomplished through SMTP: the “Simple Mail Transport Protocol.” It was first defined in 1982 in RFC 
+821; the most recent RFC defining it is 5321. It typically serves in two roles: 
+• 
+When a user types an e-mail message on a laptop or desktop machine, the e-mail 
+client uses SMTP to submit the e-mail to a real server that can send it along to its 
+destination. 
+• 
+E-mail servers themselves use SMTP to deliver messages, sending them across the 
+Internet to the server in charge of the recipient e-mail address’s domain (the part 
+of the e-mail address after the @ sign). 
+There are several differences between how SMTP is used for submission and delivery. But before 
+discussing them, we should quickly outline the difference between users who check e-mail with a local 
+e-mail client, and people who instead use a webmail service. 
+E-mail Clients, Webmail Services 
+The role of SMTP in message submission, where the user presses “Send” and expects a message to go 
+winging its way across the Internet, will probably be least confusing if we trace the history of how users 
+have historically worked with Internet mail. 
+The key concept to understand as we begin this history is that users have never been asked to sit 
+around and wait for an e-mail message to actually be delivered. This process can often take quite a bit of 
+time—and up to several dozen repeated attempts—before an e-mail message is actually delivered to its 
+destination. Any number of things could cause delays: a message could have to wait because other 
+messages are already being transmitted across a link of limited bandwidth; the destination server might 
+be down for a few hours, or its network might not be currently accessible because of a glitch; and if the 
+mail is destined for a large organization, then it might have to make several different “hops” as it arrives 
+at the big university server, then is directed to a smaller college e-mail machine, and then finally is 
+directed to a departmental e-mail server. 
+So understanding what happens when the user hits “Send” is, essentially, to understand how the 
+finished e-mail message gets submitted to the first of possibly several e-mail queues in which it can 
+languish until the circumstances are just right for its delivery to occur (which we will discuss in the next 
+section, on e-mail delivery). 
+
+CHAPTER 13 ■ SMTP 
+218 
+In the Beginning Was the Command Line 
+The first generations of e-mail users were given usernames and passwords by their business or university 
+that gave them command-line access to the large mainframes where user files and general-purpose 
+programs were kept. These large machines typically ran an e-mail daemon that maintained an outgoing 
+queue, right on the same box as the users who were busily typing messages into small command-line 
+programs. Several such programs each had their heyday; mail was followed by the fancier mailx, which 
+then fell to the far prettier interfaces—and great capabilities—of elm, pine, and finally mutt. 
+But for all of these early users, the network was not even involved in the simple task of e-mail 
+submission; after all, the e-mail client and the server were on the same machine! The actual means of 
+bridging this small gap and performing e-mail submission was a mere implementation detail, usually 
+hidden behind a command-line client program that came with the server software and that knew exactly 
+how to communicate with it. The first widespread e-mail daemon, sendmail, came with a program for 
+submitting e-mail called /usr/lib/sendmail. 
+Because the first generation of client programs for reading and writing e-mail were designed to 
+interact with sendmail, the mail daemons that have subsequently risen to popularity, like qmail and 
+postfix and exim, generally followed suit by providing a sendmail binary of their own (its official home is 
+now /usr/sbin, thanks to recent filesystem standards) that, when invoked by the user’s e-mail program, 
+would follow their own peculiar procedure for getting a message moved into the queue. 
+When e-mail arrived, it was typically deposited into a file belonging to the user to whom the 
+message had been addressed. The e-mail client running on the command line could simply open this file 
+and parse it to see the messages that were waiting for the user to read. This book does not cover these 
+mailbox formats, because we have to keep our focus on how e-mail uses the network; but if you are 
+curious, you can check out the mailbox package in the Python Standard Library, which supports all of the 
+strange and curious ways in which various e-mail programs have read and written messages to disk over 
+the years. 
+The Rise of Clients 
+The next generation of users to reach the Internet were often not familiar with the idea of a command 
+line; they instead had experience with the graphical interface of an Apple Macintosh—or, when it later 
+arrived, the Microsoft Windows operating system—and expected to accomplish things by clicking an 
+icon and running a graphical program. So a number of different e-mail clients were written that brought 
+this Internet service to the desktop; Mozilla Thunderbird and Microsoft Outlook are only two of the most 
+popular of the clients still in use today. 
+The problems with this approach are obvious. 
+First, the problem of reading incoming e-mail was transformed from a simple task—your client 
+program opened a file and read it—to being an operation that would require a network connection. 
+When you brought your graphical desktop online, it somehow had to reach across the Internet to a full-
+time server that had been receiving e-mail on your behalf while you were away, and bring the mail to the 
+local machine. 
+Second, users are notorious for not properly backing up their desktop and laptop file systems, and 
+clients that downloaded and stored messages locally made those messages thereby vulnerable to 
+obliteration when the laptop or desktop hard drive finally crashed; by contrast, university and industrial 
+servers—despite their clunky command lines—usually had small armies of people specifically tasked 
+with keeping their data archived, duplicated, and safe. 
+Third, laptop and desktop machines are usually not suitable environments for an e-mail server and 
+its queue of outgoing messages. Users, after all, often turn their machines off when they are done using 
+them; or they disconnect from the Internet; or they leave the Internet café and lose their wireless signal 
+
+CHAPTER 13 ■ SMTP 
+219
+anyway. Outgoing messages generally need more attention than this, so completed e-mails need some 
+way to be submitted back to a full-time server for queuing and delivery. 
+But programmers are clever people, and they came up with a series of solutions to these problems. 
+First, new protocols were invented—first the Post Office Protocol, POP, which we discuss in Chapter 
+14, and then the Internet Message Access Protocol, IMAP, covered in Chapter 15—that let a user’s e-mail 
+client authenticate with a password and download mail from the full-time server that had been storing 
+it. Passwords were necessary since, after all, you do not want the invention of a new protocol to suddenly 
+make it easy for other people to connect to your ISP’s servers and read your mail! This solved the first 
+problem. 
+But what about the second problem, that of persistence: avoiding the loss of mail when desktop and 
+laptop hard drives crash? This inspired two sets of advances. First, people using POP often learned to 
+turn off its default mode, in which the e-mail on the server is deleted once is has been downloaded, and 
+learned to leave copies of important mail on the server, from which they could fetch mail again later if 
+they had to re-install their computer and start from scratch. Second, they started moving to IMAP, 
+because—if their e-mail server chose to support this more advanced protocol—it meant that they could 
+not only leave incoming e-mail messages on the server for safekeeping, but also arrange the messages in 
+folders right there on the server! This let them use their e-mail client program as a mere window through 
+which to see mail that remained stored on the server, rather than having to manage an e-mail storage 
+area on their laptop or desktop itself. 
+Finally, how does e-mail make it back to the server when the user finishes writing an e-mail message 
+and hits “Send”? This task—again, called e-mail “submission” in the official terminology—brings us 
+back to the subject of this chapter: e-mail submission takes place using the SMTP protocol. But, as we 
+shall see, there are usually two differences between SMTP as it is spoken between servers on the Internet 
+and when it is used for client e-mail submission, and both differences are driven by the modern need to 
+combat spam. First, because most ISPs block outgoing messages to port 25 from laptops and desktops so 
+that these small machines cannot be hijacked by viruses and used as mail servers, e-mail submission is 
+usually directed to port 587. Second, to prevent every spammer from connecting to your ISP and 
+claiming that they want to send a message purportedly from you, e-mail clients use authenticated SMTP 
+that includes the user’s username and password. 
+Through these mechanisms, e-mail has been brought to the desktop. Both in large organizations 
+like universities and businesses, and also in ISPs catering to users at home, it is still common to hand out 
+instructions to each user that tell them to: 
+• 
+Install an e-mail client like Thunderbird or Outlook 
+• 
+Enter the hostname and protocol from which e-mail can be fetched 
+• 
+Configure the outgoing server’s name and SMTP port number 
+• 
+Assign a username and password with which connections to both services can be 
+authenticated 
+While e-mail clients can be cumbersome to configure and the servers can be difficult maintain, they 
+were originally the only way that e-mail could be supported using a familiar graphical interface to the 
+new breed of users staring at large colorful displays. And, today, they allow users an enviable freedom of 
+choice: their ISP simply decides whether to support POP, or IMAP, or both, and the user (or, at least, the 
+non-enterprise user!) is then free to try out the various e-mail clients and settle on the one that they like 
+best. 
+
+CHAPTER 13 ■ SMTP 
+220 
+The Move to Webmail 
+And, finally, yet another generational shift has occurred on the Internet. 
+Users once had to download and install a plethora of clients in order to experience all that the
+Internet had to offer; many older readers will remember having Windows or Mac machines on which
+they eventually installed client programs for such diverse protocols as Telnet, FTP, the Gopher directory
+service, Usenet newsgroups, and, when it came along, a World Wide Web browser. (Unix users typically
+found clients for each basic protocol already installed when they first logged in to a well-configured
+machine, though they might have chosen to install more advanced replacements for some of the
+programs, like ncftp in place of the clunky default FTP client.) 
+But, no longer! 
+The average Internet user today knows only a single client: their web browser. Thanks to the fact 
+that web pages can now use JavaScript to respond and re-draw themselves as the user clicks and types,
+the Web is not only replacing all traditional Internet protocols—users browse and fetch files on web
+pages, not through FTP; they read message boards, rather than connecting to the Usenet—but it is also
+obviating the need for many traditional desktop clients. Why convince thousands of users to download
+and install a client, clicking through several warnings about how your software might harm their
+computer, if your application is one that could be offered through an interactive web page? 
+In fact, the web browser has become so preeminent that many Internet users are not even aware
+that they have a web browser. They therefore use the words “Internet” and “Web” interchangeably, and
+think that both terms refer to “all those documents and links that give me Facebook and YouTube and
+the Wikipedia.” This obliviousness to the fact that they are viewing the Web’s glory through some
+particular client program with a name and identity—say through the dingy pane of Internet Explorer—is
+a constant frustration to evangelists for alternatives like Firefox, Google Chrome, and Opera, who find it
+difficult to convince people to change from a program that they are not even aware they are using! 
+Obviously, if such users are to read e-mail, it must be presented to them on a web page, where they
+read incoming mail, sort it into folders, and compose and send replies. And so there exist many web sites
+offering e-mail services through the browser—Gmail and Yahoo! Mail being among the most popular—
+as well as server software, like the popular SquirrelMail, that system administrators can install if they
+want to offer webmail to users at their school or business. 
+What does this transition mean for e-mail protocols, and the network? 
+Interestingly enough, the webmail phenomenon essentially moves us back in time, to the simpler 
+days when e-mail submission and e-mail reading were private affairs, confined to a single mainframe
+server and usually not using public protocols at all. Of course, these modern services—especially the
+ones run by large ISPs, and companies like Google and Yahoo!—must be gargantuan affairs, involving
+hundreds of servers at locations around the world; so, certainly, network protocols are doubtless
+involved at every level of e-mail storage and retrieval. 
+But the point is that these are now private transactions, internal to the organization running the
+webmail service. You browse e-mail in your web browser; you write e-mail using the same interface; and
+when you hit “Send,” well, who knows what protocol Google or Yahoo! uses internally to pass the new
+message from the web server receiving your HTTP POST to a mail queue from which it can be delivered?
+It could be SMTP; it could be an in-house RPC protocol; or it could even be an operation on common
+filesystems to which the web and e-mail servers are connected. 
+For the purpose of this book, the important thing is that—unless you are an engineer working at
+such an organization—you will never see whether POP, or IMAP, or something else is at work, sitting
+behind the webmail interface and manipulating your messages. 
+E-mail browsing and submission, therefore, become a black box: your browser interacts with a web
+API, and on the other end, you will see plain old SMTP connections originating from and going to the
+large organization as mail is delivered in each direction. But in the world of webmail, client protocols are
+removed from the equation, taking us back to the old days of pure server-to-server unauthenticated
+SMTP. 
+Download from www.eBookTM.Com
+
+CHAPTER 13 ■ SMTP 
+221
+How SMTP Is Used 
+The foregoing narrative has hopefully helped you structure your thinking about Internet e-mail 
+protocols, and realize how they fit together in the bigger picture of getting messages to and from users. 
+But the subject of this chapter is a narrower one—the Simple Mail Transport Protocol in particular. 
+And we should start by stating the basics, in the terms we learned in Part 1 of this book: 
+• 
+SMTP is a TCP/IP-based protocol. 
+• 
+Connections can be authenticated, or not. 
+• 
+Connections can be encrypted, or not. 
+Most e-mail connections across the Internet these days seem to lack any attempt at encryption, 
+which means that whoever owns the Internet backbone routers are theoretically in a position to read 
+simply staggering amounts of other people’s mail. 
+What are the two ways, given our discussion in the last section, that SMTP is used? 
+First, SMTP can be used for e-mail submission between a client e-mail program like Thunderbird or 
+Outlook, claiming that a user wants to send e-mail, and a server at an organization that has given that 
+user an e-mail address. These connections generally use authentication, so that spammers cannot 
+connect and send millions of messages on a user’s behalf without his or her password. Once received, 
+the server puts the message in a queue for delivery (and often makes its first attempt at sending it 
+moments later), and the client can forget about the message and presume the server will keep trying to 
+deliver it. 
+Second, SMTP is used between Internet mail servers as they move e-mail from its origin to its 
+destination. This typically involves no authentication; after all, big organizations like Google, Yahoo!, 
+and Microsoft do not know the passwords of each other’s users, so when Yahoo! receives an e-mail from 
+Google claiming that it was sent from an @gmail.com user, Yahoo! just has to believe them (or not—
+sometimes organizations blacklist each other if too much spam is making it through their servers, as 
+happened to a friend of mine the other day when Hotmail stopped accepting his client’s newsletters 
+from GoDaddy’s servers because of alleged problems with spam). 
+So, typically, no authentication takes place between servers talking SMTP to each other—and even 
+encryption against snooping routers seems to be used only rarely. 
+Because of the problem of spammers connecting to e-mail servers and claiming to be delivering 
+mail from another organization’s users, there has been an attempt made to lock down who can send e-
+mail on an organization’s behalf. Though controversial, some e-mail servers consult the Sender Policy 
+Framework (SPF), defined in RFC 4408, to see whether the server they are talking to really has the 
+authority to deliver the e-mails it is transmitting. 
+But the SPF and other anti-spam technologies are unfortunately beyond the scope of this book, 
+which must limit itself to the question of using the basic protocols themselves from Python. So we now 
+turn to the more technical question of how you will actually use SMTP from your Python programs. 
+Sending E-Mail 
+Before proceeding to share with you the gritty details of the SMTP protocol, one warning is in order: if 
+you are writing an interactive program, daemon, or web site that needs to send e-mail, then your site or 
+system administrator (in cases where that is not you!) might have an opinion about how your program 
+sends mail—and they might save you a lot of work by doing so! 
+As noted in the introduction, successfully sending e-mail generally requires a queue where a 
+message can sit for seconds, minutes, or days until it can be successfully transmitted toward its 
+destination. So you typically do not want your programs using Python’s smtplib to send mail directly to a 
+message’s destination—because if your first transmission attempt fails, then you will be stuck with the 
+
+CHAPTER 13 ■ SMTP 
+222 
+job of writing a full “mail transfer agent” (MTA), as the RFCs call an e-mail server, and give it a full 
+standards-compliant re-try queue. This is not only a big job, but also one that has already been done 
+well several times, and you will be wise to take advantage of one of the existing MTAs (look at postfix, 
+exim, and qmail) before trying to write something of your own. 
+So only rarely will you be making SMTP connections out into the world from Python. More usually, 
+your system administrator will tell you one of two things: 
+• 
+That you should make an authenticated SMTP connection to an existing e-mail 
+server, using a username and password that will belong to your application, and 
+give it permission to use the e-mail server to queue outgoing messages 
+• 
+That you should run a local binary on the system—like the sendmail program—
+that the system administrator has already gone to the trouble to configure so that 
+local programs can send mail 
+As of late 2010, the Python Library FAQ has sample code for invoking a sendmail compatible 
+program; take a look at the section “How do I send mail from a Python script?” on the following page: 
+http://docs.python.org/faq/library.html 
+Since this book is about networking, we will not cover this possibility in detail, but you should 
+remember to do raw SMTP yourself only when no simpler mechanism exists on your machine for 
+sending e-mail. 
+Headers and the Envelope Recipient 
+The key concept involved in SMTP that consistently confuses beginners is that the addressee headers 
+you are so familiar with—To, Cc (carbon copy), and Bcc (blind carbon copy)—are not consulted by the 
+SMTP protocol to decide where your e-mail goes! 
+This surprises many users. After all, almost every e-mail program in existence asks you to fill in 
+those addressee fields, and when you hit “Send,” the message wings it way out to those mailboxes. What 
+could be more natural? But it turns out that this is a feature of the e-mail client itself, not of the SMTP 
+protocol: the protocol knows only that each message has an “envelope” around it naming a sender and 
+some recipients. SMTP itself does not care whether those names are ones that it can find in the headers 
+of the message. 
+That e-mail must work this way will actually be quite obvious if you think for a moment about the 
+Bcc blind carbon-copy header. Unlike the To and Cc headers, which make it to the e-mail’s destination 
+and let each recipient see who else was sent that e-mail, the Bcc header names people who you want to 
+receive the mail without any of the other recipients knowing. Blind copies let you quietly bring a 
+message to someone’s attention without alerting the other readers of the e-mail. 
+The existence of a header like Bcc that can be present when you compose a message but disappear 
+as it is sent raises two points: 
+• 
+Your e-mail client edits your message’s headers before sending it. Besides 
+removing the Bcc header so that none of the e-mail's recipients gets a copy of it, 
+the client typically adds headers as well, such as a unique message ID, and 
+perhaps the name of the e-mail client itself (an e-mail open on my desktop right 
+now, for example, identifies the X-Mailer that sent it as “YahooMailClassic”). 
+• 
+An e-mail can pass across SMTP toward a destination address that is mentioned 
+nowhere in the e-mail headers or text itself—and can do this for the most 
+legitimate of reasons. 
+
+CHAPTER 13 ■ SMTP 
+223
+This mechanism also helps support mailing lists, so that an e-mail whose To says 
+advocacy@python.org can actually be delivered, without rewritten headers, to the dozens or hundreds of 
+people who subscribe to that list. 
+So, as you read the following descriptions of SMTP, keep reminding yourself that the headers-plus-
+body that make up the e-mail message itself are separate from the “envelope sender” and “envelope 
+recipient” that will be mentioned in the protocol descriptions. Yes, it is true that your e-mail client, 
+whether you are using /usr/sbin/sendmail or Thunderbird or Google Mail, probably asked you for the 
+recipient’s e-mail address only once; but it then proceeded to use it in two different places, once in the 
+To header at the top of the message, and then again “outside” of the message when it spoke SMTP in 
+order to send the e-mail on its way. 
+Multiple Hops 
+Once upon a time, e-mail often traveled over only one SMTP “hop” between the mainframe on which it 
+was composed to the machine on whose disk the recipient’s in-box was stored. These days, messages 
+often travel through a half-dozen servers or more before reaching their destination. This means that the 
+SMTP envelope recipient, described in the last section, repeatedly changes as the message nears its 
+destination. 
+An example should make this clear. Several of the following details are fictitious, but they should 
+give you a good idea of how messages actually traverse the Internet. 
+Imagine a worker in the central IT organization at Georgia Tech who tells his friend that his e-mail 
+address is brandon@gatech.edu. When the friend later sends him a message, the friend’s e-mail provider 
+will look up the domain gatech.edu in the Domain Name Service (DNS; see Chapter 4), receive a series of 
+MX records in reply, and connect to one of those IP address to deliver the message. Simple enough, right? 
+But the server for gatech.edu serves an entire campus! To find out where brandon is, it consults a 
+table, finds his department, and learns that his official e-mail address is actually: 
+brandon.rhodes@oit.gatech.edu 
+So the gatech.edu server in turn does a DNS lookup of oit.gatech.edu and then uses SMTP—the 
+message’s second SMTP hop, if you are counting—to send the message to the e-mail server for OIT, the 
+Office of Information Technology. 
+But OIT long ago abandoned their single-server solution that used to keep all of their mail on a 
+single Unix server. Instead, they now run a sophisticated e-mail solution that users can access through 
+webmail, POP, and IMAP. Incoming mail arriving at oit.gatech.edu is first sent randomly to one of 
+several spam-filtering servers (third hop), say, the server named spam3.oit.gatech.edu. Then it is 
+handed off randomly to one of eight redundant e-mail servers, and so after the fourth hop, the message 
+is in the queue on mail7.oit.gatech.edu. 
+We are almost done: the routing servers like mail7 are the ones with access to the lookup tables of 
+which back-end mailstores, connected to large RAID arrays, hold which users. So mail7 does an LDAP 
+lookup for brandon.rhodes, concludes that his mail lives on the anvil.oit.gatech.edu server, and in a 
+fifth and final SMTP hop, the mail is delivered to anvil and there is written to the redundant disk array. 
+That is why e-mail often takes at least a few seconds to traverse the Internet: large organizations and 
+big ISPs tend to have several levels of servers that a message must negotiate before its delivery. 
+How can you find out what an e-mail’s route was? It was emphasized previously that the SMTP 
+protocol does not look inside e-mail headers, but has its own idea about where a message should be 
+going—that, as we have just seen, can change with every hop that a message makes toward its 
+destination. But it turns out that e-mail servers are encouraged to write new headers, precisely to keep 
+track of a message’s circuitous route from its original to its destination. 
+These headers are called Received headers, and they are a gold mine for confused system 
+administrators trying to debug problems with their mail systems. Take a look at any e-mail message, and 
+ask your mail client to display all of the headers; you should be able to see every step that the message 
+
+CHAPTER 13 ■ SMTP 
+224 
+took toward its destination. (An exception is spam messages: spammers often write several fictitious 
+Received headers at the top of their messages to make it look like the message has originated from a 
+reputable organization.) Finally, there is probably a Delivered-to header that is written when the last 
+server in the chain is finally able to triumphantly write the message to physical storage in someone’s 
+mailbox. 
+Because each server tends to add its Received header to the top of the e-mail message—this saves 
+time, and prevents each server from having to search to the bottom of the Received headers that have 
+been written so far—you should read them “backward”: the oldest Received header will be the one listed 
+last, and as you read up the screen toward the top, you will be following the e-mail from its origin to its 
+destination. Try it: bring up a recent e-mail message you have received, select its “View All Message 
+Headers” or “Show Original” option, and look for the received headers near the top. Did the message 
+require more, or fewer, steps to reach your in-box than you would have expected? 
+Introducing the SMTP Library 
+Python’s built-in SMTP implementation is in the Python Standard Library module smtplib, which makes 
+it easy to do simple tasks with SMTP. 
+In the examples that follow, the programs are designed to take several command-line arguments: 
+the name of an SMTP server, a sender address, and one or more recipient addresses. Please use them 
+cautiously; name only an SMTP server that you yourself run or that you know will be happy receiving 
+your test messages, lest you wind up getting an IP address banned for sending spam! 
+If you don’t know where to find an SMTP server, you might try running a mail daemon like postfix 
+or exim locally and then pointing these example programs at localhost. Many UNIX, Linux, and Mac OS 
+X systems have an SMTP server like one of these already listening for connections from the local 
+machine. 
+Otherwise, consult your network administrator or Internet provider to obtain a proper hostname 
+and port. Note that you usually cannot just pick a mail server at random; many store or forward mail 
+only from certain authorized clients. 
+So, take a look at Listing 13–1 for a very simple SMTP program! 
+Listing 13–1. Sending E-mail with smtplib.sendmail() 
+#!/usr/bin/env python 
+# Basic SMTP transmission - Chapter 13 - simple.py 
+ 
+import sys, smtplib 
+ 
+if len(sys.argv) < 4: 
+»   print "usage: %s server fromaddr toaddr [toaddr...]" % sys.argv[0] 
+»   sys.exit(2) 
+ 
+server, fromaddr, toaddrs = sys.argv[1], sys.argv[2], sys.argv[3:] 
+ 
+message = """To: %s 
+From: %s 
+Subject: Test Message from simple.py 
+ 
+Hello, 
+ 
+This is a test message sent to you from the simple.py program 
+in Foundations of Python Network Programming. 
+""" % (', '.join(toaddrs), fromaddr) 
+
+CHAPTER 13 ■ SMTP 
+225
+ 
+s = smtplib.SMTP(server) 
+s.sendmail(fromaddr, toaddrs, message) 
+ 
+print "Message successfully sent to %d recipient(s)" % len(toaddrs) 
+This program is quite simple, because it uses a very powerful and general function from inside the 
+Standard Library. 
+It starts by generating a simple message from the user’s command-line arguments (for details on 
+generating fancier messages that contain elements beyond simple plain text, see Chapter 12). Then it 
+creates an smtplib.SMTP object that connects to the specified server. Finally, all that’s required is a call to 
+sendmail(). If that returns successfully, then you know that the message was sent. 
+As was promised in the earlier sections of this chapter, you can see that the idea of who receives the 
+message—the “envelope recipient”—is, down at this level, separate from the actual text of the message. 
+This particular program writes a To header that happens to contain the same addresses to which it is 
+sending the message; but the To header is just a piece of text, and could instead say anything else 
+instead. (Whether that “anything else” would be willingly displayed by the recipient’s e-mail client, or 
+cause a server along the way to discard the message as spam, is another question!) 
+When you run the program, it will look like this: 
+$ ./simple.py localhost sender@example.com recipient@example.com 
+Message successfully sent to 2 recipient(s) 
+Thanks to the hard work that the authors of the Python Standard Library have put into the 
+sendmail() method, it might be the only SMTP call you ever need! But to understand the steps that it is 
+taking under the hood to get your message delivered, let’s delve in more detail into how SMTP works. 
+Error Handling and Conversation Debugging 
+There are several different exceptions that might be raised while you’re programming with smtplib. They 
+are: 
+• 
+socket.gaierror for errors looking up address information 
+• 
+socket.error for general I/O and communication problems 
+• 
+socket.herror for other addressing errors 
+• 
+smtplib.SMTPException or a subclass of it for SMTP conversation problems 
+The first three errors are covered in more detail in Chapter 3; they are passed straight through the 
+smtplib module and up to your program. But so long as the underlying TCP socket works, all problems 
+that actually involve the SMTP e-mail conversation will result in an smtplib.SMTPException. 
+The smtplib module also provides a way to get a series of detailed messages about the steps it takes 
+to send an e-mail. To enable that level of detail, you can call 
+smtpobj.set_debuglevel(1) 
+With this option, you should be able to track down any problems. Take a look at Listing 13–2 for an 
+example program that provides basic error handling and debugging. 
+
+CHAPTER 13 ■ SMTP 
+226 
+Listing 13–2. A More Cautious SMTP Client 
+#!/usr/bin/env python 
+# SMTP transmission with debugging - Chapter 13 - debug.py 
+ 
+import sys, smtplib, socket 
+ 
+if len(sys.argv) < 4: 
+»   print "usage: %s server fromaddr toaddr [toaddr...]" % sys.argv[0] 
+»   sys.exit(2) 
+ 
+server, fromaddr, toaddrs = sys.argv[1], sys.argv[2], sys.argv[3:] 
+ 
+message = """To: %s 
+From: %s 
+Subject: Test Message from simple.py 
+ 
+Hello, 
+ 
+This is a test message sent to you from the debug.py program 
+in Foundations of Python Network Programming. 
+""" % (', '.join(toaddrs), fromaddr) 
+ 
+try: 
+»   s = smtplib.SMTP(server) 
+»   s.set_debuglevel(1) 
+»   s.sendmail(fromaddr, toaddrs, message) 
+except (socket.gaierror, socket.error, socket.herror, 
+»   »   smtplib.SMTPException), e: 
+»   print " *** Your message may not have been sent!" 
+»   print e 
+»   sys.exit(1) 
+else: 
+»   print "Message successfully sent to %d recipient(s)" % len(toaddrs) 
+This program looks similar to the last one. However, the output will be very different; take a look at 
+Listing 13–3 for an example. 
+Listing 13–3. Debugging Output from smtplib 
+$ ./debug.py localhost foo@example.com jgoerzen@complete.org 
+send: 'ehlo localhost\r\n' 
+reply: '250-localhost\r\n' 
+reply: '250-PIPELINING\r\n' 
+reply: '250-SIZE 20480000\r\n' 
+reply: '250-VRFY\r\n' 
+reply: '250-ETRN\r\n' 
+reply: '250-STARTTLS\r\n' 
+reply: '250-XVERP\r\n' 
+reply: '250 8BITMIME\r\n' 
+reply: retcode (250); Msg: localhost 
+PIPELINING 
+SIZE 20480000 
+VRFY 
+
+CHAPTER 13 ■ SMTP 
+227
+ETRN 
+STARTTLS 
+XVERP 
+8BITMIME 
+send: 'mail FROM:<foo@example.com> size=157\r\n' 
+reply: '250 Ok\r\n' 
+reply: retcode (250); Msg: Ok 
+send: 'rcpt TO:<jgoerzen@complete.org>\r\n' 
+reply: '250 Ok\r\n' 
+reply: retcode (250); Msg: Ok 
+send: 'data\r\n' 
+reply: '354 End data with <CR><LF>.<CR><LF>\r\n' 
+reply: retcode (354); Msg: End data with <CR><LF>.<CR><LF> 
+data: (354, 'End data with <CR><LF>.<CR><LF>') 
+send: 'To: jgoerzen@complete.org\r\n 
+From: foo@example.com\r\n 
+Subject: Test Message from simple.py\r\n 
+\r\n 
+Hello,\r\n 
+\r\n 
+This is a test message sent to you from simple.py and smtplib. 
+\r\n. 
+\r\n' 
+reply: '250 Ok: queued as 8094C18C0\r\n' 
+reply: retcode (250); Msg: Ok: queued as 8094C18C0 
+data: (250, 'Ok: queued as 8094C18C0') 
+Message successfully sent to 1 recipient(s) 
+From this example, you can see the conversation that smtplib is having with the SMTP server over 
+the network. As you implement code that uses more advanced SMTP features, the details shown here 
+will be more important, so let’s look at what’s happening. 
+First, the client (the smtplib library) sends an EHLO command (an “extended” successor to a more 
+ancient command that was named, more readably, HELO) with your hostname in it. The remote server 
+responds with its hostname, and lists any optional SMTP features that it supports. 
+Next, the client sends the mail from command, which states the “envelope sender” e-mail address 
+and the size of the message. The server at this moment has the opportunity to reject the message (for 
+example, because it thinks you are a spammer); but in this case, it responds with 250 Ok. (Note that in 
+this case, the code 250 is what matters; the remaining text is just a human-readable comment and varies 
+from server to server.) 
+Then the client sends a rcpt to command, with the “envelope recipient” that we talked so much 
+about earlier in this chapter; you can finally see that, indeed, it is transmitted separately from the text of 
+the message itself when using the SMTP protocol. If you were sending the message to more than one 
+recipient, they would each be listed on the rcpt to line. 
+Finally, the client sends a data command, transmits the actual message (using verbose carriage-
+return-linefeed line endings, you will note, per the Internet e-mail standard), and finishes the 
+conversation. 
+The smtplib module is doing all this automatically for you in this example. In the rest of the chapter, 
+we will look at how to take more control of the process so you can take advantage of some more 
+advanced features. 
+
+CHAPTER 13 ■ SMTP 
+228 
+■ Caution Do not get a false sense of confidence because no error was detected during this first hop, and think 
+that the message is now guaranteed to be delivered. In many cases, a mail server may accept a message, only to 
+have delivery fail at a later time; read back over the foregoing “Multiple Hops” section, and imagine how many 
+possibilities of failure there are before that message reaches its destination! 
+Getting Information from EHLO 
+Sometimes it is nice to know about what kind of messages a remote SMTP server will accept. For 
+instance, most SMTP servers have a limit on what size message they permit, and if you fail to check first, 
+then you may transmit a very large message only to have it rejected when you have completed 
+transmission. 
+In the original version of SMTP, a client would send a HELO command as the initial greeting to the 
+server. A set of extensions to SMTP, called ESMTP, has been developed to allow more powerful 
+conversations. ESMTP-aware clients will begin the conversation with EHLO, which signals an ESMTP-
+aware server to send extended information. This extended information includes the maximum message 
+size, along with any optional SMTP features that it supports. 
+However, you must be careful to check the return code. Some servers do not support ESMTP. On 
+those servers, EHLO will just return an error. In that case, you must send a HELO command instead. 
+In the previous examples, we used sendmail() immediately after creating our SMTP object, so 
+smtplib had to send its own “hello” message to the server. But if it sees you attempt to send the EHLO or 
+HELO command on your own, then sendmail() will no longer attempt to send these commands itself. 
+Listing 13–4 shows a program that gets the maximum size from the server, and returns an error 
+before sending if a message would be too large. 
+Listing 13–4. Checking Message Size Restrictions 
+#!/usr/bin/env python 
+# SMTP transmission with manual EHLO - Chapter 13 - ehlo.py 
+ 
+import sys, smtplib, socket 
+ 
+if len(sys.argv) < 4: 
+»   print "usage: %s server fromaddr toaddr [toaddr...]" % sys.argv[0] 
+»   sys.exit(2) 
+ 
+server, fromaddr, toaddrs = sys.argv[1], sys.argv[2], sys.argv[3:] 
+ 
+message = """To: %s 
+From: %s 
+Subject: Test Message from simple.py 
+ 
+Hello, 
+ 
+This is a test message sent to you from the ehlo.py program 
+in Foundations of Python Network Programming. 
+""" % (', '.join(toaddrs), fromaddr) 
+ 
+try: 
+
+CHAPTER 13 ■ SMTP 
+229
+»   s = smtplib.SMTP(server) 
+»   code = s.ehlo()[0] 
+»   uses_esmtp = (200 <= code <= 299) 
+»   if not uses_esmtp: 
+»   »   code = s.helo()[0] 
+»   »   if not (200 <= code <= 299): 
+»   »   »   print "Remote server refused HELO; code:", code 
+»   »   »   sys.exit(1) 
+ 
+»   if uses_esmtp and s.has_extn('size'): 
+»   »   print "Maximum message size is", s.esmtp_features['size'] 
+»   »   if len(message) > int(s.esmtp_features['size']): 
+»   »   »   print "Message too large; aborting." 
+»   »   »   sys.exit(1) 
+ 
+»   s.sendmail(fromaddr, toaddrs, message) 
+ 
+except (socket.gaierror, socket.error, socket.herror, 
+»   »   smtplib.SMTPException), e: 
+»   print " *** Your message may not have been sent!" 
+»   print e 
+»   sys.exit(1) 
+else: 
+»   print "Message successfully sent to %d recipient(s)" % len(toaddrs) 
+If you run this program, and the remote server provides its maximum message size, then the 
+program will display the size on your screen and verify that its message does not exceed that size before 
+sending. (For a tiny message like this, the check is obviously silly, but the listing shows you the pattern 
+that you can use successfully with much larger messages.) 
+Here is what running this program might look like: 
+$ ./ehlo.py localhost foo@example.com jgoerzen@complete.org Maximum message size is 10240000 
+Message successfully sent to 1 recipient(s) 
+Take a look at the part of the code that verifies the result from a call to ehlo() or helo(). Those two 
+functions return a list; the first item in the list is a numeric result code from the remote SMTP server. 
+Results between 200 and 299, inclusive, indicate success; everything else indicates a failure. Therefore, if 
+the result is within that range, you know that the server processed the message properly. 
+■ Caution The same caution as before applies here. The fact that the first SMTP server accepts the message 
+does not mean that it will actually be delivered; a later server may have a more restrictive maximum size. 
+Besides message size, other ESMTP information is available as well. For instance, some servers may 
+accept data in raw 8-bit mode if they provide the 8BITMIME capability. Others may support encryption, as 
+described in the next section. For more on ESMTP and its capabilities, which may vary from server to 
+server, consult RFC 1869 or your own server’s documentation. 
+
+CHAPTER 13 ■ SMTP 
+230 
+Using Secure Sockets Layer and Transport Layer Security 
+As we discussed, e-mails sent in plain text over SMTP can be read by anyone with access to an Internet
+gateway or router across which the packets happen to pass. The best solution to this problem is to
+encrypt each e-mail with a public key whose private key is possessed only by the person to whom you
+are sending the e-mail; there are freely available systems such as PGP and GPG for doing exactly this. But
+regardless of whether the messages themselves are protected, individual SMTP conversations between
+particular pairs of machines can be encrypted and authenticated using a method known as SSL/TLS. In
+this section, you will learn about how SSL/TLS fits in with SMTP conversations. 
+Keep in mind that TLS protects only the SMTP “hops” that choose to use it—if you carefully use TLS
+to send an e-mail to a server, you have no control over whether that server uses TLS again if it has to
+forward your e-mail across another hop toward its destination. 
+For more details on TLS, please see Chapter 6; the code presented in this chapter cannot protect you
+from delivering a message to a fraudulent server without the certificate-handling described there. 
+The general procedure for using TLS in SMTP is as follows: 
+1.
+Create the SMTP object, as usual. 
+2.
+Send the EHLO command. If the remote server does not support EHLO, then it will
+not support TLS. 
+3.
+Check s.has_extn() to see if starttls is present. If not, then the remote server
+does not support TLS and the message can only be sent normally, in the clear. 
+4.
+Call starttls() to initiate the encrypted channel. 
+5.
+Call ehlo() a second time; this time, it’s encrypted. 
+6.
+Finally, send your message. 
+The first question you have to ask yourself when working with TLS is whether you should return an
+error if TLS is not available. Depending on your application, you might want to raise an error for any of
+the following: 
+•
+There is no support for TLS on the remote side. 
+•
+The remote side fails to establish a TLS session properly. 
+•
+The remote server presents a certificate that cannot be validated. 
+Let us step through each of these scenarios and see when they may deserve an error message.
+First, it is sometimes appropriate to treat a lack of support for TLS altogether as an error. This could 
+be the case if you are writing an application that speaks to only a limited set of mail servers—perhaps
+mail servers run by your company that you know should support TLS, or mail servers run by a bank that
+you know supports TLS. 
+But since only a minority of mail servers on the Internet today support TLS, a mail program should
+not, in general, treat its absence as an error. Many TLS-aware SMTP clients will use TLS if available, but
+will fall back on standard, unsecured transmission otherwise. This is known as opportunistic encryption
+and is less secure than forcing all communications to be encrypted, but protects messages when the
+capability is present. 
+Second, sometimes a remote server claims to be TLS-aware but then fails to properly establish a TLS
+connection. This is often due to a misconfiguration on the server’s end. To be as robust as possible, you
+may wish to retry your transmission to such a server with a new connection that you do not even try to
+encrypt. 
+Third, there is the situation where you cannot completely authenticate the remote server. Again, for
+a complete discussion of peer validation, see Chapter 6. If your security policy dictates that you must 
+Download from www.eBookTM.Com
+
+CHAPTER 13 ■ SMTP 
+231
+exchange mail only with trusted servers, then lack of authentication is clearly a problem warranting an 
+error message; but for a general-purpose client, it probably merits a warning instead. 
+Listing 13–5 acts as a TLS-capable general-purpose client. It will connect to a server and use TLS if it 
+can; otherwise, it will fall back and send the message as usual. (But it will die with an error if the attempt 
+to start TLS fails while talking to an ostensibly capable server!) 
+Listing 13–5. Using TLS Opportunistically 
+#!/usr/bin/env python 
+# SMTP transmission with TLS - Chapter 13 - tls.py 
+ 
+import sys, smtplib, socket 
+ 
+if len(sys.argv) < 4: 
+»   print "Syntax: %s server fromaddr toaddr [toaddr...]" % sys.argv[0] 
+»   sys.exit(2) 
+ 
+server, fromaddr, toaddrs = sys.argv[1], sys.argv[2], sys.argv[3:] 
+ 
+message = """To: %s 
+From: %s 
+Subject: Test Message from simple.py 
+ 
+Hello, 
+ 
+This is a test message sent to you from the tls.py program 
+in Foundations of Python Network Programming. 
+""" % (', '.join(toaddrs), fromaddr) 
+try: 
+»   s = smtplib.SMTP(server) 
+»   code = s.ehlo()[0] 
+»   uses_esmtp = (200 <= code <= 299) 
+»   if not uses_esmtp: 
+»   »   code = s.helo()[0] 
+»   »   if not (200 <= code <= 299): 
+»   »   »   print "Remove server refused HELO; code:", code 
+»   »   »   sys.exit(1) 
+»   if uses_esmtp and s.has_extn('starttls'): 
+»   »   print "Negotiating TLS...." 
+»   »   s.starttls() 
+»   »   code = s.ehlo()[0] 
+»   »   if not (200 <= code <= 299): 
+»   »   »   print "Couldn't EHLO after STARTTLS" 
+»   »   »   sys.exit(5) 
+»   »   print "Using TLS connection." 
+»   else: 
+»   »   print "Server does not support TLS; using normal connection." 
+»   s.sendmail(fromaddr, toaddrs, message) 
+ 
+except (socket.gaierror, socket.error, socket.herror, 
+»   »   smtplib.SMTPException), e: 
+»   print " *** Your message may not have been sent!" 
+»   print e 
+»   sys.exit(1) 
+
+CHAPTER 13 ■ SMTP 
+232 
+else: 
+»   print "Message successfully sent to %d recipient(s)" % len(toaddrs) 
+If you run this program and give it a server that understands TLS, the output will look like this: 
+$ ./tls.py localhost jgoerzen@complete.org jgoerzen@complete.org 
+Negotiating TLS.... 
+Using TLS connection. 
+Message successfully sent to 1 recipient(s) 
+Notice that the call to sendmail() in these last few listings is the same, regardless of whether TLS is 
+used. Once TLS is started, the system hides that layer of complexity from you, so you do not need to 
+worry about it. Please note that this TLS example is not fully secure, because it does not perform 
+certificate validation; again, see Chapter 6 for details. 
+Authenticated SMTP 
+Finally, we reach the topic of Authenticated SMTP, where your ISP, university, or company e-mail server 
+needs you to log in with a username and password to prove that you are not a spammer before they 
+allow you to send e-mail. 
+For maximum security, TLS should be used in conjunction with authentication; otherwise your 
+password (and username, for that matter) will be visible to anyone observing the connection. The proper 
+way to do this is to establish the TLS connection first, and then send your authentication information 
+only over the encrypted communications channel. 
+But using authentication itself is simple; smtplib provides a login() function that takes a username 
+and a password. Listing 13–6 shows an example. To avoid repeating code already shown in previous 
+listings, this listing does not take the advice of the previous paragraph, and sends the username and 
+password over an un-authenticated connection that will send them in the clear. 
+Listing 13–6. Authenticating over SMTP 
+#!/usr/bin/env python 
+# SMTP transmission with authentication - Chapter 13 - login.py 
+ 
+import sys, smtplib, socket 
+from getpass import getpass 
+ 
+if len(sys.argv) < 4: 
+»   print "Syntax: %s server fromaddr toaddr [toaddr...]" % sys.argv[0] 
+»   sys.exit(2) 
+ 
+server, fromaddr, toaddrs = sys.argv[1], sys.argv[2], sys.argv[3:] 
+ 
+message = """To: %s 
+From: %s 
+Subject: Test Message from simple.py 
+ 
+Hello, 
+This is a test message sent to you from the login.py program 
+in Foundations of Python Network Programming. 
+""" % (', '.join(toaddrs), fromaddr) 
+ 
+sys.stdout.write("Enter username: ") 
+
+CHAPTER 13 ■ SMTP 
+233
+username = sys.stdin.readline().strip() 
+password = getpass("Enter password: ") 
+ 
+try: 
+»   s = smtplib.SMTP(server) 
+»   try: 
+»   »   s.login(username, password) 
+»   except smtplib.SMTPException, e: 
+»   »   print "Authentication failed:", e 
+»   »   sys.exit(1) 
+»   s.sendmail(fromaddr, toaddrs, message) 
+except (socket.gaierror, socket.error, socket.herror, 
+»   »   smtplib.SMTPException), e: 
+»   print " *** Your message may not have been sent!" 
+»   print e 
+»   sys.exit(1) 
+else: 
+»   print "Message successfully sent to %d recipient(s)" % len(toaddrs) 
+Most outgoing e-mail servers on the Internet do not support authentication. If you are using a server 
+that does not support authentication, you will receive an “Authentication failed” error message from the 
+login() attempt. You can prevent that by checking s.has_extn('auth') after calling s.ehlo() if the 
+remote server supports ESMTP. 
+You can run this program just like the previous examples. If you run it with a server that does 
+support authentication, you will be prompted for a username and password. If they are accepted, then 
+the program will proceed to transmit your message. 
+SMTP Tips 
+Here are some tips to help you implement SMTP clients: 
+• 
+There is no way to guarantee that a message was delivered. You can sometimes 
+know immediately that your attempt failed, but the lack of an error does not mean 
+that something else will not go wrong before the message is safely delivered to the 
+recipient. 
+• 
+The sendmail() function raises an exception if any of the recipients failed, though 
+the message may still have been sent to other recipients. Check the exception you 
+get back for more details. If it is very important for you to know specifics of which 
+addresses failed—say, because you will want to try re-transmitting later without 
+producing duplicate copies for the people who have already received the 
+message—you may need to call sendmail() individually for each recipient. This is 
+not generally recommended, however, since it will cause the message body to be 
+transmitted multiple times. 
+• 
+SSL/TLS is insecure without certificate validation; until validation happens, you 
+could be talking to any old server that has temporarily gotten control of the 
+normal server’s IP address. To support certificate verification, the starttls() 
+function takes some of the same arguments as socket.ssl(), which is described in 
+Chapter 6. See the Standard Library documentation of starttls() for details. 
+
+CHAPTER 13 ■ SMTP 
+234 
+• 
+Python’s smtplib is not meant to be a general-purpose mail relay. Rather, you 
+should use it to send messages to an SMTP server close to you that will handle the 
+actual delivery of mail. 
+Summary 
+SMTP is used to transmit e-mail messages to mail servers. Python provides the smtplib module for 
+SMTP clients to use. By calling the sendmail() method of SMTP objects, you can transmit messages. The 
+sole way of specifying the actual recipients of a message is with parameters to sendmail(); the To, Cc, and 
+Bcc message headers are separate from the actual list of recipients. 
+Several different exceptions could be raised during an SMTP conversation. Interactive programs 
+should check for and handle them appropriately. 
+ESMTP is an extension to SMTP. It lets you discover the maximum message size supported by a 
+remote SMTP server prior to transmitting a message. 
+ESMTP also permits TLS, which is a way to encrypt your conversation with a remote server. 
+Fundamentals of TLS are covered in Chapter 6. 
+Some SMTP servers require authentication. You can authenticate with the login() method. 
+SMTP does not provide functions for downloading messages from a mailbox to your own computer. 
+To accomplish that, you will need the protocols discussed in the next two chapters. POP, discussed in 
+Chapter 14, is a simple way to download messages. IMAP, discussed in Chapter 15, is a more capable 
+and powerful protocol. 
+ 

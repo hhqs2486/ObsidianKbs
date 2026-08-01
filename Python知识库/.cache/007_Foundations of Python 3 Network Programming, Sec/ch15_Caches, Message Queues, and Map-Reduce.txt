@@ -1,0 +1,608 @@
+C H A P T E R   8 
+ 
+■ ■ ■ 
+125
+Caches, Message Queues, 
+and Map-Reduce 
+This chapter, though brief, might be one of the most important in this book. It surveys the handful of 
+technologies that have together become fundamental building blocks for expanding applications to 
+Internet scale. 
+In the following pages, this book reaches its turning point. The previous chapters have explored the 
+sockets API and how Python can use the primitive IP network operations to build communication 
+channels. All of the subsequent chapters, as you will see if you peek ahead, are about very particular 
+protocols built atop sockets—about how to fetch web documents, send e-mails, and connect to server 
+command lines. 
+What sets apart the tools that we will be looking at here? They have several characteristics: 
+• 
+Each of these technologies is popular because it is a powerful tool. The point of 
+using Memcached or a message queue is that it is a very well-written service that 
+will solve a particular problem for you—not because it implements an interesting 
+protocol that different organizations are likely to use to communicate. 
+• 
+The problems solved by these tools tend to be internal to an organization. You 
+often cannot tell from outside which caches, queues, and load distribution tools 
+are being used to power a particular web site. 
+• 
+While protocols like HTTP and SMTP were built with specific payloads in mind—
+hypertext documents and e-mail messages, respectively—caches and message 
+queues tend to be completely agnostic about the data that they carry for you. 
+This chapter is not intended to be a manual for any of these technologies, nor will code examples be 
+plentiful. Ample documentation for each of the libraries mentioned exists online, and for the more 
+popular ones, you can even find entire books that have been written about them. Instead, this chapter’s 
+purpose is to introduce you to the problem that each tool solves; explain how to use the service to 
+address that issue; and give a few hints about using the tool from Python. 
+After all, the greatest challenge that a programmer often faces—aside from the basic, lifelong 
+process of learning to program itself—is knowing that a solution exists. We are inveterate inventors of 
+wheels that already exist, had we only known it. Think of this chapter as offering you a few wheels in the 
+hopes that you can avoid hewing them yourself. 
+k
+
+CHAPTER 8 ■ CACHES, MESSAGE QUEUES, AND MAP-REDUCE 
+126 
+Using Memcached 
+Memcached is the “memory cache daemon.” Its impact on many large Internet services has been, by all 
+accounts, revolutionary. After glancing at how to use it from Python, we will discuss its implementation, 
+which will teach us about a very important modern network concept called sharding. 
+The actual procedures for using Memcached are designed to be very simple: 
+• 
+You run a Memcached daemon on every server with some spare memory. 
+• 
+You make a list of the IP address and port numbers of your new Memcached 
+daemons, and distribute this list to all of the clients that will be using the cache. 
+• 
+Your client programs now have access to an organization-wide blazing-fast key-
+value cache that acts something like a big Python dictionary that all of your servers 
+can share. The cache operates on an LRU (least-recently-used) basis, dropping old 
+items that have not been accessed for a while so that it has room to both accept 
+new entries and keep records that are being frequently accessed. 
+Enough Python clients are currently listed for Memcached that I had better just send you to the page 
+that lists them, rather than try to review them here: http://code.google.com/p/memcached/wiki/Clients. 
+The client that they list first is written in pure Python, and therefore will not need to compile against 
+any libraries. It should install quite cleanly into a virtual environment (see Chapter 1), thanks to being 
+available on the Python Package Index: 
+$ pip install python-memcached 
+The interface is straightforward. Though you might have expected an interface that more strongly 
+resembles a Python dictionary with native methods like __getitem__, the author of python-memcached 
+chose instead to use the same method names as are used in other languages supported by 
+Memcached—which I think was a good decision, since it makes it easier to translate Memcached 
+examples into Python: 
+>>> import memcache 
+>>> mc = memcache.Client(['127.0.0.1:11211']) 
+>>> mc.set('user:19', '{name: "Lancelot", quest: "Grail"}') 
+True 
+>>> mc.get('user:19') 
+'{name: "Lancelot", quest: "Grail"}' 
+The basic pattern by which Memcached is used from Python is shown in Listing 8–1. Before 
+embarking on an (artificially) expensive operation, it checks Memcached to see whether the answer is 
+already present. If so, then the answer can be returned immediately; if not, then it is computed and 
+stored in the cache before being returned. 
+Listing 8–1. Constants and Functions for the Lancelot Protocol 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 8 - squares.py 
+# Using memcached to cache expensive results. 
+ 
+import memcache, random, time, timeit 
+mc = memcache.Client(['127.0.0.1:11211']) 
+ 
+def compute_square(n): 
+»   value = mc.get('sq:%d' % n) 
+»   if value is None: 
+
+CHAPTER 8 ■ CACHES, MESSAGE QUEUES, AND MAP-REDUCE 
+127
+»   »   time.sleep(0.001)  # pretend that computing a square is expensive 
+»   »   value = n * n 
+»   »   mc.set('sq:%d' % n, value) 
+»   return value 
+ 
+def make_request(): 
+»   compute_square(random.randint(0, 5000)) 
+ 
+print 'Ten successive runs:', 
+for i in range(1, 11): 
+»   print '%.2fs' % timeit.timeit(make_request, number=2000), 
+print 
+The Memcached daemon needs to be running on your machine at port 11211 for this example to 
+succeed. For the first few hundred requests, of course, the program will run at its usual speed. But as the 
+cache begins to accumulate more requests, it is able to accelerate an increasingly large fraction of them. 
+After a few thousand requests into the domain of 5,000 possible values, the program is showing a 
+substantial speed-up, and runs five times faster on its tenth run of 2,000 requests than on its first: 
+$ python squares.py 
+Ten successive runs: 2.75s 1.98s 1.51s 1.14s 0.90s 0.82s 0.71s 0.65s 0.58s 0.55s 
+This pattern is generally characteristic of caching: a gradual improvement as the cache begins to 
+cover the problem domain, and then stability as either the cache fills or the input domain has been fully 
+covered. 
+In a real application, what kind of data might you want to write to the cache? 
+Many programmers simply cache the lowest level of expensive call, like queries to a database, 
+filesystem, or external service. It can, after all, be easy to understand which items can be cached for how 
+long without making information too out-of-date; and if a database row changes, then perhaps the 
+cache can even be preemptively cleared of stale items related to the changed value. But sometimes there 
+can be great value in caching intermediate results at higher levels of the application, like data structures, 
+snippets of HTML, or even entire web pages. That way, a cache hit prevents not only a database access 
+but also the cost of turning the result into a data structure and then into rendered HTML. 
+There are many good introductions and in-depth guides that are linked to from the Memcached 
+site, as well as a surprisingly extensive FAQ, as though the Memcached developers have discovered that 
+catechism is the best way to teach people about their service. I will just make some general points here. 
+First, keys have to be unique, so developers tend to use prefixes and encodings to keep distinct the 
+various classes of objects they are storing—you often see things like user:19, mypage:/node/14, or even 
+the entire text of a SQL query used as a key. Keys can be only 250 characters long, but by using a strong 
+hash function, you might get away with lookups that support longer strings. The values stored in 
+Memcached, by the way, can be at most 1MB in length. 
+Second, you must always remember that Memcached is a cache; it is ephemeral, it uses RAM for 
+storage, and, if re-started, it remembers nothing that you have ever stored! Your application should 
+always be able to recover if the cache should disappear. 
+Third, make sure that your cache does not return data that is too old to be accurately presented to 
+your users. “Too old” depends entirely upon your problem domain; a bank balance probably needs to be 
+absolutely up-to-date, while “today’s top headline” can probably be an hour old. There are three 
+approaches to solving this problem: 
+• 
+Memcached will let you set an expiration date and time on each item that you 
+place in the cache, and it will take care of dropping these items silently when the 
+time comes. 
+• 
+You can reach in and actively invalidate particular cache entries at the moment 
+they become no longer valid. 
+
+CHAPTER 8 ■ CACHES, MESSAGE QUEUES, AND MAP-REDUCE 
+128 
+• 
+You can rewrite and replace entries that are invalid instead of simply removing 
+them, which works well for entries that might be hit dozens of times per second: 
+instead of all of those clients finding the missing entry and all trying to 
+simultaneously recompute it, they find the rewritten entry there instead. For the 
+same reason, pre-populating the cache when an application first comes up can 
+also be a crucial survival skill for large sites. 
+As you might guess, decorators are a very popular way to add caching in Python since they wrap 
+function calls without changing their names or signatures. If you look at the Python Package Index, you 
+will find several decorator cache libraries that can take advantage of Memcached, and two that target 
+popular web frameworks: django-cache-utils and the plone.memoize extension to the popular CMS. 
+Finally, as always when persisting data structures with Python, you will have to either create a string 
+representation yourself (unless, of course, the data you are trying to store is itself simply a string!), or use 
+a module like pickle or json. Since the point of Memcached is to be fast, and you will be using it at 
+crucial points of performance, I recommend doing some quick tests to choose a data representation that 
+is both rich enough and also among your fastest choices. Something ugly, fast, and Python-specific like 
+cPickle will probably do very well. 
+Memcached and Sharding 
+The design of Memcached illustrates an important principle that is used in several other kinds of 
+databases, and which you might want to employ in architectures of your own: the clients shard the 
+database by hashing the keys’ string values and letting the hash determine which member of the cluster 
+is consulted for each key. 
+To understand why this is effective, consider a particular key/value pair—like the key sq:42 and the 
+value 1764 that might be stored by Listing 8–1. To make the best use of the RAM it has available, the 
+Memcached cluster wants to store this key and value exactly once. But to make the service fast, it wants 
+to avoid duplication without requiring any coordination between the different servers or 
+communication between all of the clients. 
+This means that all of the clients, without any other information to go on than (a) the key and (b) the 
+list of Memcached servers with which they are configured, need some scheme for working out where 
+that piece of information belongs. If they fail to make the same decision, then not only might the key and 
+value be copied on to several servers and reduce the overall memory available, but also a client’s attempt 
+to remove an invalid entry could leave other invalid copies elsewhere. 
+The solution is that the clients all implement a single, stable algorithm that can turn a key into an 
+integer n that selects one of the servers from their list. They do this by using a “hash” algorithm, which 
+mixes the bits of a string when forming a number so that any pattern in the string is, hopefully, 
+obliterated. 
+To see why patterns in key values must be obliterated, consider Listing 8–2. It loads a dictionary of 
+English words (you might have to download a dictionary of your own or adjust the path to make the 
+script run on your own machine), and explores how those words would be distributed across four 
+servers if they were used as keys. The first algorithm tries to divide the alphabet into four roughly equal 
+sections and distributes the keys using their first letter; the other two algorithms use hash functions. 
+Listing 8–2. Two Schemes for Assigning Data to Servers 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 8 - hashing.py 
+# Hashes are a great way to divide work. 
+ 
+import hashlib 
+ 
+
+CHAPTER 8 ■ CACHES, MESSAGE QUEUES, AND MAP-REDUCE 
+129
+def alpha_shard(word): 
+»   """Do a poor job of assigning data to servers by using first letters.""" 
+»   if word[0] in 'abcdef': 
+»   »   return 'server0' 
+»   elif word[0] in 'ghijklm': 
+»   »   return 'server1' 
+»   elif word[0] in 'nopqrs': 
+»   »   return 'server2' 
+»   else: 
+»   »   return 'server3' 
+ 
+def hash_shard(word): 
+»   """Do a great job of assigning data to servers using a hash value.""" 
+»   return 'server%d' % (hash(word) % 4) 
+ 
+def md5_shard(word): 
+»   """Do a great job of assigning data to servers using a hash value.""" 
+»   # digest() is a byte string, so we ord() its last character 
+»   return 'server%d' % (ord(hashlib.md5(word).digest()[-1]) % 4) 
+ 
+words = open('/usr/share/dict/words').read().split() 
+ 
+for function in alpha_shard, hash_shard, md5_shard: 
+»   d = {'server0': 0, 'server1': 0, 'server2': 0, 'server3': 0} 
+»   for word in words: 
+»   »   d[function(word.lower())] += 1 
+»   print function.__name__[:-6], d 
+The hash() function is Python’s own built-in hash routine, which is designed to be blazingly fast 
+because it is used internally to implement Python dictionary lookup. The MD5 algorithm is much more 
+sophisticated because it was actually designed as a cryptographic hash; although it is now considered 
+too weak for security use, using it to distribute load across servers is fine (though slow). 
+The results show quite plainly the danger of trying to distribute load using any method that could 
+directly expose the patterns in your data: 
+$ python hashing.py 
+alpha {'server0': 35203, 'server1': 22816, 'server2': 28615, 'server3': 11934} 
+hash {'server0': 24739, 'server1': 24622, 'server2': 24577, 'server3': 24630} 
+md5 {'server0': 24671, 'server1': 24726, 'server2': 24536, 'server3': 24635} 
+You can see that distributing load by first letters results in server 0 getting more than three times the 
+load of server 3, even though it was assigned only six letters instead of seven! The hash routines, 
+however, both performed like champions: despite all of the strong patterns that characterize not only 
+the first letters but also the entire structure and endings of English words, the hash functions scattered 
+the words very evenly across the four buckets. 
+Though many data sets are not as skewed as the letter distributions of English words, sharded 
+databases like Memcached always have to contend with the appearance of patterns in their input data.  
+Listing 8–1, for example, was not unusual in its use of keys that always began with a common prefix 
+(and that were followed by characters from a very restricted alphabet: the decimal digits). These kinds of 
+obvious patterns are why sharding should always be performed through a hash function. 
+Of course, this is an implementation detail that you can often ignore when you use a database 
+system like Memcached that supports sharding internally. But if you ever need to design a service of 
+your own that automatically assigns work or data to nodes in a cluster in a way that needs to be 
+reproducible, then you will find the same technique useful in your own code. 
+
+CHAPTER 8 ■ CACHES, MESSAGE QUEUES, AND MAP-REDUCE 
+130 
+Message Queues 
+Message queue protocols let you send reliable chunks of data called (predictably) messages. Typically, a
+queue promises to transmit messages reliably, and to deliver them atomically: a message either arrives
+whole and intact, or it does not arrive at all. Clients never have to loop and keep calling something like
+recv() until a whole message has arrived. 
+The other innovation that message queues offer is that, instead of supporting only the point-to-
+point connections that are possible with an IP transport like TCP, you can set up all kinds of topologies
+between messaging clients. Each brand of message queue typically supports several topologies. 
+A pipeline topology is the pattern that perhaps best resembles the picture you have in your head
+when you think of a queue: a producer creates messages and submits them to the queue, from which the
+messages can then be received by a consumer. For example, the front-end web machines of a photo-
+sharing web site might accept image uploads from end users and list the incoming files on an internal
+queue. A machine room full of servers could then read from the queue, each receiving one message for
+each read it performs, and generate thumbnails for each of the incoming images. The queue might get
+long during the day and then be short or empty during periods of relatively low use, but either way the
+front-end web servers are freed to quickly return a page to the waiting customer, telling them that their
+upload is complete and that their images will soon appear in their photostream. 
+A publisher-subscriber topology looks very much like a pipeline, but with a key difference. The
+pipeline makes sure that every queued message is delivered to exactly one consumer—since, after all, it
+would be wasteful for two thumbnail servers to be assigned the same photograph. But subscribers
+typically want to receive all of the messages that are being enqueued by each publisher—or else they
+want to receive every message that matches some particular topic. Either way, a publisher-subscriber
+model supports messages that fan out to be delivered to every interested subscriber. This kind of queue
+can be used to power external services that need to push events to the outside world, and also to form a
+fabric that a machine room full of servers can use to advertise which systems are up, which are going
+down for maintenance, and that can even publish the addresses of other message queues as they are
+created and destroyed. 
+Finally, a request-reply pattern is often the most complex because messages have to make a round-
+trip. Both of the previous patterns placed very little responsibility on the producer of a message: they
+connect to the queue, transmit their message, and are done. But a message queue client that makes a
+request has to stay connected and wait for the corresponding reply to be delivered back to it. The queue
+itself, to support this, has to feature some sort of addressing scheme by which replies can be directed to
+the correct client that is still sitting and waiting for it. But for all of its underlying complexity, this is
+probably the most powerful pattern of all, since it allows the load of dozens or hundreds of clients to be
+spread across equally large numbers of servers without any effort beyond setting up the message queue.
+And since a good message queue will allow servers to attach and detach without losing messages, this
+topology allows servers to be brought down for maintenance in a way that is invisible to the population
+of client machines. 
+Request-reply queues are a great way to connect lightweight workers that can run together by the
+hundreds on a particular machine—like, say, the threads of a web server front end—to database clients
+or file servers that sometimes need to be called in to do heavier work on the front end’s behalf. And the
+request-reply pattern is a natural fit for RPC mechanisms, with an added benefit not usually offered by
+simpler RPC systems: that many consumers or many producers can all be attached to the same queue in
+a fan-in or fan-out work pattern, without either group of clients knowing the difference. 
+Download from www.eBookTM.Com
+
+CHAPTER 8 ■ CACHES, MESSAGE QUEUES, AND MAP-REDUCE 
+131
+Using Message Queues from Python 
+Messaging seems to have been popular in the Java world before it started becoming the rage among 
+Python programmers, and the Java approach was interesting: instead of defining a protocol, their 
+community defined an API standard called the JMS on which the various message queue vendors could 
+standardize. This gave them each the freedom—but also the responsibility—to invent and adopt some 
+particular on-the-wire protocol for their particular message queue, and then hide it behind their own 
+implementation of the standard API. Their situation, therefore, strongly resembles that of SQL databases 
+under Python today: databases all use different on-the-wire protocols, and no one can really do anything 
+to improve that situation. But you can at least write your code against the DB-API 2.0 (PEP 249) and 
+hopefully run against several different database libraries as the need arises. 
+A competing approach that is much more in line with the Internet philosophy of open standards, 
+and of competing client and server implementations that can all interoperate, is the Advanced Message 
+Queuing Protocol (AMQP), which is gaining significant popularity among Python programmers. A 
+favorite combination at the moment seems to be the RabbitMQ message broker, written in Erlang, with 
+a Python AMQP client library like Carrot. 
+There are several AMQP implementations currently listed in the Python Package Index, and their 
+popularity will doubtless wax and wane over the years that this book remains relevant. Future readers 
+will want to read recent blog posts and success stories to learn about which libraries are working out 
+best, and check for which packages have been released recently and are showing active development. 
+Finally, you might find that a particular implementation is a favorite in combination with some other 
+technology you are using—as Celery currently seems a favorite with Django developers—and that might 
+serve as a good guide to choosing a library. 
+An alternative to using AMQP and having to run a central broker, like RabbitMQ or Apache Qpid, is 
+to use ØMQ, the “Zero Message Queue,” which was invented by the same company as AMQP but moves 
+the messaging intelligence from a centralized broker into every one of your message client programs. 
+The ØMQ library embedded in each of your programs, in other words, lets your code spontaneously 
+build a messaging fabric without the need for a centralized broker. This involves several differences in 
+approach from an architecture based on a central broker that can provide reliability, redundancy, 
+retransmission, and even persistence to disk. A good summary of the advantages and disadvantages is 
+provided at the ØMQ web site: www.zeromq.org/docs:welcome-from-amqp. 
+How should you approach this range of possible solutions, or evaluate other message queue 
+technologies or libraries that you might find mentioned on Python blogs or PyCon talks? 
+You should probably focus on the particular message pattern that you need to implement. If you are 
+using messages as simply a lightweight and load-balanced form of RPC behind your front-end web 
+machines, for example, then ØMQ might be a great choice; if a server reboots and its messages are lost, 
+then either users will time out and hit reload, or you can teach your front-end machines to resubmit 
+their requests after a modest delay. But if your messages each represent an unrepeatable investment of 
+effort by one of your users—if, for example, your social network site saves user status updates by placing 
+them on a queue and then telling the users that their update succeeded—then a message broker with 
+strong guarantees against message loss will be the only protection your users will have against having to 
+re-type the same status later when they notice that it never got posted. 
+Listing 8–3 shows some of the patterns that can be supported when message queues are used to 
+connect different parts of an application. It requires ØMQ, which you can most easily make available to 
+Python by creating a virtual environment and then typing the following: 
+$ pip install pyzmq-static 
+The listing uses Python threads to create a small cluster of six different services. One pushes a 
+constant stream of words on to a pipeline. Three others sit ready to receive a word from the pipeline; 
+each word wakes one of them up. The final two are request-reply servers, which resemble remote 
+procedure endpoints (see Chapter 18) and send back a message for each message they receive. 
+
+CHAPTER 8 ■ CACHES, MESSAGE QUEUES, AND MAP-REDUCE 
+132 
+Listing 8–3. Two Schemes for Assigning Data to Servers 
+#!/usr/bin/env python 
+# Foundations of Python Network Programming - Chapter 8 - queuecrazy.py 
+# Small application that uses several different message queues 
+ 
+import random, threading, time, zmq 
+zcontext = zmq.Context() 
+ 
+def fountain(url): 
+»   """Produces a steady stream of words.""" 
+»   zsock = zcontext.socket(zmq.PUSH) 
+»   zsock.bind(url) 
+»   words = [ w for w in dir(__builtins__) if w.islower() ] 
+»   while True: 
+»   »   zsock.send(random.choice(words)) 
+»   »   time.sleep(0.4) 
+ 
+def responder(url, function): 
+»   """Performs a string operation on each word received.""" 
+»   zsock = zcontext.socket(zmq.REP) 
+»   zsock.bind(url) 
+»   while True: 
+»   »   word = zsock.recv() 
+»   »   zsock.send(function(word))  # send the modified word back 
+ 
+def processor(n, fountain_url, responder_urls): 
+»   """Read words as they are produced; get them processed; print them.""" 
+»   zpullsock = zcontext.socket(zmq.PULL) 
+»   zpullsock.connect(fountain_url) 
+ 
+»   zreqsock = zcontext.socket(zmq.REQ) 
+»   for url in responder_urls: 
+»   »   zreqsock.connect(url) 
+ 
+»   while True: 
+»   »   word = zpullsock.recv() 
+»   »   zreqsock.send(word) 
+»   »   print n, zreqsock.recv() 
+ 
+def start_thread(function, *args): 
+»   thread = threading.Thread(target=function, args=args) 
+»   thread.daemon = True  # so you can easily Control-C the whole program 
+»   thread.start() 
+ 
+start_thread(fountain, 'tcp://127.0.0.1:6700') 
+start_thread(responder, 'tcp://127.0.0.1:6701', str.upper) 
+start_thread(responder, 'tcp://127.0.0.1:6702', str.lower) 
+for n in range(3): 
+»   start_thread(processor, n + 1, 'tcp://127.0.0.1:6700', 
+»   »   »   »    ['tcp://127.0.0.1:6701', 'tcp://127.0.0.1:6702']) 
+time.sleep(30) 
+
+CHAPTER 8 ■ CACHES, MESSAGE QUEUES, AND MAP-REDUCE 
+133
+The two request-reply servers are different—one turns each word it receives to uppercase, while the 
+other makes its words all lowercase—and you can tell the three processors apart by the fact that each is 
+assigned a different integer. The output of the script shows you how the words, which originate from a 
+single source, get evenly distributed among the three workers, and by paying attention to the 
+capitalization, you can see that the three workers are spreading their requests among the two request-
+reply servers: 
+1 HASATTR 
+2 filter 
+3 reduce 
+1 float 
+2 BYTEARRAY 
+3 FROZENSET 
+In practice, of course, you would usually use message queues for connecting entirely different 
+servers in a cluster, but even these simple threads should give you a good idea of how a group of services 
+can be arranged. 
+How Message Queues Change Programming 
+Whatever message queue you use, I should warn you that it may very well cause a revolution in your 
+thinking and eventually make large changes to the very way that you construct large applications. 
+Before you encounter message queues, you tend to consider the function or method call to be the 
+basic mechanism of cooperation between the various pieces of your application. And so the problem of 
+building a program, up at the highest level, is the problem of designing and writing all of its different 
+pieces, and then of figuring out how they will find and invoke one another. If you happen to create 
+multiple threads or processes in your application, then they tend to correspond to outside demands—
+like having one server thread per external client—and to execute code from across your entire code base 
+in the performance of your duties. The thread might receive a submitted photograph, then call the 
+routine that saves it to storage, then jump into the code that parses and saves the photograph’s 
+metadata, and then finally execute the image processing code that generates several thumbnails. This 
+single thread of control may wind up touching every part of your application, and so the task of scaling 
+your service becomes that of duplicating this one piece of software over and over again until you can 
+handle your client load. 
+If the best tools available for some of your sub-tasks happen to be written in other languages—if, for 
+example, the thumbnails can best be processed by some particular library written in the C language—
+then the seams or boundaries between different languages take the form of Python extension libraries or 
+interfaces like ctypes that can make the jump between different language runtimes. 
+Once you start using message queues, however, your entire approach toward service architecture 
+may begin to experience a Copernican revolution. 
+Instead of thinking of complicated extension libraries as the natural way for different languages to 
+interoperate, you will not be able to help but notice that your message broker of choice supports many 
+different language bindings. Why should a single thread of control on one processor, after all, have to 
+wind its way through a web framework, then a database client, and then an imaging library, when you 
+could make each of these components a separate client of the messaging broker and connect the pieces 
+with language-neutral messages? 
+You will suddenly realize not only that a dedicated thumbnail service might be quite easy to test and 
+debug, but also that running it as a separate service means that it can be upgraded and expanded 
+without any disruption to your front-end web servers. New servers can attach to the message queue, old 
+ones can be decommissioned, and software updates can be pushed out slowly to one back end after 
+another without the front-end clients caring at all. The queued message, rather than the library API, will 
+become the fundamental point of rendezvous in your application. 
+
+CHAPTER 8 ■ CACHES, MESSAGE QUEUES, AND MAP-REDUCE 
+134 
+And all of this can have a startling impact on your approach toward concurrency, especially where 
+shared resources are concerned. 
+When all of your application’s work and resources are present within a single address space 
+containing dozens of Python packages and libraries, then it can seem like semaphores, locks, and shared 
+data structures—despite all of the problems inherent in using them correctly—are the natural 
+mechanisms for cooperation. 
+But message services offer a different model: that of small, autonomous services attached to a 
+common queue, that let the queue take care of getting information—namely, messages—safely back and 
+forth between dozens of different processes. Suddenly, you will find yourself writing Python 
+components that begin to take on the pleasant concurrent semantics of Erlang function calls: they will 
+accept a request, use their carefully husbanded resources to generate a response, and never once 
+explicitly touch a shared data structure. The message queue will not only take care of shuttling data back 
+and forth, but by letting client procedures that have sent requests wait on server procedures that are 
+generating results, the message queue also provides a well-defined synchrony with which your processes 
+can coordinate their activity. 
+If you are not yet ready to try external message queues, be sure to at least look very closely at the 
+Python Standard Library when writing concurrent programs, paying close attention to the queue module 
+and also to the between-process Queue that is offered by the multiprocessing library. Within the confines 
+of a single machine, these mechanisms can get you started on writing application components as 
+scalable producers and consumers. 
+Finally, if you are writing a large application that is sending huge amounts of data in one direction 
+using the pipeline pattern, then you might also want to check out this resource: 
+http://wiki.python.org/moin/FlowBasedProgramming. 
+It will point you toward resources related to Python and “flow-based” programming, which steps 
+back from the idea of messages to the more general idea of information flowing downstream from an 
+origin, through various processing steps, and finally to a destination that saves or displays the result. 
+This can be a very natural way to express various scientific computations, as well as massively data-
+driven tasks like searching web server log files for various patterns. Some flow-based systems even 
+support the use of a graphical interface, which can let scientists and other researchers who might be 
+unfamiliar with programming build quite sophisticated data processing stacks. 
+One final note: do not let the recent popularity of message queues mislead you into thinking that 
+the messaging pattern itself is a recent phenomenon! It is not. Message queues are merely the 
+formalization of an ages-old architecture that would originally have involved piles of punch cards 
+waiting for processing, and that in more recent incarnations included things like “incoming” FTP folders 
+full of files that were submitted for processing. The modern libraries are simply a useful and general 
+implementation of a very old wheel that has been re-invented countless times. 
+Map-Reduce 
+Traditionally, if you wanted to distribute a large task across several racks of machine-room servers, then 
+you faced two quite different problems. First, of course, you had to write code that could be assigned a 
+small part of the problem and solve it, and then write code that could assemble the various answers from 
+each node back into one big answer to the original question. 
+But, finally, you would also have wound up writing a lot of code that had little to do with your 
+problem at all: the scripts that would push your code out to all of the servers in the cluster, then run it, 
+and then finally collect the data back together using the network or a shared file system. 
+The idea of a map-reduce system is to eliminate that last step in distributing a large computation, 
+and to offer a framework that will distribute data and execute code without your having to worry about 
+the underlying distribution mechanisms. Most frameworks also implement precautions that are often 
+not present in homemade parallel computations, like the ability to seamlessly re-submit tasks to other 
+nodes if some of the cluster servers fail during a particular computation. In fact, some map-reduce 
+frameworks will happily let you unplug and reboot machines for routine maintenance even while the 
+
+CHAPTER 8 ■ CACHES, MESSAGE QUEUES, AND MAP-REDUCE 
+135
+cluster is busy with a computation, and will quietly work around the unavailable nodes without 
+disturbing the actual application in the least. 
+Note that there are two quite different reasons for distributing a computation. One kind of task 
+simply requires a lot of CPU. In this case, the cluster nodes do not start off holding any data relevant to 
+the problem; they have to be loaded with both their data set and code to run against it. But another kind 
+of task involves a large data set that is kept permanently distributed across the nodes, making them 
+asymmetric workers who are each, so to speak, the expert on some particular slice of the data. This 
+approach could be used, for example, by an organization that has saved years of web logs across dozens 
+of machines, and wants to perform queries where each machine in the cluster computes some particular 
+tally, or looks for some particular pattern, in the few months of data for which it is uniquely responsible. 
+Although a map-reduce framework might superficially resemble the Beowulf clusters pioneered at 
+NASA in the 1990s, it imposes a far more specific semantics on the phases of computation than did the 
+generic message-passing libraries that tended to power Beowulf’s. Instead, a map-reduce framework 
+takes responsibility for both distributing tasks and assembling an answer, by imposing structure on the 
+processing code submitted by programmers: 
+• 
+The task under consideration needs to be broken into two pieces, one called the 
+map operation, and the other reduce. 
+• 
+The two operations bear some resemblance to the Python built-in functions of 
+that name (which Python itself borrowed from the world of functional 
+programming); imagine how one might split across several servers the tasks of 
+summing the squares of many integers: 
+>>> squares = map(lambda n: n*n, range(11)) 
+>>> squares 
+[0, 1, 4, 9, 16, 25, 36, 49, 64, 81, 100] 
+>>> import operator 
+>>> reduce(operator.add, squares) 
+385 
+• 
+The mapping operation should be prepared to run once on some particular slice 
+of the overall problem or data set, and to produce a tally, table, or response that 
+summarizes its findings for that slice of the input. 
+• 
+The reduce operation is then exposed to the outputs of the mapping functions, to 
+combine them together into an ever-accumulating answer. To use the map-
+reduce cluster’s power effectively, frameworks are not content to simply run the 
+reduce function on one node once all of the dozens or hundreds of active 
+machines have finished the mapping stage. Instead, the reduce function is run in 
+parallel on many nodes at once, each considering the output of a handful of map 
+operations, and then these intermediate results are combined again and again in a 
+tree of computations until a final reduce step produces output for the whole input. 
+• 
+Thus, map-reduce frameworks require the programmer to be careful, and write 
+reduce functions that can be safely run on the same data over and over again; but 
+the specific guidelines and guarantees with respect to reduce can vary, so check 
+the tutorials and user guides to specific map-reduce frameworks that interest you. 
+Many map-reduce implementations are commercial and cloud-based, because many people need 
+them only occasionally, and paying to run their operation on Google MapReduce or Amazon Elastic 
+MapReduce is much cheaper than owning enough servers themselves to set up Hadoop or some other 
+self-hosted solution. 
+Significantly, the programming APIs for the various map-reduce solutions are often similar enough 
+that Python interfaces can simply paper over the differences and offer the same interface regardless of 
+
+CHAPTER 8 ■ CACHES, MESSAGE QUEUES, AND MAP-REDUCE 
+136 
+which back end you are using; for example, the mrjob library supports both Hadoop and Amazon. Some 
+programmers avoid using a specific API altogether, and submit their Python programs to Hadoop as 
+external scripts that it should run using its “streaming” module that uses the standard input and output 
+of a subprocess to communicate—the CGI-BIN of the map-reduce world, I suppose. 
+Note that some of the new generation of NoSQL databases, like CouchDB and MongoDB, offer the 
+map-reduce pattern as a way to run distributed computations across your database, or even—in the case 
+of CouchDB—as the usual way to create indexes. Conversely, each map-reduce framework tends to 
+come with its own brand of distributed filesystem or file-like storage that is designed to be efficiently 
+shared across many nodes. 
+Summary 
+Serving thousands or millions of customers has become a routine assignment for application developers 
+in the modern world, and several key technologies have emerged to help them meet this scale—and all 
+of them can easily be accessed from Python. 
+The most popular may be Memcached, which combines the free RAM across all of the servers on 
+which it is installed into a single large LRU cache. As long as you have some procedure for invalidating or 
+replacing entries that become out of date—or an interface with components that are allowed to go 
+seconds, minutes, or hours out of date before needing to be updated—Memcached can remove massive 
+load from your database or other back-end storage. It can also be inserted at several different points in 
+your processing; instead of saving the result of an expensive database query, for example, it might be 
+even better to simply cache the web widget that ultimately gets rendered. You can assign an expiration 
+data to cache entries as well, in which case Memcached will remove them for you when they have grown 
+too old. 
+Message queues provide a point of coordination and integration for different parts of your 
+application that may require different hardware, load balancing techniques, platforms, or even 
+programming languages. They can take responsibility for distributing messages among many waiting 
+consumers or servers in a way that is not possible with the single point-to-point links offered by normal 
+TCP sockets, and can also use a database or other persistent storage to assure that updates to your 
+service are not lost if the server goes down. Message queues also offer resilience and flexibility, since if 
+some part of your system temporarily becomes a bottleneck, then the message queue can absorb the 
+shock by allowing many messages to queue up for that service. By hiding the population of servers or 
+processes that serve a particular kind of request, the message queue pattern also makes it easy to 
+disconnect, upgrade, reboot, and reconnect servers without the rest of your infrastructure noticing. 
+Finally, the map-reduce pattern provides a cloud-style framework for distributed computation 
+across many processors and, potentially, across many parts of a large data set. Commercial offerings are 
+available from companies like Google and Amazon, while the Hadoop project is the foremost open 
+source alternative—but one that requires users to build server farms of their own, instead of renting 
+capacity from a cloud service. 
+If any of these patterns sound like they address a problem of yours, then search the Python Package 
+Index for good leads on Python libraries that might implement them. The state of the art in the Python 
+community can also be explored through blogs, tweets, and especially Stack Overflow, since there is a 
+strong culture there of keeping answers up-to-date as solutions age and new ones emerge. 
+ 

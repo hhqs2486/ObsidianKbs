@@ -1,0 +1,1429 @@
+ 
+94 
+ 
+第6 章 
+矩阵和矢量计算 
+读完本章之后你将能够回答下列问题 
+• 
+矢量计算的瓶颈在哪里？ 
+• 
+我可以用什么工具查看CPU 进行计算时的效率？ 
+• 
+numpy 为什么比纯Python 更适合数值计算？ 
+• 
+cache-miss 和page-faults 是什么？ 
+• 
+我如何追踪代码中的内存分配？ 
+无论你尝试在计算机上解决什么问题，你都会在某个时候遇到矢量计算。矢量计算
+是计算机工作原理不可或缺的部分，也是在芯片层次上对程序运行时间进行加速所
+必须了解的部分——计算机只知道如何对数字进行操作，而了解如何同时进行多个
+这样的计算能够加速你的程序运行。 
+在本章，我们通过解决一个相对简单的数学问题，扩散等式求解，来揭示这个
+问题的复杂度并理解CPU 层面上发生了什么。通过理解Python 代码如何影响
+CPU 以及如何有效探测这些影响，我们就可以举一反三地学习如何理解其他  
+问题。 
+我们将首先介绍扩散等式问题并提供一个纯Python 的快速解决方案。我们随后会
+指出该方案中的一些内存问题并试图用纯Python 解决它们，我们会介绍numpy 并
+验证它是如何以及为什么能够加速我们的代码的。然后我们会开始进行一些算法的
+改变并特化我们的代码来解决手上的问题。通过移除我们所使用的库中的一些通用
+性函数，我们就能够再一次提升速度。最后我们会介绍一些额外的模块，它们将帮
+
+ 
+图矩阵和矢量计算 
+95 
+助我们在实际工作中简化这种流程，然后浏览一个小故事，告诫我们不要急于在性
+能分析之前进行优化。 
+6.1  问题介绍 
+ 
+备忘 
+本节要对我们将在本章解决的等式问题给予一个深刻的理解。本节的
+理解对于本章剩余部分的阅读并不是严格必须的。如果你想要跳过本
+节，那么请一定要看一下例6-1 和例6-2 中的算法逻辑，理解我们需
+要优化的代码。 
+另外，如果你阅读了本节之后还需要更多的解释，请阅读剑桥大学
+出版社出版的William Press 等人的著作《数值分析方法库》第三版
+第17 章。 
+ 
+为了在本章探索矩阵和矢量计算，我们将重复使用流体扩散的例子。扩散是流体移
+动并试图均匀混合的一种方式。 
+本节我们将探索扩散等式背后的数学问题。它看上去可能很复杂，但不要担心！我
+们会快速简化并让它更容易理解。另外，重要的是要记住，虽然对于我们所需要解
+决的最终等式的基本理解有助于本章的阅读，但这并不是完全必须的。后续的章节
+会主要集中于代码中的各种方程式，而不是扩散等式本身。不过，对等式的理解会
+有助于你的直觉来对代码进行优化。总而言之——理解你代码背后的动机以及算法
+的难点会让你对可能的优化方案有一个更深刻的理解。 
+扩散的一个简单例子是水中的染料：如果你在室温的水里滴入几滴染料，它会慢慢
+扩散直到完全跟水混在一起。由于我们并不搅拌水，水也没有热到出现热对流的程
+度，扩散将是两种液体混合的主要过程。为了在数学上解决这些等式，我们会特地
+选取我们所需要的初始条件，之后我们会看看对初始条件的改变会对计算发生怎样
+的影响（图6-2）。 
+说了这么多，对于我们的目标来说其实最主要的还是扩散方程式本身。扩散等式可
+以被写成一个1 阶偏微分方程： 
+2
+2
+( , )
+( , )
+u x t
+D
+u x t
+t
+x
+∂
+∂
+=
+∂
+∂
+ 
+这个方程中，u 是表示扩散质量的矢量。比如，我们会有一个矢量，里面的值0 表
+示纯水，1 表示纯染料（0 和1 之间的值表示混合液体）。一般来说，这个矢量应
+
+96 
+第6 章 
+该是一个2 阶或3 阶的矩阵表示液体的实际区域或体积。这样，为了表示一个玻璃
+杯中的液体，我们就可以设u 为一个3 阶矩阵，计算所有的轴，而不只是在x 方
+向求导。除此以外，D 是一个物理值表示模拟实验中的液体的属性。D 越大则表明
+液体越容易扩散。为了简化，我们在代码中设D = 1，但依然将它包含在计算中。 
+ 
+备忘 
+扩散方程也被称为热方程。此时，u 表示一个区域的温度而D 描述了
+材料的热传导能力。解开方程可以告诉我们热如何传导。这样，我们
+就能够了解CPU 产生的热量如何扩散到散热片上而不是水中染料的
+扩散。 
+ 
+我们会将时空上连续的扩散微分方程改成小块的离散时空。我们用欧拉法来做到这
+一点。欧拉法将微分方程写成差分形式，如下： 
+( ,
+d )
+( , )
+( , )
+d
+u x t
+t
+u x t
+u x t
+t
+t
+∂
++
++
+=
+∂
+ 
+此时dt 是一个固定的值，表示一个时间的步长，或者说我们为了解决方程而定的
+时间的精确度。它可以被想象成我们正在制作的电影的帧率。当帧率提高（或者说
+dt 变小）时，我们就能够得到一个更清晰的图像。实际上，dt 越接近0，欧拉近
+似就越精确（但是注意，这个精确只能在理论上达到，因为计算机只拥有有限的精
+确度，而精度误差会迅速传播到所有的计算结果）。这样我们就能将方程改写成根
+据u(x, t)求u(x, t+dt)。这意味着我们可以以某个初始状态u(x, 0)为起
+点，表示一杯刚加了一滴染料的水，然后通过对初始状态进行“演化”来了解
+这杯水在未来某个时刻的样子（u(x, dt)）。这种类型的问题被称为“初值问
+题”或“柯西问题”。 
+以同样的有限差分近似对x 进行求导，我们就能获得最终的方程式： 
+2
+(
+d , )
+(
+d , )
+2
+( , )
+( ,
+d )
+( , )
+d *
+*
+d
+u x
+x t
+u x
+x t
+u x t
+u x t
+t
+u x t
+t
+D
+x
++
++
++
++
+⋅
++
+=
++
+ 
+这里，和dt 表示帧率一样，dx 表示图像的分辨率——dx 越小，则我们矩阵的每
+一个单元格表示的区域就越小。为了简化，我们设D = 1 且dx = 1。这两个值
+在物理模拟时非常重要，但是因为我们只是以扩散方程为例子来说明问题，它们对
+我们并不重要。 
+我们能用这个等式解决几乎所有扩散问题。但是，这个等式有些需要考虑的地方。
+首先，我们之前说过u 方向的空间索引（参数x）代表矩阵中的索引。那么当x 处
+
+ 
+图矩阵和矢量计算 
+97 
+于矩阵的起始索引位置时x-dx 的值代表什么呢？这个问题被称为边界条件。你可
+以这样定义固定的边界条件：“任何超出矩阵边界的值都为0”（或任意其他值）。
+或者，你也可以定义边界值环绕的周期性边界条件（比如，如果你矩阵的某个维度
+的长度为N，那么索引为-1 的值就等于索引为N-1 的值，而索引为N 的值则等于
+索引为0 的值。换句话说，当你试图访问索引i 上的值时，你得到的就是位于索
+引(i%N)上的值）。 
+另一个需要考虑的地方是我们如何存储u 的多个时间分量。我们可以让一个矩阵来
+保存计算所需的所有时间值。看起来我们需要至少两个矩阵：一个保存液体的当前
+状态，一个保存液体的下一状态。我们会看到这里面有很重要的性能考量。 
+那么我们如何解决实际的问题？例6-1 包含了一些伪代码来说明我们是如何使用这
+个等式来解决问题的。 
+例6-1  1 阶扩散方程伪代码 
+# Create the initial conditions 
+u = vector of length N 
+for i in range(N): 
+    u = 0 if there is water, 1 if there is dye 
+ 
+# Evolve the initial conditions 
+D = 1 
+t = 0 
+dt = 0.0001 
+while True: 
+    print "Current time is: %f" % t 
+    unew = vector of size N 
+ 
+    # Update step for every cell 
+    for i in range(N): 
+        unew[i] = u[i] + D * dt * (u[(i+1)%N] + u[(i-1)%N] - 2 * u[i]) 
+    # Move the updated solution into u 
+    u = unew 
+ 
+    visualize(u) 
+ 
+这段代码会根据水中染料的初始条件来告诉我们每一个0.0001 秒之后的未来系统
+是什么样的。结果见图6-1，图中显示的是最浓的染料液滴（高帽函数）随时间的
+演化。我们可以看到染料是如何均匀混合，直到每处染料的浓度都相等的。 
+为了本章的目的，我们还将解决方程的2 阶版本。这意味着我们将要操作一个2 阶
+矩阵，而不是一个矢量（或者说一个只有1 阶的矩阵）。对方程唯一的改动（以及
+相应的代码改动）是现在我们必须计算第二个y 方向上的导数。这意味着原始的方
+
+98 
+第6 章 
+程会变成： 
+2
+2
+2
+2
+( , , )
+( , , )
+( , , )
+u x y t
+D
+u x y t
+u x y t
+t
+x
+y
+⎛
+⎞
+∂
+∂
+∂
+=
+⋅
++
+⎜
+⎟
+∂
+∂
+∂
+⎝
+⎠
+ 
+ 
+图6-1  1 阶扩散的例子 
+这个2 阶扩散方程翻译成伪码如例6-2 所示，用的是跟之前一样的方法。 
+例6-2  计算2 阶差分的算法 
+for i in range(N): 
+    for j in range(M): 
+        unew[i][j] = u[i][j] + dt * (                  \ 
+             (u[(i+1)%N][j] + u[(i-1)%N][j] - 2 * u[i][j]) + \ # d^2 u / dx^2 
+             (u[i][(j+1)%M] + u[j][(j-1)%M] - 2 * u[i][j]) \ # d^2 u / dy^2 
+        ) 
+ 
+现在我们可以将所有的代码片段组装到一起，并写出完整的Python2 阶扩散代码来
+作为我们本章接下来进行性能参照的基准。代码虽然看上去更复杂，结果却近似1
+阶扩散（见图6-2）。 
+如果你希望阅读更多本节的主题，可以参考扩散方程的维基百科和S.V.Gurevich 写
+的第7 章“复杂系统的数值方法”。 
+
+ 
+图矩阵和矢量计算 
+99 
+ 
+图6-2  两组初始条件扩散的例子 
+6.2  Python 列表还不够吗 
+让我们将例6-2 的伪代码写成正式代码，这样我们就能够更好地分析它的运行时性
+能。第一步是写出演化函数，它接受一个矩阵并返回其演化后的状态，见例6-3。 
+例6-3  纯Python 2 阶扩散函数 
+grid_shape = (1024, 1024) 
+ 
+def evolve(grid, dt, D=1.0): 
+    xmax, ymax = grid_shape 
+    new_grid = [[0.0,] * ymax for x in xrange(xmax)] 
+    for i in xrange(xmax): 
+        for j in xrange(ymax): 
+            grid_xx = grid[(i+1)%xmax][j] + grid[(i-1)%xmax][j] - 2.0 * grid[i][j] 
+            grid_yy = grid[i][(j+1)%ymax] + grid[i][(j-1)%ymax] - 2.0 * grid[i][j] 
+            new_grid[i][j] = grid[i][j] + D * (grid_xx + grid_yy) * dt 
+return new_grid 
+ 
+ 
+备忘 
+其实相比预分配一个new_grid 列表，还不如在for 循环中用
+appends 建立它。不仅速度比我们这样写要快很多，结果也是一样
+的。我们之所以使用现在这个方法是因为它能解释得更清楚。 
+
+100 
+第6 章 
+全局变量grid_shape 表示我们模拟的区域有多大。另外，在6.1 节中解释过，
+我们使用的是周期性边界条件（这也是为什么我们需要对索引取模）。为了实际使
+用这段代码，我们必须初始化一个矩阵并对其调用evolve。例6-4 中的代码是一
+个非常通用的初始化过程，将在本章多次被重用（它的性能将不会被分析，因为它
+只运行一次，不像evolve 函数将被重复调用）。 
+例6-4  纯Python 2 阶扩散初始化函数 
+def run_experiment(num_iterations): 
+    # Setting up initial conditions  X 
+    xmax, ymax = grid_shape 
+    grid = [[0.0,] * ymax for x in xrange(xmax)] 
+ 
+    block_low = int(grid_shape[0] * .4) 
+    block_high = int(grid_shape[0] * .5) 
+    for i in xrange(block_low, block_high): 
+        for j in xrange(block_low, block_high): 
+            grid[i][j] = 0.005 
+ 
+    # Evolve the initial conditions 
+    start = time.time() 
+    for i in range(num_iterations): 
+        grid = evolve(grid, 0.1) 
+    return time.time() - start 
+ 
+X 这里使用的初始条件跟图6-2 的方形例子相同。 
+我们特地选择了足够小的dt 和矩阵元素的值来让算法稳定。对这个算法的收敛特
+性更深入的讨论见Willian Press 等人的著作《Numerical Recipes》第三版。 
+分配次数太多带来的问题 
+通过对纯Python 演化函数使用line_profiler，我们就能开始理解运行变慢可
+能是什么原因导致的。见例6-5 的分析输出，我们看到函数大多数时间花在了求导
+和更新矩阵上。
+①这正是我们所需要的，因为这是一个纯粹的CPU 密集型问题——
+任何不是花在CPU 上的时间都是一个明显的优化对象。 
+例6-5  纯Python 2 阶扩散函数分析 
+$ kernprof.py -lv diffusion_python.py 
+Wrote profile results to diffusion_python.py.lprof 
+Timer unit: 1e-06 s 
+ 
+File: diffusion_python.py 
+                        
+① 这段受分析代码来自例6-3，截取了部分以适应页面边界。别忘了kernprof.py 需要函数被@profile 修饰才
+能对其进行分析（见2.8 节） 
+
+ 
+图矩阵和矢量计算 
+101 
+Function: evolve at line 8 
+Total time: 16.1398 s 
+ 
+Line #     Hits       Time  Per Hit  % Time  Line Contents 
+============================================================== 
+     8                                       @profile 
+     9                                       def evolve(grid, dt, D=1.0): 
+    10       10         39      3.9     0.0      xmax, ymax = grid_shape # X 
+    11  2626570    2159628      0.8    13.4      new_grid = ... 
+    12     5130       4167      0.8     0.0      for i in xrange(xmax): # Y 
+    13  2626560    2126592      0.8    13.2          for j in xrange(ymax): 
+    14  2621440    4259164      1.6    26.4              grid_xx = ... 
+    15  2621440    4196964      1.6    26.0              grid_yy = ... 
+    16  2621440    3393273      1.3    21.0              new_grid[i][j] = ... 
+    17       10         10      1.0     0.0           return grid # Z 
+ 
+X 这条语句用了这么长时间是因为grid_shape 必须从本地名字空间获得（见
+4.2 节）。 
+Y 这行命中了5130 次，意味着我们操作的矩阵的xmax 为512。因为需要对xrange
+中的每一个值求值512 次加上对循环终止条件求一次值，而这些一共发生了10 次。 
+Z 这行命中10 次，告诉我们这个被分析函数运行了10 次。 
+但是，输出也显示我们有20%的时间花费在分配new_grid 列表上。这是一个浪
+费，因为new_grid 的属性不会发生变化——无论我们传入evolve 的值是什么，
+new_grid 列表始终具有相同的形状和大小，包含同样的值。一个简单优化是只分
+配一次并重用它。这种优化类似于将重复代码移至循环外： 
+from math import sin 
+ 
+def loop_slow(num_iterations): 
+    """ 
+    >>> %timeit loop_slow(int(1e4)) 
+    100 loops, best of 3: 2.67 ms per loop 
+    """ 
+    result = 0 
+    for i in xrange(num_iterations): 
+        result += i * sin(num_iterations) # X 
+    return result 
+ 
+def loop_fast(num_iterations): 
+    """ 
+    >>> %timeit loop_fast(int(1e4)) 
+    1000 loops, best of 3: 1.38 ms per loop 
+    """ 
+    result = 0 
+
+102 
+第6 章 
+    factor = sin(num_iterations) 
+    for i in xrange(num_iterations): 
+        result += i 
+    return result * factor 
+X sin(num_iterations)的值在循环内不会改变，所以不需要每次重新计算它。 
+我们可以对扩散代码进行类似的转换，如例6-6 所示。在此，我们将例6-4 的new_ 
+grid 实例化之后再传入我们的evolve 函数。该函数做的事情跟之前一样：读取
+grid 列表并写入新的new_grid 列表。然后，我们可以简单交换new_grid 和
+grid 并继续。 
+例6-6  减少内存分配之后的纯Python 2 阶扩散函数 
+def evolve(grid, dt, out, D=1.0): 
+    xmax, ymax = grid_shape 
+    for i in xrange(xmax): 
+        for j in xrange(ymax): 
+            grid_xx = grid[(i+1)%xmax][j] + grid[(i-1)%xmax][j] - 2.0 * grid[i][j] 
+            grid_yy = grid[i][(j+1)%ymax] + grid[i][(j-1)%ymax] - 2.0 * grid[i][j] 
+            out[i][j] = grid[i][j] + D * (grid_xx + grid_yy) * dt 
+ 
+def run_experiment(num_iterations): 
+    # 设置初始条件 
+    xmax,ymax = grid_shape 
+    next_grid = [[0.0,] * ymax for x in xrange(xmax)] 
+    grid = [[0.0,] * ymax for x in xrange(xmax)] 
+ 
+    block_low = int(grid_shape[0] * .4) 
+    block_high = int(grid_shape[0] * .5) 
+    for i in xrange(block_low, block_high): 
+        for j in xrange(block_low, block_high): 
+            grid[i][j] = 0.005 
+ 
+    start = time.time() 
+    for i in range(num_iterations): 
+        evolve(grid, 0.1, next_grid) 
+        grid, next_grid = next_grid, grid 
+    return time.time() – start 
+ 
+在例6-7 的分析结果中
+①，我们可以看到经过这个细小的修改后的版本给我们带来
+了21%的速度提升。这个结论跟之前对列表的append 操作给我们的结论（见3.2.1
+节）类似：内存分配不便宜。每次当我们需要内存用于存储一个变量或列表，Python
+都必须花时间向操作系统申请更多内存空间，然后还要遍历新分配的空间来将它初
+始化为某个值。任何时候只要有可能，重用已分配的内存空间都能为我们带来速度
+                        
+① 这段受分析代码来自例6-6，截取了部分以适应页面边界。 
+
+ 
+图矩阵和矢量计算 
+103 
+提升。不过，要小心实现这些改动。速度提升固然可观，你还是需要通过分析来确
+保这是你想要的结果，而不是污染你代码库的垃圾。 
+例6-7  减少内存分配后的Python 扩散函数的分析结果 
+$ kernprof.py -lv diffusion_python_memory.py 
+Wrote profile results to diffusion_python_memory.py.lprof 
+Timer unit: 1e-06 s 
+ 
+File: diffusion_python_memory.py 
+Function: evolve at line 8 
+Total time: 13.3209 s 
+ 
+Line #      Hits      Time  Per Hit  % Time  Line Contents 
+============================================================== 
+     8                                       @profile 
+     9                                       def evolve(grid, dt, out, D=1.0): 
+    10        10        15      1.5      0.0    xmax, ymax = grid_shape 
+    11      5130      3853      0.8      0.0    for i in xrange(xmax): 
+    12   2626560   1942976      0.7     14.6        for j in xrange(ymax): 
+    13   2621440   4059998      1.5     30.5            grid_xx = ... 
+    14   2621440   4038560      1.5     30.3            grid_yy = ... 
+    15   2621440   3275454      1.2     24.6            out[i][j] = ... 
+ 
+6.3  内存碎片 
+我们在例6-6 写的Python 代码还有一个问题，也是使用Python 进行此类矢量计算
+的核心问题：原生Python 并不支持矢量操作。这有两个原因：Python 列表存储的
+是指向实际数据的指针，且Python 字节码并没有针对矢量操作进行优化，所以for
+循环无法预测何时使用矢量操作能带来好处。 
+Python 列表储存的是指针意味着列表保存的并不是实际的数据，而是这些数据的位
+置。在大多数情况下，这是一种优势，因为它允许我们在列表中存储任意类型的数
+据。但是对于矢量和矩阵操作，这会导致性能的大幅下降。 
+性能下降的原因在于每次我们需要获得grid 矩阵中的元素时，我们都必须进行多
+次查找。比如，grid[5][2]这样的语句需要我们首先对列表grid 查找索引5。
+这会返回一个指针指向数据所在的位置。然后我们需要第二次列表查找找到索引2
+的元素。查到之后，我们得到的是实际数据所储存的位置。 
+一次这样的查找开销并不大，在大多数情况下可以忽略。但是，如果我们想要定位
+的数据在内存的一个连续存储块内，我们本来可以一次性将所有的数据全部读取出
+来，而不是分别对每个元素进行两次操作。这是数据分片的一个主要问题：当你的
+
+104 
+第6 章 
+数据被分成小片，你只能对每一片分别进行传输，而不是一次性传输整个块。这意
+味着你引入了更多的内存传输开销，且强制CPU 在数据传输的过程中等待。我们
+可以用perf 看到在缓存失效的情况下这个问题会有多严重。 
+这个在正确的时候将正确的数据传输给CPU 的问题被称为“冯诺伊曼瓶颈”。意思
+是现代计算机所使用的层次化的内存架构会导致CPU 和内存之间的带宽受到限
+制。如果我们数据传输的速度可以无限快，我们就不需要任何缓存，因为CPU 可
+以立即获得任何它需要的数据。此时瓶颈就不再存在。 
+由于数据传输的速度不可能无限快，我们必须从RAM 中预取数据并将其保存在
+一个更小但更快的CPU 缓存中，并希望当CPU 需要某个数据时，它可以从中更
+快读取到。虽然这已经是一个严重理想化了的场景，我们依然可以看到其中的一
+些问题—我们如何知道未来需要哪些数据？CPU 内部的分支预测和流水线技
+术会试图在处理当前指令的同时预测其下一条指令并将相应的内存读进缓存。但
+是减少瓶颈最好的方法是让代码知道如何分配我们的内存以及如何使用我们的
+数据进行计算。 
+探测内存移动至CPU 的性能相当困难，不过，Linux 上的perf 工具可以让我们
+洞察CPU 如何处理运行中的程序。比如，我们可以对例6-6 的纯Python 代码运
+行perf 并看到CPU 运行我们代码的效率。结果见例6-8。注意该例以及之后的
+perf 例子的输出都被截取以适应页面边界。被删除的数据包括各测量值的方差，
+用于表示测量值在几次测量中发生了多大的变化。这有助于看到测量值在多大程
+度上依赖于实际的程序特性以及多大程度上受到来自系统的其他干扰，比如其他
+正在使用系统资源的程序。 
+例6-8  减少内存分配后纯Python 2 阶扩散函数的性能指标 
+$ perf stat -e cycles,stalled-cycles-frontend,stalled-cycles-backend,instructions,\ 
+   cache-references,cache-misses,branches,branch-misses,task-clock,faults,\ 
+   minor-faults,cs,migrations -r 3 python diffusion_python_memory.py 
+ 
+Performance counter stats for 'python diffusion_python_memory.py' (3 runs): 
+ 
+ 329,155,359,015 cycles                   #    3.477 GHz 
+  76,800,457,550 stalled-cycles-frontend  #   23.33% frontend cycles idle 
+  46,556,100,820 stalled-cycles-backend   #   14.14% backend cycles idle 
+ 598,135,111,009 instructions             #    1.82 insns per cycle 
+                                          #    0.13 stalled cycles per insn 
+     35,497,196 cache-references          #    0.375 M/sec 
+     10,716,972 cache-misses              #   30.191 % of all cache refs 
+133,881,241,254 branches                  # 1414.067 M/sec 
+  2,891,093,384 branch-misses             #    2.16% of all branches 
+   94678.127621 task-clock                #    0.999 CPUs utilized 
+
+ 
+图矩阵和矢量计算 
+105 
+          5,439 page-faults               #    0.057 K/sec 
+          5,439 minor-faults              #    0.057 K/sec 
+            125 context-switches          #    0.001 K/sec 
+              6 CPU-migrations            #    0.000 K/sec 
+ 
+   94.749389121 seconds time elapsed 
+6.3.1  理解perf 
+让我们花一秒钟来理解perf 告诉我们的各种性能指标以及它们跟我们代码的关
+系。task-clock 指标告诉我们的任务花了多少个时钟周期。这跟总体的运行时
+间不同，因为如果我们的程序花了一秒钟来运行但是使用了两个CPU，那么
+task-clock 将是1000（task-clock 的单位是毫秒）。方便的是，perf 会帮我
+们计算并在该指标旁边告诉我们有多少个CPU 被使用了。这个数字不完全等于1
+是因为进程有一段时间依赖于其他子系统的指令（比如分配内存时）。 
+context-switches 和CPU-migrations 告诉我们程序在等待内核操作（如I/O
+操作）完成时，为了让其他进程得以运行，被挂起或迁移到另一个CPU 核心上执
+行的次数。当一个context-switch 发生时程序的执行会被挂起，让另一个程序
+得以执行。这是一个对时间要求非常精细的任务，也是我们需要尽量避免的，但是
+我们对它的发生无能为力。只要进程允许切换，内核就会接手；不过，我们可以做
+一些事来抑制内核切换我们的程序。总的来说，内核会在程序进行I/O（比如读取
+内存、磁盘或网络）时将其挂起。我们在后续章节会看到，我们可以用异步操作来
+确保我们的程序在等待I/O 时继续使用CPU，这会让我们的进程继续运行而不被切
+换出去。另外，我们还可以设置程序的nice 值来给我们的程序更高的优先级以防
+止内核将它切换出去。类似的，CPU-migrations 会发生在进程被挂起并迁移到
+另一个CPU 上继续执行的情况，这是为了让所有的CPU 都有同样程度的利用率。
+这可以被认为是一个特别糟糕的进程切换，因为我们的程序不仅被暂时挂起，而且
+丢失了L1 缓存内所有的数据（每个CPU 都有它自己的L1 缓存）。 
+page-fault 是现代UNIX 内存分配机制的一部分。分配内存时，内核除了告诉
+程序一个内存的引用地址以外没做任何事。但是，之后在这块内存第一次被使用时，
+操作系统会抛出一个缺页小中断，这将暂停程序的运行并正确分配内存。这被称为
+延迟分配系统。虽然这种手段相比以前的内存分配系统是一个很大的优化，缺页小
+中断本身依然是一个相当昂贵的操作，因为大多数操作都发生在你的程序外部。另
+外还有一种缺页大中断，发生于当你的程序需要从设备（磁盘、网络等）上请求还
+未被读取的数据时。这些操作更加昂贵，因为他们不仅中断了你的程序，还需要读
+取数据所在的设备。这种缺页不总是影响CPU 密集的工作，但是，它会给任何需
+要读写磁盘或网络的程序带来痛苦。 
+
+106 
+第6 章 
+一旦我们引用内存中的数据，数据就需要通过内存的多个层级（对此的讨论见1.1.3
+节“通信层”）。每当我们引用缓存中的数据，cache-references 指标就会增加。
+如果我们的缓存中还没有数据并需要从RAM 获取，cache-miss 指标的计数就会
+增加。如果我们读取一个最近刚读过的数据（那个数据还在缓存里）或者读取的数
+据在最近刚读过的数据附近（缓存从RAM 中按块读取数据），缓存失效就不会发
+生。缓存失效会拖慢CPU 密集型工作，因为我们不仅需要等待数据从RAM 被读
+取，而且中断了我们的执行流水线（马上会说到这个）。本章后面将讨论如何通过
+优化内存中的数据布局降低缓存失效。 
+Instructions 指标告诉我们的代码让CPU 总共执行了多少条指令。流水线技术
+让CPU 能在同一时间执行多条指令，insns per cycle 指标会告诉我们一个时钟
+周期内具体了几条。为了更好地优化流水线，stalled-cycles-frontend 和
+stalled-cycles-backend 告诉我们的程序在等待流水线的前端或后端填满指
+令时等待了多少时钟周期。这可能是由于一次缓存失效，一次错误的分支预测或一
+次资源冲突。流水线前端负责从内存中获取下一条指令并解码成一个合法的操作，
+而后端则负责实际执行操作。有了流水线，CPU 就能在运行当前指令的同时获取
+并准备下一条指令。 
+branch 是代码执行流程发生改变的地方。想象一条if..then 语句——基于条
+件语句的结果，我们会执行不同的代码段。这就是代码执行的分支——下一条指令
+将是两者之一。为了优化，特别是在使用了流水线的情况下，CPU 会试图猜测分
+支的走向并预取与其相关的指令。当预测出错时，就会发生stalled-cycles 和
+branch-miss。分支失效是相当令人困惑的，并可能导致很多奇怪的现象（比如，
+某些循环在排序列表上跑得远比乱序列表快，仅仅是因为发生了更少的分支失效）。 
+ 
+备忘 
+如果你想要一个在CPU 层面各种性能指标更彻底的解释，请参考
+Gurpur M. Prabhu 的“计算机架构导论”。它讲述在很底层发生的故事，
+让你对代码运行时底层发生的一些事有一个很好的理解。 
+6.3.2  根据perf 输出做出抉择 
+例6-8 的性能指标告诉我们在运行我们的代码时，CPU 需要访问L1/L2 缓存
+35 497 196 次，其中10 716 972 次（30.191%）是由于请求的数据不在内存中而需
+要被获取。另外，我们可以看到每个CPU 周期我们能平均执行1.82 条指令，这告
+诉了我们通过流水线，乱序执行以及超线程技术（或者任何其他能够让你的CPU
+在一个时钟周期内执行多条指令的技术）给予我们的性能增幅。 
+
+ 
+图矩阵和矢量计算 
+107 
+数据的分片不仅增加了从内存传输数据到CPU 的次数，还让你无法进行矢量计
+算，因为在计算时你的CPU 缓存中并没有多个数据。我们在1.1.3 节中解释过，
+矢量计算（或者说让CPU 在同一时间进行多个计算）仅能发生在我们能够将相
+关数据填满CPU 缓存的情况下。由于总线只能移动连续的内存数据，也就是说
+只有当格子中的数据在RAM 中顺序储存时才有可能。由于我们的列表存储的是
+数据的指针而不是实际数据，格子中实际的值被分散在内存里，无法一次性全
+部复制。 
+我们可以通过使用array 模块代替列表来减轻这个问题。array 对象可以在内存
+中顺序储存数据，一段array 实际代表了一段连续的内存。但是这并没有完全解
+决问题——现在我们有了内存中的连续存储的数据，但Python 依然不知道如何对
+我们的循环进行矢量计算。我们想要的是让原本一次只能处理一个数组元素的循环
+现在一次能够处理多个数据，但是之前说过，Python 没有这样的字节码优化（部分
+是由于Python 语言极端的动态特性）。 
+ 
+备忘 
+为什么我们顺序存储在内存中的数据不能自动矢量化？如果我们看
+看CPU 运行的机器指令，就会发现矢量操作（比如两个数组相乘）
+和非矢量操作使用的是不同的CPU 计算单元和指令集。为了让Python
+能够使用这些特殊指令，我们必须有一个模块专门用来使用这些指令
+集。我们马上会看到numpy 如何让我们能够访问这些特殊指令。 
+ 
+另外，由于实现细节，使用array 类型来创建数据列表实际上比使用list 要慢。
+这是因为array 对象存储的数据是一个非常底层的抽象，在用户使用它们时必须
+被转换成一个Python 兼容的版本。这个额外的开销在你每次索引一个array 类型
+时都会发生。这一实现细节导致了array 对象不适用于数学计算而更适用于在内
+存中存放类型固定的数据。 
+6.3.3  使用numpy 
+为了解决perf 发现的分片问题，我们必须找到一个可以进行高效矢量操作的模
+块。幸运的是，numpy 拥有我们需要的所有特性——它能将数据连续存储在内存
+中并支持数据的矢量操作。结果就是，任何我们对numpy 数组的数学操作都能自
+动矢量化而无须我们显式遍历每一个元素。这不仅仅让矩阵计算更简单，而且也更
+快。让我们看这样一个例子： 
+from array import array 
+import numpy 
+ 
+
+108 
+第6 章 
+def norm_square_list(vector): 
+    """ 
+    >>> vector = range(1000000) 
+    >>> %timeit norm_square_list(vector_list) 
+    1000 loops, best of 3: 1.16 ms per loop 
+    """ 
+    norm = 0 
+    for v in vector: 
+        norm += v*v 
+    return norm 
+ 
+def norm_square_list_comprehension(vector): 
+    """ 
+    >>> vector = range(1000000) 
+    >>> %timeit norm_square_list_comprehension(vector_list) 
+    1000 loops, best of 3: 913 μs per loop 
+    """ 
+    return sum([v*v for v in vector]) 
+ 
+def norm_squared_generator_comprehension(vector): 
+    """ 
+    >>> vector = range(1000000) 
+    >>> %timeit norm_square_generator_comprehension(vector_list) 
+    1000 loops, best of 3: 747 μs per loop 
+    """ 
+    return sum(v*v for v in vector) 
+ 
+def norm_square_array(vector): 
+    """ 
+    >>> vector = array('l', range(1000000)) 
+    >>> %timeit norm_square_array(vector_array) 
+    1000 loops, best of 3: 1.44 ms per loop 
+    """ 
+    norm = 0 
+    for v in vector: 
+        norm += v*v 
+    return norm 
+ 
+def norm_square_numpy(vector): 
+    """ 
+    >>> vector = numpy.arange(1000000) 
+    >>> %timeit norm_square_numpy(vector_numpy) 
+    10000 loops, best of 3: 30.9 μs per loop 
+    """ 
+    return numpy.sum(vector * vector) # X 
+ 
+def norm_square_numpy_dot(vector): 
+    """ 
+    >>> vector = numpy.arange(1000000) 
+
+ 
+图矩阵和矢量计算 
+109 
+    >>> %timeit norm_square_numpy_dot(vector_numpy) 
+    10000 loops, best of 3: 21.8 μs per loop 
+    """ 
+    return numpy.dot(vector, vector) # Y 
+ 
+X 这创建了vector 上的两个隐式循环，一个用于做乘法，另一个求和。这两个
+循环类似norm_squre_list_comprehension 中的循环，只是使用了numpy
+优化的数学代码。 
+Y 这才是numpy 中求矢量范数的推荐做法，通过矢量化的numpy.dot 操作。前
+面提供的低效的norm_squre_numpy 代码仅作说明用途。 
+这段简单的numpy 代码运行速度是norm_square_list 的37.54 倍，比使用
+Python 列表“优化”后的版本也要快29.5 倍。纯Python 循环和列表优化版本在速
+度上的差距体现了让后台进行更多计算相比于Python 代码显式计算的优势。 
+Python 是用C 语言写的，利用Python 内建机制进行运算，我们就获得了原生C 代
+码的速度。我们在numpy 代码中有如此大的速度提升也是基于同样的原因：我们
+使用了高度优化且特殊构建的对象取代了通用的列表结构来处理数组。 
+除了更轻量级且特化的机制，numpy 对象还给了我们内存的本地性和矢量操作，
+它们在处理数值计算时尤其重要。CPU 是超快的，大多数时候，仅仅提升其获取
+所需的数据的速度就是最好的优化手段。我们之前使用perf 工具运行每个函数显
+示了使用array 的版本和纯Python 版本的函数花费了大约1×1011 条指令，而
+numpy 版本花费了大约3×109 条。另外，array 和纯Python 版本大约有80%缓
+存失效而numpy 只有大约55%。 
+我们的norm_square_numpy 代码中，在运算vector * vector 时，numpy
+会为我们隐式调用一个循环。该循环和我们在其他例子中显式调用的一样：遍
+历vector 内的每一项，乘以其自身。但是，由于我们让numpy 来干这件事而
+不是自己用Python 代码实现，numpy 就可以进行任何它想要的优化。numpy
+在后台有极其优化的C 代码来专门使用CPU 的矢量操作。另外，numpy 数组在
+内存中是连续储存的底层数字类型，和（array 模块中的）array 对象有同样
+的空间需求。 
+另外还有一个额外好处是，numpy 支持我们将问题重新描述为一个点积。这
+让我们可以用一个单一操作来计算我们想要的值，而不是计算两个矢量的乘积
+并求和。在图6-3 中可以看到，由于该函数的特化，norm_numpy_dot 的效
+率大大超越了其他所有函数，这也是因为我们不需要存储vector * vector
+的中间结果。 
+
+110 
+第6 章 
+ 
+图6-3  对不同长度的矢量求范数平方的函数运行时间 
+6.4  用numpy 解决扩散问题 
+利用我们刚刚学到的numpy，我们就可以轻松地把之前的纯Python 代码矢量化。
+唯一需要引入的新功能是numpy 的roll 函数。该函数和我们手写的数组轮转技
+巧一样，但它运行在一个numpy 数组上。一言以蔽之，它能将下面的数组轮转操
+作矢量化： 
+>>> import numpy as np 
+>>> np.roll([1,2,3,4], 1) 
+array([4, 1, 2, 3]) 
+ 
+>>> np.roll([[1,2,3],[4,5,6]], 1, axis=1) 
+array([[3, 1, 2], 
+       [6, 4, 5]]) 
+ 
+roll 函数创建了一个新的numpy 数组，这一点有利有弊。坏处是我们需要额外
+的时间开销来分配新的空间，然后还需要用合适的数据填满它。另一方面，一旦我
+们创建了这个轮转后的新数组，我们立刻就能够在其上进行矢量操作，而不会受到
+CPU 缓存失效的影响。这可以极大影响我们对矩阵数据运算的速度。在本章后续，
+
+ 
+图矩阵和矢量计算 
+111 
+我们还将重写这部分代码来获得同样的好处而又不至于频繁分配更多内存。 
+有了这个额外的函数，我们就能将例6-6 的Python 扩散代码用更简单且矢量化的
+numpy 数组重写。另外，我们将grid_xx 和grid_yy 的微分计算打散至另一个
+函数。例6-9 展示了我们第一版的numpy 扩散代码。 
+例6-9  初版numpy 扩散 
+import numpy as np 
+ 
+grid_shape = (1024, 1024) 
+ 
+def laplacian(grid): 
+    return np.roll(grid, +1, 0) + np.roll(grid, -1, 0) + \ 
+           np.roll(grid, +1, 1) + np.roll(grid, -1, 1) - 4 * grid 
+ 
+def evolve(grid, dt, D=1): 
+    return grid + dt * D * laplacian(grid) 
+ 
+def run_experiment(num_iterations): 
+    grid = np.zeros(grid_shape) 
+ 
+    block_low = int(grid_shape[0] * .4) 
+    block_high = int(grid_shape[0] * .5) 
+    grid[block_low:block_high, block_low:block_high] = 0.005 
+ 
+    start = time.time() 
+    for i in range(num_iterations): 
+        grid = evolve(grid, 0.1) 
+    return time.time() - start 
+ 
+我们会立刻发现这段代码短多了。这通常预示着高性能：我们将很多重活累活移到
+Python 解释器之外，让模块内建的优化代码来帮我们解决特定的问题（但是，这必
+须要经过测试！）。我们的假设是numpy 有更好的内存管理可以更快地给CPU 提供
+所需的数据。但是，这一点实际取决于numpy 的实现，让我们对代码进行性能分
+析来验证我们的假设。例6-10 显示了结果。 
+例6-10  numpy 2 阶扩散的性能指标 
+$ perf stat -e cycles,stalled-cycles-frontend,stalled-cycles-backend,instructions,\ 
+  cache-references,cache-misses,branches,branch-misses,task-clock,faults,\ 
+  minor-faults,cs,migrations -r 3 python diffusion_numpy.py 
+ 
+Performance counter stats for 'python diffusion_numpy.py' (3 runs): 
+10,194,811,718 cycles                  #    3.332 GHz 
+ 4,435,850,419 stalled-cycles-frontend #   43.51% frontend cycles idle 
+
+112 
+第6 章 
+ 2,055,861,567 stalled-cycles-backend  #   20.17% backend cycles idle 
+15,165,151,844 instructions            #     1.49 insns per cycle 
+                                       #     0.29 stalled cycles per insn 
+   346,798,311 cache-references        #  113.362 M/sec 
+       519,793 cache-misses            #    0.150 % of all cache refs 
+ 3,506,887,927 branches                # 1146.334 M/sec 
+     3,681,441 branch-misses           #    0.10% of all branches 
+   3059.219862 task-clock              #    0.999 CPUs utilized 
+       751,707 page-faults             #    0.246 M/sec 
+       751,707 minor-faults            #    0.246 M/sec 
+             8 context-switches        #    0.003 K/sec 
+             1 CPU-migrations          #    0.000 K/sec 
+ 
+   3.061883218 seconds time elapsed 
+ 
+这个结果显示出，相比于例6-8 的降低内存分配的纯Python 实现，仅仅改用numpy
+就给我们带来了40 倍的速度提升。这是怎么做到的？ 
+首先，我们要感谢numpy 提供的矢量操作。虽然numpy 版本看上去每个周期运行
+的指令较少，但是每条指令干了更多的活。也就是说，一条矢量操作指令可以对4
+个（或更多）数组元素进行乘法操作而不需要4 条独立的乘法指令。最终导致我们
+解决同样问题的指令数变得更少。 
+numpy 版本的函数能够降低指令总数还有其他原因。其中之一是纯Python 版本需要
+完整的Python API 可用，而numpy 版本则没有这样的需求——比如说，纯Python
+矩阵只能在Python 中附加，而不能在numpy 模块内被附加。即使我们并没有显式
+使用这个功能（以及还有其他很多功能），仅仅是为了让系统确保它能够被使用也会
+带来额外的开销。由于numpy 可以假定它存储的数据永远是数字，所有跟数组相关
+的操作都可以针对数字操作优化。等我们讨论Cython（7.6 节）时，我们会为了性能
+继续移除各种必要功能，它甚至可以移除列表边界检查来加速整个列表查询。 
+通常，指令的数量跟性能并不相关—拥有较少指令的程序可能并没有高效地运行
+它们，或者它们可能都是慢速指令。不过，我们看到除了降低指令数量以外，numpy
+版本还减少了很多低效之处：缓存失效（仅0.15%，相比于之前的30.2%）。我们
+在6.3 节中解释过，由于CPU 必须等待从较慢的内存中读取数据而不是从缓存中
+直接使用，缓存失效降低了计算速度。事实上，内存碎片是如此决定性的性能因素，
+以至于在numpy 中禁用矢量操作
+①并保持其他一切不变的情况下，我们仍旧能看到
+一个相对纯Python 版本极大的速度提升（例6-11）。 
+                        
+① 为此我们以-O0 开关编译numpy。为了这个实验，我们用如下命令编译了numpy1.8.0： 
+   $ OPT='-O0' FOPT='-O0' BLAS=None LAPACK=None ATLAS=None python setup.py build。 
+
+ 
+图矩阵和矢量计算 
+113 
+例6-11  禁用矢量操作的numpy 2 阶扩散性能指标 
+$ perf stat -e cycles,stalled-cycles-frontend,stalled-cycles-backend,instructions,\ 
+  cache-references,cache-misses,branches,branch-misses,task-clock,faults,\ 
+  minor-faults,cs,migrations -r 3 python diffusion_numpy.py 
+ 
+Performance counter stats for 'python diffusion_numpy.py' (3 runs): 
+ 
+  48,923,515,604 cycles                   #    3.413 GHz 
+  24,901,979,501 stalled-cycles-frontend  #   50.90% frontend cycles idle 
+   6,585,982,510 stalled-cycles-backend   #   13.46% backend cycles idle 
+  53,208,756,117 instructions             #     1.09 insns per cycle 
+                                          #     0.47 stalled cycles per insn 
+      83,436,665 cache-references         #    5.821 M/sec 
+       1,211,229 cache-misses             #    1.452 % of all cache refs 
+   4,428,225,111 branches                 #  308.926 M/sec 
+       3,716,789 branch-misses            #    0.08% of all branches 
+    14334.244888 task-clock               #    0.999 CPUs utilized 
+         751,185 page-faults              #    0.052 M/sec 
+         751,185 minor-faults             #    0.052 M/sec 
+              24 context-switches         #    0.002 K/sec 
+               5 CPU-migrations           #    0.000 K/sec 
+ 
+    14.345794896 seconds time elapsed 
+ 
+这个结果展示出：当我们使用numpy 的时候，给我们带来40 倍速度提升的决定性
+因素并不是矢量操作指令集，而是内存的本地性以及减少的内存碎片。事实上，从
+之前的实验上我们可以看到，矢量操作仅给我们带来了40 倍速度提升中的15%。
+① 
+内存问题才是代码效率低下的决定性因素这一认知并不会令我们感到太过震惊。计
+算机就是专门被设计用来处理我们的问题的——把数字相乘和相加。瓶颈就取决于
+能否将这些数字以足够快的速度传输给CPU 让它能够以最高的速度进行计算。 
+6.4.1  内存分配和就地操作 
+为了优化内存方面的影响，让我们试着使用跟例6-6 同样的方法来降低我们numpy
+代码的内存分配次数。内存分配比我们之前讨论的缓存失效更糟。不仅仅要在缓
+存中找不到数据时去RAM 中找到正确的数据，内存分配还必须向操作系统请求
+一块可用的数据并保留它。向操作系统进行请求所需的开销比简单填充缓存大很
+多—填充一次缓存失效是一个在主板上优化过的硬件行为，而内存分配则需要
+跟另一个进程、内核打交道来完成。 
+为了移除例6-9 中的内存分配，我们会在代码开头预分配一些空间然后只使用就地
+                        
+① 这一点视实际使用的CPU 而定。 
+
+114 
+第6 章 
+操作。就地操作，比如+=、*=等，将其中一个输入重用为输出。这意味着我们不
+需要为计算的结果分配空间。 
+为了显式说明这点，我们看看当我们操作一个numpy 数组时它的id 如何改变（例
+6-12）。id 是一个很好的追溯numpy 数组的方式，因为id 跟指向的内存区域有关。
+如果两个numpy 数组具有相同的id，那么他们指向同一块内存区域。
+① 
+例6-12  就地操作减少内存分配 
+>>> import numpy as np 
+>>> array1 = np.random.random((10,10)) 
+>>> array2 = np.random.random((10,10)) 
+>>> id(array1) 
+140199765947424 X 
+>>> array1 += array2 
+>>> id(array1) 
+140199765947424 #Y 
+>>> array1 = array1 + array2 
+>>> id(array1) 
+140199765969792 #Z 
+ 
+XY 这两个id 相同，因为我们使用了就地操作。这意味着array1 的内存地址没
+有改变，我们只是改变了其内部的数据。 
+Z 内存地址在这里改变了。在计算array1 + array2 时，一个新的内存地址被
+分配并填入计算的结果。不过这样做也有好处，比如当原始数据需要被保留时（比
+如，array3 = array1 + array2 允许你继续使用array1 和array2，而就
+地操作销毁了部分原始数据）。 
+另外，我们看到一个由非就地操作带来的期望中的性能损失。对于小的numpy 数
+组，这一开销大约占了整个计算时间的50%。至于大型计算，速度提升大概在几个
+百分点，但如果发生几百万次，这依然代表着一段很长的时间。在例6-13 中，我
+们看到对小数组使用就地操作给我们带来了20%的速度提升。这一数字会随着数组
+长度增加而变得更多，因为内存分配会变得更繁重。 
+例6-13  使用就地操作减少内存分配 
+>>> %%timeit array1, array2 = np.random.random((10,10)), np.random.random((10,10)) 
+#X 
+... array1 = array1 + array2 
+... 
+                        
+① 这并不严格为真，因为两个numpy 数组可以指向相同的内存区域但使用不同的步进信息来对同样的数  
+据做出不同的表达。这样两个numpy 数组会具有不同的id。Numpy 数组的id 结构有很多微妙之处，
+在本书讨论范围之外。 
+
+ 
+图矩阵和矢量计算 
+115 
+100000 loops, best of 3: 3.03 us per loop 
+ 
+>>> %%timeit array1, array2 = np.random.random((10,10)), np.random.random((10,10)) 
+... array1 += array2 
+... 
+100000 loops, best of 3: 2.42 us per loop 
+ 
+X 注意我们使用了%%timeit 而不是%timeit，这让我们可以指定用于设置环境
+的代码免于时间测量。 
+虽然改写我们例6-9 中的代码并不十分复杂，但就地操作的坏处在于它确实会让代
+码有一点难以阅读。在例6-14 中我们可以看到这一重构的结果。我们初始化grid
+和next_grid 矩阵，然后重复交换两者。grid 是当前系统的已知信息，在运行
+了evolve 之后，next_grid 包含了更新后的信息。 
+例6-14  将大多数numpy 操作改为就地操作 
+def laplacian(grid, out): 
+    np.copyto(out, grid) 
+    out *= -4 
+    out += np.roll(grid, +1, 0) 
+    out += np.roll(grid, -1, 0) 
+    out += np.roll(grid, +1, 1) 
+    out += np.roll(grid, -1, 1) 
+ 
+def evolve(grid, dt, out, D=1): 
+    laplacian(grid, out) 
+    out *= D * dt 
+    out += grid 
+ 
+def run_experiment(num_iterations): 
+    next_grid = np.zeros(grid_shape) 
+    grid = np.zeros(grid_shape) 
+ 
+    block_low = int(grid_shape[0] * .4) 
+    block_high = int(grid_shape[0] * .5) 
+    grid[block_low:block_high, block_low:block_high] = 0.005 
+ 
+    start = time.time() 
+    for i in range(num_iterations): 
+        evolve(grid, 0.1, next_grid) 
+        grid, next_grid = next_grid, grid # X 
+    return time.time() - start 
+ 
+X 因为evolve 的输出被保存在输出矩阵next_grid，我们必须为下一次迭代
+交换这两个变量来让grid 包含最新的信息。这一交换操作非常便宜，因为仅仅互
+换了数据的引用，而不是数据本身。 
+
+116 
+第6 章 
+记住因为我们想要让每个操作都就地完成，所以每一个矢量操作都必须在同一行完
+成。这可以让一句简单的A = A * B + C 变得相当费解。因为Python 非常强调
+可读性，所以我们必须确保这些改动给我们带来的速度提升足以弥补这一点。 
+比较例6-15 和例6-10 的性能指标，我们看到移除不需要的内存分配给我们的代码
+带来了29%的速度提升。部分是因为降低了缓存失效，但主要还是因为降低了内存
+缺页。 
+例6-15  numpy 就地操作内存的性能指标 
+$ perf stat -e cycles,stalled-cycles-frontend,stalled-cycles-backend,instructions,\ 
+  cache-references,cache-misses,branches,branch-misses,task-clock,faults,\ 
+  minor-faults,cs,migrations -r 3 python diffusion_numpy_memory.py 
+ 
+Performance counter stats for 'python diffusion_numpy_memory.py' (3 runs): 
+ 
+   7,864,072,570 cycles                   #    3.330 GHz 
+   3,055,151,931 stalled-cycles-frontend  #   38.85% frontend cycles idle 
+   1,368,235,506 stalled-cycles-backend   #   17.40% backend cycles idle 
+  13,257,488,848 instructions             #     1.69 insns per cycle 
+                                          #     0.23 stalled cycles per insn 
+     239,195,407 cache-references         #  101.291 M/sec 
+       2,886,525 cache-misses             #    1.207 % of all cache refs 
+   3,166,506,861 branches                 # 1340.903 M/sec 
+       3,204,960 branch-misses            #    0.10% of all branches 
+     2361.473922 task-clock               #    0.999 CPUs utilized 
+           6,527 page-faults              #    0.003 M/sec 
+           6,527 minor-faults             #    0.003 M/sec 
+               6 context-switches         #    0.003 K/sec 
+               2 CPU-migrations           #    0.001 K/sec 
+ 
+     2.363727876 seconds time elapsed 
+ 
+6.4.2  选择优化点：找到需要被修正的地方 
+从例6-14 的代码中，似乎可以看到我们解决了手头大部分的问题：我们使用numpy
+降低了CPU 负担，我们降低了解决问题所必要的内存分配次数。但是，永远有更
+多的调查等待着我们。如果我们对代码做一个逐行性能分析（例6-16），就会看到
+我们大部分的工作都在laplacian 函数中完成。事实上evolve 函数有93%的时
+间花费在laplacian 函数中。 
+例6-16  逐行性能分析显示laplacian 花费了太多时间 
+Wrote profile results to diffusion_numpy_memory.py.lprof 
+Timer unit: 1e-06 s 
+
+ 
+图矩阵和矢量计算 
+117 
+ 
+File: diffusion_numpy_memory.py 
+Function: laplacian at line 8 
+Total time: 3.67347 s 
+ 
+Line #     Hits      Time   Per Hit  % Time  Line Contents 
+============================================================== 
+     8                                       @profile 
+     9                                       def laplacian(grid, out): 
+    10      500    162009     324.0     4.4      np.copyto(out, grid) 
+    11      500    111044     222.1     3.0      out *= -4 
+    12      500    464810     929.6    12.7      out += np.roll(grid, +1, 0) 
+    13      500    432518     865.0    11.8      out += np.roll(grid, -1, 0) 
+    14      500   1261692    2523.4    34.3      out += np.roll(grid, +1, 1) 
+    15      500   124139     2482.8    33.8      out += np.roll(grid, -1, 1) 
+ 
+File: diffusion_numpy_memory.py 
+Function: evolve at line 17 
+Total time: 3.97768 s 
+ 
+Line #     Hits      Time   Per Hit  % Time  Line Contents 
+============================================================== 
+    17                                       @profile 
+    18                                       def evolve(grid, dt, out, D=1): 
+    19      500    3691674   7383.3    92.8     laplacian(grid, out) 
+    20      500     111687    223.4     2.8     out *= D * dt 
+    21      500     174320    348.6     4.4     out += grid 
+ 
+laplacian 函数如此慢的原因可能有很多。但是，这里我们主要考虑两个高级因
+素。首先，在调用np.roll 时会为创建新的矢量分配内存（我们可以通过查看该
+函数的说明文档来验证这一点）。这意味着即使我们在之前的重构中移除了7 处内
+存分配，仍然有4 处分配是我们遗漏的。另外，np.roll 是一个非常通用的函数，
+有很多代码用来处理特殊情况。既然我们已经完全清楚我们需要做什么（那就是将
+每个维度的第一列的数据移到最后一列），那么我们就可以重写这个函数来消除大
+部分无用的代码。我们甚至可以将np.roll 的代码逻辑和add 操作合并，生成一
+个高度专用的roll_add 函数以最少的内存分配次数和最精简的逻辑来完成我们
+的任务。 
+例6-17 显示了这个重构的细节。我们需要的仅是创建新的roll_add 函数并让
+laplacian 使用它。因为numpy 支持复杂索引（fancy indexing），实现这样
+一个函数只需要保证不搞乱索引就行。但是，之前说过，这样的代码性能虽好，可
+读性却不怎么样。 
+
+118 
+第6 章 
+ 
+警告 
+注意我们除了彻底测试之外，还在docstring 上花费了额外的维护工
+作。当你在做类似这样的优化时，维护代码的可读性是非常重要的，
+这些步骤是为了确保你的代码以你期望的方式工作，让未来的程序
+开发者能够维护你的代码并在出问题时清楚地知道你的代码做了些
+什么。 
+ 
+例6-17  创建我们自己的轮转函数 
+import numpy as np 
+ 
+def roll_add(rollee, shift, axis, out): 
+    """ 
+    Given a matrix, rollee, and an output matrix, out, this function will 
+    perform the calculation: 
+ 
+        >>> out += np.roll(rollee, shift, axis=axis) 
+ 
+    This is done with the following assumptions: 
+        * rollee is 2D 
+        * shift will only ever be +1 or -1 
+        * axis will only ever be 0 or 1 (also implied by the first assumption) 
+ 
+Using these assumptions, we are able to speed up this function by avoiding 
+extra machinery that numpy uses to generalize the `roll` function and also 
+by making this operation intrinsically in-place. 
+""" 
+if shift == 1 and axis == 0: 
+    out[1:, :] += rollee[:-1, :] 
+    out[0 , :] += rollee[-1, :] 
+elif shift == -1 and axis == 0: 
+    out[:-1, :] += rollee[1:, :] 
+    out[-1 , :] += rollee[0, :] 
+elif shift == 1 and axis == 1: 
+    out[:, 1:] += rollee[:, :-1] 
+    out[:, 0 ] += rollee[:, -1] 
+elif shift == -1 and axis == 1: 
+    out[:, :-1] += rollee[:, 1:] 
+    out[:, -1] += rollee[:, 0] 
+ 
+def test_roll_add(): 
+    rollee = np.asarray([[1,2],[3,4]]) 
+    for shift in (-1, +1): 
+        for axis in (0, 1): 
+            out = np.asarray([[6,3],[9,2]]) 
+            expected_result = np.roll(rollee, shift, axis=axis) + out 
+            roll_add(rollee, shift, axis, out) 
+
+ 
+图矩阵和矢量计算 
+119 
+            assert np.all(expected_result == out) 
+ 
+def laplacian(grid, out): 
+    np.copyto(out, grid) 
+    out *= -4 
+    roll_add(grid, +1, 0, out) 
+    roll_add(grid, -1, 0, out) 
+    roll_add(grid, +1, 1, out) 
+    roll_add(grid, -1, 1, out) 
+ 
+如果我们查看例6-18 中本次重写后的性能指标，我们会发现虽然它比例6-14 有一
+个很大的性能提升（实际上提升了70%），但是大多数性能指标都是相同的。
+Page-faults 的数量下降了，但是下降了不到70%。同样，cache-misses 跟
+cache-references 也下降了，但是也不足以导致整体这么大的性能提升。这
+里最重要的参数是instructions 指标。Instructions 指标记录了CPU 需
+要执行多少指令来完成整个程序——也就是说，CPU 需要干多少事情。使用特化
+的roll_add 函数后instructions 指标降低了2.86 倍。这是因为我们不再需
+要依靠numpy 提供的完整功能来轮转我们的矩阵，而是利用我们对数据的了解（我
+们的数据只有两个维度且只需轮转一次）创建了更精简的功能。我们将在7.6 节中
+继续讨论关于在numpy 和Python 中精简不需要功能的主题。 
+例6-18  numpy 使用就地内存操作和特化laplacian 函数的性能指标 
+$ perf stat -e cycles,stalled-cycles-frontend,stalled-cycles-backend,instructions,\ 
+  cache-references,cache-misses,branches,branch-misses,task-clock,faults,\ 
+  minor-faults,cs,migrations -r 3 python diffusion_numpy_memory2.py 
+ 
+Performance counter stats for 'python diffusion_numpy_memory2.py' (3 runs): 
+ 
+   4,303,799,244 cycles                   #   3.108 GHz 
+   2,814,678,053 stalled-cycles-frontend  #  65.40% frontend cycles idle 
+   1,635,172,736 stalled-cycles-backend   #  37.99% backend cycles idle 
+   4,631,882,411 instructions             #    1.08 insns per cycle 
+                                          #    0.61 stalled cycles per insn 
+    272,151,957 cache-references          # 196.563 M/sec 
+      2,835,948 cache-misses              # 1.042 % of all cache refs 
+    621,565,054 branches                  # 448.928 M/sec 
+      2,905,879 branch-misses             #   0.47% of all branches 
+    1384.555494 task-clock                #   0.999 CPUs utilized 
+          5,559 page-faults               #   0.004 M/sec 
+          5,559 minor-faults              #   0.004 M/sec 
+              6 context-switches          #   0.004 K/sec 
+              3 CPU-migrations            #   0.002 K/sec 
+    1.386148918 seconds time elapsed 
+ 
+
+120 
+第6 章 
+6.5  numexpr：让就地操作更快更简单 
+numpy 对矢量操作优化的一个缺陷是它一次只能处理一个操作。这意味着，当我
+们对numpy 矢量进行A * B + C 这样的操作时，首先要等待A * B 操作完成，
+数据保存在一个临时矢量中，然后将这个新的矢量和C 相加。正如例6-14 中使用
+就地操作的扩散代码所示。 
+然而，有许多模块可以对这点进行优化。numexpr 模块可以将整个矢量表达式   
+编译成非常高效的代码，可以将缓存失效以及临时变量的数量最小化。另外，它还
+能利用多个CPU 核心（更多信息见第9 章）以及Intel 芯片专用的指令集来将速度
+最大化。 
+很容易修改代码来使用numexpr：我们只需要将表达式重写为使用本地变量的字
+符串即可。表达式会在后台被编译成优化过的代码（并被缓存来确保相同的表达式
+不会导致同样的编译过程发生多次）并运行。例6-19 显示了evolve 函数改用
+numexpr 是多么的简单。我们在evaluate 函数中使用out 参数，这样numexpr
+就不会为返回一个新矢量而分配内存。 
+例6-19  使用numexpr 来进一步优化大矩阵操作 
+from numexpr import evaluate 
+ 
+def evolve(grid, dt, next_grid, D=1): 
+    laplacian(grid, next_grid) 
+    evaluate("next_grid*D*dt+grid", out=next_grid) 
+ 
+numexpr 的一个重要特点是它考虑到了CPU 缓存。它特地移动数据来让各级  
+CPU 缓存能够拥有正确的数据让缓存失效最小化。当我们对更新后的代码运行
+perf（例6-20）时，我们看到速度的确是提升了。但是，如果我们针对一个较小
+的512×512 的矩阵（见本章最后的图6-4）比较速度，我们会看到大约15%的速
+度下降。这是为什么？ 
+例6-20  使用了numpy 就地内存操作特化laplacian 函数以及numexpr 的性能指标 
+$ perf stat -e cycles,stalled-cycles-frontend,stalled-cycles-backend,instructions,\ 
+  cache-references,cache-misses,branches,branch-misses,task-clock,faults,\ 
+  minor-faults,cs,migrations -r 3 python diffusion_numpy_memory2_numexpr.py 
+ 
+Performance counter stats for 'python diffusion_numpy_memory2_numexpr.py' (3 runs): 
+ 
+   5,940,414,581 cycles                   #   1.447 GHz 
+   3,706,635,857 stalled-cycles-frontend  #  62.40% frontend cycles idle 
+
+ 
+图矩阵和矢量计算 
+121 
+   2,321,606,960 stalled-cycles-backend   #  39.08% backend cycles idle 
+   6,909,546,082 instructions             #    1.16 insns per cycle 
+                                          #    0.54 stalled cycles per insn 
+     261,136,786 cache-references         #  63.628 M/sec 
+      11,623,783 cache-misses             #   4.451 % of all cache refs 
+     627,319,686 branches                 # 152.851 M/sec 
+       8,443,876 branch-misses            #   1.35% of all branches 
+     4104.127507 task-clock               #   1.364 CPUs utilized 
+           9,786 page-faults              #   0.002 M/sec 
+           9,786 minor-faults             #   0.002 M/sec 
+           8,701 context-switches         #   0.002 M/sec 
+              60 CPU-migrations           #   0.015 K/sec 
+ 
+     3.009811418 seconds time elapsed 
+ 
+numexpr 引入的大多数额外的机制都跟缓存相关。当我们的矩阵较小且计算所需
+的所有数据都能被放入缓存时，这些额外的机制只是白白增加了更多的指令而不能
+对性能有所帮助。另外，将字符串编译成矢量操作也会有很大的开销。当程序运行
+的整体时间较少时，这个开销就会变得相当引人注意。不过，当我们增加矩阵的大
+小时，我们会发现numexpr 比原生numpy 更好地利用了我们的缓存。而且，
+numexpr 利用了多核来进行计算并尝试填满每个核心的缓存。当矩阵较小时，管
+理多核的开销盖过了任何可能的性能提升。 
+我们用来跑测试的电脑有20480 KB 的缓存（Intel Xeon E5-2680）。因为有两个数组
+需要处理，一个作为输入，另一个作为输出，所以我们可以轻易计算出需要足以填
+满缓存的矩阵大小。矩阵元素的总数是20480 KB/64 bit = 2560000。因为我们有两
+个矩阵，这一总数被平分到两个对象中（所以每个对象最多可以有2560000 / 2 = 
+1280000 个元素）。最后，对这个数字求平方根可以让我们知道能存放这么多元素
+的矩阵的大小。总的来说，这意味着大概两个大小为1131 的2 维数组就会填满缓
+存（
+20480KB/ 64bit / 2
+1131
+=
+）。但实际上，我们自己没办法完全填满缓存（其他
+程序会占用部分缓存），所以现实来说大概能填入两个800×800 的数组。见表6-1
+和表6-2，我们可以看到当矩阵大小从512×512 跳到1024×1024 时，numexpr 代
+码的性能就开始超越纯numpy。 
+6.6  告诫故事：验证你的“优化”（scipy） 
+重要的是记住我们在本章中对每一次优化使用的一套方法：首先对代码进行性能分
+析来感知问题可能出在哪，提出一个可能的解决方案来修改慢的那部分，然后再次
+进行性能分析来确保我们的修改可行。虽然这听上去十分简单直接，但事情很快会
+变得复杂，比如我们看到numexpr 的性能是如何受到矩阵大小影响的。 
+
+122 
+第6 章 
+当然我们提出的方案并不总是可行。在为本章写代码时，有一次作者看到laplacian
+函数最慢并假设scipy 的函数会明显更快。这一想法来自于一个事实，那就是
+laplacian 在图像分析这一行是一个常见操作，可能已经有一个非常优化的库
+加速了其运行的速度。scipy 正好有一个图像子模块，我们一定会得到幸运的
+眷顾！ 
+用scipy 实现起来很简单（例6-21）且不需要考虑实现周期边界的复杂度（因为
+scipy 的wrap 模式会帮我们搞定）。 
+例6-21  使用scipy 的laplace 滤波 
+from scipy.ndimage.filters import laplace 
+ 
+def laplacian(grid, out): 
+    laplace(grid, out, mode='wrap') 
+ 
+能够简单实现这一点相当重要，且绝对为这个函数赢得了一些分数，在我们考查性
+能之前。然而一旦我们对scipy 代码进行性能对比（例6-22），我们才发觉：这个
+函数跟之前的相比（例6-14）并没有带来大量的速度提升。事实上，当我们增加矩
+阵大小时，这个函数甚至开始变得性能下降了（见本章最后的图6-4）。 
+例6-22  使用scipy 的laplacian 函数的扩散代码性能指标 
+$ perf stat -e cycles,stalled-cycles-frontend,stalled-cycles-backend,instructions,\ 
+  cache-references,cache-misses,branches,branch-misses,task-clock,faults,\ 
+  minor-faults,cs,migrations -r 3 python diffusion_scipy.py 
+ 
+Performance counter stats for 'python diffusion_scipy.py' (3 runs): 
+ 
+   6,573,168,470 cycles                   #   2.929 GHz 
+   3,574,258,872 stalled-cycles-frontend  #  54.38% frontend cycles idle 
+   2,357,614,687 stalled-cycles-backend   #  35.87% backend cycles idle 
+   9,850,025,585 instructions             #    1.50 insns per cycle 
+                                          #    0.36 stalled cycles per insn 
+     415,930,123 cache-references         # 185.361 M/sec 
+       3,188,390 cache-misses             #   0.767 % of all cache refs 
+   1,608,887,891 branches                 # 717.006 M/sec 
+       4,017,205 branch-misses            #   0.25% of all branches 
+     2243.897843 task-clock               #   0.994 CPUs utilized 
+           7,319 page-faults              #   0.003 M/sec 
+           7,319 minor-faults             #   0.003 M/sec 
+              12 context-switche          #   0.005 K/sec 
+               1 CPU-migrations           #   0.000 K/sec 
+ 
+     2.258396667 seconds time elapsed 
+ 
+
+ 
+图矩阵和矢量计算 
+123 
+对比scipy 版本和我们自己的laplacian 函数性能指标（例6-18），我们可以得到
+一些提示，为什么没有从这次重写中得到期待的性能提升。 
+指标中最突出的是page-faults 和instructions。scipy 版本的指标中两者
+的值都明显更大。page-faults 的增加显示出scipy 的laplace 函数虽然支持
+就地操作，但它依然分配了很多内存。事实上scipy 版本的page-faults 的次
+数比我们第一次用numpy 重写的版本还要多（例6-15）。 
+但更严重的还是instructions 指标。它告诉我们scipy 代码比我们的
+laplacian 函数让CPU 多做了超过两倍的工作。即使这些指令都是更加优化的
+（因为我们可以看到更高的insns per cycle 计数，也就是CPU 在一个时钟周
+期内能完成多少条指令），额外的优化并没有能胜过指令数的猛增。这可能部分是
+因为scipy 代码写得非常通用，以使它可以处理具有不同边界条件的各种输入（所
+以需要额外的代码也就是更多的指令数）。事实上这一点我们也可以通过scipy 代
+码拥有更多的branches 指标看出。 
+6.7  小结 
+回顾我们的优化历程，看起来我们使用了两种方法：减少CPU 获得数据的时间和
+减少CPU 需要干的工作。表6-1 和表6-2 在不同的矩阵大小上显示了我们在原始
+的纯Python 实现之上进行的各种优化努力后的结果对比。 
+图6-4 显示了这些优化手段之间的比较。我们可以看到两种优化手段的三个基带：
+底部的基带显示了我们纯Python 实现在进行了降低内存分配次数之后的小小提升，
+中间的基带显示了我们使用numpy 并进一步减少内存分配后发生了什么，最上面
+的基带则显示了减少进程总体工作量的结果。 
+表6-1 
+各种优化，各种矩阵大小，运行500 次evolve 函数的总时间 
+Method 
+256 × 256 
+512 × 512
+1 024 × 1 024
+2 048 × 2 048 
+4 096 × 4 096 
+Python 
+2.32s 
+9.49s 
+39.00s 
+155.02s 
+617.35s 
+Python + memory 
+2.56s 
+10.26s 
+40.87s 
+162.88s 
+650.26s 
+numpy 
+0.07s 
+0.28s 
+1.61s 
+11.28s 
+45.47s 
+numpy + memory 
+0.05s 
+0.22s 
+1.05s 
+6.95s 
+28.14s 
+numpy + memory 
++ laplacian 
+0.03s 
+0.12s 
+0.53s 
+2.68s 
+10.57s 
+numpy + memory 
++ laplacian + numexpr 
+0.04s 
+0.13s 
+0.50s 
+2.42s 
+9.54s 
+numpy + memory + scipy
+0.05s 
+0.19s 
+1.22s 
+6.06s 
+30.31s 
+
+124 
+第6 章 
+表6-2     各种优化，各种矩阵大小，运行500 次evolve 函数相比原生Python 
+              （例6-3）的速度提升倍数 
+Method 
+256 × 256
+512 × 512
+1 024 × 1 024
+2 048 × 2 048
+4 096 × 4 096 
+Python 
+0.00x 
+0.00x 
+0.00x 
+0.00x 
+0.00x 
+Python + memory 
+0.90x 
+0.93x 
+0.95x 
+0.95x 
+0.95x 
+numpy 
+32.33x 
+33.56x 
+24.25x 
+13.74x 
+13.58x 
+numpy + memory 
+42.63x 
+42.75x 
+37.13x 
+22.30x 
+21.94x 
+numpy + memory 
++ laplacian 
+77.98x 
+78.91x 
+73.90x 
+57.90x 
+58.43x 
+numpy + memory+ 
+laplacian +numexpr 
+65.01x 
+74.27x 
+78.27x 
+64.18x 
+64.75x 
+numpy + memory + scipy
+42.43x 
+51.28x 
+32.09x 
+25.58x 
+20.37x 
+ 
+我们从中学到的一个重要的教训是你应该总是将代码需要的任何管理性工作放在
+初始化阶段进行。这可能包括内存分配，读取配置文件，预先计算程序所需的一些
+数据等。原因有两点。首先在初始化阶段一次性搞定可以让你减少这些工作运行的
+总次数，并让你知道你可以在将来不需要付出什么代价就使用这些资源。其次，你
+的程序不会因为要转而去做这些工作而打扰了流程，这可以让流水线更有效并让缓
+存始终含有相关数据。 
+我们同时还学到了数据的本地性以及将数据传给CPU 这一简单操作的重要性有多
+高。CPU 的缓存可以相当复杂，所以大多数时候我们都会让各种优化过的专用函
+数来处理它。但是，只要我们理解背后发生的故事并且用尽了各种可能的方法去优
+化内存的使用方法，那么结果会大不一样。比如，理解了缓存的工作方式，我们就
+能理解图6-4 中的每一种优化手段在矩阵大到一定程度之后性能提升程度就不再发
+生变化的原因是我们的矩阵已经填满了L3 缓存。建立内存分级制度本来是为了解
+决冯诺依曼瓶颈，但是当这种情况发生时，它反而成为了我们的制约。 
+另一个重要的收获是考虑使用各种外部库。Python 本身是一门非常容易使用的高可
+读性语言，让你能够快速地编写和调试代码。但是使用外部库对于优化性能来说是
+必要的。这些外部库可以超级快，因为它们都是用各种低级语言写的——但是因为
+它们提供了Python 接口，你依然可以迅速写出使用它们的代码。 
+最后，我们学到了运行性能测试并对结果做出假设的重要性。在测试之前先进行假
+设，我们就能让结果告诉我们优化是否真的成功了。这个改动是否能加速运行时
+间？是否减少了内存分配？是否降低了缓存失效的数量？现代计算机系统的复杂
+性让优化变成了一门艺术，而能对性能指标进行定量分析则是一个很大的帮助。 
+
+ 
+图矩阵和矢量计算 
+125 
+ 
+图6-4  本章各种优化方法带来的速度提升总结 
+优化的最后一点是必须花很大精力确保优化在各种计算机上都是通用的（你的假设
+以及测试结果可能跟运行程序的计算机架构以及模块编译方式等相关）。另外，在
+进行这些优化时还必须考虑到其他开发者，你的改动会多大程度上影响代码的可读
+性。比如，我们意识到例6-17 中实现的解决方案具有一定的模糊性，所以特地确
+保代码具有完备的描述文档和测试来帮助我们以及团队中的其他成员。 
+下一章，我们会谈到如何创建你自己的外部模块来更高效地解决特定的问题。这让
+我们能够用快速原型的方式来写程序——首先用较慢的代码解决问题，然后找到导
+致慢的原因，最终让它们快起来。经常进行性能分析来找到并优化我们的慢速代码
+段，就能让自己的程序运行尽可能快的同时还省了自己的时间。 
+ 

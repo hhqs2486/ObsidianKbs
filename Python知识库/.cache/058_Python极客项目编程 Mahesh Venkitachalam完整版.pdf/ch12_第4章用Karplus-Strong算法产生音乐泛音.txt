@@ -1,0 +1,512 @@
+第   章 
+用Karplus-Strong 算法产生音乐泛音 
+任何乐音的主要特点是它的音调，即频率。这是每秒的振动
+数，单位是赫兹（Hz）。例如，从原声吉他的第三根弦产生音符
+D，频率是146.83 赫兹。可以在计算机上创建频率为146.83 Hz
+的正弦波，来模拟这种声音，如图4-1 所示。 
+遗憾的是，如果在计算机上播放这个正弦波，听起来不会
+像吉他或钢琴。播放相同的音符时，是什么让计算机的声音与
+乐器如此不同呢？
+在吉他上拨弦时，乐器产生了不同强度的混合频率，如图4-2 的频谱图所示。
+刚拨弦时声音最强，强度随着时间推移而逐渐消失。拨动吉他D 弦听到的主要
+频率称为基本频率，是146.83 赫兹，但也会听到该频率的一些倍数，称为泛音。
+任何乐器的声音都由这种基本频率和泛音组成，正是这种组合，让吉他听起来像
+吉他。
+如你所见，在计算机上模拟拨弦乐器的声音，要能同时生成基本频率和泛音。
+诀窍是利用Karplus-Strong 算法。 
+这个项目使用Karplus-Strong 算法，产生5 个类似吉他的音符，它们属于一个
+音阶（一系列相关的音符）。我们会让产生这些音符的算法可视化，并将声音保存
+为WAV 文件。我们还会创建一种方式，随机演奏它们，并学习如何做到以下几点： 
+4
+
+50 Python 极客项目编程 
+•
+用Python 的deque 类实现环形缓冲区；
+•
+使用numpy 数组和ufuncs；
+•
+用pygame 播放WAV 文件；
+•
+用matplotlib 绘图；
+•
+演奏五声音阶。
+图4-1  146.83 Hz 的正弦波 
+图4-2  吉他上弹奏音符D4 的频谱图 
+除了用Python 实现Karplus-Strong 算法，我们还会探讨WAV 文件格式，看看
+如何产生五声音阶中的音符。
+
+4.1  工作原理 
+利用偏移值构成的环形缓冲区，模拟两端固定的弦，类似于吉他弦，Karplus-Strong
+算法可以模拟拨弦的声音。
+环形缓冲区（也称为循环缓冲区）是一个固定长度的缓冲区（就是值的数组），
+但折返到本身。换言之，如果到达缓冲区的末尾，则下一个元素就是缓冲区的第
+一个元素（环缓冲区的更多信息，参见4.3.1 小节）。 
+根据公式N=S / f，环形缓冲区的长度（N）与振动的基本频率有关，其中S 是
+采样率，f 是频率。 
+模拟开始时，缓冲区中填充一些随机值，范围在[-0.5，0.5]，可以认为代表了
+拨弦在振动时的随机偏移。
+除了环形缓冲区，可以用一个样本缓冲区，保存任何特定时间的声音强度。这
+个缓冲区的长度和采样率决定了声音片段的长度。
+4.1.1  模拟 
+模拟持续进行，直到样本缓冲填充了一种反馈方案，如图4-3 所示。对于模拟
+的每一步，做以下几件事：
+1．将环形缓冲区的第一个值存入样本缓冲区； 
+2．计算环形缓冲区前两个元素的平均值； 
+3．平均值乘以一个衰减系数（在这个例子中，是0.995）； 
+4．将该值添加到环形缓冲区的末尾； 
+5．移除环形缓冲区的第一个元素。 
+图4-3  环形缓冲区和Karplus-Strong 算法 
+为了模拟拨弦，在环形缓冲区填入一些数字，代表波的能量。样本缓冲区表示
+第 4 章  用 Karplus-Strong 算法产生音乐泛音 51 
+
+52 Python 极客项目编程 
+最终的声音数据，通过迭代遍历环形缓冲区中的值来创建。使用平均方案（等一下
+解释）来更新环形缓冲区的值。
+这种反馈方案旨在模拟能量通过一根振动的弦。根据物理学，对于一根振动的
+弦，基本频率与它的长度成反比。因为我们感兴趣的是产生一定频率的声音，所以
+选择一个环形缓冲区，其长度与该频率成反比。模拟第1 步的求平均值相当于“低
+通滤波器”，切断较高频率，并允许较低频率通过，从而消除高次谐波（即基频的
+较大倍数），因为我们的主要兴趣是基频。最后，用衰减因子来模拟波沿着弦来回
+传播的能量损失。
+模拟第1 步中用到的样本缓冲区，表示产生的声音随时间变化的振幅。为了
+计算任何给定的振幅，需要计算环形缓冲区前两个元素的平均值，结果乘以衰减
+系数，更新环形缓冲区。这个计算的值被添加到环形缓冲区的末尾，并删除第
+一个元素。
+现在，我们来看看该算法执行的一个简单例子。下表表示两个连续时间步骤的
+环形缓冲区。环形缓冲区中的每个值表示声音的振幅。该缓冲区具有5 个元素，它
+们开始填充了一些数字。
+时间步骤1 
+0.1 
+–0.2 
+0.3 
+0.6 
+–0.5 
+时间步骤2 
+–0.2 
+0.3 
+0.6 
+–0.5 
+–0.199 
+从第1 步转到第2 步，像这样应用Karplus-Strong 算法。第一行的第一个值0.1
+被删除，第1 步中所有后续值以相同顺序加入第2 行，它表示时间上的第2 步。第
+2 步的最后一个值是第1 步的第一个值和最后一个值的衰减平均值，计算方法是
+0.995×（（0.1+ –0.5）÷2）= –0.199。 
+4.1.2  创建WAV 文件 
+波形音频文件格式（WAV）用于存储音频数据。这种格式对小的音乐项目比较
+方便，因为它简单，不需要处理复杂的压缩技术。
+在最简单的形式中，WAV 文件由一系列比特构成，表示在给定时间点所记录
+的声音的振幅，称为分辨率。本项目中使用16 位分辨率。 WAV 文件也有一组采
+样率，是音频每秒采样或读取的次数。本项目采用44100 赫兹，即CD 中使用的
+采样率。让我们用Python 产生5 秒的220 Hz 正弦波音频片段。首先，用这个公
+式表示正弦波：
+A = sin (2πft ) 
+这里，A 是声波的振幅，f 是频率，t 是当前时间的索引。现在，重写这个公式
+如下：
+A = sin (2πfi/R) 
+
+在这个公式中，i 是样本的索引，R 是采样率。用这两个方程，可以按如下方式
+创建一个200 赫兹的正弦波WAV 文件： 
+import numpy as np 
+import wave, math 
+sRate = 44100 
+nSamples = sRate * 5 
+ x = np.arange(nSamples)/float(sRate) 
+ vals = np.sin(2.0*math.pi*220.0*x) 
+ data = np.array(vals*32767, 'int16').tostring() 
+file = wave.open('sine220.wav', 'wb') 
+ file.setparams((1, 2, sRate, nSamples, 'NONE', 'uncompressed')) 
+file.writeframes(data) 
+file.close() 
+ 
+在行和行，根据第二个正弦波方程，创建振幅值的numpy 数组（见第1 章）。
+对数组应用函数，如sin()函数，numpy 数组是快速、便捷的方式。 
+在行，计算好的、在[-1，1]范围的正弦波值被放大为16 位值，并转换成字符
+串，以便写入文件。在行，为WAV 文件设置参数，在这个例子中，是单通道（单
+声道）、两字节（16 位）、无压缩的格式。图4-4 展示了生成的sine220.wav 文件在
+Audacity 中的样子，Audacity 是一款免费的音频编辑器。正如预期的那样，我们看
+到了频率220 赫兹的正弦波，如果播放该文件，会听到5 秒的220 Hz 音调。 
+图4-4  220 Hz 的正弦波 
+4.1.3  小调五声音阶 
+“音阶”是一系列升高或降低音高（频率）的音符。“音程”是两个音高之间的
+差。通常，一首音乐的所有音符都从特定音阶中选择。“半音”是音阶的基本单位，
+是西方音乐最小的音程。全音是半音长度的两倍。“大调音阶”是最常见的一种音
+阶，间隔模式是“全音-全音-半音-全音-全音-全音-半音”。 
+第 4 章  用 Karplus-Strong 算法产生音乐泛音 53 
+
+54 Python 极客项目编程 
+这里，我们将快速进入五声音阶，因为我们要产生这个音阶的音符。本节将告
+诉你，我们如何得出程序中用到的频率数字，利用Karplus-Strong 算法来生成这些
+音符。“五声音阶”是五个音符的音阶。例如，美国著名的歌曲“Oh! Susanna”就
+是基于五声音阶的。这种音阶的一个变种是小调五声音阶。
+这种音阶定义为音符序列“（全音+半音）-全音-全音-（全音+半音）-全音”。
+因此，C 小调五声音阶包含音符C、降E、F、G 和降B。表4-1 列出了小调五声音
+阶中5 个音符的频率，我们将用Karplus-Strong 算法来产生它（这里，C4 表示钢琴
+第4 个八度的C，或习惯称为中音C）。 
+表4-1  小调五声音阶的音符 
+音符 
+频率（Hz） 
+C4 
+261.6 
+降E 
+311.1 
+F 
+349.2 
+G 
+392.0 
+降B 
+466.2 
+4.2  所需模块 
+本项目将用Python 的wave 模块来创建WAV 格式的音频文件。使用numpy 数
+组来实现Karplus-Strong 算法，用Python 集合中的deque 类来实现环形缓冲区。还
+会用pygame 模块来播放WAV 文件。 
+4.3  代码 
+现在，让我们开发实现Karplus-Strong 算法所需的各种代码片段，然后将它们
+合并成完整的程序。要查看完整的项目代码，请直接跳到4.4 节。 
+4.3.1  用deque 实现环形缓冲区 
+回想一下，前面提到Karplus-Strong 算法使用环形缓冲区来生成一个音符。我
+们将利用Python 的deque 容器（发音为“deck”，是Python 的collections 模块的一
+部分），来实现环形缓冲区，它用一个数组提供了专门的容器数据类型。可以从deque
+的开始（头）或末尾（尾）插入或删除元素（见图4-5）。这种插入和删除过程是
+O(1)或“常数时间”的操作，这意味着不论deque 的容器变得多大，它需要的时间
+都是相同的。
+
+图4-5  使用deque 的环形缓冲区 
+下面的代码展示了如何在Python 中使用deque： 
+>>> from collections import deque 
+ >>> d = deque(range(10)) 
+>>> print(d) 
+deque([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]) 
+ >>> d.append(-1) 
+>>> print(d) 
+deque([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, -1]) 
+ >>> d.popleft() 
+0 
+>>> print d 
+deque([1, 2, 3, 4, 5, 6, 7, 8, 9, -1]) 
+ 
+在行，传入range()方法创建的一个列表，创建了deque 容器。在行，将一
+个元素添加到deque 容器的末尾，在行，从deque 的头部弹出（删除）第一个元
+素。这两个操作都很快。
+4.3.2  实现Karplus-Strong 算法 
+也可以用deque 容器，针对环形缓冲区，实现Karplus-Strong 算法，如下所示： 
+# generate note of given frequency 
+def generateNote(freq): 
+ nSamples = 44100 
+ sampleRate = 44100 
+ N = int(sampleRate/freq) 
+ # initialize ring buffer 
+ 
+ buf = deque([random.random() - 0.5 for i in range(N)]) 
+ # initialize samples buffer 
+ 
+ samples = np.array([0]*nSamples, 'float32') 
+ for i in range(nSamples): 
+ 
+ samples[i] = buf[0] 
+ 
+ avg = 0.996*0.5*(buf[0] + buf[1]) 
+ buf.append(avg) 
+ buf.popleft() 
+ # convert samples to 16-bit values and then to a string 
+ # the maximum value is 32767 for 16-bit 
+ 
+ samples = np.array(samples*32767, 'int16') 
+ 
+ return samples.tostring() 
+在行，用范围在[-0.5，0.5]的随机数来初始化deque。在行，建立一个浮
+点数组来保存声音采样。该数组的长度与采样率相符，这意味着将生成一秒钟的
+声音片段。
+第 4 章  用 Karplus-Strong 算法产生音乐泛音 55 
+
+56 Python 极客项目编程 
+在行，deque 的第一个元素被复制到采样缓冲区。在行和随后几行中，可
+以看到低通滤波器和衰减在生效。在行，samples 数组的每个值乘以32767（16
+位带符号整数的取值范围是—32768～32,767），被转换成16 位的格式。在行，它
+被转换成字符串表示形式，这是wave 模块的要求，我们将用该模块，将这些数据
+保存到文件。
+4.3.3  写WAV 文件 
+拥有音频数据后，可以用Python 的wave 模块，将其写入WAV 文件。 
+def writeWAVE(fname, data): 
+ # open file 
+ 
+ file = wave.open(fname, 'wb') 
+ # WAV file parameters 
+ nChannels = 1 
+ sampleWidth = 2 
+ frameRate = 44100 
+ nFrames = 44100 
+ # set parameters 
+ 
+ file.setparams((nChannels, sampleWidth, frameRate, nFrames, 
+   'NONE', 'noncompressed')) 
+ 
+ file.writeframes(data) 
+ file.close() 
+在行，创建了一个WAV 文件，在行，将参数设置为使用单声道、16 位、
+无压缩的格式。最后，在行，将数据写入文件。 
+4.3.4  用pygame 播放WAV 文件 
+现在，用Python 的pygame 模块播放算法生成的WAV 文件。pygame 是用来编
+写游戏的流行Python 模块。它基于简单直接媒体层（SDL）库，该库是高性能的底
+层库，让你能访问声音、图形，以及计算机的输入设备。
+方便起见，我们将代码封装在NotePlayer 类中，如下所示： 
+# play a WAV file 
+class NotePlayer: 
+ # constructor 
+ def __init__(self): 
+ 
+ pygame.mixer.pre_init(44100, -16, 1, 2048) 
+ pygame.init() 
+ # dictionary of notes 
+ 
+ self.notes = {} 
+ # add a note 
+ def add(self, fileName): 
+ 
+   self.notes[fileName] = pygame.mixer.Sound(fileName) 
+ # play a note 
+ def play(self, fileName): 
+ try: 
+ 
+ self.notes[fileName].play() 
+ except: 
+   print(fileName + ' not found!') 
+ def playRandom(self): 
+
+ """play a random note""" 
+ 
+ index = random.randint(0, len(self.notes)-1) 
+ 
+ note = list(self.notes.values())[index] 
+ note.play() 
+在行，预先初始化pygame 的mixer 类：44100 的采样率，16 位的有符号值，
+单声道，缓冲区大小为2048。在行，创建一个音符的字典，它针对文件名保存
+pygame 的声音对象。接下来，在NotePlayer 的add()方法中，创建声音对象，并
+将它保存在notes 目录中。 
+请注意，在play()中行如何使用目录，并播放与文件名相关联的声音对象。
+playRandom()方法从已生成的五个音符中随机选取一个播放。最后，在行，randint()
+从范围[0,4]中选择一个随机整数，在行从字典中挑选一个音符播放。 
+4.3.5  main()方法 
+现在看看main()方法，它创建音符并处理各种命令行选项，以演奏音符。 
+ parser = argparse.ArgumentParser(description="Generating sounds with 
+   Karplus String Algorithm") 
+ # add arguments 
+ 
+ parser.add_argument('--display', action='store_true', required=False) 
+ parser.add_argument('--play', action='store_true', required=False) 
+ parser.add_argument('--piano', action='store_true', required=False) 
+ args = parser.parse_args() 
+ # show plot if flag set 
+ if args.display: 
+ gShowPlot = True 
+ plt.ion() 
+ # create note player 
+ nplayer = NotePlayer() 
+ print('creating notes...') 
+ for name, freq in list(pmNotes.items()): 
+ fileName = name + '.wav' 
+ 
+ if not os.path.exists(fileName) or args.display: 
+ data = generateNote(freq) 
+ print('creating ' + fileName + '...') 
+ writeWAVE(fileName, data) 
+ else: 
+ print('fileName already created. skipping...') 
+ # add note to player 
+ 
+ nplayer.add(name + '.wav') 
+ # play note if display flag set 
+ if args.display: 
+ 
+ nplayer.play(name + '.wav') 
+ time.sleep(0.5) 
+ # play a random tune 
+ if args.play: 
+ while True: 
+ try: 
+第 4 章  用 Karplus-Strong 算法产生音乐泛音 57 
+
+58 Python 极客项目编程 
+ 
+ nplayer.playRandom() 
+ # rest - 1 to 8 beats 
+ 
+ rest = np.random.choice([1, 2, 4, 8], 1, 
+ p=[0.15, 0.7, 0.1, 0.05]) 
+   time.sleep(0.25*rest[0]) 
+ except KeyboardInterrupt: 
+ exit() 
+首先，用argparse 为程序建立一些命令行选项，就像以前的项目中讨论的一样。
+在行，如果使用了--display 命令行选项，就用matplotlib 绘图，显示Karplus-Strong
+算法中波形如何演变。ion()调用启动了matplotlib 的交互模式。然后，创建NotePlayer
+类的一个实例，用generateNote()方法生成五声音阶的音符。五个音符的频率在全局
+字典pmNotes 中定义。 
+在行，利用os.path.exists()方法来查看WAV 文件是否已创建。如果已创建，
+就跳过计算（如果多次运行该程序，这是一个方便的优化）。
+计算好音符、创建了WAV 文件后，在行将该音符添加NotePlayer 字典中，
+如果使用了--display 命令行选项，就在行播放它。 
+在行，如果使用了--play 选项，NotePlayer 的playRandom()方法就从五个音符
+中随机播放一个音符。要让一个音符序列听起来更像音乐，需要在播放的音符之间
+添加休止符，所以在行，用numpy 模块的random.choice()方法，选择随机的休止
+时间。该方法还可以选择休止间隔的概率，设置之后可以让两拍的休止最有可能，
+八拍的休止最不可能。请试着改变这些值，以创建自己的音乐风格！
+4.4  完整代码 
+现在将程序整合在一起。完整的代码如下，也可以从https://github.com/electronut/ 
+pp/blob/master/karplus/ks.py 下载。 
+import sys, os 
+import time, random 
+import wave, argparse, pygame 
+import numpy as np 
+from collections import deque 
+from matplotlib import pyplot as plt 
+# show plot of algorithm in action? 
+gShowPlot = False 
+# notes of a Pentatonic Minor scale 
+# piano C4-E(b)-F-G-B(b)-C5 
+pmNotes = {'C4': 262, 'Eb': 311, 'F': 349, 'G':391, 'Bb':466} 
+# write out WAV file 
+def writeWAVE(fname, data): 
+ # open file 
+ file = wave.open(fname, 'wb') 
+ # WAV file parameters 
+
+ nChannels = 1 
+ sampleWidth = 2 
+ frameRate = 44100 
+ nFrames = 44100 
+ # set parameters 
+ file.setparams((nChannels, sampleWidth, frameRate, nFrames, 
+   'NONE', 'noncompressed')) 
+ file.writeframes(data) 
+ file.close() 
+# generate note of given frequency 
+def generateNote(freq): 
+ nSamples = 44100 
+ sampleRate = 44100 
+ N = int(sampleRate/freq) 
+ # initialize ring buffer 
+ buf = deque([random.random() - 0.5 for i in range(N)]) 
+ # plot of flag set 
+ if gShowPlot: 
+   axline, = plt.plot(buf) 
+ # initialize samples buffer 
+ samples = np.array([0]*nSamples, 'float32') 
+ for i in range(nSamples): 
+ samples[i] = buf[0] 
+ avg = 0.995*0.5*(buf[0] + buf[1]) 
+ buf.append(avg) 
+ buf.popleft() 
+ # plot of flag set 
+ if gShowPlot: 
+ if i % 1000 == 0: 
+ axline.set_ydata(buf) 
+ plt.draw() 
+ # convert samples to 16-bit values and then to a string 
+ # the maximum value is 32767 for 16-bit 
+ samples = np.array(samples*32767, 'int16') 
+ return samples.tostring() 
+# play a WAV file 
+class NotePlayer: 
+ # constructor 
+ def __init__(self): 
+ pygame.mixer.pre_init(44100, -16, 1, 2048) 
+ pygame.init() 
+ # dictionary of notes 
+ self.notes = {} 
+ # add a note 
+ def add(self, fileName): 
+   self.notes[fileName] = pygame.mixer.Sound(fileName) 
+ # play a note 
+ def play(self, fileName): 
+ try: 
+ self.notes[fileName].play() 
+ except: 
+   print(fileName + ' not found!') 
+ def playRandom(self): 
+ """play a random note""" 
+ index = random.randint(0, len(self.notes)-1) 
+第 4 章  用 Karplus-Strong 算法产生音乐泛音 59 
+
+60 Python 极客项目编程 
+ note = list(self.notes.values())[index] 
+ note.play() 
+# main() function 
+def main(): 
+ # declare global var 
+ global gShowPlot 
+ parser = argparse.ArgumentParser(description="Generating sounds with 
+   Karplus String Algorithm") 
+ # add arguments 
+ parser.add_argument('--display', action='store_true', required=False) 
+ parser.add_argument('--play', action='store_true', required=False) 
+ parser.add_argument('--piano', action='store_true', required=False) 
+ args = parser.parse_args() 
+ # show plot if flag set 
+ if args.display: 
+ gShowPlot = True 
+ plt.ion() 
+ # create note player 
+ nplayer = NotePlayer() 
+ print('creating notes...') 
+ for name, freq in list(pmNotes.items()): 
+ fileName = name + '.wav' 
+ if not os.path.exists(fileName) or args.display: 
+ data = generateNote(freq) 
+ print('creating ' + fileName + '...') 
+ writeWAVE(fileName, data) 
+ else: 
+ print('fileName already created. skipping...') 
+ # add note to player 
+ nplayer.add(name + '.wav') 
+ # play note if display flag set 
+ if args.display: 
+ nplayer.play(name + '.wav') 
+ time.sleep(0.5) 
+ # play a random tune 
+ if args.play: 
+ while True: 
+ try: 
+ nplayer.playRandom() 
+ # rest - 1 to 8 beats 
+ rest = np.random.choice([1, 2, 4, 8], 1, 
+ p=[0.15, 0.7, 0.1, 0.05]) 
+   time.sleep(0.25*rest[0]) 
+ except KeyboardInterrupt: 
+ exit() 
+ # random piano mode 
+ if args.piano: 
+ while True: 
+ for event in pygame.event.get(): 
+
+ if (event.type == pygame.KEYUP): 
+ print("key pressed") 
+ nplayer.playRandom() 
+ time.sleep(0.5) 
+# call main 
+if __name__ == '__main__': 
+ main() 
+4.5  运行拨弦模拟 
+要运行这个项目的代码，就在命令行输入：
+$ python3 ks.py –display 
+matplotlib 绘图展示了Karplus-Strong 算法如何转换初始随机偏移，创建所需频
+率的波，如图4-6 所示。 
+图4-6  Karplus-Strong 算法的运行示例 
+现在尝试用这个程序播放随机音符。
+$ python ks.py –play 
+这应该会用生成的五声音阶WAV 文件播放随机的音符序列。 
+第 4 章  用 Karplus-Strong 算法产生音乐泛音 61 
+
+62 Python 极客项目编程 
+4.6  小结 
+这个项目用Karplus-Strong 算法来模拟拨弦的声音，利用生成的WAV 文件来播
+放音符。
+4.7  实验 
+这里有一些值得试验的想法：
+1．用你在本章学到的技术创建一种方法，重现两根不同频率的弦一起振动发
+出的声音。记住，Karplus-Strong 算法产生的声音振幅可以叠加（放大到16 位值并
+生成WAV 文件之前）。现在，在第一次拨弦和第二次拨弦之间增加一点延时。 
+2．写一个方法，从文本文件中读取音乐，并生成音符。然后用这些音符播放
+音乐。使用的格式可以是音符名称后面跟上整数的休止时间，就像这样：C4 1 F4 2 
+G4 1…… 
+3．为项目添加--piano 命令行选项。如果程序用这个选项运行，用户应该能够
+按键盘上的A、S、D、F 和G 键，播放五个音符（提示：用pygame.event.get 和
+pygame.event.type）。 

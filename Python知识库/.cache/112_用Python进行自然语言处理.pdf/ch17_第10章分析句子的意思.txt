@@ -1,0 +1,1614 @@
+314
+第10
+10
+10
+10 章分析句子的意思
+我们已经看到利用计算机的能力来处理大规模文本是多么有用。现在我们已经有了分析
+器和基于特征的文法，我们能否做一些类似分析句子的意思这样有用的事情？本章的目的是
+要回答下列问题：
+1.
+我们如何能表示自然语言的意思，使计算机能够处理这些表示？
+2.
+我们怎样才能将意思表示与无限的句子集合关联？
+3.
+我们怎样才能使用连接意思表示与句子的程序来存储知识？
+一路上，我们将学习一些逻辑语义领域的形式化技术，看看如何用它们来查询存储了世
+间真知的数据库。
+10.1
+10.1
+10.1
+10.1 自然语言理解
+自然语言理解
+自然语言理解
+自然语言理解
+查询数据库
+假设有一个程序，让我们输入一个自然语言问题，返回给我们正确的答案：
+(1)
+a. Which country is Athens in?
+b. Greece.
+写这样的一个程序有多难？我们可以使用到目前为止在这本书中遇到的技术吗？或者
+需要新的东西？在本节中，我们将看到解决特定领域的任务是相当简单的。但我们也将看到，
+要以一个更一般化的方式解决这个问题，就必须开辟一个全新的涉及意思的表示的理念和技
+术的框架。
+因此，让我们开始先假设我们有关于城市和国家的结构化的数据。更具体的，我们将使
+用一个具有表10-1 所示的前几行的数据库表。
+表10-1 所示的数据来自80 聊天系统(Warren & Pereira, 1982)。人口数以
+千计算，注意在这些例子中使用的数据可以追溯到1980 年代，在(Warren
+& Pereira, 1982)出版时，某些已经有些过时。
+表10-1. city_table：一个城市、国家和人口的表格
+从这个表格数据检索答案的最明显的方式是在一个如SQL 这样的数据库查询语言中编
+写查询语句。
+City
+Country
+Population
+athens
+greece
+1368
+bangkok
+thailand
+1178
+barcelona
+spain
+1280
+berlin
+east_germany
+3481
+birmingham
+united_kingdom
+1112
+
+315
+SQL（Structured Query Language，结构化查询语言）是为在关系数据库
+中检索和管理数据而设计的语言。如果你想了解更多有关SQL 的信息，h
+ttp://www.w3schools.com/sql/是一个方便的在线参考。
+例如：执行查询（2）将得到值：'greece'：
+(2) SELECT Country FROM city_table WHERE City = 'athens'
+这条语句得到由所有City 列的值是'athens'的数据行中Country 列的所有值组成的结果
+的集合。
+我们怎样才能使用英语得到与我们在查询系统中输入得到的相同的效果呢？第9 章中
+描述的基于特征的文法形式可以很容易地从英语翻译到SQL。文法sql0.fcfg 说明如何将句
+子意思表示与句子分析串联组装。每个短语结构规则为特征SEM 构建值作补充。你可以看
+到这些补充非常简单；在每一种情况下，我们对分割的子成分用字符串连接操作+来组成父
+成分的值。
+>>> nltk.data.show_cfg('grammars/book_grammars/sql0.fcfg')
+% start S
+S[SEM=(?np + WHERE + ?vp)] -> NP[SEM=?np] VP[SEM=?vp]
+VP[SEM=(?v + ?pp)] -> IV[SEM=?v] PP[SEM=?pp]
+VP[SEM=(?v + ?ap)] -> IV[SEM=?v] AP[SEM=?ap]
+NP[SEM=(?det + ?n)] -> Det[SEM=?det] N[SEM=?n]
+PP[SEM=(?p + ?np)] -> P[SEM=?p] NP[SEM=?np]
+AP[SEM=?pp] -> A[SEM=?a] PP[SEM=?pp]
+NP[SEM='Country="greece"'] -> 'Greece'
+NP[SEM='Country="china"'] -> 'China'
+Det[SEM='SELECT'] -> 'Which' | 'What'
+N[SEM='City FROM city_table'] -> 'cities'
+IV[SEM=''] -> 'are'
+A[SEM=''] -> 'located'
+P[SEM=''] -> 'in'
+这使我们能够分析SQL 查询：
+>>> from nltk import load_parser
+>>> cp = load_parser('grammars/book_grammars/sql0.fcfg')
+>>> query = 'What cities are located in China'
+>>> trees = cp.nbest_parse(query.split())
+>>> answer = trees[0].node['sem']
+>>> q = ' '.join(answer)
+>>> print q
+SELECT City FROM city_table WHERE Country="china"
+轮到你来：设置跟踪为最大，运行分析器，即cp =load_parser('gram
+mars/book_grammars/sql0.fcfg', trace=3)，研究当边被完整的加
+入到图表中时，如何建立SEM 的值。
+最后，我们在数据库city.db 上执行查询，检索出一些结果：
+
+316
+>>> from nltk.sem import chat80
+>>> rows = chat80.sql_query('corpora/city_database/city.db', q)
+>>> for r in rows: print r[0],
+c
+canton chungking dairen harbin kowloon mukden peking shanghai sian tientsin
+由于每行r 是一个单元素的元组，我们输出元组的成员，而不是元组本身c。
+总结一下，我们已经定义了一个任务：计算机对自然语言查询做出反应，返回有用的数
+据。我们通过将英语的一个小的子集翻译成SQL 来实现这个任务们可以说，我们的NLTK
+代码已经“理解”SQL，只要Python 能够对数据库执行SQL 查询，通过扩展，它也“理解”
+如“What cities are located in China”这样的查询。这相当于自然语言理解的例子能够从荷
+兰语翻译成英语。假设你是一个英语为母语的人，已经开始学习荷兰语。你的老师问你是否
+理解（3）的意思：
+(3) Margrietje houdt van Brunoke.
+如果你知道（3）中单个词的意思，并且知道如何将它们结合在一起组成整个句子的意
+思，你可能会说（3）的意思与Margrietje loves Brunoke 相同。
+一个观察者——让我们叫她Olga——可能会将此作为你理解了（3）的意思的证据。但
+是，这将依赖于Olga 自己懂英语。如果她不懂英语，那么你从荷兰语到英语的翻译就不能
+说明你理解了荷兰语。我们将很快回到这个问题。
+文法sql0.fcfg，连同NLTK 的Earley 分析器是实现从英语翻译到SQL 的工具。这个文
+法够用吗？你已经看到整个句子的SQL 翻译是由句子成分的翻译建立起来的。然而，这些
+成分的意思表示似乎没有很多的合理性。例如：如果我们看一下名词短语Which cities 的分
+析，限定词和名词分别对应SQL 片段SELECT 和City FROM city_table。但这两个都没
+有单独的符合语法的意思。
+我们对语法还有另一种批评：我们“硬生生”的把一些数据库的细节加入其中。我们需
+要知道有关表（如：city_table）和字段的名称。但我们的数据库中可能确实存在相同的数据
+行但是用的是不同的表名和字段名，在这种情况下，SQL 查询就不能执行。同样，我们可
+以不同的格式存储我们的数据，如XML，在这种情况下，检索相同的结果需要我们将我们
+的英语查询翻译成XML 查询语言而不是SQL。这些因素表明我们应该将英语翻译成比SQ
+L 更加抽象和通用的东西。
+为了突出这一点，让我们考虑另一个英语查询及其翻译：
+(4)
+a. What cities are in China and have populations above 1,000,000?
+b. SELECT City FROM city_table WHERE Country = 'china' AND Population >
+1000
+轮到你来：扩展文法sql0.fcfg 使它能将（4a）转换为（4b），检查查询所返回
+的值。记得在聊天80 数据库中数字以千为单位，因此（4b）中的1000 代表
+一百万人口。
+你可能会发现：最简单的方法是在一起处理之前扩展文法来处理查询Wh
+at cities have populations above 1,000,000。在你完成了这个任务之后，你可
+以比较你的方案与NLTK 数据格式的grammars/book_grammars/sql1.f
+cfg。
+观察（4a）中and 连接被翻译成（4b）中SQL 对应的AND。后者告诉我们从两个条件
+都为真的行中选择结果：Country 列的值是'china'，Population 列的值是大于1000。an
+d 的解释包含一个新的想法：它讲的是在某些特定情况下什么是真的，告诉我们在条件s 中
+Cond1 AND Cond2 为真，当且仅当条件Cond1 在s 中为真且Cond2 也在s 中为真。虽然这
+
+317
+并不是and 在英语中的全部意思，但它具有很好的属性：独立于任何查询语言。事实上，我
+们已经给了它一个经典逻辑的标准解释。在下面的章节中，我们将探讨将自然语言的句子翻
+译成逻辑而不是如SQL 这样的可执行查询语言的方法。逻辑形式的一个优势是它们更抽象，
+因此更通用。一旦我们翻译成了逻辑，只要我们想要，就可以再翻译成其他各种特殊用途的
+语言。事实上，大多说通过自然语言查询数据库的重要的尝试都是使用这种方法。
+自然语言、语义和逻辑
+我们一开始尝试捕捉（1a）的意思，通过将它翻译成计算机可以解释和执行的另一种语
+言，SQL，中的查询。但是，这仍然在回避问题的实质：翻译是否正确。从数据库查询走出
+来，我们注意到and 的意思似乎可以用来指定在特定情况下语句是真或是假。不是将句子S
+从一种语言翻译到另一种，我们通过将S 与现实的情况关联，尝试解释S 是关于什么的，。
+让我们更进一步。假设有一种情况s，其中有两个实体Margrietje 和她最喜欢的娃娃Brunok
+e。此外，两个实体之间有一种我们称之为爱的关系。如果你理解（3）的意思，那么你知道
+在情况s 中它为真。你知道这个的部分原因是因为你知道Margrietje 指的是Margrietje，Bru
+noke 指的是Brunoke，houdt van 指的是爱的关系。
+我们引进了语义中的两个基本概念。第一个是在某些情况下，陈述句非真即假。第二个
+是名词短语和专有名词的定义指的是世界上的东西。所以（3）在Margrietje 喜欢娃娃Brun
+oke 这一情形中为真，如图10-1 所示。
+图10.1：对Margrietje 喜欢Brunoke 的情形的描绘。
+一旦我们采取了在一个情况下是真是假的概念，我们就有了一个强大的进行推理的工
+具。特别是，我们可以看到句子的集合，询问它们在某些情况下是否为真。例如：（5）中的
+句子可以都为真，而（6）和（7）中的则不能。换句话说，（5）中的句子是一致的，而（6）
+和（7）中的是不一致的。
+(5)
+a. Sylvania is to the north of Freedonia.
+b. Freedonia is a republic.
+(6)
+a. The capital of Freedonia has a population of 9,000.
+b. No city in Freedonia has a population of 9,000.
+
+318
+(7)
+a. Sylvania is to the north of Freedonia.
+b. Freedonia is to the north of Sylvania.
+我们选择有关fictional countries（虚构的国家）（选自Marx Brothers 1933 年的电影《D
+uck Soup》）的句子来强调你对这些例子的推理并不取决于真实世界中的真与假。如果你知
+道词no 的意思，也知道一个国家的首都是一个位于该国的城市，那么你应该能够得出这样
+的结论：（6）中的两个句子是不一致的，不管Freedonia 在哪里和它的首都有多少人口。也
+就是说，不存在使这两个句子同时都为真的情况。同样的，如果你知道to the north of 所表
+达的关系是不对称的，那么你应该能够得出这样的结论：（7）中的两句话是不一致的。
+从广义上讲，自然语言语义表示的基于逻辑的方法关注那些指导我们判断自然语言的一
+致性和不一致性的方面。设计一种逻辑语言的句法是为了使这些特征形式更明确。结果是如
+一致性这样的确定性属性往往可以简化成符号操作，也就是说，一种可以被计算机实施的任
+务。为了实现这种方法，我们首先要开发一种表示某种可能情况的技术。我们做的这些逻辑
+学家称之为模型。
+一个句子集W 的模型是某种情况的形式化表示，其中W 中的所有句子都为真。表示模
+型通常的方式是集合论。段落的域D（我们当前关心的所有实体）是个体的一个集合，而当
+集合从D 建立，关系也被确立。让我们看一个具体的例子。我们的域D 包括3 个孩子，St
+efan、Klaus 和Evi，分别用s、k 和e 表示。记为D = {s, k, e}。表达式boy 是包含Stefan
+和Klaus 的集合，表达式girl 是包含Evi 的集合，表达式is running 是包含Stefan 和Evi 的
+集合。图10-2 是这个模型的图形化描绘。
+图10-2. 一个模型图，包含一个域D 及D 的子集分别对应谓词boy、girl 和is running。
+在本章后面，我们将使用模型来帮助评估英语句子的真假，并用这种方式来说明表示意
+思的一些方法。然而，在进入更多细节之前，让我们将从更广阔的角度进行讨论，回到我们
+在1.5 节简要提到过的主题。一台计算机可以理解句子的意思吗？我们该如何判断它是否能
+理解？这类似与问：“计算机能思考吗？”阿兰·图灵提出的著名的回答是：通过检查计算
+机与人类进行理智的对话的能力（Turing, 1950）。假设你有一个与人聊天的会话和一个与计
+算机聊天的会话，但一开始你并不知道哪个是哪个。在与它们两个聊天后，如果你不能识别
+对方哪一个是计算机，那么计算机就成功地模仿了人类。如果一台计算机成功的被当做人类
+通过了这个“模仿游戏”（或“图灵测试”，这是它是俗称），那么对于图灵来说，就可以说
+计算机能思考，可以说它具有了智能。所以图灵从侧面回答了这个问题，不是检查计算机的
+内部状态，而是检查它的行为，作为具有智能的证据。同样的道理，我们认为要说一台计算
+机懂英语，只需要它的行为表现看上去它懂。这里最重要的是不是图灵模仿游戏的细节，而
+是以可观察的行为为依据来判断自然语言理解能力的想法。
+
+319
+10.2
+10.2
+10.2
+10.2 命题逻辑
+命题逻辑
+命题逻辑
+命题逻辑
+设计一种逻辑语言的目的是使推理形式更明确。因此，它可以在自然语言中确定一组句
+子是否是一致的。作为这种方法的一部分，我们需要开发一个句子φ的逻辑表示，它能形式
+化的捕捉φ为真的条件。我们先从一个简单的例子开始：
+(8) [Klaus chased Evi] and [Evi ran away].
+让我们分别用φ和ψ替代（8）中的两个子句，并用&替代对应的英语词and 的逻辑操
+作：φ & ψ。这种结构是（80）的逻辑形式。
+命题逻辑使我们能只表示语言结构的对应与句子的特定连接词的那些部分。刚才我们看
+了and。其他的连接词还有not、or 和if...，then...。命题逻辑形式中，这些连接词的对应形
+式有时叫做布尔运算符。命题逻辑的基本表达式是命题符号，通常写作P、Q、R 等。表示
+布尔运算符的约定很多。由于我们将重点探索NLTK 中的逻辑表示方式，所以将使用下列A
+SCII 版本的运算符：
+>>> nltk.boolean_ops()
+negation
+-
+conjunction
+&
+disjunction
+|
+implication
+->
+equivalence
+<->
+从命题符号和布尔运算符，我们可以建立命题逻辑的规范公式的无限集合（或简称公
+式）。首先，每个命题字母是一个公式。然后，如果φ是一个公式，那么-φ也是一个公式。
+如果φ和ψ是公式，那么(φ & ψ)、(φ | ψ)、(φ -> ψ)以及(φ <-> ψ)也是公式。
+表10-2 指定了包含这些运算符的公式为真的条件。和以前一样，我们使用φ和ψ作为
+句子中的变量，iff 作为if and only if（当且仅当）的缩写。
+表10-2. 命题逻辑的布尔运算符的真值条件
+这些规则通常是简单的，虽然蕴含的真值条件违反了很多我们通常关于英语中条件句的
+直觉。形式(P -> Q)的公式是为假只有当P 为真并且Q 为假时。如果P 为假（比如说，P
+对应The moon is made of green cheese）而Q 为真（比如说，Q 对应Two plus two equa
+ls four）那么P -> Q 的结果为真。
+NLTK 的LogicParser()将逻辑表达式分析成表达式的各种子类：
+>>> lp = nltk.LogicParser()
+>>> lp.parse('-(P & Q)')
+<NegatedExpression -(P & Q)>
+>>> lp.parse('P & Q')
+<AndExpression (P & Q)>
+>>> lp.parse('P | (R -> Q)')
+<OrExpression (P | (R -> Q))>
+布尔运算符
+真值条件
+非(否定的情况)
+在s 中-φ为真
+iff
+在s 中φ为真
+与(and)
+在s 中(φ & ψ)为真
+iff
+在s 中φ为真并且在s 中ψ为真
+或(or)
+在s 中(φ | ψ)为真
+iff
+在s 中φ为真或者在s 中ψ为真
+蕴含(if ..., then ...)
+在s 中(φ -> ψ)为真
+iff
+在s 中φ为假或者在s 中ψ为真
+等价(if and only if)
+在s 中(φ <-> ψ)为真
+iff
+在s 中φ和ψ同时为真或者同时为假
+
+320
+>>> lp.parse('P <-> -- P')
+<IffExpression (P <-> --P)>
+从计算的角度来看，逻辑给了我们进行推理的一个重要工具。假设你表达：Freedonia i
+s not to the north of Sylvania（Freedonia 不在Sylvania 北边），而你给出理由：Sylvania is
+to the north of Freedonia（Sylvania 在Freedonia 北边）。在这种情况下，你已经给出了一个
+论证。句子：Sylvania is to the north of Freedonia 是论证的假设，而Freedonia is not to t
+he north of Sylvania 是结论。从假设一步一步推到结论，被称为推理。通俗地说，就是我
+们以在结论前面写therefore 这样的格式写一个论证。
+(9)
+Sylvania is to the north of Freedonia.
+Therefore, Freedonia is not to the north of Sylvania.
+一个论证，如果没有它的所有的前提都为真而结论为假的情况，那么它是有效的。
+现在，（9）的有效性关键取决于短语to the north of 的含义，特别的，它实际上是一个
+非对称的关系：
+(10) if x is to the north of y then y is not to the north of x.
+不幸的是，在命题逻辑中，我们不能表达这样的规则：我们能用的最小的元素是原子命
+题，我们不能“向里看”来谈论个体x 和y 之间的关系。在这种情况下，我们可以做的最好
+的是捕捉不对称的一个特定案例。让我们使用命题符号SnF 表示Sylvania is to the north o
+f Freedonia，用FnS 表示Freedonia is to the north of Sylvania。要说Freedonia is not to t
+he north of Sylvania，我们写成-FnS。也就是说，我们将not 当做短语it is not the case th
+at 的等价，用一元布尔运算符-来翻译这个。分别替代（10）中的x 和y 为Sylvania 和Free
+donia，于是我们得到一个蕴含，可以写作：
+(11) SnF -> -FnS
+给出一个完整的论证版本会怎样？我们将提到（9）的第一句话为两个命题逻辑公式：
+Snf 和（11）中的蕴含，它表示（相当贫乏的）我们的背景知识：to the north of 的意思。
+我们将写[A1, ..., An] / C 表示一个从假设[A1, ..., An]得出结论C 的论证。这使得论
+证（9）可以表示为：
+(12) [SnF, SnF -> -FnS] / -FnS
+这是一个有效的论证：如果SnF and SnF -> -FnS 在情况s 中都为真，那么-FnS 也
+一定在s 中为真。相反，如果FnS 为真，这将与我们的理解冲突：在任何可能的情况下两个
+事物不能同时在对方的北边。同样的，链表[SnF, SnF -> -FnS, FnS] 是不一致的——
+这些句子不能全为真。
+参数可以通过使用证明系统来测试“句法有效性”。在稍后的10.3 节中我们会再多讲一
+些这个。NLTK 中的inference 模块通过一个第三方定理证明器Prover9 的接口，可以进行
+逻辑证明。推理机制的输入首先必须用LogicParser()分析成逻辑表达式。
+>>> lp = nltk.LogicParser()
+>>> SnF = lp.parse('SnF')
+>>> NotFnS = lp.parse('-FnS')
+>>> R = lp.parse('SnF -> -FnS')
+>>> prover = nltk.Prover9()
+>>> prover.prove(NotFnS, [SnF, R])
+True
+这里有另一种方式可以看到结论如何得出。SnF -> -FnS 在语义上等价与-SnF | -F
+nS，其中|是对应与or 的二元运算符。在一般情况下，φ | ψ在条件s 中为真，要么φ在s
+中为真，要么ψ在s 中为真。现在，假设SnF 和-SnF | -FnS 都在s 中为真。如果SnF 为
+
+321
+真，那么-SnF 不可能也为真。经典逻辑的一个基本假设是：一个句子在一种情况下不能同
+时为真和为假。因此，-FnS 必须为真。
+回想一下，我们解释相对于一个模型的一种逻辑语言的句子，它们是这个世界的一个非
+常简化的版本。一个命题逻辑的模型需要为每个可能的公式分配值True 或False。我们一
+步步的来做这个：首先，为每个命题符号分配一个值，然后确定布尔运算符的含义（即表1
+0-2）和运用它们到这些公式的组件的值，来计算复杂的公式的值。估值是从逻辑的基本符
+号映射到它们的值。下面是一个例子：
+>>> val = nltk.Valuation([('P', True), ('Q', True), ('R', False)])
+我们使用一个配对的链表初始化一个估值，每个配对由一个语义符号和一个语义值组
+成。所产生的对象基本上只是一个字典，映射逻辑符号（作为字符串处理）为适当的值。
+>>> val['P']
+True
+正如我们稍后将看到的，我们的模型需要稍微更加复杂些，以便处理将在下一节中讨论
+的更复杂的逻辑形式；暂时的，在下面的声明中先忽略参数dom 和g。
+>>> dom = set([])
+>>> g = nltk.Assignment(dom)
+现在，让我们用val 初始化模型m：
+>>> m = nltk.Model(dom, val)
+每一个模型都有一个evaluate()方法，可以确定逻辑表达式，如命题逻辑的公式，的
+语义值；当然，这些值取决于最初我们分配给命题符号如P、Q 和R 的真值。
+>>> print m.evaluate('(P & Q)', g)
+True
+>>> print m.evaluate('-(P & Q)', g)
+False
+>>> print m.evaluate('(P & R)', g)
+False
+>>> print m.evaluate('(P | R)', g)
+True
+轮到你来：做实验为不同的命题逻辑公式估值。模型是否给出你所期望的值？
+到目前为止，我们已经将我们的英文句子翻译成命题逻辑。因为我们只限于用字母如P
+和Q 表示原子句子，不能深入其内部结构。实际上，我们说将原子句子分成主语、宾语和
+谓词并没有语义上的好处。然而，这似乎是错误的：如果我们想形式化如（9）这样的论证，
+就必须要能“看到里面”基本的句子。因此，我们将超越命题逻辑到一个更有表现力的东西，
+也就是一阶逻辑。这正是我们下一节要讲的。
+10.3
+10.3
+10.3
+10.3 一阶逻辑
+一阶逻辑
+一阶逻辑
+一阶逻辑
+本章的剩余部分，我们将通过翻译自然语言表达式为一阶逻辑来表示它们的意思。并不
+是所有的自然语言语义都可以用一阶逻辑表示。但它是计算语义的一个不错的选择，因为它
+具有足够的表现力来表达语义的很多方面，而且另一方面，有出色的现成系统可用于开展一
+阶逻辑自动推理。
+下一步我们将描述如何构造一阶逻辑公式，然后是这样的公式如何用来评估模型。
+
+322
+句法
+一阶逻辑保留所有命题逻辑的布尔运算符，但它增加了一些重要的新机制。首先，命题
+被分析成谓词和参数，这将我们与自然语言的结构的距离拉近了一步。一阶逻辑的标准构造
+规则承认以下术语：独立变量和独立常量、带不同数量的参数的谓词。例如：Angus walks
+可以被形式化为walk(angus)，Angus sees Bertie 可以被形式化为see(angus, bertie)。我们称
+walk 为一元谓词，see 为二元谓词。作为谓词使用的符号不具有内在的含义，虽然很难记住
+这一点。回到我们前面的一个例子，（13a）和（13b）之间没有逻辑区别。
+(13) a. love(margrietje, brunoke)
+b. houden_van(margrietje, brunoke)
+一阶逻辑本身没有什么实质性的关于词汇语义的表示——单个词的意思——虽然一些
+词汇语义理论可以用一阶逻辑编码。原子谓词如see(angus, bertie)在情况s 中是真还是假不
+是一个逻辑的问题，而是依赖于特定的估值，即我们为常量see、angus 和bertie 选择的值。
+出于这个原因，这些表达式被称为非逻辑常量。相比之下，逻辑常量（如布尔运算符）在一
+阶逻辑的每个模型中的解释总是相同的。
+我们应该在这里提到：有一个二元谓词具有特殊的地位，它就是等号，如在angus =
+aj 这样的公式中的等号。等号被视为一个逻辑常量，因为对于单独的术语t1 和t2，公式t1
+= t2 为真当且仅当t1 和t2 是指同一个实体。
+检查一阶逻辑表达式的语法结构往往是有益的，这样做通常的方式是为表达式指定类
+型。下面是Montague 文法的约定，我们将使用基本类型：e 是实体类型，而t 是公式类型，
+即有真值的表达式的类型。给定这两种基本类型，我们可以形成函数表达式的复杂类型。也
+就是说，给定任何类型σ和τ，<σ,τ>是一个对应与从'σ things’到'τ things’的函数
+的复杂类型。例如：<e, T>是从实体到真值，即一元谓词，的表达式的类型。可以调用Lo
+gicParser 来进行类型检查。
+>>> tlp = nltk.LogicParser(type_check=True)
+>>> parsed = tlp.parse('walk(angus)')
+>>> parsed.argument
+<ConstantExpression angus>
+>>> parsed.argument.type
+e
+>>> parsed.function
+<ConstantExpression walk>
+>>> parsed.function.type
+<e,?>
+为什么我们在这个例子的结尾看到<e,?>呢？虽然类型检查器会尝试推断出尽可能多
+的类型，在这种情况下，它并没有能够推断出walk 的类型，所以其结果的类型是未知的。
+虽然我们期望walk 的类型是<e, t>，迄今为止类型检查器知道的，在这个上下文中可能
+是一些其他类型，如<e, e>或<e, <e, t>>。要帮助类型检查器，我们需要指定一个信
+号，作为一个字典来实施，明确的与非逻辑常量类型关联：
+>>> sig = {'walk': '<e, t>'}
+>>> parsed = tlp.parse('walk(angus)', sig)
+>>> parsed.function.type
+<e,t>
+
+323
+一种二元谓词的类型<e, <e, t>>。虽然这是先组合类型e 的一个参数成一个一元谓
+词的类型，我们可以用二元谓词的两个参数直接组合来表示二元谓词。例如：在Angus see
+s Cyril 的翻译中谓词see 会与它的参数结合得到结果see(angus, cyril)。
+在一阶逻辑中，谓词的参数也可以是独立变量，如x、y 和z。在NLTK 中，我们采用
+的惯例：e 类型的变量都是小写。独立变量类似与人称代词，如he、she 和it，其中我们为
+了弄清楚它们的含义需要知道它们使用的上下文。解释（14）中的代名词的方法之一是指向
+上下文中相关的个体。
+(14) He disappeared.
+另一种方法是为代词he 提供文本中的先行词，例如：通过指出（15a）在（14）之前。
+在这里，我们说he 与名词短语Cyril 指称相同。在这个上下文中，(14)与(15b)是语义上是等
+价的。
+(15) a. Cyril is Angus’s dog.
+b. Cyril disappeared.
+相比之下，思考(16a)中出现的he。在这种情况下，它受不确定的NP ：a dog 的约束，
+这是一个与共指关系不同的关系。如果我们替换代词he 为a dog，结果(16b)就在语义上就
+不等效与（16a）。
+(16) a. Angus had a dog but he disappeared.
+b. Angus had a dog but a dog disappeared.
+对应与（17a），我们可以构建一个开放公式（17b），变量x 出现了两次（我们忽略了时
+态，以简化论述。）
+(17) a. He is a dog and he disappeared.
+b. dog(x) & disappear(x)
+通过在（17b）前面指定一个存在量词∃x (“存在某些x”) ，我们可以绑定这些变量，
+如在（18a）中，它的意思是（18b），或者更习惯写法（18c）。
+(18) a. ∃x.(dog(x) & disappear(x))
+b. At least one entity is a dog and disappeared.
+c. A dog disappeared.
+下面是(18a)在NLTK 中的表示：
+(19) exists x.(dog(x) & disappear(x))
+除了存在量词，一阶逻辑为我们提供了全称量词∀X（“对所有x”），如（20）所示。
+(20) a. ?x.(dog(x) →disappear(x))
+b. Everything has the property that if it is a dog, it disappears.
+c. Every dog disappeared.
+下面是(20a)在NLTK 中的表示：
+(21) all x.(dog(x) -> disappear(x))
+虽然（20a）是（20c）的标准一阶逻辑翻译，其真值条件不一定是你所期望的。公式表
+示如果某些x 是狗，那么x 消失——但它并没有说有狗存在。在没有狗存在的情况下，（20
+a）仍然会为真。（请记住，当P 为假时，(P -> Q)为真。）现在你可能会说，所有的狗都消
+失是以狗的存在为前提条件的，逻辑形式化表示的是完全错误的。但也可能找到其他的例子，
+没有这样一个前提。例如：我们也许可以解释Python 表达式astring.replace('ate', '8')
+是替代astring 中出现的所有'ate'为'8'，即使事实上'ate'可能没有出现（表3-2）。
+我们已经看到了一些量词约束变量的例子。下面的公式中会发生什么？
+((exists x. dog(x)) -> bark(x))
+量词exists x 的范围是dog(x)，所以bark(x)中x 的出现是不受限制的。因此，它可
+
+324
+以被其他一些量词约束，例如：
+下面公式中的all x：
+all x.((exists x. dog(x)) -> bark(x))
+在一般情况下，变量x 在公式φ中出现是自由的，如果它在φ中没有出现在all x 或e
+xists x 范围内。相反，如果x 在公式φ中是受限的，那么它在all x.φ和exists x.φ限制
+范围内。如果公式中所有变量都是受限的，那么我们说这个公式是封闭的。
+在此之前我们提到过，NLTK 中的LogicParser 的parse()方法返回Expression 类的
+对象。这个类的每个实例expr 都有free()方法，返回一个在expr 中自由的变量的集合。
+>>> lp = nltk.LogicParser()
+>>> lp.parse('dog(cyril)').free()
+set([])
+>>> lp.parse('dog(x)').free()
+set([Variable('x')])
+>>> lp.parse('own(angus, cyril)').free()
+set([])
+>>> lp.parse('exists x.dog(x)').free()
+set([])
+>>> lp.parse('((some x. walk(x)) -> sing(x))').free()
+set([Variable('x')])
+>>> lp.parse('exists x.own(y, x)').free()
+set([Variable('y')])
+一阶定理证明
+回顾一下我们较早前在（10）中提出的to the north of 上的限制，：
+(22) if x is to the north of y then y is not to the north of x.
+我们观察到命题逻辑不足以表示与二元谓词相关的概括，因此，我们不能正确的捕捉论
+证：Sylvania is to the north of Freedonia. Therefore, Freedonia is not to the north of
+Sylvania。
+毫无疑问，用一阶逻辑形式化这些规则是很理想的：
+all x. all y.(north_of(x, y) -> -north_of(y, x))
+更妙的是，我们可以进行自动推理来证明论证的有效性。
+定理证明在一般情况下是为了确定我们要证明的公式（证明目标）是否可以由一个有限
+序列的推理步骤从一个假设的公式列表派生出来。我们写作A   g，其中A 是一个假设的
+列表（可能为空），g 是证明目标。我们将用NLTK 中的定理证明接口Prover9 来演示这个。
+首先，我们分析所需的证明目标c和两个de。然后我们创建一个Prover9 实例④，并在目
+标和给定的假设列表上调用它的prove()⑤。
+>>> NotFnS = lp.parse('-north_of(f, s)')
+c
+>>> SnF = lp.parse('north_of(s, f)')
+d
+>>> R = lp.parse('all x. all y. (north_of(x, y) -> -north_of(y, x))')
+e
+>>> prover = nltk.Prover9()
+④
+>>> prover.prove(NotFnS, [SnF, R])
+⑤
+True
+令人高兴的是，定理证明器证明我们的论证是有效的。相反，它得出结论：不能从我们
+
+325
+的假设推到出north_of(f, s)：
+>>> FnS = lp.parse('north_of(f, s)')
+>>> prover.prove(FnS, [SnF, R])
+False
+一阶逻辑语言总结
+我们将借此机会重新表述前面的命题逻辑的语法规则，并添加量词的形式化规则；所有
+这些一起组成一阶逻辑的句法。此外，我们会明确相关表达式的类型。我们将采取约定：<
+en, t>是一种由n 个类型为e 的参数组成产生一个类型为t 的表达式的谓词的类型。在这
+种情况下，我们说n 是谓词的元数。
+1.
+如果P 是类型<en, t>的谓词，α1，... αn 是e 类型的术语，那么P（α1，...
+αn）的类型是t。
+2.
+如果α和β都是e 类型，那么（α=β）和（α!=β）是t 类型。
+3.
+如果φ是t 类型，那么是-φ也是t 类型。
+4.
+如果φ和ψ是t 类型，那么（φ&ψ）、（φ|ψ）、（φ -> ψ）和（φ<->ψ）也是t
+类型。
+5.
+如果φ是t 类型，x 是类型为e 的变量，那么exists x.φ和all x.φ也是t 类型。
+表10-3 总结了logic 模块的新的逻辑常量，以及Expressions 模块的两个方法。
+表10-3. 一阶逻辑所需的新的逻辑关系和运算符总结
+真值模型
+我们已经看到了一阶逻辑句法，在第10.4 节我们将考察将英语翻译成一阶逻辑的任务。
+然而，正如我们在第10.1 节中提到的，只有我们赋予一阶逻辑的句子以含义，才能进一步
+做下去。换句话说，我们需要给出一阶逻辑的真值条件的语义。从计算语义学的角度来看，
+采用这种方法能走多远是有明显的界限的。虽然我们要谈的是句子在某种情况下为真或为
+假，我们只能在电脑中以符号的方式表示这些情况。尽管有这些限制，通过在NLTK 解码
+模块仍然可以获得较清晰的真值条件语义。
+给定一阶逻辑语言L，L 的模型M 是一个<D, Val>对，其中D 是一个非空集合，称为
+模型的域，Val 是一个函数，称为估值函数，它按如下方式从D 中分配值给L 的表达式：
+1.
+对于L 中每一个独立常量c，Val(c)是D 中的元素。
+2.
+对于每一个元数n≥0 的谓词符号P，Val(P)是从Dn 到{True, False}的函数。
+（如
+果P 的元数为0，则Val(P)是一个简单的真值，P 被认为是一个命题符号。）
+对于（2），如果P 的元数是2，然后Val(P)将是一个从D 的元素的配对到{True, Fal
+se}的函数。我们将在NLTK 中建立的模型中采取更方便的替代品，其中Val(P)是一个配
+对的集合S，定义如下：
+示例
+描述
+=
+等于
+!=
+不等于
+exists
+存在量词
+all
+全称量词
+
+326
+(23) S = {s | f(s) = True}
+这样的f 被称为S 的特征函数（如在进一步阅读中讨论过的）。
+NLTK 的语义关系可以用标准的集合论方法表示：作为元组的集合。例如：假设我们有
+一个域包括Bertie、Olive 和Cyril，其中Bertie 是男孩，Olive 是女孩，而Cyril 是小狗。为
+了方便记述，我们用b、o 和c 作为模型中相应的标签。我们可以声明域如下：
+>>> dom = set(['b', 'o', 'c'])
+我们使用工具函数parse_valuation()将“符号=> 值”形式的字符串序列转换成一
+个Valuation 对象。
+>>> v = """
+... bertie => b
+... olive => o
+... cyril => c
+... boy => {b}
+... girl => {o}
+... dog => {c}
+... walk => {o, c}
+... see => {(b, o), (c, b), (o, c)}
+... """
+>>> val = nltk.parse_valuation(v)
+>>> print val
+{'bertie': 'b',
+'boy': set([('b',)]),
+'cyril': 'c',
+'dog': set([('c',)]),
+'girl': set([('o',)]),
+'olive': 'o',
+'see': set([('o', 'c'), ('c', 'b'), ('b', 'o')]),
+'walk': set([('c',), ('o',)])}
+根据这一估值，see 的值是一个元组的集合，包含：Bertie 看到Olive、Cyril 看到Berti
+e 和Olive 看到Cyril。
+轮到你来：模仿图10-2 绘制一个图，描述域dom 和相应的每个一元谓词的集
+合。
+你可能已经注意到，我们的一元谓词（即boy、girl、dog）也是以单个元组的集合而不
+是个体的集合出现的。这使我们能够方便的统一处理任何元数的关系。
+一个形式为P(T1, ... Tn)的谓词，其中P 是n 元的，为真的条件是对应于(T1, ... T
+n)的值的元组属于P 的值的元组的集合。
+>>> ('o', 'c') in val['see']
+True
+>>> ('b',) in val['boy']
+True
+
+327
+独立变量和赋值
+在我们的模型，上下文的使用对应的是为变量赋值。这是一个从独立变量到域中实体的
+映射。赋值使用构造函数Assignment，它也以论述的模型的域为参数。我们无需实际输
+入任何绑定，但如果我们要这样做，它们是以(变量,值)的形式来绑定，类似于我们前面看到
+的估值。
+>>> g = nltk.Assignment(dom, [('x', 'o'), ('y', 'c')])
+>>> g
+{'y': 'c', 'x': 'o'}
+此外，还可以使用print()查看赋值，使用与逻辑教科书中经常出现的符号类似的符号：
+>>> print g
+g[c/y][o/x]
+现在让我们看看如何为一阶逻辑的原子公式估值。首先，我们创建了一个模型，然后调
+用evaluate()方法来计算真值。
+>>> m = nltk.Model(dom, val)
+>>> m.evaluate('see(olive, y)', g)
+True
+这里发生了什么？我们正在为一个公式估值，类似与我们前面的例子：see(olive, cy
+ril)。然而，当解释函数遇到变量y 时，不是检查val 中的值，它在变量赋值g 中查询这个
+变量的值：
+>>> g['y']
+'c'
+由于我们已经知道o 和c 在see 关系中表示的含义，所以true 值是我们所期望的。在
+这种情况下，我们可以说赋值g 满足公式see(olive, y)。相比之下，下面的公式相对g 的
+评估结果为False（检查为什么会是你看到的这样）。
+>>> m.evaluate('see(y, x)', g)
+False
+在我们的方法中（虽然不是标准的一阶逻辑），变量赋值是部分的。例如：g 中除了x
+和y 没有其它变量。方法purge()从清除一个赋值中所有的绑定。
+>>> g.purge()
+>>> g
+{}
+如果我们现在尝试为公式，如see(olive, y)，相对于g 估值，就像试图解释一个包含
+一个him 的句子，我们不知道him 指什么。在这种情况下，估值函数未能提供一个真值。
+>>> m.evaluate('see(olive, y)', g)
+'Undefined'
+由于我们的模型已经包含了解释布尔运算的规则，任意复杂的公式都可以组合和评估。
+>>> m.evaluate('see(bertie, olive) & boy(bertie) & -walk(bertie)', g)
+True
+确定模型中公式的真假的一般过程称为模型检查。
+
+328
+量化
+现代逻辑的关键特征之一就是变量满足的概念可以用来解释量化的公式。让我们用（2
+4）作为一个例子。
+(24) exists x.(girl(x) & walk(x))
+什么时候为真？让我们想想我们的域，即在dom 中的所有个体。我们要检查这些个体
+中是否有属性是女孩并且这种走路的。换句话说，我们想知道dom 中是否有某个u 使g[u
+/x]满足开放的公式(25)。
+(25) girl(x) & walk(x)
+思考下面的：
+>>> m.evaluate('exists x.(girl(x) & walk(x))', g)
+True
+在这里evaluate()返回True，因为dom 中有某些u 通过绑定x 到u 的赋值满足（2
+5）。事实上，o 是这样一个u：
+>>> m.evaluate('girl(x) & walk(x)', g.add('x', 'o'))
+True
+NLTK 中提供了一个有用的工具：satisfiers()方法。它返回满足开放公式的所有个体
+的集合。该方法的参数是一个已分析的公式、一个变量和一个赋值。下面是几个例子：
+>>> fmla1 = lp.parse('girl(x) | boy(x)')
+>>> m.satisfiers(fmla1, 'x', g)
+set(['b', 'o'])
+>>> fmla2 = lp.parse('girl(x) -> walk(x)')
+>>> m.satisfiers(fmla2, 'x', g)
+set(['c', 'b', 'o'])
+>>> fmla3 = lp.parse('walk(x) -> girl(x)')
+>>> m.satisfiers(fmla3, 'x', g)
+set(['b', 'o'])
+想一想为什么fmla2 和fmla3 是那样的值，这是非常有用。->的真值条件的意思是
+fmla2 等价于-girl(x) | walk(x)，要么不是女孩要么没有步行的个体满足条件。因为b(B
+ertie)和c(Cyril)都不是女孩，根据模型m，它们都满足整个公式。当然o 也满足公式，因
+为o 两项都满足。现在，因为话题的域的每一个成员都满足fmla2，相应的全称量化公式
+也为真。
+>>> m.evaluate('all x.(girl(x) -> walk(x))', g)
+True
+换句话说，一个全称量化公式∀x.φ关于g 为真，只有对每一个u，φ关于g[u/x]为
+真。
+轮到你来：先用笔和纸，然后用m.evaluate()，尝试弄清楚all x.(girl
+(x) & walk(x))和exists x.(boy(x) -> walk(x))的真值。确保你能理
+解为什么它们得到这些值。
+
+329
+量词范围歧义
+当我们给一个句子的形式化表示两个量词时，会发生什么？
+(26) Everybody admires someone.
+用一阶逻辑有（至少）两种方法表示（26）：
+(27) a. all x.(person(x) -> exists y.(person(y) & admire(x,y)))
+b. exists y.(person(y) & all x.(person(x) -> admire(x,y)))
+这两个我们都能用吗？答案是肯定的，但它们的含义不同。（27b）在逻辑上强于（27a）：
+它声称只有一个人，也就是Bruce，被所有人钦佩。而（27a）只要其对于每一个u 我们可
+以找到u 钦佩的一些人u'；但每次找到的人u'可能不同。我们使用术语量化范围来区分（2
+7a）和（27b）。首先，∀的范围比∃广，而在（27b）中范围顺序颠倒了，所以现在我们有
+两种方式表示（26）的意思，它们都相当合理。换句话说，我们称（26）关于量词范围有歧
+义，（27）中的公式给我们一种使这两个读法明确的方法。然而，我们不只是对与（26）相
+关联的两个不同的表示感兴趣；我们也想要显示模型中的两种表述是如何导致不同的真值条
+件的细节。
+为了更仔细的检查歧义，让我们对估值做如下修正：
+>>> v2 = """
+... bruce => b
+... cyril => c
+... elspeth => e
+... julia => j
+... matthew => m
+... person => {b, e, j, m}
+... admire => {(j, b), (b, b), (m, e), (e, m), (c, a)}
+... """
+>>> val2 = nltk.parse_valuation(v2)
+admire 关系可以使用（28）所示的映射图进行可视化。
+（28）中，两个个体x 和y 之间的箭头表示x 钦佩y。因此，j 和b 都钦佩b（布鲁斯
+很虚荣），而e 钦佩m 且m 钦佩e。在这个模型中，公式（27a）为真而（27b）为假。探
+索这些结果的方法之一是使用Model 对象的satisfiers()的方法。
+>>> dom2 = val2.domain
+>>> m2 = nltk.Model(dom2, val2)
+>>> g2 = nltk.Assignment(dom2)
+
+330
+>>> fmla4 = lp.parse('(person(x) -> exists y.(person(y) & admire(x, y)))')
+>>> m2.satisfiers(fmla4, 'x', g2)
+set(['a', 'c', 'b', 'e', 'j', 'm'])
+这表明fmla4 包含域中每一个个体。相反，思考下面的公式fmla5；没有满足y 的值。
+>>> fmla5 = lp.parse('(person(y) & all x.(person(x) -> admire(x, y)))')
+>>> m2.satisfiers(fmla5, 'y', g2)
+set([])
+也就是说，没有大家都钦佩的人。看看另一个开放的公式fmla6，我们可以验证有一
+个人，即Bruce，它被Julia 和Bruce 都钦佩。
+>>> fmla6 = lp.parse('(person(y) & all x.((x = bruce | x = julia) -> admire(x, y)))')
+>>> m2.satisfiers(fmla6, 'y', g2)
+set(['b'])
+轮到你来：基于m2 设计一个新的模型，使（27a）在你的模型中为假；同样
+的，设计一个新的模型使（27b）为真。
+模型的建立
+我们一直假设我们已经有了一个模型，并要检查模型中的一个句子的真值。相比之下，
+模型的建立是给定一些句子的集合，尝试创造一种新的模型。如果成功，那么我们知道集合
+是一致的，因为我们有模型的存在作为证据。
+我们通过创建Mace()的一个实例并调用它的build_model()方法来调用Mace4 模式
+产生器，与调用Prover9 定理证明器类似的方法。一种选择是将我们的候选的句子集合作为
+假设，保留目标为未指定。下面的交互显示了[a, c1]和[a, c2]都是一致的链表，因为Ma
+ce 成功的为它们都建立了一个模型，而[c1,c2]不一致。
+>>> a3 = lp.parse('exists x.(man(x) & walks(x))')
+>>> c1 = lp.parse('mortal(socrates)')
+>>> c2 = lp.parse('-mortal(socrates)')
+>>> mb = nltk.Mace(5)
+>>> print mb.build_model(None, [a3, c1])
+True
+>>> print mb.build_model(None, [a3, c2])
+True
+>>> print mb.build_model(None, [c1, c2])
+False
+我们也可以使用模型建立器作为定理证明器的辅助。假设我们正试图证明A   g，即g
+是假设A = [a1,a2, ..., an]的逻辑派生。我们可以同样的输入提供给Mace4，模型建立
+器将尝试找出一个反例，就是要表明g 不遵循从A。因此，给定此输入，Mace4 将尝试为假
+设A 连同g 的否定找到一个模型，即链表A' = [a1, a2, ..., an, -g]。如果g 从S 不能
+证明出来，那么Mace4 会返回一个范例，比Prover9 更快的得出结论：无法找到所需的证明。
+相反，如果g 从S 可以证明出来，Mace4 可能要花很长时间不能成功地找到一个反例模型，
+最终会放弃。
+让我们思考一个具体的方案。我们的假设是链表[There is a woman that every
+man loves, Adam is a man, Eve is a woman]。我们的结论是Adam loves Eve。M
+
+331
+ace4 能找到使假设为真而结论为假的模型吗？在下面的代码，我们使用MaceCommand()
+检查已建立的模型。
+>>> a4 = lp.parse('exists y. (woman(y) & all x. (man(x) -> love(x,y)))')
+>>> a5 = lp.parse('man(adam)')
+>>> a6 = lp.parse('woman(eve)')
+>>> g = lp.parse('love(adam,eve)')
+>>> mc = nltk.MaceCommand(g, assumptions=[a4, a5, a6])
+>>> mc.build_model()
+True
+因此答案是肯定的：Mace4 发现了一个反例模型，其中Adam 爱某个女人而不是Eve。
+但是，让我们细看Mace4 的模型，转换成我们用来估值的格式：
+>>> print mc.valuation
+{'C1': 'b',
+'adam': 'a',
+'eve': 'a',
+'love': set([('a', 'b')]),
+'man': set([('a',)]),
+'woman': set([('a',), ('b',)])}
+这个估值的一般形式应是你熟悉的：它包含了一些单独的常量和谓词，每一个都有适当
+类型的值。可能令人费解的是C1。它是一个“Skolem 常量”，模型生成器作为存在量词的
+表示引入的。也就是说，模型生成器遇到a4 里面的exists y，它知道，域中有某个个体b
+满足a4 中的开放公式。然而，它不知道b 是否也是它的输入中的某个地方的一个独立常量
+的标志，所以它为b 凭空创造了一个新名字，即C1。现在，由于我们的假设中没有关于独
+立常量adam 和eve 的信息，模型生成器认为没有任何理由将它们当做表示不同的实体，
+于是它们都得到映射到a。此外，我们并没有指定man 和woman 表示不相交的集合，因
+此，模型生成器让它们相互重叠。这个演示非常明显的隐含了我们用来解释我们的情境的知
+识，而模型生成器对此一无所知。因此，让我们添加一个新的假设，使man 和woman 不
+相交。模型生成器仍然产生一个反例模型，但这次更符合我们直觉的有关情况：
+>>> a7 = lp.parse('all x. (man(x) -> -woman(x))')
+>>> g = lp.parse('love(adam,eve)')
+>>> mc = nltk.MaceCommand(g, assumptions=[a4, a5, a6, a7])
+>>> mc.build_model()
+True
+>>> print mc.valuation
+{'C1': 'c',
+'adam': 'a',
+'eve': 'b',
+'love': set([('a', 'c')]),
+'man': set([('a',)]),
+'woman': set([('b',), ('c',)])}
+经再三考虑，我们可以看到我们的假设中没有说Eve 是论域中唯一的女性，所以反例模
+型其实是可以接受的。如果想排除这种可能性，我们将不得不添加进一步的假设，如exist
+s y. all x. (woman(x) -> (x = y))，以确保模型中只有一个女性。
+
+332
+10.4
+10.4
+10.4
+10.4 英语句子的语义
+英语句子的语义
+英语句子的语义
+英语句子的语义
+基于特征的文法中的合成语义学
+在本章开头，我们简要说明了一种在句法分析的基础上建立语义表示的方法，使用在第
+9 章开发的文法框架。这一次，不是构建一个SQL 查询，我们将建立一个逻辑形式。我们
+设计这样的文法的指导思想之一是组合原则。（也称为Frege 原则，具体内容见[Partee, 199
+5] 。）
+组合原则：整体的含义是部分的含义与它们的句法结合
+方式的函数。
+我们将假设一个复杂的表达式的语义相关部分由句法分析理论给出。在本章中，我们将
+认为表达式已经用上下文无关文法分析过。然而，这不是组合原则的内容。
+我们现在的目标是以一种可以与分析过程平滑对接的方式整合语义表达的构建。（29）
+说明了我们想建立的这种分析的第一个近似。
+（29）中，根节点的SEM 值显示了整个句子的语义表示，而较低节点处的SEM 值显
+示句子成分的语义表示。由于SEM 值必须以特殊的方式来对待，它们被括在尖括号里面用
+来与其他特征值区别。
+到目前为止还好，但我们如何编写能给我们这样的结果的文法规则呢？我们的方法将与
+本章开始采用的文法sql0.fcfg 类似，其中我们将为词汇节点指定语义表示，然后组合它们的
+子节点的每个部分的语义表示。然而，在目前情况下，我们将使用函数应用而不是字符串连
+接作为组成的模式。为了更具体，假设我们有SEM 节点带有适当值的NP 和VP 成分。那
+么，一个S 的SEM 值由（30）这样的规则处理。（请看在SEM 的值是一个变量的情况下，
+我们省略了尖括号）。
+(30) S[SEM=<?vp(?np)>] -> NP[SEM=?subj] VP[SEM=?vp]
+（30）告诉我们，给定某个SEM 值?subj 表示主语NP，某个SEM 值?vp 表示VP，
+父母S 的SEM 值通过将?vp 当做?np 的函数表达式来构建。由此，我们可以得出结论?vp
+必须表示一个在它的域中有?np 的表示的函数。（30）是一个很好的使用组合原则建立语义
+的例子。
+要完成文法是非常简单的；我们需要的规则全部显示如下：
+VP[SEM=?v] -> IV[SEM=?v]
+NP[SEM=<cyril>] -> 'Cyril'
+IV[SEM=<\x.bark(x)>] -> 'barks'
+VP 规则说的是父母的语义与核心孩子的语义相同。两个词法规则提供非逻辑常数分别
+作为Cyril 和barks 的语义值。barks 入口处有一块额外的符号，我们将简短的解释。
+在讲述组合语义规则的细节之前，我们需要为我们的工具箱添加新的工具，称为λ演算。
+这是一个宝贵的工具，用于在我们组装一个英文句子的意思表示时组合一阶逻辑表达式。
+
+333
+λ演算
+1.3 节中，我们指出数学集合符号对于制定我们想从文档中选择的词的属性P 很有用。
+我们用（31）说明这个，它是“所有w 的集合，其中w 是V（词汇表）的元素且w 有属性
+P”的表示。
+(31) {w | w ∈V & P(w)}
+事实证明添加一些能达到同样的效果的东西到一阶逻辑中是非常有用的。我们用λ运算
+符（发音为“lambda”）做这个。（31）的λ对应是（32）。（由于我们不是要在这里讲述理论，
+我们只将V 当作一元谓词。）
+(32) λw. (V(w) & P(w))
+λ表达式最初由Alonzo Church 设计用来表示可计算函数，并提供数学和
+逻辑的基础。研究λ表达式的理论被称为λ演算。需要注意的是λ演算不
+是一阶逻辑的一部分——它们都可以单独使用。
+λ是一个约束运算符，就像一阶逻辑量词。如果我们有一个开放公式，如（33a），那么
+我们可以将变量x 与λ运算符绑定，如（33b）所示。（33c）给出相应的NLTK 中的表示。
+(33) a. (walk(x) & chew_gum(x))
+b. λx.(walk(x) & chew_gum(x))
+c. \x.(walk(x) & chew_gum(x))
+请记住\是Python 中的特殊字符。我们要么使用转义字符（另一个\）要么使用“原始
+字符串”（3.4 节），如下所示：
+>>> lp = nltk.LogicParser()
+>>> e = lp.parse(r'\x.(walk(x) & chew_gum(x))')
+>>> e
+<LambdaExpression \x.(walk(x) & chew_gum(x))>
+>>> e.free()
+set([])
+>>> print lp.parse(r'\x.(walk(x) & chew_gum(y))')
+\x.(walk(x) & chew_gum(y))
+我们对绑定表达式中的变量的结果有一个特殊的名字：λ-抽象。当你第一次遇到λ-抽
+象时，很难对它们的意思得到一个直观的感觉。（33b）的一对英语表示是“是一个x，其中
+x 步行且x 嚼口香糖”或“具有步行和嚼口香糖的属性。”通常认为λ-抽象可以很好的表示
+动词短语（或无主语从句），尤其是当它作为参数出现在它自己的右侧时。如（34a）和它的
+翻译（34b）中的演示。
+(34) a. To walk and chew gum is hard
+b. hard(\x.(walk(x) & chew_gum(x))
+所以一般的描绘是这样的：一个开放公式φ有自由变量x，x 抽象为一个属性表达式λ
+x.φ——满足φ的x 的属性。这里有一个如何建立抽象的官方版本：
+(35)如果α是τ类型，x 是e 类型的变量，那么\x.α是<e,τ>类型。
+（34b）说明了一个情况：我们说某物的属性，即它是很难的。但我们通常所说的属性
+是为它们指定个体。而事实上，如果φ是一个开放公式，那么抽象λx.φ可以被用来作为一
+元谓词。在（36）中，术语gerald 满足（33b）。
+(36) \x.(walk(x) & chew_gum(x)) (gerald)
+
+334
+（36）说Gerald 具有步行和嚼口香糖的属性，与（37）的意思相同。
+(37) (walk(gerald) & chew_gum(gerald))
+与（37）表示的相同。从（36）到（37）的约简是简化语义表示的非常有用的操作，我
+们将在本章的其余部分大量用到它。该操作通常被称为β-约简。为了使它在语义上合理，
+我们希望λx.α(β)能保持与α[β/x]有相同的语义值。这的确是真实的，稍微有些复杂，我
+们马上会遇到。为了在NLTK 中实施表达式的β-约简，我们可以调用simplify()方法c。
+>>> e = lp.parse(r'\x.(walk(x) & chew_gum(x))(gerald)')
+>>> print e
+\x.(walk(x) & chew_gum(x))(gerald)
+>>> print e.simplify()
+c
+(walk(gerald) & chew_gum(gerald))
+虽然我们迄今只考虑了λ-抽象的主体是一个某种类型t 的开放公式，这不是必要的限
+制；主体可以是任何符合文法的表达式。下面是一个有两个λ的例子：
+(38) \x.\y.(dog(x) & own(y, x))
+正如（33b）中起到一元谓词的作用，（38）就像一个二元谓词：它可以直接应用到两个
+参数c。LogicParser 允许嵌套λ，如\x.\y.，写成缩写形式\x y. c。
+>>> print lp.parse(r'\x.\y.(dog(x) & own(y, x))(cyril)').simplify()
+\y.(dog(cyril) & own(y,cyril))
+>>> print lp.parse(r'\x y.(dog(x) & own(y, x))(cyril, angus)').simplify() c
+(dog(cyril) & own(angus,cyril))
+我们所有的λ-抽象到目前为止只涉及熟悉的一阶变量：x、y 等——类型e 的变量。但
+假设我们要处理一个抽象，例如：\x.walk(x)，作为另一个λ-抽象的参数？我们不妨试试
+这个：
+\y.y(angus)(\x.walk(x))
+但由于自由变量y 规定是e 类型，\y.y(angus)只适用于e 类型的参数，而\x.walk(x)
+是<e, t>类型的！相反，我们需要允许在更高级的类型的变量上抽象。让我们用P 和Q 作
+为<e, t>类型的变量，那么我们可以有一个抽象，如：\P.P(angus)。由于P 是<e, t>类
+型，整个抽象是<<e, t>, t>类型。那么\P.P(angus)(\x.walk(x))是合法的，可以通过
+β-约简化简为\x.walk(x)(angus)，然后再次化简为walk(angus)。
+在进行β-约简时，对变量有些注意事项。例如，思考（39a）和（39b）的λ-术语，它
+只是一个自由变量的不同身份。
+(39) a. \y.see(y, x)
+b. \y.see(y, z)
+现在假设我们应用λ-术语\P.exists x.P(x)到这些术语中的每一个：
+(40) a. \P.exists x.P(x)(\y.see(y, x))
+b. \P.exists x.P(x)(\y.see(y, z))
+我们较早前指出过应用程序的结果应该是语义等价的。但是，如果我们让（39a）中的
+自由变量x 落入（40a）中存在量词的范围内，那么约简之后的结果会不同：
+(41) a. exists x.see(x, x)
+b. exists x.see(x, z)
+（41a）是指有某个x 能看到他/她自己，而（41b）的意思是有某个x 能看到一个未指
+定的个体z。出了什么错？显然，我们要禁止（41a）所示的那种变量“捕获”。
+为了处理这个问题，让我们退后一会儿。我们使用的变量的特别的名字是否受到在（4
+0a）的函数表达式的存在量词的约束呢？答案是否定的。事实上，给定任何绑定变量的表达
+
+335
+式（包含∀、∃或λ），为绑定的变量选择名字完全是任意的。例如：exists x.P(x)和exi
+sts y.P(y)是等价的；它们被称为α-等价，或字母变体。重新标记绑定的变量的过程被称
+为α-转换。当我们在logic 模块中测试VariableBinderExpressions 是否相等（即使用=
+=）时，我们其实是测试α-等价：
+>>> e1 = lp.parse('exists x.P(x)')
+>>> print e1
+exists x.P(x)
+>>> e2 = e1.alpha_convert(nltk.Variable('z'))
+>>> print e2
+exists z.P(z)
+>>> e1 == e2
+True
+当β-约减在一个应用f(a)中实施时，我们检查是否有自由变量在a 中同时也作为f 的
+子术语中绑定的变量出现。假设在上面讨论的例子中，x 是a 中的自由变量，f 包括子术语
+exists x.P(x)。在这种情况下，我们产生一个exists x.P(x)的字母变体，也就是说，exi
+sts z1.P(z1)，然后再进行约减。这种重新标记由logic 中的β-约减代码自动进行，可以
+在下面的例子中看到的结果:
+>>> e3 = lp.parse('\P.exists x.P(x)(\y.see(y, x))')
+>>> print e3
+(\P.exists x.P(x))(\y.see(y,x))
+>>> print e3.simplify()
+exists z1.see(z1,x)
+当你在下面的章节运行这些例子时，你可能会发现返回的逻辑表达式的变
+量名不同；例如：你可能在前面的公式的z1 的位置看到z14。这种标签
+的变化是无害的——事实上，它仅仅是一个字母变体的例子。
+在此附注之后，让我们回到英语句子的逻辑形式建立的任务。
+量化的NP
+NP
+NP
+NP
+在本节开始，我们简要介绍了如何为Cyril barks 构建语义表示。你会以为这太容易了
+——肯定还有更多关于建立组合语义的。例如：量词？没错，这是一个至关重要的问题。例
+如，我们要给出（42a）的逻辑形式（42b）。如何才能实现呢？
+(42) a. A dog barks.
+b. exists x.(dog(x) & bark(x))
+让我们作一个假设，我们建立复杂的语义表示的唯一操作是函数应用。那么我们的问题
+是这样的：我们如何给量化的NP：a dog 一个语义表示，使它可以在（42b）中的结果中与
+bark 结合？作为第一步，让我们将主语的SEM 值作为函数表达式，而不是参数（这有时
+被称为类型提升。）。现在，我们寻找实例化?np 的方式，使[SEM=<?np(\x.bark(x))>]
+等价于[SEM=<exists x.(dog(x) & bark(x))>]。这是否看上去有点让人联想到λ-演算
+中的β-约减？换句话说，我们想要一个λ-术语M 来取代?np，从而应用M 到\x.bark(x)
+产生（42b）。要做到这一点，我们替代（42b）中出现的\x.bark(x)为一个谓词变量P，并
+用λ绑定变量，如（43）中所示。
+
+336
+(43) \P.exists x.(dog(x) & P(x))
+我们已经在（43）中使用了不同风格的变量——也就是，'P'而不是'x'或'y'——表明我
+们在不同类型的对象上抽象——不是单个个体，而是类型为<e,t>的函数表达式。因此，作
+为一个整体（43）的类型是<<e,t>,t>。我们将普遍把这个作为NP 的类型。为了进一步
+说明，一个普遍的量化的NP 看起来像（44）。
+(44) \P.all x.(dog(x) -> P(x))
+现在我们几乎完成了，除了我们还需要进行进一步的抽象，加上将限定词a，即（45），
+和dog 的语义组合的过程的应用。
+(45) \Q P.exists x.(Q(x) & P(x))
+将（46）作为一个函数表达式应用到\x.dog(x)产生(43)，应用到\x.bark(x)给我们\P.
+exists x.(dog(x) & P(x))(\x.bark(x))。最后，进行β-约简产生我们正想要的，即（4
+2b）。
+及物动词
+我们的下一个挑战是处理含及物动词的句子，如（46）。
+(46) Angus chases a dog.
+我们所要建设的输出语义是exists x.(dog(x) & chase(angus, x))。让我们看看我
+们如何能够利用λ-抽象得到这样的结果。可能的解决方案中一个重要制约因素是需要a do
+g 的语义表示与NP 是否充当句子的主语或宾语独立。换句话说，我们希望得到上述公式作
+为输出，同时坚持（43）作为NP 的语义。第二个制约因素是：VP 应该有一个统一的解释
+的类型，不管它们是否只是一个不及物动词或及物动词加对象组成。更具体地说，我们规定
+VP 的类型一直是<e, t>。鉴于这些制约因素，下面是chases a dog 的成功的语义表示。
+(47) \y.exists x.(dog(x) & chase(y, x))
+将（47）作为一个y 的属性，使得对于某只狗x 有y 追逐x；或者更通俗的，作为一
+个追逐一只狗的y。我们现在的任务是为chases 设计语义表示，它可以与（43）结合从而
+派生出（47）。
+让我们在（47）上进行β-约简的逆操作，得到（48）。
+(48) \P.exists x.(dog(x) & P(x))(\z.chase(y, z))
+（48）在一开始可能会稍微难读；你需要看到，它涉及从（43）到\z.chase(y,z)应用
+量化的NP 表示。（48）通过β-约简与exists x.(dog(x) & chase(y, x))等效。
+现在，让我们用与NP 的类型相同的变量X，也就是<<e,t>,t>类型，替换（48）中
+的函数表达式。
+(49) X(\z.chase(y, z))
+及物动词的表示将必须使用X 类型的参数来产生VP 类型，也就是<e,t>类型，的函数
+表达式。我们可以确保这个，通过在（49）的X 变量和主语变量y 上的抽象。因此，完整
+的解决方案是给出（50）中所示的chases 的语义表示。
+(50) \X y.X(\x.chase(y, x))
+如果（50）应用到（43），β-约简后的结果与（47）等效，这是我们一直都想要的东西：
+>>> lp = nltk.LogicParser()
+>>> tvp = lp.parse(r'\X x.X(\y.chase(x,y))')
+>>> np = lp.parse(r'(\P.exists x.(dog(x) & P(x)))')
+>>> vp = nltk.ApplicationExpression(tvp, np)
+>>> print vp
+
+337
+(\X x.X(\y.chase(x,y)))(\P.exists x.(dog(x) & P(x)))
+>>> print vp.simplify()
+\x.exists z2.(dog(z2) & chase(x,z2))
+为了建立一个句子的语义表示，我们也需要组合主语NP 的语义。如果后者是一个量化
+的表达式，例如every girl，一切都与我们前面讲过的a dog barks 一样的处理方式；主语转
+换为函数表达式，这被用于VP 的语义表示。然而，我们现在似乎已经用适当的名称为自己
+创造了另一个问题。到目前为止，这些已经作为单独的常量进行了语义的处理，这些不能作
+为像（47）那样的表达式的函数应用。因此，我们需要为它们提出不同的语义表示。我们在
+这种情况下所做的是重新解释适当的名称，使它们也成为如量化的NP 那样的函数表达式。
+这里是Angus 的λ表达式：
+(51) \P.P(angus)
+（51）表示相应与Angus 为真的所有属性的集合的特征函数。从独立常量angus 转换
+为\P.P(angus)是类型提升的另一个例子，前面简单的提到过，允许我们用等效的函数应用
+\P.P(angus)(\x.walk(x))替换一个布尔值的应用，如：\x.walk(x)(angus)。通过β-约
+简，两个表达式都约简为walk(angus)。
+文法sem.fcfg 包含一个用于分析和翻译简单的我们刚才一直找寻的这类例子的一个小
+的规则集合。下面是一个稍微复杂的例子。
+>>> from nltk import load_parser
+>>> parser = load_parser('grammars/book_grammars/simple-sem.fcfg', trace=0)
+>>> sentence = 'Angus gives a bone to every dog'
+>>> tokens = sentence.split()
+>>> trees = parser.nbest_parse(tokens)
+>>> for tree in trees:
+...
+print tree.node['SEM']
+all z2.(dog(z2) -> exists z1.(bone(z1) & give(angus,z1,z2)))
+NLTK 提供了一些实用工具使获得和检查的语义解释更容易。函数batch_interpret()
+用于批量解释输入句子的链表。它建立一个字典d，其中对每个输入的句子sent，d[sent]
+是包含sent 的分析树和语义表示的(synrep, semrep)对的链表。该值是一个链表，因为
+sent 可能有句法歧义；在下面的例子中，链表中的每个句子只有一个分析树。
+(S[SEM=<walk(irene)>]
+(NP[-LOC, NUM='sg', SEM=<\P.P(irene)>]
+(PropN[-LOC, NUM='sg', SEM=<\P.P(irene)>] Irene))
+(VP[NUM='sg', SEM=<\x.walk(x)>]
+(IV[NUM='sg', SEM=<\x.walk(x)>, TNS='pres'] walks)))
+(S[SEM=<exists z1.(ankle(z1) & bite(cyril,z1))>]
+(NP[-LOC, NUM='sg', SEM=<\P.P(cyril)>]
+(PropN[-LOC, NUM='sg', SEM=<\P.P(cyril)>] Cyril))
+(VP[NUM='sg', SEM=<\x.exists z1.(ankle(z1) & bite(x,z1))>]
+(TV[NUM='sg', SEM=<\X x.X(\y.bite(x,y))>, TNS='pres'] bites)
+(NP[NUM='sg', SEM=<\Q.exists x.(ankle(x) & Q(x))>]
+(Det[NUM='sg', SEM=<\P Q.exists x.(P(x) & Q(x))>] an)
+(Nom[NUM='sg', SEM=<\x.ankle(x)>]
+(N[NUM='sg', SEM=<\x.ankle(x)>] ankle)))))
+现在我们已经看到了英文句子如何转换成逻辑形式，前面我们看到了在模型中如何检查
+
+338
+逻辑形式的真假。把这两个映射放在一起，我们可以检查一个给定的模型中的英语句子的真
+值。让我们看看前面定义的模型m。工具batch_evaluate()类似于batch_interpret()，
+除了我们需要传递一个模型和一个变量赋值作为参数。输出是三元组(synrep, semrep,
+value)，其中synrep, semrep 和以前一样，value 是真值。为简单起见，下面的例子只
+处理一个简单的句子。
+>>> v = """
+... bertie => b
+... olive => o
+... cyril => c
+... boy => {b}
+... girl => {o}
+... dog => {c}
+... walk => {o, c}
+... see => {(b, o), (c, b), (o, c)}
+... """
+>>> val = nltk.parse_valuation(v)
+>>> g = nltk.Assignment(val.domain)
+>>> m = nltk.Model(val.domain, val)
+>>> sent = 'Cyril sees every boy'
+>>> grammar_file = 'grammars/book_grammars/simple-sem.fcfg'
+>>> results = nltk.batch_evaluate([sent], grammar_file, m, g)[0]
+>>> for (syntree, semrel, value) in results:
+...
+print semrep
+...
+print value
+exists z3.(ankle(z3) & bite(cyril,z3))
+True
+再述量词歧义
+上述方法的一个重要的限制是它们没有处理范围歧义。我们的翻译方法是句法驱动的，
+认为语义表示与句法分析紧密耦合，语义中量词的范围也因此反映句法分析树中相应的NP
+的相对范围。因此，像（26）这样的句子，在这里重复，总是会被翻译为（53a）而不是（5
+3b）。
+(52) Every girl chases a dog.
+(53) a. all x.(girl(x) -> exists y.(dog(y) & chase(x,y)))
+b. exists y.(dog(y) & all x.(girl(x) -> chase(x,y)))
+有许多方法来处理范围歧义，我们将简要的看看最简单的一个。首先，让我们简要地考
+虑具有范围的公式的结构。图10-3 描绘了（52）的这两种不同的读法。
+
+339
+图10-3. 量词范围
+让我们先考虑左侧的结构。在上面，有对应与every girl 的量词。φ可以被看作是量词
+范围内的所有东西的一个占位符。向下移动，我们看到可以插入相应与a dog 的量词作为φ
+的实例。这提供了一种新的占位符ψ表示a dog 的范围，这一点，我们可以堵塞语义的“核
+心”，即对应于x chases y 的开放的句子。右侧的结构是相同的，除了两个量词的顺序交换
+了。
+在被称为Cooper
+Cooper
+Cooper
+Cooper 存储的方法中，语义表示不再是一阶逻辑表达式，而是一个由一个“核
+心”语义表示加一个绑定操作符链表组成的配对。就目前而言，可以认为一个绑定操作符是
+如（44）或（45）那样的量化NP 的语义表示。沿图10-3 所示的线向下，我们假设我们已
+经构建了一个Cooper 存储风格的句子（52）的语义表示，让我们将开放公式chase(x,y)
+作为核心。给定有关（52）中两个NP 的绑定操作符的链表，我们将一个绑定操作符从链表
+挑出来，与核心结合。
+\P.exists y.(dog(y) & P(y))(\z2.chase(z1,z2))
+然后，我们将链表中的另一个绑定操作符应用到结果中。
+\P.all x.(girl(x) -> P(x))(\z1.exists x.(dog(x) & chase(z1,x)))
+当链表为空时，我们就有了句子的传统的逻辑形式。将绑定操作符与核心以这种方式组
+合被称为S-
+S-
+S-
+S-检索。如果我们仔细的允许绑定操作符的每个可能的顺序（例如：通过将链表
+进行全排列；见4.5 节），那么我们将能够产生量词的每一个可能的范围排序。
+接下来要解决的问题是我们如何建立一个核心+存储表示的组合。如前所述，文法中每
+个短语和词法规则将有一个SEM 特征，但现在将有嵌入特征CORE 和STORE。要说明这
+里的机制，让我们考虑一个简单的例子：Cyril smiles。下面是动词smiles 的词法规则（取
+自文法storage.fcfg），看起来还可以：
+IV[SEM=[CORE=<\x.smile(x)>, STORE=(/)]] -> 'smiles'
+适当的名称Cyril 的规则更为复杂。
+NP[SEM=[CORE=<@x>, STORE=(<bo(\P.P(cyril),@x)>)]] -> 'Cyril'
+谓词bo 有两个子部分：一个适当的名称的标准（类型提升）表示，以及表达式@x，
+被称为绑定操作符的地址。（我们将简要解释为什么需要地址变量。）@x 是原变量，也就是，
+范围在逻辑的独立变量之上的变量，你会看到，它也提供了核心的值。VP 的规则只是向上
+渗透IV 的语义，有趣的工作由S 规则来做。
+VP[SEM=?s] -> IV[SEM=?s]
+S[SEM=[CORE=<?vp(?subj)>, STORE=(?b1+?b2)]] ->
+NP[SEM=[CORE=?subj, STORE=?b1]] VP[SEM=[core=?vp, store=?b2]]
+S 节点的核心值是应用VP 的核心值，即\x.smile(x)，到主语NP 的值的结果。后者
+不会是@x，而是一个@x 的实例，也就是z3。β-约简后，<?vp(?subj)>将与<smile(z
+3)>统一。现在，当@x 实例化为分析过程的一部分时，它将会同样的被实例化。特别是主
+
+340
+语NP 的STORE 中出现的@x 也将被映射到z3，产生元素bo(\P.P(cyril),z3)。这些步骤
+可以在下面的分析树中看到。
+(S[SEM=[CORE=<smile(z3)>, STORE=(bo(\P.P(cyril),z3))]]
+(NP[SEM=[CORE=<z3>, STORE=(bo(\P.P(cyril),z3))]] Cyril)
+(VP[SEM=[CORE=<\x.smile(x)>, STORE=()]]
+(IV[SEM=[CORE=<\x.smile(x)>, STORE=()]] smiles)))
+让我们回到更复杂的例子，（52），看看在用文法storage.fcfg 分析后，存储风格的SEM
+值是什么。
+CORE
+= <chase(z1,z2)>
+STORE = (bo(\P.all x.(girl(x) -> P(x)),z1), bo(\P.exists x.(dog(x) & P(x)),z2))
+现在，应该很清楚为什么地址变量是绑定操作符的一个重要组成部分。记得在S-检索
+过程中，我们将绑定操作符从STORE 链表移出，先后将它们应用到CORE。假设我们从我
+们想要与chase(z1,z2)结合的bo(\P.all x.(girl(x) -> P(x)),z1)开始。绑定操作符的量
+词部分是\P.all x.(girl(x) -> P(x))，将这与chase(z1,z2)结合，后者需要先被转换成λ
+-抽象。我们怎么知道在哪些变量上进行抽象？这是z1 的地址告诉我们的，即every girl 都
+有追求者而不是主动追求别人的人。
+模块nltk.sem.cooper_storage 处理将存储形式的语义表示转换成标准逻辑形式的
+任务。首先，我们构造一个CooperStore 实例，并检查它的STORE 和CORE。
+>>> from nltk.sem import cooper_storage as cs
+>>> sentence = 'every girl chases a dog'
+>>> trees = cs.parse_with_bindops(sentence, grammar='grammars/book_grammars/storage.fcfg')
+>>> semrep = trees[0].node['sem']
+>>> cs_semrep = cs.CooperStore(semrep)
+>>> print cs_semrep.core
+chase(z1,z2)
+>>> for bo in cs_semrep.store:
+...
+print bo
+bo(\P.all x.(girl(x) -> P(x)),z1)
+bo(\P.exists x.(dog(x) & P(x)),z2)
+最后，我们调用s_retrieve()检查读法。
+>>> cs_semrep.s_retrieve(trace=True)
+Permutation 1
+(\P.all x.(girl(x) -> P(x)))(\z1.chase(z1,z2))
+(\P.exists x.(dog(x) & P(x)))(\z2.all x.(girl(x) -> chase(x,z2)))
+Permutation 2
+(\P.exists x.(dog(x) & P(x)))(\z2.chase(z1,z2))
+(\P.all x.(girl(x) -> P(x)))(\z1.exists x.(dog(x) & chase(z1,x)))
+>>> for reading in cs_semrep.readings:
+...
+print reading
+exists x.(dog(x) & all z3.(girl(z3) -> chase(z3,x)))
+all x.(girl(x) -> exists z4.(dog(z4) & chase(x,z4)))
+
+341
+10.5
+10.5
+10.5
+10.5 段落语义层
+段落语义层
+段落语义层
+段落语义层
+段落是句子的序列。很多时候，段落中的一个句子的解释依赖它前面的句子。一个明显
+的例子来自照应代词，如he、she 和it。给定一个段落如：Angus used to have a dog.But
+he recently disappeared.你可能会解释he 指的是Angus 的狗。然而，在Angus used to have
+a dog.He took him for walks in New Town.中，你更可能解释he 指的是Angus 自己。
+(54) a. Angus owns a dog. It bit Irene.
+b. ∃x.(dog(x) & own(Angus, x) & bite(x, Irene))
+段落表示理论
+一阶逻辑中的量化的标准方法仅限于单个句子。然而，似乎是有量词的范围可以扩大到
+两个或两个以上的句子的例子。我们之前看到过一个，下面是第二个例子，与它的翻译一起。
+(54) a. Angus owns a dog. It bit Irene.
+b. ∃x.(dog(x) & own(Angus, x) & bite(x, Irene))
+也就是说，NP：a dog 的作用像一个绑定第二句话中的it 的量词。段落表示理论（Dis
+course Representation Theory，DRT）的目标是提供一种方法处理这个和看上去是段落的特
+征的其它语义现象。一个段落表示结构（discourse representation structure，DRS）根据一个
+段落指称的列表和一个条件列表表示段落的意思。段落指称是段落中正在讨论的事情，它对
+应一阶逻辑的单个变量。DRS
+DRS
+DRS
+DRS 条件应用于那些段落指称，对应于一阶逻辑的原子开放公式。
+图10-4 演示了（54a）中第一句话的DRS 如何增强为两个句子的DRS。
+图10-4. 建立一个DRS：左侧的DRS 表示段落中第一句话的处理结果，而右侧的DRS 显示
+处理并整合第二句上下文的效果。
+在处理（54a）的第二句时，以图10-4 左侧的已经呈现的上下文背景进行解释。代词i
+t 触发另外一个新的段落指称，也就是u，我们需要为它找一个先行词——也就是，我们想
+算出it 指的是什么。在DRT 中，为一个参照代词寻找先行词的任务包括将它连接到已经在
+当前DRS 中的话题指称，y 是显而易见的选择。（我们会在不久讲述更多关于指代消解的内
+容。）处理步骤产生一个新的条件u=y。第二句贡献的其余的内容也与第一个的内容合并，
+如图10-4 右侧所示。
+图10-4 说明DRS 如何表示多个句子。这种情况是一个两句话的段落，但原则上一个D
+RS 可以对应整个文本的解释。我们可以查询图10-4 中DRS 右侧的真值。我们可以通俗地
+
+342
+说，它为真，如果在情况s 中有实体a、c 和i，对应DRS 中的段落指称使s 中所有条件都
+为真；也就是说，a 是Angus，c 是a dog，a 拥有c，i 是Irene，c 咬了i。
+为了处理DRS 计算，我们需要将其转换成线性格式。下面是一个例子，其中DRS 是由
+一个段落指称链表和一个DRS 条件链表组成的配对：
+([x, y], [angus(x), dog(y), own(x,y)])
+在NLTK 建立DRS 对象最简单的方法是通过解析一个字符串表示c。
+>>> dp = nltk.DrtParser()
+>>> drs1 = dp.parse('([x, y], [angus(x), dog(y), own(x, y)])') c
+>>> print drs1
+([x,y],[angus(x), dog(y), own(x,y)])
+我们可以使用draw()方法c可视化结果，如图10-5 所示。
+>>> drs1.draw() c
+图10-5. DRS 截图
+我们讨论图10-4 中DRS 的真值条件时，假设最上面的段落指称被解释为存在量词，而
+条件也进行了解释，虽然它们是联合的。事实上，每一个DRS 都可以转化为一阶逻辑公式，
+fol()方法实现这种转换。
+>>> print drs1.fol()
+exists x y.((angus(x) & dog(y)) & own(x,y))
+作为一阶逻辑表达式功能补充，DRT 表达式有DRS-连接运算符，用“+”符号表示。
+两个DRS 的连接是一个单独的DRS 包含合并的段落指称和来自两个论证的条件。DRS-连
+接自动进行α-转换绑定变量避免名称冲突。
+>>> drs2 = dp.parse('([x], [walk(x)]) + ([y], [run(y)])')
+>>> print drs2
+(([x],[walk(x)]) + ([y],[run(y)]))
+>>> print drs2.simplify()
+([x,y],[walk(x), run(y)])
+虽然迄今为止见到的所有条件都是原子的，一个DRS 可以内嵌入另一个DRS，这是全
+称量词被处理的方式。在drs3 中，没有顶层的段落指称，唯一的条件是由两个子DRS 组
+成，通过蕴含连接。再次，我们可以使用fol()来获得真值条件的句柄。
+>>> drs3 = dp.parse('([], [(([x], [dog(x)]) -> ([y],[ankle(y), bite(x, y)]))])')
+>>> print drs3.fol()
+all x.(dog(x) -> exists y.(ankle(y) & bite(x,y)))
+我们较早前指出DRT 旨在通过链接照应代词和现有的段落指称来解释照应代词。DRT
+设置约束条件使段落指称可以像先行词那样“可访问”，但并不打算解释一个特殊的先行词
+如何被从候选集合中选出的。模块nltk.sem.drt_resolve_anaphora 采用了类此的保守
+策略：如果DRS 包含PRO(x)形式的条件，方法resolve_anaphora()将其替换为x = [...]
+
+343
+形式的条件，其中[...]是一个可能的先行词链表。
+>>> drs4 = dp.parse('([x, y], [angus(x), dog(y), own(x, y)])')
+>>> drs5 = dp.parse('([u, z], [PRO(u), irene(z), bite(u, z)])')
+>>> drs6 = drs4 + drs5
+>>> print drs6.simplify()
+([x,y,u,z],[angus(x), dog(y), own(x,y), PRO(u), irene(z), bite(u,z)])
+>>> print drs6.simplify().resolve_anaphora()
+([x,y,u,z],[angus(x), dog(y), own(x,y), (u = [x,y,z]), irene(z), bite(u,z)])
+由于指代消解算法已分离到它自己的模块，这有利于在替代程序中交换，使对正确的先
+行词的猜测更加智能。
+我们对DRS 的处理与处理λ-抽象的现有机制是完全兼容的，因此可以直接基于DRT
+而不是一阶逻辑建立组合语义表示。这种技术在下面的不确定性规则（是文法drt.fcfg 的一
+部分）中说明。为便于比较，我们已经从simplesem.fcfg 增加了不确定性的平行规则。
+Det[NUM=sg,SEM=<\P Q.([x],[]) + P(x) + Q(x)>] -> 'a'
+Det[NUM=sg,SEM=<\P Q. exists x.(P(x) & Q(x))>] -> 'a'
+为了对DRT 规则如何运作有更好的了解，请看下面的NP：a dog 的子树：
+(NP[NUM='sg', SEM=<\Q.(([x],[dog(x)]) + Q(x))>]
+(Det[NUM'sg', SEM=<\P Q.((([x],[]) + P(x)) + Q(x))>] a)
+(Nom[NUM='sg', SEM=<\x.([],[dog(x)])>]
+(N[NUM='sg', SEM=<\x.([],[dog(x)])>] dog)))))
+作为一个函数表达式不确定性的λ-抽象被应用到\x.([],[dog(x)])，得到\Q.(([x],[])
++ ([],[dog(x)]) + Q(x))；简化后，我们得到\Q.(([x],[dog(x)]) + Q(x))将NP 作
+为一个整体表示。
+为了解析文法drt.fcfg，我们在load_parser()调用中指定特征结构中的SEM 值用Dr
+tParser 解析替代默认的LogicParser。
+>>> from nltk import load_parser
+>>> parser = load_parser('grammars/book_grammars/drt.fcfg', logic_parser=nltk.DrtParser())
+>>> trees = parser.nbest_parse('Angus owns a dog'.split())
+>>> print trees[0].node['sem'].simplify()
+([x,z2],[Angus(x), dog(z2), own(x,z2)])
+段落处理
+我们解释一句话时会使用丰富的上下文知识，一部分取决于前面的内容，一部分取决于
+我们的背景假设。DRT 提供了一个句子的含义如何集成到前面段落表示中的理论，但是在
+前面的讨论中明显缺少这两个部分。首先，一直没有尝试纳入任何一种推理；第二，我们只
+处理了个别句子。这些遗漏由模块nltk.inference.discourse 纠正。
+段落是一个句子的序列s1, ... sn，段落线是读法的序列s1-ri, ... sn-rj，每个序列
+对应段落中的一个句子。该模块按增量处理句子，当有歧义时保持追踪所有可能的线。为简
+单起见，下面的例子中忽略了范围歧义。
+>>> dt = nltk.DiscourseTester(['A student dances', 'Every student is a person'])
+>>> dt.readings()
+s0 readings: s0-r0: exists x.(student(x) & dance(x))
+s1 readings: s1-r0: all x.(student(x) -> person(x))
+
+344
+一个新句子添加到当前的段落时，设置参数consistchk=True 会通过每条线，即每个
+可接受的读法的序列，的检查模块来检查一致性。在这种情况下，用户可以选择收回有问题
+的句子。
+>>> dt.add_sentence('No person dances', consistchk=True)
+Inconsistent discourse d0 ['s0-r0', 's1-r0', 's2-r0']:
+s0-r0: exists x.(student(x) & dance(x))
+s1-r0: all x.(student(x) -> person(x))
+s2-r0: -exists x.(person(x) & dance(x))
+>>> dt.retract_sentence('No person dances', verbose=True)
+Current sentences are
+s0: A student dances
+s1: Every student is a person
+以类似的方式，我们使用informchk= True 检查新的句子φ是否对当前的段落有信息
+量。定理证明器将段落线中现有的句子当做假设，尝试证明φ；如果没有发现这样的证据，
+那么它是有信息量的。
+>>> dt.add_sentence('A person dances', informchk=True)
+Sentence 'A person dances' under reading 'exists x.(person(x) & dance(x))':
+Not informative relative to thread 'd0'
+也可以传递另一套假设作为背景知识，并使用这些筛选出不一致的读法；详情请参阅h
+ttp://www.nltk.org/howto 上的段落HOWTO。
+discourse 模块可适应语义歧义，筛选出不可接受的读法。下面的例子调用Glue 语义
+和DRT。由于Glue 语义模块被配置为使用的覆盖面广的Malt 依存关系分析器，输入（Eve
+ry dog chases a boy. He runs.）需要分词和标注。
+>>> from nltk.tag import RegexpTagger
+>>> tagger = RegexpTagger(
+...
+[('^(chases|runs)$', 'VB'),
+...
+('^(a)$', 'ex_quant'),
+...
+('^(every)$', 'univ_quant'),
+...
+('^(dog|boy)$', 'NN'),
+...
+('^(He)$', 'PRP')
+... ])
+>>> rc = nltk.DrtGlueReadingCommand(depparser=nltk.MaltParser(tagger=tagger))
+>>> dt = nltk.DiscourseTester(['Every dog chases a boy', 'He runs'], rc)
+>>> dt.readings()
+s0 readings:
+s0-r0: ([],[(([x],[dog(x)]) -> ([z3],[boy(z3), chases(x,z3)]))])
+s0-r1: ([z4],[boy(z4), (([x],[dog(x)]) -> ([],[chases(x,z4)]))])
+s1 readings:
+s1-r0: ([x],[PRO(x), runs(x)])
+段落的第一句有两种可能的读法，取决于量词的作用域。第二句的唯一的读法通过条件
+PRO(x)表示代词He。现在让我们看看段落线的结果：
+>>> dt.readings(show_thread_readings=True)
+d0: ['s0-r0', 's1-r0'] : INVALID: AnaphoraResolutionException
+d1: ['s0-r1', 's1-r0'] : ([z6,z10],[boy(z6), (([x],[dog(x)]) ->
+
+345
+([],[chases(x,z6)])), (z10 = z6), runs(z10)])
+当我们检查段落线d0 和d1 时，我们看到读法s0-r0，其中every dog 超出了a boy
+的范围，被认为是不可接受的，因为第二句的代词不能得到解释。相比之下，段落线d1 中
+的代词（重写为z10）通过等式(z10 = z6)绑定。
+不可接受的读法可以通过传递参数filter=True 过滤掉。
+>>> dt.readings(show_thread_readings=True, filter=True)
+d1: ['s0-r1', 's1-r0'] : ([z12,z15],[boy(z12), (([x],[dog(x)]) ->
+([],[chases(x,z12)])), (z17 = z15), runs(z15)])
+虽然这一小段是极其有限的，它应该能让你对于我们在超越单个句子后产生的语义处理
+问题，以及部署用来解决它们的技术有所了解。
+10.6
+10.6
+10.6
+10.6 小结
+小结
+小结
+小结
+z
+一阶逻辑是一种适合在计算环境中表示自然语言的含义的语言，因为它很灵活，足以表
+示自然语言含义的很多有用的方面，具有使用一阶逻辑推理的高效的定理证明器。（同
+样的，自然语言语义中也有各种各样的现象，需要更强大的逻辑机制。）
+z
+在将自然语言句子翻译成一阶逻辑的同时，我们可以通过检查一阶公式模型表述这些句
+子的真值条件。
+z
+为了构建成分组合的意思表示，我们为一阶逻辑补充了λ-演算。
+z
+λ-演算中的β-约简在语义上与函数传递参数对应。句法上，它包括将被函数表达式中
+的λ绑定的变量替换为函数应用中表达式提供的参数。
+z
+构建模型的一个关键部分在于建立估值，为非逻辑常量分配解释。这些被解释为n 元谓
+词或独立常量。
+z
+一个开放表达式是一个包含一个或多个自变量的表达式。开放表达式只在它的自变量被
+赋值时被解释。
+z
+量词的解释是对于具有变量x 的公式φ[x]，构建个体的集合，赋值g 分配它们作为x
+的值使φ[x]为真。然后量词对这个集合加以约束。
+z
+一个封闭的表达式是一个没有自由变量的表达式。也就是，变量都被绑定。一个封闭的
+表达式是真是假取决于所有变量赋值。
+z
+如果两个公式只是由绑定操作符（即λ或量词）绑定的变量的标签不同，那么它们是α
+-等价。重新标记公式中的绑定变量的结果被称为α-转换。
+z
+给定有两个嵌套量词Q1 和Q2 的公式，最外层的量词Q1 有较广的范围（或范围超出
+Q2）。英语句子往往由于它们包含的量词的范围而产生歧义。
+z
+在基于特征的文法中英语句子可以通过将SEM 作为特征与语义表达关联。一个复杂的
+表达式的SEM 值通常包括成分表达式的SEM 值的函数应用。
+10.7
+10.7
+10.7
+10.7 进一步阅读
+进一步阅读
+进一步阅读
+进一步阅读
+关于本章的进一步材料以及如何安装Prover9定理证明器和Mace4模型生成器的内容请
+查阅http://www.nltk.org/。这两个推论工具一般信息见(McCune, 2008)。
+用NLTK 进行语义分析的更多例子，请参阅http://www.nltk.org/howto 上的语义和逻辑
+HOWTO。请注意，范围歧义还有其他两种解决方法，即(Blackburn & Bos, 2005)描述的H
+ole
+ole
+ole
+ole 语义和(Dalrymple et al., 1999)描述的Glue
+Glue
+Glue
+Glue 语义。
+
+346
+自然语言语义中还有很多现象没有在本章中涉及到，主要有：
+1. 事件、时态和体
+2. 语义角色
+3. 广义量词，如most
+4. 内涵结构，例如像may 和believe 这样的动词
+（1）和（2）可以使用一阶逻辑处理，（3）和（4）需要不同的逻辑。下面的读物中很
+多都讲述了这些问题。
+建立自然语言前端数据库方面的结果和技术的综合概述可以在(Androutsopoulos, Ritchi
+e & Thanisch, 1995)中找到。
+任何一本现代逻辑的入门书都将提出命题和一阶逻辑。强烈推荐(Hodges, 1977)，书中
+有很多有关自然语言的有趣且有洞察力的文字和插图。
+要说范围广泛，参阅两卷本的关于逻辑教科书(Gamut, 1991a, 1991b)，也包含了有关自
+然语言的形式语义的当代材料，例如：Montague 文法和内涵逻辑。(Kamp & Reyle, 1993)
+提供段落表示理论的权威报告，包括涵盖大量且有趣的自然语言片段，包括时态、体和形态。
+另一个对许多自然语言结构的语义的全面研究是(Carpenter, 1997)。
+有许多作品介绍语言学理论框架内的逻辑语义。(Chierchia & McConnell-Ginet, 1990)
+与句法相对无关，而(Heim & Kratzer, 1998)和(Larson & Segal, 1995)都更明确的倾向于将
+语义真值条件整合到乔姆斯基框架中。
+(Blackburn & Bos, 2005)是致力于计算语义的第一本教科书，为该领域提供了极好的介
+绍。它扩展了许多本章涵盖的主题，包括量词范围歧义的未指定、一阶逻辑推理以及段落处
+理。
+要获得更先进的当代语义方法的概述，包括处理时态和广义量词，尝试查阅(Lappin, 1
+996)或(van Benthem & ter Meulen, 1997)。
+10.8
+10.8
+10.8
+10.8 练习
+练习
+练习
+练习
+1.
+○将下列句子翻译成命题逻辑，并用LogicParser 验证结果。提供显示你的翻译中命
+题变量如何对应英语表达的一个要点。
+a.
+If Angus sings, it is not the case that Bertie sulks.
+b.
+Cyril runs and barks.
+c.
+It will snow if it doesn’t rain.
+d.
+It’s not the case that Irene will be happy if Olive or Tofu comes.
+e.
+Pat didn’t cough or sneeze.
+f.
+If you don’t come if I call, I won’t come if you call.
+2.
+○翻译下面的句子为一阶逻辑的谓词参数公式。
+a.
+Angus likes Cyril and Irene hates Cyril.
+b.
+Tofu is taller than Bertie.
+c.
+Bruce loves himself and Pat does too.
+d.
+Cyril saw Bertie, but Angus didn’t.
+e.
+Cyril is a four-legged friend.
+f.
+Tofu and Olive are near each other.
+3.
+○翻译下列句子为成一阶逻辑的量化公式。
+a.
+Angus likes someone and someone likes Julia.
+b.
+Angus loves a dog who loves him.
+
+347
+c.
+Nobody smiles at Pat.
+d.
+Somebody coughs and sneezes.
+e.
+Nobody coughed or sneezed.
+f.
+Bruce loves somebody other than Bruce.
+g.
+Nobody other than Matthew loves Pat.
+h.
+Cyril likes everyone except for Irene.
+i.
+Exactly one person is asleep.
+4.
+○使用λ-抽象和一阶逻辑的量化公式，翻译下列动词短语。
+a.
+feed Cyril and give a capuccino to Angus
+b.
+be given ‘War and Peace’ by Pat
+c.
+be loved by everyone
+d.
+be loved or detested by everyone
+e.
+be loved by everyone and detested by no-one
+5.
+○思考下面的语句：
+>>> lp = nltk.LogicParser()
+>>> e2 = lp.parse('pat')
+>>> e3 = nltk.ApplicationExpression(e1, e2)
+>>> print e3.simplify()
+exists y.love(pat, y)
+显然这里缺少了什么东西，即e1 值的声明。为了ApplicationExpression(e1, e2)
+被β-转换为exists y.love(pat, y)，e1 必须是一个以pat 为参数的λ-抽象。你的任务是
+构建这样的一个抽象，将它绑定到e1，使上面的语句都是满足（上到字母方差）。此外，提
+供一个e3.simplify()的非正式的英文翻译。
+现在根据e3.simplify()的进一步情况（如下所示）继续做同样的任务：
+>>> print e3.simplify()
+exists y.(love(pat,y) | love(y,pat))
+>>> print e3.simplify()
+exists y.(love(pat,y) | love(y,pat))
+>>> print e3.simplify()
+walk(fido)
+6.
+○如前面的练习中那样，找到一个λ-抽象e1，产生与下面显示的等效的结果：
+>>> e2 = lp.parse('chase')
+>>> e3 = nltk.ApplicationExpression(e1, e2)
+>>> print e3.simplify()
+\x.all y.(dog(y) -> chase(x,pat))
+>>> e2 = lp.parse('chase')
+>>> e3 = nltk.ApplicationExpression(e1, e2)
+>>> print e3.simplify()
+\x.exists y.(dog(y) & chase(pat,x))
+>>> e2 = lp.parse('give')
+>>> e3 = nltk.ApplicationExpression(e1, e2)
+>>> print e3.simplify()
+\x0 x1.exists y.(present(y) & give(x1,y,x0))
+7.
+○如前面的练习中那样，找到一个λ-抽象e1，产生与下面显示的等效的结果：
+
+348
+>>> e2 = lp.parse('bark')
+>>> e3 = nltk.ApplicationExpression(e1, e2)
+>>> print e3.simplify()
+exists y.(dog(x) & bark(x))
+>>> e2 = lp.parse('bark')
+>>> e3 = nltk.ApplicationExpression(e1, e2)
+>>> print e3.simplify()
+bark(fido)
+>>> e2 = lp.parse('\\P. all x. (dog(x) -> P(x))')
+>>> e3 = nltk.ApplicationExpression(e1, e2)
+>>> print e3.simplify()
+all x.(dog(x) -> bark(x))
+8.
+◑开发一种方法，翻译英语句子为带有二元广义量词的公式。在此方法中，给定广义量
+词Q，量化公式的形式为Q(A, B)，其中A 和B 是<e, t>类型的表达式。那么，例
+如：all(A,B)为真当且仅当A 表示的是B 所表示的一个子集。
+9.
+◑扩展前面练习中的方法，使量词如most 和exactly three 的真值条件可以在模型中计
+算。
+10. ◑修改sem.evaluate 代码，使它能提供一个有用的错误消息，如果一个表达式不在
+模型的估值函数的域中。
+11. ●从儿童读物中选择三个或四个连续的句子。一个例子是nltk.corpus.gutenberg:
+bryantstories.txt，burgess-busterbrown.txt 和edgeworth-parents.txt 中的故
+事集。开发一个文法，能将你的句子翻译成一阶逻辑，建立一个模型，使它能检查这些
+翻译为真或为假。
+12. ●实施前面的练习，但使用DRT 作为意思表示。
+13. ●以(Warren & Pereira, 1982)为出发点，开发一种技术，转换一个自然语言查询为一种
+可以更加有效的在模型中评估的形式。例如：给定一个(P(x) & Q(x))形式的查询，将
+它转换为(Q(x) & P(x))，如果Q 的范围比P 小。

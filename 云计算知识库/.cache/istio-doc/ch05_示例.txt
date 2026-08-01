@@ -1,0 +1,1495 @@
+这里包括多个可供 Istio 使用的可完整工作的示例，你可以用来亲自部署和体验这些示例。
+部署一个用于演示多种 Istio 特性的应用，由四个单独的微服务构成。
+将虚拟机中运行的工作负载添加到 Istio 网格的示例。
+该模块化教程为新用户提供了一步步将 Istio 应用于常见微服务场景的动手经验。
+示例
+Bookinfo 应用
+虚拟机
+使用 Kubernetes 和 Istio 学习微服务
+示例
+- 460 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+这个示例部署了一个用于演示多种 Istio 特性的应用，该应用由四个单独的微服务构成。 这个应用模仿在线书店的
+一个分类，显示一本书的信息。 页面上会显示一本书的描述，书籍的细节（ISBN、页数等），以及关于这本书的一
+些评论。
+Bookinfo 应用分为四个单独的微服务：
+ productpage . 这个微服务会调用  details  和  reviews  两个微服务，用来生成页面。
+ details . 这个微服务中包含了书籍的信息。
+ reviews . 这个微服务中包含了书籍相关的评论。它还会调用  ratings  微服务。
+ ratings . 这个微服务中包含了由书籍评价组成的评级信息。
+ reviews  微服务有 3 个版本：
+v1 版本不会调用  ratings  服务。
+v2 版本会调用  ratings  服务，并使用 1 到 5 个黑色星形图标来显示评分信息。
+v3 版本会调用  ratings  服务，并使用 1 到 5 个红色星形图标来显示评分信息。
+下图展示了这个应用的端到端架构。
+Bookinfo Application without Istio
+Bookinfo 应用中的几个微服务是由不同的语言编写的。 这些服务对 Istio 并无依赖，但是构成了一个有代表性
+的服务网格的例子：它由多个服务、多个语言构成，并且 
+ reviews  服务具有多个版本。
+Bookinfo 应用
+Bookinfo 应用
+- 461 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+如果您还没有开始，请遵循安装指南完成 Istio 的部署工作。
+要在 Istio 中运行这一应用，无需对应用自身做出任何改变。 您只要简单的在 Istio 环境中对服务进行配置和
+运行，具体一点说就是把 Envoy sidecar 注入到每个服务之中。 最终的部署结果将如下图所示：
+Bookinfo Application
+所有的微服务都和 Envoy sidecar 集成在一起，被集成服务所有的出入流量都被 sidecar 所劫持，这样就为外
+部控制准备了所需的 Hook，然后就可以利用 Istio 控制平面为应用提供服务路由、遥测数据收集以及策略实施等
+功能。
+如果运行的是 GKE，请确您的集群具有至少四个标准 GKE 节点。如果使用的是 Minikube，应该有 4G 以上的内
+存。
+1. 进入 Istio 安装目录。
+2. Istio 默认自动注入 Sidecar. 请为 
+ default  命名空间打上标签 
+ istio-injection=enabled ：
+1. $ kubectl label namespace default istio-injection=enabled
+开始之前
+部署应用
+启动应用服务
+Bookinfo 应用
+- 462 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+3. 使用 
+ kubectl  部署应用：
+Zip
+1. $ kubectl apply -f @samples/bookinfo/platform/kube/bookinfo.yaml@
+如果您在安装过程中禁用了 Sidecar 自动注入功能而选择手动注入 Sidecar，请在部署应用之前使用
+ istioctl kube-inject  命令修改 
+ bookinfo.yaml  文件。
+Zip
+1. $ kubectl apply -f <(istioctl kube-inject -f @samples/bookinfo/platform/kube/bookinfo.yaml@)
+上面的命令会启动全部的四个服务，其中也包括了 reviews 服务的三个版本（v1、v2 以及 v3）。
+在实际部署中，微服务版本的启动过程需要持续一段时间，并不是同时完成的。
+4. 确认所有的服务和 Pod 都已经正确的定义和启动：
+1. $ kubectl get services
+2. NAME                       CLUSTER-IP   EXTERNAL-IP   PORT(S)              AGE
+3. details                    10.0.0.31    <none>        9080/TCP             6m
+4. kubernetes                 10.0.0.1     <none>        443/TCP              7d
+5. productpage                10.0.0.120   <none>        9080/TCP             6m
+6. ratings                    10.0.0.15    <none>        9080/TCP             6m
+7. reviews                    10.0.0.170   <none>        9080/TCP             6m
+还有：
+1. $ kubectl get pods
+2. NAME                                        READY     STATUS    RESTARTS   AGE
+3. details-v1-1520924117-48z17                 2/2       Running   0          6m
+4. productpage-v1-560495357-jk1lz              2/2       Running   0          6m
+5. ratings-v1-734492171-rnr5l                  2/2       Running   0          6m
+6. reviews-v1-874083890-f0qf0                  2/2       Running   0          6m
+7. reviews-v2-1343845940-b34q5                 2/2       Running   0          6m
+8. reviews-v3-1813607990-8ch52                 2/2       Running   0          6m
+5. 要确认 Bookinfo 应用是否正在运行，请在某个 Pod 中用 
+ curl  命令对应用发送请求，例如
+ ratings ：
+1. 
+$ kubectl exec -it $(kubectl get pod -l app=ratings -o jsonpath='{.items[0].metadata.name}') -c ratings 
+-- curl productpage:9080/productpage | grep -o "<title>.*</title>"
+2. <title>Simple Bookstore App</title>
+现在 Bookinfo 服务启动并运行中，您需要使应用程序可以从外部访问 Kubernetes 集群，例如使用浏览器。可
+确定 Ingress 的 IP 和端口
+Bookinfo 应用
+- 463 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+以用 Istio Gateway 来实现这个目标。
+1. 为应用程序定义 Ingress 网关：
+Zip
+1. $ kubectl apply -f @samples/bookinfo/networking/bookinfo-gateway.yaml@
+2. 确认网关创建完成：
+1. $ kubectl get gateway
+2. NAME               AGE
+3. bookinfo-gateway   32s
+3. 根据文档设置访问网关的 
+ INGRESS_HOST  和 
+ INGRESS_PORT  变量。确认并设置。
+4. 设置 
+ GATEWAY_URL ：
+1. $ export GATEWAY_URL=$INGRESS_HOST:$INGRESS_PORT
+可以用 
+ curl  命令来确认是否能够从集群外部访问 Bookinfo 应用程序：
+1. $ curl -s http://${GATEWAY_URL}/productpage | grep -o "<title>.*</title>"
+2. <title>Simple Bookstore App</title>
+还可以用浏览器打开网址 
+ http://$GATEWAY_URL/productpage ，来浏览应用的 Web 页面。如果刷新几次应用的页面，
+就会看到 
+ productpage  页面中会随机展示 
+ reviews  服务的不同版本的效果（红色、黑色的星形或者没有显
+示）。
+ reviews  服务出现这种情况是因为我们还没有使用 Istio 来控制版本的路由。
+在使用 Istio 控制 Bookinfo 版本路由之前，您需要在目标规则中定义好可用的版本，命名为 subsets 。
+运行以下命令为 Bookinfo 服务创建的默认的目标规则：
+如果没有启用双向 TLS，请执行以下命令：
+如果您是 Istio 的新手，并且使用了 
+ demo  配置文件，请选择此步。
+Zip
+1. $ kubectl apply -f @samples/bookinfo/networking/destination-rule-all.yaml@
+如果启用了双向 TLS，请执行以下命令：
+确认可以从集群外部访问应用
+应用默认目标规则
+Bookinfo 应用
+- 464 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+Zip
+1. $ kubectl apply -f @samples/bookinfo/networking/destination-rule-all-mtls.yaml@
+等待几秒钟，以使目标规则生效。
+您可以使用以下命令查看目标规则：
+1. $ kubectl get destinationrules -o yaml
+现在就可以使用这一应用来体验 Istio 的特性了，其中包括了流量的路由、错误注入、速率限制等。 接下来可以根
+据个人爱好去阅读和演练 Istio 实例。这里为新手推荐智能路由功能作为起步课程。
+结束对 Bookinfo 示例应用的体验之后，就可以使用下面的命令来完成应用的删除和清理了：
+1. 删除路由规则，并销毁应用的 Pod
+Zip
+1. $ @samples/bookinfo/platform/kube/cleanup.sh@
+2. 确认应用已经关停
+1. $ kubectl get virtualservices   #-- there should be no virtual services
+2. $ kubectl get destinationrules  #-- there should be no destination rules
+3. $ kubectl get gateway           #-- there should be no gateway
+4. $ kubectl get pods              #-- the Bookinfo pods should be deleted
+下一步
+清理
+Bookinfo 应用
+- 465 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+将虚拟机中运行的工作负载添加到 Istio 网格的示例。
+学习如何新增一个服务，使其运行在单网络 Istio 网格的虚拟机上。
+学习怎样添加运行在虚拟机上的服务到您的多网络 Istio 网格中。
+使用在网格内的虚拟机上运行的 MySQL 服务运行 Bookinfo 应用程序。
+虚拟机
+单个网络网格中的虚拟机
+多网络网格中的虚拟机
+在虚拟机上部署 Bookinfo 应用程序
+虚拟机
+- 466 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+此示例显示如何将 VM 或者本地裸机集成到 Kubernetes 上部署的单网络 Istio 网格中。
+您已经在 Kubernetes 上部署了 Istio。如果尚未这样做， 则可以在安装指南中找到方法。
+虚拟机（VM）必须具有网格中 endpoint 的 IP 连接。 这通常需要 VPC 或者 VPN，以及需要提供直接
+（没有 NAT 或者防火墙拒绝访问） 路由到 endpoint 的容器网络。虚拟机不需要访问 Kubernetes 分配
+的集群 IP 地址。
+VM 必须有权访问 DNS 服务，将名称解析为集群 IP 地址。 选项包括通过内部负载均衡器，使用 Core
+DNS 服务公开的 Kubernetes DNS 服务器，或者在可从 VM 中访问的任何其他 DNS 服务器中配置 IP。
+具有以下说明：
+假设扩展 VM 运行在 GCE 上。
+使用 Google 平台的特定命令执行某些步骤。
+安装并配置每个虚拟机，设置准备用于扩展的网格。
+当将非 Kubernetes 服务添加到 Istio 网格中时，首先配置 Istio 它自己的设施，并生成配置文件使 VM 连
+接网格。在具有集群管理员特权的计算机上，使用以下命令为 VM 准备集群：
+1. 使用类似于以下的命令，为生成的 CA 证书创建 Kubernetes secret。请参阅证书办法机构 (CA) 证书获
+取更多的详细信息。
+样本目录中的 root 证书和中间证书已经大范围分发并被识别。 不能 在生产环境中使用这些证书，否则您的
+集群容易受到安全漏洞和破坏的威胁。
+ZipZipZipZip
+1. $ kubectl create namespace istio-system
+2. $ kubectl create secret generic cacerts -n istio-system \
+3.     --from-file=@samples/certs/ca-cert.pem@ \
+4.     --from-file=@samples/certs/ca-key.pem@ \
+5.     --from-file=@samples/certs/root-cert.pem@ \
+6.     --from-file=@samples/certs/cert-chain.pem@
+2. 在集群中部署 Istio 控制平面：
+单个网络网格中的虚拟机
+准备环境
+安装步骤
+为虚拟机准备 Kubernetes 集群
+单个网络网格中的虚拟机
+- 467 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+1. $ istioctl manifest apply \
+2.     -f install/kubernetes/operator/examples/vm/values-istio-meshexpansion.yaml
+有关更多的详细信息和自定义选项，请参阅 安装说明。
+3. 定义 VM 加入的命名空间。本示例使用 
+ SERVICE_NAMESPACE  环境变量存储命名空间。此变量的值必须与稍后
+在配置文件中使用的命名空间相匹配。
+1. $ export SERVICE_NAMESPACE="default"
+4. 确定并存储 Istio 入口网关的 IP 地址，因为 VMs 通过此 IP 地址访问 Citadel 和 Pilot。
+1. 
+$ export GWIP=$(kubectl get -n istio-system service istio-ingressgateway -o 
+jsonpath='{.status.loadBalancer.ingress[0].ip}')
+2. $ echo $GWIP
+3. 35.232.112.158
+5. 在 VM 中生成 
+ cluster.env  配置并部署。该文件包含 Kubernetes 集群 IP 地址范围，可 通过 Envoy
+进行拦截和重定向。当您安装 Kubernetes 时，可以指定 CIDR 的范围为 
+ servicesIpv4Cidr 。 在安装
+后，按照以下示例的命令，使用适当的值替换 
+ $MY_ZONE  和 
+ $MY_PROJECT ， 以获取 CIDR：
+1. 
+$ ISTIO_SERVICE_CIDR=$(gcloud container clusters describe $K8S_CLUSTER --zone $MY_ZONE --project 
+$MY_PROJECT --format "value(servicesIpv4Cidr)")
+2. $ echo -e "ISTIO_CP_AUTH=MUTUAL_TLS\nISTIO_SERVICE_CIDR=$ISTIO_SERVICE_CIDR\n" > cluster.env
+6. 检查生成文件 
+ cluster.env  的内容。其内容应该与以下示例类似：
+1. $ cat cluster.env
+2. ISTIO_CP_AUTH=MUTUAL_TLS
+3. ISTIO_SERVICE_CIDR=10.55.240.0/20
+7. 如果 VM 仅在网格中调用服务，您可以跳过这 2 一步骤。否则，使用以下命令为 VM 新增公开端口到
+ cluster.env  文件下。 如有必要，您可以稍后更改端口。
+1. $ echo "ISTIO_INBOUND_PORTS=3306,8080" >> cluster.env
+8. 提取服务帐户需要在 VM 上使用的初始密钥。
+1. $ kubectl -n $SERVICE_NAMESPACE get secret istio.default  \
+2.     -o jsonpath='{.data.root-cert\.pem}' |base64 --decode > root-cert.pem
+3. $ kubectl -n $SERVICE_NAMESPACE get secret istio.default  \
+4.     -o jsonpath='{.data.key\.pem}' |base64 --decode > key.pem
+5. $ kubectl -n $SERVICE_NAMESPACE get secret istio.default  \
+6.       -o jsonpath='{.data.cert-chain\.pem}' |base64 --decode > cert-chain.pem
+设置 VM
+单个网络网格中的虚拟机
+- 468 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+下一步，将要加入网格的每台机器上运行以下命令：
+1. 将之前创建的 
+ cluster.env  和 
+ *.pem  文件复制到 VM 中。例如：
+1. $ export GCE_NAME="your-gce-instance"
+2. 
+$ gcloud compute scp --project=${MY_PROJECT} --zone=${MY_ZONE} {key.pem,cert-chain.pem,cluster.env,root-
+cert.pem} ${GCE_NAME}:~
+2. 使用 Envoy sidecar 安装 Debian 软件包。
+1. $ gcloud compute ssh --project=${MY_PROJECT} --zone=${MY_ZONE} "${GCE_NAME}"
+2. 
+$ curl -L https://storage.googleapis.com/istio-release/releases/1.6.0/deb/istio-sidecar.deb > istio-
+sidecar.deb
+3. $ sudo dpkg -i istio-sidecar.deb
+3. 将 Istio 的网关 IP 地址添加到 
+ /etc/hosts 。重新访问集群准备部分以了解如何获取 IP 地址。 以下
+示例使用 Istio 网关地址修改 
+ /etc/hosts  文件：
+1. $ echo "35.232.112.158 istio-citadel istio-pilot istio-pilot.istio-system" | sudo tee -a /etc/hosts
+4. 在 
+ /etc/certs/  下安装 
+ root-cert.pem ，
+ key.pem  和 
+ cert-chain.pem 。
+1. $ sudo mkdir -p /etc/certs
+2. $ sudo cp {root-cert.pem,cert-chain.pem,key.pem} /etc/certs
+5. 在 
+ /var/lib/istio/envoy/  下安装 
+ cluster.env 。
+1. $ sudo cp cluster.env /var/lib/istio/envoy
+6. 将 
+ /etc/certs/  和 
+ /var/lib/istio/envoy/  中文件的所有权转交给 Istio proxy。
+1. $ sudo chown -R istio-proxy /etc/certs /var/lib/istio/envoy
+7. 验证节点上的 agent 是否正常工作：
+1. $ sudo node_agent
+2. ....
+3. CSR is approved successfully. Will renew cert in 1079h59m59.84568493s
+8. 使用 
+ systemctl  启动 Istio：
+1. $ sudo systemctl start istio-auth-node-agent
+2. $ sudo systemctl start istio
+将来自 VM 工作负载的请求发送到 Kubernetes 服务
+单个网络网格中的虚拟机
+- 469 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+设置完后，机器可以访问运行在 Kubernetes 集群上的服务，或者其他的 VM。
+以下示例展示了使用 
+ /etc/hosts/  如何从 VM 中访问 Kubernetes 集群上运行的服务， 这里使用 Bookinfo
+示例中的服务。
+1. 首先，在集群管理机器上获取服务的虚拟 IP 地址（
+ clusterIP ）：
+1. $ kubectl get svc productpage -o jsonpath='{.spec.clusterIP}'
+2. 10.55.246.247
+2. 然后在新增的 VM 上，将服务名称和地址添加到其 
+ etc/hosts  文件下。 然后您可以从 VM 连接到集群服
+务，如以下示例：
+1. $ echo "10.55.246.247 productpage.default.svc.cluster.local" | sudo tee -a /etc/hosts
+2. $ curl -v productpage.default.svc.cluster.local:9080
+3. < HTTP/1.1 200 OK
+4. < content-type: text/html; charset=utf-8
+5. < content-length: 1836
+6. < server: envoy
+7. ... html content ...
+ server: envoy  标头指示 sidecar 拦截了流量。
+1. 在 VM 实例上设置 HTTP 服务，以在端口 8080 上提供 HTTP 通信：
+1. $ gcloud compute ssh ${GCE_NAME}
+2. $ python -m SimpleHTTPServer 8080
+2. 定义 VM 实例的 IP 地址。例如，使用以下命令 查找 GCE 实例的 IP 地址：
+1. 
+$ export GCE_IP=$(gcloud --format="value(networkInterfaces[0].networkIP)" compute instances describe 
+${GCE_NAME})
+2. $ echo ${GCE_IP}
+3. 将 VM 服务添加到网格
+1. $ istioctl experimental add-to-mesh external-service vmhttp ${VM_IP} http:8080 -n ${SERVICE_NAMESPACE}
+按照下载页面中的说明，确保已经将 
+ istioctl  客户端添加到您的路径中。
+4. 在 Kubernetes 集群中部署一个 pod 运行 
+ sleep  服务，然后等待其准备就绪：
+Zip
+1. $ kubectl apply -f @samples/sleep/sleep.yaml@
+在添加的 VM 中运行服务
+单个网络网格中的虚拟机
+- 470 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+2. $ kubectl get pod
+3. NAME                             READY     STATUS    RESTARTS   AGE
+4. sleep-88ddbcfdd-rm42k            2/2       Running   0          1s
+5. ...
+5. 将 pod 中 
+ sleep  服务的请求发送到 VM 的 HTTP 服务：
+1. 
+$ kubectl exec -it sleep-88ddbcfdd-rm42k -c sleep -- curl 
+vmhttp.${SERVICE_NAMESPACE}.svc.cluster.local:8080
+您应该看到类似于以下输出的内容：
+1. <!DOCTYPE html PUBLIC "-//W3C//DTD HTML 3.2 Final//EN"><html>
+2. <title>Directory listing for /</title>
+3. <body>
+4. <h2>Directory listing for /</h2>
+5. <hr>
+6. <ul>
+7. <li><a href=".bashrc">.bashrc</a></li>
+8. <li><a href=".ssh/">.ssh/</a></li>
+9. ...
+10. </body>
+恭喜你！ 您已经成功的配置了一个服务，使其运行在集群中的 pod 上，将其流量发送给集群之外在 VM 上运行的
+服务，并测试了配置是否有效。
+运行以下命令，从网格的抽象模型中删除扩展 VM：
+1. $ istioctl experimental remove-from-mesh -n ${SERVICE_NAMESPACE} vmhttp
+2. Kubernetes Service "vmhttp.vm" has been deleted for external service "vmhttp"
+3. Service Entry "mesh-expansion-vmhttp" has been deleted for external service "vmhttp"
+以下是一些常见的 VM 相关问题的基本故障排除步骤。
+从 VM 向群集发出请求时，请确保不要以 
+ root  或 者 
+ istio-proxy  用户的身份运行请求。默认情况
+下，Istio 将这两个用户都排除在拦截范围之外。
+验证计算机是否可以达到集群中运行的所有工作负载的 IP。例如：
+1. $ kubectl get endpoints productpage -o jsonpath='{.subsets[0].addresses[0].ip}'
+2. 10.52.39.13
+1. $ curl 10.52.39.13:9080
+清理
+故障排除
+单个网络网格中的虚拟机
+- 471 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+2. html output
+检查节点 agent 和 sidecar 的状态：
+1. $ sudo systemctl status istio-auth-node-agent
+2. $ sudo systemctl status istio
+检查进程是否正在运行。在 VM 上，您应该看到以下示例的进程，如果您运行了 
+ ps  过滤 
+ istio ：
+1. $ ps aux | grep istio
+2. 
+root      6941  0.0  0.2  75392 16820 ?        Ssl  21:32   0:00 /usr/local/istio/bin/node_agent --
+logtostderr
+3. 
+root      6955  0.0  0.0  49344  3048 ?        Ss   21:32   0:00 su -s /bin/bash -c 
+INSTANCE_IP=10.150.0.5 POD_NAME=demo-vm-1 POD_NAMESPACE=default exec /usr/local/bin/pilot-agent proxy > 
+/var/log/istio/istio.log istio-proxy
+4. istio-p+  7016  0.0  0.1 215172 12096 ?        Ssl  21:32   0:00 /usr/local/bin/pilot-agent proxy
+5. 
+istio-p+  7094  4.0  0.3  69540 24800 ?        Sl   21:32   0:37 /usr/local/bin/envoy -c 
+/etc/istio/proxy/envoy-rev1.json --restart-epoch 1 --drain-time-s 2 --parent-shutdown-time-s 3 --
+service-cluster istio-proxy --service-node sidecar~10.150.0.5~demo-vm-
+1.default~default.svc.cluster.local
+检查 Envoy 访问和错误日志：
+1. $ tail /var/log/istio/istio.log
+2. $ tail /var/log/istio/istio.err.log
+多网络网格中的虚拟机
+学习怎样添加运行在虚拟机上的服务到您的多网络 Istio 网格中。
+DNS 证书管理
+在 Istio 中配置和管理 DNS 证书。
+安全管理 Webhook
+一种更安全管理 Istio webhook 的方法。
+揭开 Istio Sidecar 注入模型的神秘面纱
+揭秘 Istio 是如何将其数据平面组件添加到现有 deployment。
+Docker Desktop
+在 Docker Desktop 中运行 Istio 的设置说明。
+Helm 变更
+相关内容
+单个网络网格中的虚拟机
+- 472 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+关于 Istio 1.1 和 Istio 1.2 之间的 Helm chart 安装选项的变更。
+单个网络网格中的虚拟机
+- 473 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+本示例演示如何利用网关整合一个 VM 或一个裸机到部署在 Kubernetes 上的多网络 Istio 网格中。这种方式不
+要求 VM，裸机和集群之间可以通过 VPN 连通或者直接的网络访问。
+一个或者多个 Kubernetes 集群，支持版本为：1.15, 1.16, 1.17, 1.18。
+虚拟机（VMs）必须可以通过 IP 连接网格中的 Ingress 网关。
+设置内容包括准备网格用于扩展，安装和配置各个 VM 。
+当添加非 Kubernetes 的服务到 Istio 网格时，第一步是 Istio 本身的安装配置，并生成让 VMs 连接到网格
+的配置文件。为 VM 准备集群需要使用集群管理员权限在一台机器上执行如下命令：
+1. 为您的生成的 CA 证书创建 Kubernetes secret，使用如下命令。查看 Certificate Authority
+(CA) certificates 获取更多细节。
+样本目录中的 root 证书和中间证书已经大范围分发并被识别。不能 在生产环境中使用这些证书，否则您的
+集群容易受到安全漏洞和破坏的威胁。
+ZipZipZipZip
+1. $ kubectl create namespace istio-system
+2. $ kubectl create secret generic cacerts -n istio-system \
+3.     --from-file=@samples/certs/ca-cert.pem@ \
+4.     --from-file=@samples/certs/ca-key.pem@ \
+5.     --from-file=@samples/certs/root-cert.pem@ \
+6.     --from-file=@samples/certs/cert-chain.pem@
+2. 集群中部署 Istio 控制平面
+1. $ istioctl manifest apply \
+2.     -f install/kubernetes/operator/examples/vm/values-istio-meshexpansion-gateways.yaml \
+3.     --set coreDNS.enabled=true
+更多细节和定制选项，参考 installation instructions。
+3. 为 VM 的服务创建 
+ vm  命名空间
+1. $ kubectl create ns vm
+多网络网格中的虚拟机
+前提条件
+安装步骤
+集群上定制化安装 Istio
+多网络网格中的虚拟机
+- 474 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+4. 定义命名空间，供 VM 加入。本示例使用 
+ SERVICE_NAMESPACE  环境变量保存命名空间。这个环境变量的值必
+须与您后面在配置文件中使用的命名空间匹配。
+1. $ export SERVICE_NAMESPACE="vm"
+5. 取得初始密钥，服务账户需要在 VMs 上使用。
+1. $ kubectl -n $SERVICE_NAMESPACE get secret istio.default  \
+2.     -o jsonpath='{.data.root-cert\.pem}' | base64 --decode > root-cert.pem
+3. $ kubectl -n $SERVICE_NAMESPACE get secret istio.default  \
+4.     -o jsonpath='{.data.key\.pem}' | base64 --decode > key.pem
+5. $ kubectl -n $SERVICE_NAMESPACE get secret istio.default  \
+6.       -o jsonpath='{.data.cert-chain\.pem}' | base64 --decode > cert-chain.pem
+6. 确定并保存 Istio Ingress gateway 的 IP 地址，VMs 会通过这个 IP 地址访问 Citadel ， Pilot
+和集群中的工作负载。
+1. 
+$ export GWIP=$(kubectl get -n istio-system service istio-ingressgateway -o 
+jsonpath='{.status.loadBalancer.ingress[0].ip}')
+2. $ echo $GWIP
+3. 35.232.112.158
+7. 生成一个 
+ cluster.env  配置并部署到 VMs 中。这个文件包含会被 Envoy 拦截和转发 Kubernetes 集群
+IP 地址段。
+1. $ echo -e "ISTIO_CP_AUTH=MUTUAL_TLS\nISTIO_SERVICE_CIDR=$ISTIO_SERVICE_CIDR\n" > cluster.env
+8. 检查生成的 
+ cluster.env  文件内容。它应该和下面示例类似：
+1. $ cat cluster.env
+2. ISTIO_CP_AUTH=MUTUAL_TLS
+3. ISTIO_SERVICE_CIDR=172.21.0.0/16
+9. 如果 VM 只是调用网格中的服务，您可以跳过这一步。否则，通过如下命令添加 VM 暴露的端口到
+ cluster.env  文件中。如果有必要，您后面还能修改这些端口。
+1. $ echo "ISTIO_INBOUND_PORTS=8888" >> cluster.env
+参考 Setup DNS 设置集群 DNS 。
+下一步，在每台您想要添加到网格中的机器上执行如下命令：
+设置 DNS
+设置 VM
+多网络网格中的虚拟机
+- 475 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+1. 拷贝之前创建的 
+ cluster.env  和 
+ *.pem  到 VM 中。
+2. 安装 Envoy sidecar 的 Debian 包。
+1. 
+$ curl -L https://storage.googleapis.com/istio-release/releases/1.6.0/deb/istio-sidecar.deb > istio-
+sidecar.deb
+2. $ sudo dpkg -i istio-sidecar.deb
+3. 添加 Istio gateway 的 IP 地址到 
+ /etc/hosts  中。重新查看集群上定制化安装 Istio 部分学习怎样
+获取 IP 地址。 下面的示例演示更新 
+ /etc/hosts  文件中的 Istio gateway 地址：
+1. $ echo "35.232.112.158 istio-citadel istio-pilot istio-pilot.istio-system" | sudo tee -a /etc/hosts
+4. 安装 
+ root-cert.pem , 
+ key.pem  和 
+ cert-chain.pem  到 
+ /etc/certs/  下。
+1. $ sudo mkdir -p /etc/certs
+2. $ sudo cp {root-cert.pem,cert-chain.pem,key.pem} /etc/certs
+5. 安装 
+ cluster.env  到 
+ /var/lib/istio/envoy/  下。
+1. $ sudo cp cluster.env /var/lib/istio/envoy
+6. 移交 
+ /etc/certs/  和 
+ /var/lib/istio/envoy/  下的文件所有权给 Istio proxy 。
+1. $ sudo chown -R istio-proxy /etc/certs /var/lib/istio/envoy
+7. 使用 
+ systemctl  启动 Istio 。
+1. $ sudo systemctl start istio-auth-node-agent
+2. $ sudo systemctl start istio
+下面的 Istio 资源结合 gateways 一起对添加 VMs 到网格中做支持。这些资源让 VM 和 集群摆脱了扁平网络
+的要求。
+资源类型
+资源名字
+功能
+ configmap 
+ coredns 
+Send .global request to
+ istiocordns  service
+ service 
+ istiocoredns 
+Resolve .global to Istio
+Ingress gateway
+ gateway.networking.istio.io 
+ meshexpansion-gateway 
+Open port for Pilot, Citadel
+and Mixer
+ gateway.networking.istio.io 
+ istio-multicluster-
+ingressgateway 
+Open port 15443 for inbound
+.global traffic
+添加 Istio 资源
+多网络网格中的虚拟机
+- 476 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+ envoyfilter.networking.istio.io 
+ istio-multicluster-
+ingressgateway 
+Transform  .global  to  *.
+svc.cluster.local 
+ destinationrule.networking.istio.io 
+ istio-multicluster-
+destinationrule 
+Set traffic policy for 15443
+traffic
+ destinationrule.networking.istio.io 
+ meshexpansion-dr-
+pilot 
+Set traffic policy for
+ istio-pilot 
+ destinationrule.networking.istio.io 
+ istio-policy 
+Set traffic policy for
+ istio-policy 
+ destinationrule.networking.istio.io 
+ istio-telemetry 
+Set traffic policy for
+ istio-telemetry 
+ virtualservice.networking.istio.io 
+ meshexpansion-vs-
+pilot 
+Set route info for  istio-
+pilot 
+ virtualservice.networking.istio.io 
+ meshexpansion-vs-
+citadel 
+Set route info for  istio-
+citadel 
+集群中每个需要被 VM 访问到的服务必须在集群中添加一个 service entry 配置。Service entry 中的 host
+要求格式为 
+ <name>.<namespace>.global ，其中 name 和 namespace 分别对应服务中的名字和命名空间。
+在集群中配置 httpbin service ，演示 VM 怎样访问集群中的服务。
+1. 在集群中部署 
+ httpbin  。
+Zip
+1. $ kubectl create namespace bar
+2. $ kubectl label namespace bar istio-injection=enabled
+3. $ kubectl apply -n bar -f @samples/httpbin/httpbin.yaml@
+2. 在集群中为 
+ httpbin  服务创建 service entry 。
+为了 VM 中的服务能够访问到集群中的 
+ httpbin  ，我们需要为它创建一个 service entry。Service
+entry 中的 host 值要求格式为 
+ <name>.<namespace>.global ，其中 name 和 namespace 分别对应远程
+服务中的名字和命名空间。
+因为 DNS 解析 
+ *.global  域上的服务，您需要为这些服务分配一个 IP 地址。
+各个服务（
+ *.global  DNS 域中）必须在集群中有一个唯一的 IP。
+如果全局服务已经有真正的 VIPs，您可以使用它们，否则我们建议使用来自回环段 
+ 127.0.0.0/8  的还未分
+配的 IPs 。这些 IPs 在 pod 外不能路由。
+本示例中我们使用 
+ 127.255.0.0/16  中的 IPs 避免和常用的 IPs 例如 
+ 127.0.0.1  (
+ localhost ) 产
+生冲突。
+使用这些 IPs 的应用流量将被 sidecar 捕获并路由到合适的远程服务上。
+1. $ kubectl apply  -n bar -f - <<EOF
+2. apiVersion: networking.istio.io/v1alpha3
+暴露在集群上运行的服务到 VMs
+多网络网格中的虚拟机
+- 477 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+3. kind: ServiceEntry
+4. metadata:
+5.   name: httpbin.bar.forvms
+6. spec:
+7.   hosts:
+8.   # 格式要求必须为 name.namespace.global
+9.   - httpbin.bar.global
+10.   location: MESH_INTERNAL
+11.   ports:
+12.   - name: http1
+13.     number: 8000
+14.     protocol: http
+15.   resolution: DNS
+16.   addresses:
+17.   # httpbin.bar.global 将会被解析至这个 IP 地址，它对于给定集群中的各个服务必须是唯一的。
+18.   # 这个地址不需要可路由。这个 IP 的流量将会被 sidecar 捕获并路由到合适的地方。
+19.   # 同时这个地址也会被添加到 VM 的 /etc/hosts 中
+20.   - 127.255.0.3
+21.   endpoints:
+22.   # 这是集群中 ingress gateway 的可路由地址。
+23.   # 来自 VMs 的流量将被路由到这个地址。
+24.   - address: ${CLUSTER_GW_ADDR}
+25.     ports:
+26.       http1: 15443 # Do not change this port value
+27. EOF
+上述配置会让来自 VMs 的 地址为 
+ httpbin.bar.global  的 any port 的所有流量通过双向 TLS 连接被
+路由到指定 endpoint 
+ <IPofClusterIngressGateway>:15443  。
+端口为 15443 的 gateway 是一个特殊的 SNI-aware Envoy，作为结合 gateway 的网格扩张的部分在
+Istio 安装部署步骤部分做了配置和安装。进入端口 15443 的流量会在目标集群中合适的内部服务的 pods
+上做负载均衡（本例子，是集群中的 
+ httpbin.bar ）。
+禁止为端口 15443 创建 
+ Gateway  配置。
+机器在安装以后，就能访问运行在 Kubernetes 集群中的服务。
+下面的示例演示一个使用 
+ /etc/hosts/  的 VM 访问运行在 Kubernetes 集群中的服务。这个服务来自
+httpbin service。
+1. 在添加的 VM 上，添加服务名字和地址到它的 
+ /etc/hosts  文件中。您就可以从该 VM 连接集群上的服务
+了，例子如下：
+1. $ echo "127.255.0.3 httpbin.bar.global" | sudo tee -a /etc/hosts
+2. $ curl -v httpbin.bar.global:8000
+3. < HTTP/1.1 200 OK
+4. < server: envoy
+5. < content-type: text/html; charset=utf-8
+6. < content-length: 9593
+从 VM 发送请求到 Kubernetes 中的服务
+多网络网格中的虚拟机
+- 478 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+7. 
+8. ... html content ...
+ server: envoy  header 表示 sidecar 拦截了这个流量。
+1. 在 VM 实例上安装一个 HTTP 服务器处理来自端口 8888 的 HTTP 流量：
+1. $ python -m SimpleHTTPServer 8888
+2. 指定 VM 实例的 IP 地址。
+3. 添加 VM 服务到网格中
+1. $ istioctl experimental add-to-mesh external-service vmhttp ${VM_IP} http:8888 -n ${SERVICE_NAMESPACE}
+确认您已经将 
+ istioctl  客户端添加到您的路径下，这在 download page 有讲到。
+4. 在 Kubernetes 集群中部署一个运行 
+ sleep  服务的 pod，并等待它的状态变为 ready：
+Zip
+1. $ kubectl apply -f @samples/sleep/sleep.yaml@
+2. $ kubectl get pod
+3. NAME                             READY     STATUS    RESTARTS   AGE
+4. sleep-88ddbcfdd-rm42k            2/2       Running   0          1s
+5. ...
+5. 从运行在 pod 上的 
+ sleep  服务发送请求给 VM 的 HTTP 服务：
+1. 
+$ kubectl exec -it sleep-88ddbcfdd-rm42k -c sleep -- curl 
+vmhttp.${SERVICE_NAMESPACE}.svc.cluster.local:8888
+如果配置正确，您将会看到如下类似输出：
+1. <!DOCTYPE html PUBLIC "-//W3C//DTD HTML 3.2 Final//EN"><html>
+2. <title>Directory listing for /</title>
+3. <body>
+4. <h2>Directory listing for /</h2>
+5. <hr>
+6. <ul>
+7. <li><a href=".bashrc">.bashrc</a></li>
+8. <li><a href=".ssh/">.ssh/</a></li>
+9. ...
+10. </body>
+在添加的 VM 上运行服务
+多网络网格中的虚拟机
+- 479 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+恭喜！ 您成功配置一个运行在集群 pod 上的服务，发送流量给运行在一个集群外的 VM 上的服务并测试配置是否
+生效。
+执行如下命令从网格的抽象模型中移除扩展的 VM。
+1. $ istioctl experimental remove-from-mesh -n ${SERVICE_NAMESPACE} vmhttp
+2. Kubernetes Service "vmhttp.vm" has been deleted for external service "vmhttp"
+3. Service Entry "mesh-expansion-vmhttp" has been deleted for external service "vmhttp"
+单个网络网格中的虚拟机
+学习如何新增一个服务，使其运行在单网络 Istio 网格的虚拟机上。
+在虚拟机上部署 Bookinfo 应用程序
+使用在网格内的虚拟机上运行的 MySQL 服务运行 Bookinfo 应用程序。
+DNS 证书管理
+在 Istio 中配置和管理 DNS 证书。
+安全管理 Webhook
+一种更安全管理 Istio webhook 的方法。
+揭开 Istio Sidecar 注入模型的神秘面纱
+揭秘 Istio 是如何将其数据平面组件添加到现有 deployment。
+Docker Desktop
+在 Docker Desktop 中运行 Istio 的设置说明。
+清除
+相关内容
+多网络网格中的虚拟机
+- 480 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+本示例通过在虚拟机（VM）上运行一项服务来跨 Kubernetes 部署 Bookinfo 应用程序，并说明了如何以单个网
+格的形式控制此基础架构。
+此示例仍在开发中，仅在 Google Cloud Platform 上进行了测试。 在 Pod 的覆盖网络与 VM 网络隔离的
+IBM Cloud 或其他平台上， 即使使用 Istio，虚拟机也无法与 Kubernetes Pod 进行任何直接通信活动。
+Bookinfo running on VMs
+按照安装指南中的说明安装 Istio。
+部署 Bookinfo 示例应用程序（在 
+ bookinfo  命名空间中）。
+在与 Istio 集群相同的项目中创建一个名为 ‘vm-1’ 的虚拟机，然后加入网格。
+在虚拟机上部署 Bookinfo 应用程序
+概述
+开始之前
+在虚拟机上部署 Bookinfo 应用程序
+- 481 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+我们将首先在虚拟机上安装 MySQL，并将其配置为 ratings 服务的后端。
+在虚拟机上：
+1. $ sudo apt-get update && sudo apt-get install -y mariadb-server
+2. $ sudo mysql
+3. # 授予 root 的访问权限
+4. GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost' IDENTIFIED BY 'password' WITH GRANT OPTION;
+5. quit;
+1. $ sudo systemctl restart mysql
+您可以在 Mysql 中找到配置 MySQL 的详细信息。
+在虚拟机上，将 ratings 数据库添加到 mysql 中。
+1. 
+$ curl -q https://raw.githubusercontent.com/istio/istio/release-1.6/samples/bookinfo/src/mysql/mysqldb-
+init.sql | mysql -u root -ppassword
+为了便于直观地检查 Bookinfo 应用程序输出中的差异，您可以使用以下命令来更改所生成的 ratings 数据库并
+且检查它：
+1. $ mysql -u root -password test -e "select * from ratings;"
+2. +----------+--------+
+3. | ReviewID | Rating |
+4. +----------+--------+
+5. |        1 |      5 |
+6. |        2 |      4 |
+7. +----------+--------+
+更改 ratings 数据库：
+1. $ mysql -u root -ppassword test -e  "update ratings set rating=1 where reviewid=1;select * from ratings;"
+2. +----------+--------+
+3. | ReviewID | Rating |
+4. +----------+--------+
+5. |        1 |      1 |
+6. |        2 |      4 |
+7. +----------+--------+
+在虚拟机上：
+1. $ hostname -I
+在 VM 上运行 MySQL
+找出将用于添加到网格中的虚拟机的 IP 地址
+在虚拟机上部署 Bookinfo 应用程序
+- 482 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+在可以访问 
+ istioctl  命令的主机上，注册虚拟机和 mysql 数据库服务。
+1. $ istioctl register -n vm mysqldb <ip-address-of-vm> 3306
+2. 
+I1108 20:17:54.256699   40419 register.go:43] Registering for service 'mysqldb' ip '10.150.0.5', ports list 
+[{3306 mysql}]
+3. 
+I1108 20:17:54.256815   40419 register.go:48] 0 labels ([]) and 1 annotations ([alpha.istio.io/kubernetes-
+serviceaccounts=default])
+4. 
+W1108 20:17:54.573068   40419 register.go:123] Got 'services "mysqldb" not found' looking up svc 'mysqldb' in 
+namespace 'vm', attempting to create it
+5. 
+W1108 20:17:54.816122   40419 register.go:138] Got 'endpoints "mysqldb" not found' looking up endpoints for 
+'mysqldb' in namespace 'vm', attempting to create them
+6. 
+I1108 20:17:54.886657   40419 register.go:180] No pre existing exact matching ports list found, created new 
+subset {[{10.150.0.5  <nil> nil}] [] [{mysql 3306 }]}
+7. I1108 20:17:54.959744   40419 register.go:191] Successfully updated mysqldb, now with 1 endpoints
+请注意，’mysqldb’ 虚拟机不需要也不应具有特殊的 Kubernetes 特权。
+Bookinfo 中的 ratings 服务将使用该虚拟机上的数据库。为了验证它是否正常工作，请在虚拟机上创建使用
+mysql 数据库的 ratings 服务第二个版本。然后指定路由规则，用于强制 review 服务使用 ratings 服务的
+第二个版本。
+Zip
+1. 
+$ istioctl kube-inject -n bookinfo -f @samples/bookinfo/platform/kube/bookinfo-ratings-v2-mysql-vm.yaml@ | 
+kubectl apply -n bookinfo -f -
+创建将强制 Bookinfo 使用 ratings 后端的路由规则：
+Zip
+1. $ kubectl apply -n bookinfo -f @samples/bookinfo/networking/virtual-service-ratings-mysql-vm.yaml@
+您可以验证 Bookinfo 应用程序的输出显示的是 Reviewer1 的 1 个星，还是 Reviewer2 的 4 个星，或者更
+改虚拟机的 ratings 服务并查看结果。
+同时，您还可以在 RawVM MySQL 文档中找到一些疑难解答和其他信息。
+多网络网格中的虚拟机
+学习怎样添加运行在虚拟机上的服务到您的多网络 Istio 网格中。
+向网格中注册 mysql 服务
+使用 mysql 服务
+相关内容
+在虚拟机上部署 Bookinfo 应用程序
+- 483 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+单个网络网格中的虚拟机
+学习如何新增一个服务，使其运行在单网络 Istio 网格的虚拟机上。
+在虚拟机上部署 Bookinfo 应用程序
+- 484 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+该模块化教程为新用户提供了一步步将 Istio 应用于常见微服务场景的动手经验。
+前提条件
+设置 Kubernetes 集群
+设置本地计算机
+本地运行微服务
+在 Docker 中运行 ratings 服务
+使用 Kubernetes 运行 Bookinfo
+生产测试
+适用于培训他人的自学用户或讲师。从设置集群以控制在本地计算机上运行的示例微服务的步骤开始，并最终展示了
+使用 Istio 的一些关键的微服务管理任务。
+为了获得最佳体验，请按照提供的顺序执行以下模块。
+这项工作正在进行中，我们将逐段添加其内容。欢迎您在 discuss.istio.io 网站上提供反馈。
+使用 Kubernetes 和 Istio 学习微服务
+使用 Kubernetes 和 Istio 学习微服务
+- 485 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+这项工作正在进行中，我们将逐段添加其内容。欢迎您在 discuss.istio.io 网站上提供反馈。
+对于本教程，你需要一个 Kubernetes 集群，集群中需要包含本教程模块中的命名空间， 并且可以在本地电脑上执
+行这些命令。如果你有自己的集群，确保集群满足这些前提条件。
+如果你在一个学习班上，并且讲师提供了一个集群，让他们来处理集群的前提条件，你可以跳过本地电脑的设置。
+确保满足以下条件：
+你拥有 Kubernetes 集群的管理员权限。
+你可以在集群中为每个参与者创建名称空间。
+确保满足以下条件：
+你拥有本地计算机  /etc/hosts  文件的写入权限。
+你可以在本地计算机上下载、安装和运行命令行工具。
+在本教程期间，你可以连接到网络。
+前提条件
+Kubernetes 集群
+本地计算机
+前提条件
+- 486 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+这项工作正在进行中，我们将逐段添加其内容。欢迎您在 discuss.istio.io 网站上提供反馈。
+在这个模块，您将设置一个安装了 Istio 的 Kubernetes 集群，和一个整个教程要用到的命名空间。
+如果您在培训班且讲师已准备好了集群，直接前往设置本地机器。
+1. 确保您有 Kubernetes 集群的访问权限。 您可以使用 Google Kubernetes Engine 或 IBM Cloud
+Kubernetes Service。
+2. 生成一个环境变量用于存储运行教程指令要用到的命名空间的名字。 可以用任何名字，比如 
+ tutorial 。
+1. $ export NAMESPACE=tutorial
+3. 创建命名空间：
+1. $ kubectl create namespace $NAMESPACE
+如果您是一位讲师，可以为每个参与者分配独立的命名空间。本教程支持多个参与者在不同的命名空间下同时运
+行。
+4. 安装 Istio。
+5. 启用 Envoy 访问日志。
+6. 使用 
+ kubectl  命令为这些通用 Istio 服务创建一个 Kubernetes Ingress 资源。在教程目前这个阶
+段要熟悉这些服务并不是必须的。
+Grafana
+Jaeger
+Prometheus
+Kiali
+ kubectl  命令可以接收一个行内配置去为每个服务创建 Ingress 资源：
+1. $ kubectl apply -f - <<EOF
+2. apiVersion: extensions/v1beta1
+3. kind: Ingress
+4. metadata:
+5.   name: istio-system
+6.   namespace: istio-system
+7. spec:
+8.   rules:
+9.   - host: my-istio-dashboard.io
+10.     http:
+11.       paths:
+12.       - path: /
+设置 Kubernetes 集群
+设置 Kubernetes 集群
+- 487 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+13.         backend:
+14.           serviceName: grafana
+15.           servicePort: 3000
+16.   - host: my-istio-tracing.io
+17.     http:
+18.       paths:
+19.       - path: /
+20.         backend:
+21.           serviceName: tracing
+22.           servicePort: 9411
+23.   - host: my-istio-logs-database.io
+24.     http:
+25.       paths:
+26.       - path: /
+27.         backend:
+28.           serviceName: prometheus
+29.           servicePort: 9090
+30.   - host: my-kiali.io
+31.     http:
+32.       paths:
+33.       - path: /
+34.         backend:
+35.           serviceName: kiali
+36.           servicePort: 20001
+37. EOF
+7. 创建一个角色为 
+ istio-system  命名空间提供读权限。要在下面的步骤中限制参与者的权限，这个角色是必
+须要有的。
+1. $ kubectl apply -f - <<EOF
+2. kind: Role
+3. apiVersion: rbac.authorization.k8s.io/v1beta1
+4. metadata:
+5.   name: istio-system-access
+6.   namespace: istio-system
+7. rules:
+8. - apiGroups: ["", "extensions", "apps"]
+9.   resources: ["*"]
+10.   verbs: ["get", "list"]
+11. EOF
+8. 为每个参与者创建服务账号：
+1. $ kubectl apply -f - <<EOF
+2. apiVersion: v1
+3. kind: ServiceAccount
+4. metadata:
+5.   name: ${NAMESPACE}-user
+6.   namespace: $NAMESPACE
+7. EOF
+设置 Kubernetes 集群
+- 488 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+9. 限制每个参与者的权限。在教程中，参与者只需要在他们自己的命名空间中创建资源以及从 
+ istio-system 
+命名空间中读取资源。 即使使用您自己的集群，这也是一个好的实践，它可以避免影响您集群中的其他命名空
+间。
+创建一个角色为每个参与者的命名空间提供读写权限。为每个参与者赋予这个角色，以及读取 
+ istio-system 
+资源的角色：
+1. $ kubectl apply -f - <<EOF
+2. kind: Role
+3. apiVersion: rbac.authorization.k8s.io/v1beta1
+4. metadata:
+5.   name: ${NAMESPACE}-access
+6.   namespace: $NAMESPACE
+7. rules:
+8. 
+- apiGroups: ["", "extensions", "apps", "networking.k8s.io", "networking.istio.io", 
+"authentication.istio.io",
+9.               "rbac.istio.io", "config.istio.io"]
+10.   resources: ["*"]
+11.   verbs: ["*"]
+12. ---
+13. kind: RoleBinding
+14. apiVersion: rbac.authorization.k8s.io/v1beta1
+15. metadata:
+16.   name: ${NAMESPACE}-access
+17.   namespace: $NAMESPACE
+18. subjects:
+19. - kind: ServiceAccount
+20.   name: ${NAMESPACE}-user
+21.   namespace: $NAMESPACE
+22. roleRef:
+23.   apiGroup: rbac.authorization.k8s.io
+24.   kind: Role
+25.   name: ${NAMESPACE}-access
+26. ---
+27. kind: RoleBinding
+28. apiVersion: rbac.authorization.k8s.io/v1beta1
+29. metadata:
+30.   name: ${NAMESPACE}-istio-system-access
+31.   namespace: istio-system
+32. subjects:
+33. - kind: ServiceAccount
+34.   name: ${NAMESPACE}-user
+35.   namespace: $NAMESPACE
+36. roleRef:
+37.   apiGroup: rbac.authorization.k8s.io
+38.   kind: Role
+39.   name: istio-system-access
+40. EOF
+10. 每个参与者需要使用他们自己的 Kubernetes 配置文件。这个配置文件指明了集群的详细信息，服务账号，
+证书和参与者的命名空间。 
+ kubectl  命令使用这个配置文件在集群上操作。
+设置 Kubernetes 集群
+- 489 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+为每个参与者创建 Kubernetes 配置文件：
+1. $ cat <<EOF > ./${NAMESPACE}-user-config.yaml
+2. apiVersion: v1
+3. kind: Config
+4. preferences: {}
+5. 
+6. clusters:
+7. - cluster:
+8. 
+   certificate-authority-data: $(kubectl get secret $(kubectl get sa ${NAMESPACE}-user -n $NAMESPACE -o 
+jsonpath={.secrets..name}) -n $NAMESPACE -o jsonpath='{.data.ca\.crt}')
+9. 
+   server: $(kubectl config view -o jsonpath="{.clusters[?(.name==\"$(kubectl config view -o jsonpath="
+{.contexts[?(.name==\"$(kubectl config current-context)\")].context.cluster}")\")].cluster.server}")
+10.  name: ${NAMESPACE}-cluster
+11. 
+12. users:
+13. - name: ${NAMESPACE}-user
+14.  user:
+15.    as-user-extra: {}
+16. 
+   client-key-data: $(kubectl get secret $(kubectl get sa ${NAMESPACE}-user -n $NAMESPACE -o jsonpath=
+{.secrets..name}) -n $NAMESPACE -o jsonpath='{.data.ca\.crt}')
+17. 
+   token: $(kubectl get secret $(kubectl get sa ${NAMESPACE}-user -n $NAMESPACE -o jsonpath=
+{.secrets..name}) -n $NAMESPACE -o jsonpath={.data.token} | base64 --decode)
+18. 
+19. contexts:
+20. - context:
+21.    cluster: ${NAMESPACE}-cluster
+22.    namespace: ${NAMESPACE}
+23.    user: ${NAMESPACE}-user
+24.  name: ${NAMESPACE}
+25. 
+26. current-context: ${NAMESPACE}
+27. EOF
+11. 为 
+ ${NAMESPACE}-user-config.yaml  配置文件设置环境变量 
+ KUBECONFIG ：
+1. $ export KUBECONFIG=./${NAMESPACE}-user-config.yaml
+12. 打印当前命名空间以确认配置文件已生效：
+1. 
+$ kubectl config view -o jsonpath="{.contexts[?(@.name==\"$(kubectl config current-
+context)\")].context.namespace}"
+2. tutorial
+在输出中可以看到命名空间的名字。
+13. 如果您为自己设置好了集群，复制前面步骤中提到的 
+ ${NAMESPACE}-user-config.yaml  文件到您的本地机
+器，
+ ${NAMESPACE}  就是前面步骤中的命名空间。比如，
+ tutorial-user-config.yaml 。 教程中您将会再次用
+到这个文件。
+如果您是讲师，则将生成的配置文件发送给每个学员。学员必须将该配置文件复制到自己本地的计算机。
+设置 Kubernetes 集群
+- 490 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+恭喜, 您为您的教程设置好了集群！
+您已经准备好设置本地机器了。
+设置 Kubernetes 集群
+- 491 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+这项工作正在进行中，我们将逐段添加其内容。欢迎您在 discuss.istio.io 网站上提供反馈。
+在本模块中，您将为教程准备本地计算机
+1. 安装 
+ curl 。
+2. 安装 Node.js。
+3. 安装 Docker。
+4. 安装 
+ kubectl 。
+5. 为您从教程中收到的配置文件或者在上一个模块自己创建的配置文件设置环境变量 
+ KUBECONFIG 。
+1. $ export KUBECONFIG=<the file you recieved or created in the previous module>
+6. 通过打印当前命名空间来验证配置是否生效：
+1. 
+$ kubectl config view -o jsonpath="{.contexts[?(@.name==\"$(kubectl config current-
+context)\")].context.namespace}"
+2. tutorial
+您应该在输出中看到命名空间的名称，该命名空间由讲师分配或者在上一个模块中由您自己分配。
+7. 下载一个 Istio 发行版 ，从 
+ bin  目录下提出命令行工具 
+ istioctl ，使用下边的命令验证
+ istioctl  是否可以正常使用：
+1. $ istioctl version
+2. 
+version.BuildInfo{Version:"release-1.1-20190214-09-16", 
+GitRevision:"6113e155ac85e2485e30dfea2b80fd97afd3130a", User:"root", Host:"4496ae63-3039-11e9-86e9-
+0a580a2c0304", GolangVersion:"go1.10.4", DockerHub:"gcr.io/istio-release", BuildStatus:"Clean", 
+GitTag:"1.1.0-snapshot.6-6-g6113e15"}
+恭喜，您已配置完毕本地计算机！
+接下来在本地运行微服务。
+设置本地计算机
+设置本地计算机
+- 492 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+这项工作正在进行中，我们将逐段添加其内容。欢迎您在 discuss.istio.io 网站上提供反馈。
+在微服务架构出现之前，开发团队会将整个应用程序作为一个大型软件进行构建、部署和运行。想要测试模块中一个
+微小的改变， 开发人员不仅要通过单元测试，他们必须重新构建整个程序。因此，构建需要花费大量的时间。完成构
+建后， 开发人员将应用程序版本部署到测试服务器上。他们会把服务跑在远程或本地计算机中。在后一种情况下，开
+发者会在他们 的本地计算机上安装并管理一个相当复杂的环境。
+在微服务架构时代，开发人员编写、构建、测试和运行小型的软件服务。构建是快速的。使用类似 Node.js 这样的
+现代框架, 由于服务是作为常规进程来运行的，就不需要安装并管理 复杂的服务环境来测试它了。您不再仅仅为了测
+试您的服务就得将它部署到某个环境了，您只需要构建您的服务并且直接在你本地机器上运行即可。
+该模块涵盖了在本地机器上开发单个服务所涉及的不同方面。不过，您无需编写代码，只需要编译、运行和测试现有
+服务 
+ rating  。
+ ratings  服务是用 Node.js 编写的一个可以单独运行的小型 web 应用程序。 它与其他 web 应用程序执行类
+似的操作：
+监听它作为参数接受的端口。
+接受在  /ratings/{productID}  路径上的  HTTP GET  请求，并返回与客户端指定的  productID  的值所匹配的
+产品的评级。
+接受在  /ratings/{productID}  路径上的  HTTP POST  请求，并更新与您指定的  productID  的值所匹配的产
+品的评级。
+请按照下列步骤下载应用程序的代码，安装其依赖项，然后在本地运行它：
+1. 将服务代码和 其 package 文件 下载到一个单独的目录中：
+1. $ mkdir ratings
+2. $ cd ratings
+3. 
+$ curl -s https://raw.githubusercontent.com/istio/istio/release-
+1.6/samples/bookinfo/src/ratings/ratings.js -o ratings.js
+4. 
+$ curl -s https://raw.githubusercontent.com/istio/istio/release-
+1.6/samples/bookinfo/src/ratings/package.json -o package.json
+2. 浏览服务的代码，并注意代码中以下元素：
+web 服务器的特征:
+监听一个端口
+处理请求和响应
+与 HTTP 相关的方面:
+请求头
+路径
+状态码
+在 Node.js 中，web 服务器的功能嵌入在应用程序的代码中。一个 Node.js web 应用程序作为一个独立
+进程运行。
+本地运行微服务
+本地运行微服务
+- 493 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+3. Node.js 应用程序是用 JavaScript 编写的，这意味着没有显式编译步骤。相反，它们 使用 just-in-
+time 即时编译。要 构建 Node.js 应用程序，则意味着要安装其依赖库。将 
+ rating  服务的依赖库安装
+在存储服务代码和 package 文件的同一目录下：
+1. $ npm install
+2. npm notice created a lockfile as package-lock.json. You should commit this file.
+3. npm WARN ratings No description
+4. npm WARN ratings No repository field.
+5. npm WARN ratings No license field.
+6. 
+7. added 24 packages in 2.094s
+4. 通过传递 
+ 9080  参数来运行服务，然后应用程序在 9080 端口上监听。
+1. $ npm start 9080
+2. > @ start /tmp/ratings
+3. > node ratings.js "9080"
+4. Server listening on: http://0.0.0.0:9080
+该 
+ ratings  服务是一个 web 应用程序，您可以像访问其他 web 应用程序那样访问它。 您可以使用浏览器或者
+像 
+ curl  或 
+ Wget  的命令行 web 客户端。由于您在本地运行了 
+ rating  服务，因此您也可以通过
+ localhost  主机名访问它。
+1. 在浏览器中打开 http://localhost:9080/ratings/7 或者使用 
+ curl  命令来访问 
+ ratings ：
+1. $ curl localhost:9080/ratings/7
+2. {"id":7,"ratings":{"Reviewer1":5,"Reviewer2":4}}
+2. 打开另一个终端 session，使用 curl 命令的 POST 方法将产品的评级设置为 1 ：
+1. $ curl -X POST localhost:9080/ratings/7 -d '{"Reviewer1":1,"Reviewer2":1}'
+2. {"id":7,"ratings":{"Reviewer1":1,"Reviewer2":1}}
+3. 检查更新的评级：
+1. $ curl localhost:9080/ratings/7
+2. {"id":7,"ratings":{"Reviewer1":1,"Reviewer2":1}}
+4. 在服务运行的终端使用 Ctrl-C 停止它。
+恭喜, 您现在可以在本地计算机上构建、测试和运行服务了！
+您已经做好了如何打包服务到容器的准备了。
+本地运行微服务
+- 494 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+这项工作正在进行中，我们将逐段添加其内容。欢迎您在 discuss.istio.io 网站上提供反馈。
+本模块展示了如何创建一个 Docker 镜像并在本地运行它。
+1. 下载微服务 
+ ratings  的 
+ Dockerfile 。
+1. 
+$ curl -s https://raw.githubusercontent.com/istio/istio/release-
+1.6/samples/bookinfo/src/ratings/Dockerfile -o Dockerfile
+2. 观察这个
+ Dockerfile 。
+1. $ cat Dockerfile
+请注意，它将文件复制到容器的文件系统中，然后执行你在上一个模块中执行过的 
+ npm install  命令。
+ CMD  命令指示 Docker 在 
+ 9080  端口上运行 
+ ratings  服务。
+3. 根据 
+ Dockerfile  构建出一个镜像：
+1. $ docker build -t $USER/ratings .
+2. ...
+3. Step 9/9 : CMD node /opt/microservices/ratings.js 9080
+4. ---> Using cache
+5. ---> 77c6a304476c
+6. Successfully built 77c6a304476c
+7. Successfully tagged user/ratings:latest
+4. 在 Docker 中运行 
+ ratings  服务. 接下来的 docker run 命令 指示 Docker 将容器的 
+ 9080  端
+口暴露到计算机的 
+ 9081  端口，从而允许你访问 
+ 9081  端口上的 
+ ratings  微服务。
+1. $ docker run -d -p 9081:9080 $USER/ratings
+5. 在浏览器访问 http://localhost:9081/ratings/7，或使用以下的 
+ curl  命令：
+1. $ curl localhost:9081/ratings/7
+2. {"id":7,"ratings":{"Reviewer1":5,"Reviewer2":4}}
+6. 观察运行中的容器。执行 docker ps 命令，列出所有运行中的容器，同时 注意镜像是 
+ <your user
+name>/ratings  的容器。
+1. $ docker ps
+2. 
+CONTAINER ID        IMAGE            COMMAND                  CREATED             STATUS              
+PORTS                    NAMES
+3. 
+47e8c1fe6eca        user/ratings     "docker-entrypoint.s…"   2 minutes ago       Up 2 minutes        
+0.0.0.0:9081->9080/tcp   elated_stonebraker
+4. ...
+在 Docker 中运行 ratings 服务
+在 Docker 中运行 ratings 服务
+- 495 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+7. 停止运行中的容器：
+1. $ docker stop <the container ID from the output of docker ps>
+现在，你已经准备好部署应用程序。
+在 Docker 中运行 ratings 服务
+- 496 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+这项工作正在进行中，我们将逐段添加其内容。欢迎您在 discuss.istio.io 网站上提供反馈。
+该模块显示了一个应用程序，它由四种以不同编程语言编写的微服务组成：
+ productpage 、
+ details 、
+ ratings 
+和 
+ reviews 。我们将组成的应用程序称为 
+ Bookinfo ，您可以在 Bookinfo 示例页面中了解更多信息。
+ reviews  微服务具有三个版本：
+ v1 、
+ v2 、
+ v3 ，而 Bookinfo 示例展示的是该应用的最终版本。在此模
+块中，应用程序仅使用 
+ reviews  微服务的 
+ v1  版本。接下来的模块通过多个版本的 
+ reviews  微服务增强了
+应用程序。
+1. 设置环境变量 
+ MYHOST  的值为应用程序的 URL：
+1. $ export MYHOST=$(kubectl config view -o jsonpath={.contexts..namespace}).bookinfo.com
+2. 浏览 
+ bookinfo.yaml 。 这是该应用的 Kubernetes 部署规范。注意 services 和 deployments。
+3. 部署应用到 Kubernetes 集群：
+1. 
+$ kubectl apply -l version!=v2,version!=v3 -f https://raw.githubusercontent.com/istio/istio/release-
+1.6/samples/bookinfo/platform/kube/bookinfo.yaml
+2. service "details" created
+3. deployment "details-v1" created
+4. service "ratings" created
+5. deployment "ratings-v1" created
+6. service "reviews" created
+7. deployment "reviews-v1" created
+8. service "productpage" created
+9. deployment "productpage-v1" created
+4. 检查 pods 的状态：
+1. $ kubectl get pods
+2. NAME                            READY   STATUS    RESTARTS   AGE
+3. details-v1-6d86fd9949-q8rrf     1/1     Running   0          10s
+4. productpage-v1-c9965499-tjdjx   1/1     Running   0          8s
+5. ratings-v1-7bf577cb77-pq9kg     1/1     Running   0          9s
+6. reviews-v1-77c65dc5c6-kjvxs     1/1     Running   0          9s
+5. 四个服务达到 
+ Running  状态后，就可以扩展 deployment。要使每个微服务的每个版本在三个 pods 中
+运行，请执行以下命令：
+1. $ kubectl scale deployments --all --replicas 3
+2. deployment "details-v1" scaled
+使用 Kubernetes 运行 Bookinfo
+部署应用程序及测试 pod
+使用 Kubernetes 运行 Bookinfo
+- 497 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+3. deployment "productpage-v1" scaled
+4. deployment "ratings-v1" scaled
+5. deployment "reviews-v1" scaled
+6. deployment "reviews-v2" scaled
+7. deployment "reviews-v3" scaled
+6. 检查 pods 的状态。可以看到每个微服务都有三个 pods：
+1. $ kubectl get pods
+2. NAME                            READY   STATUS    RESTARTS   AGE
+3. details-v1-6d86fd9949-fr59p     1/1     Running   0          50s
+4. details-v1-6d86fd9949-mksv7     1/1     Running   0          50s
+5. details-v1-6d86fd9949-q8rrf     1/1     Running   0          1m
+6. productpage-v1-c9965499-hwhcn   1/1     Running   0          50s
+7. productpage-v1-c9965499-nccwq   1/1     Running   0          50s
+8. productpage-v1-c9965499-tjdjx   1/1     Running   0          1m
+9. ratings-v1-7bf577cb77-cbdsg     1/1     Running   0          50s
+10. ratings-v1-7bf577cb77-cz6jm     1/1     Running   0          50s
+11. ratings-v1-7bf577cb77-pq9kg     1/1     Running   0          1m
+12. reviews-v1-77c65dc5c6-5wt8g     1/1     Running   0          49s
+13. reviews-v1-77c65dc5c6-kjvxs     1/1     Running   0          1m
+14. reviews-v1-77c65dc5c6-r55tl     1/1     Running   0          49s
+7. 部署测试 pod，sleep，用来向您的微服务发送请求：
+1. $ kubectl apply -f https://raw.githubusercontent.com/istio/istio/release-1.6/samples/sleep/sleep.yaml
+8. 从测试 pod 中用 curl 命令发送请求给 Bookinfo 应用，以确认该应用运行正常：
+1. 
+$ kubectl exec -it $(kubectl get pod -l app=sleep -o jsonpath='{.items[0].metadata.name}') -c sleep -- 
+curl productpage:9080/productpage | grep -o "<title>.*</title>"
+2. <title>Simple Bookstore App</title>
+应用程序运行后，使集群外部的客户端可以访问它。成功配置以下步骤后，即可从笔记本电脑的浏览器访问该应用程
+序。
+如果您的集群运行于 GKE，请将 
+ productpage  service 的类型修改为 
+ LoadBalancer ，如以下示例所示：
+1. $ kubectl patch svc productpage -p '{"spec": {"type": "LoadBalancer"}}'
+2. service/productpage patched
+1. 创建 Kubernetes Ingress 资源：
+启用对应用的外部访问
+配置 Kubernetes Ingress 资源并访问应用页面
+使用 Kubernetes 运行 Bookinfo
+- 498 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+1. $ kubectl apply -f - <<EOF
+2. apiVersion: extensions/v1beta1
+3. kind: Ingress
+4. metadata:
+5.   name: bookinfo
+6. spec:
+7.   rules:
+8.   - host: $MYHOST
+9.     http:
+10.       paths:
+11.       - path: /productpage
+12.         backend:
+13.           serviceName: productpage
+14.           servicePort: 9080
+15.       - path: /login
+16.         backend:
+17.           serviceName: productpage
+18.           servicePort: 9080
+19.       - path: /logout
+20.         backend:
+21.           serviceName: productpage
+22.           servicePort: 9080
+23.       - path: /static
+24.         backend:
+25.           serviceName: productpage
+26.           servicePort: 9080
+27. EOF
+1. 将以下命令的输出内容追加到 
+ /etc/hosts  文件。您应当具有超级用户权限，并且可能需要使用 
+ sudo  来
+编辑 
+ /etc/hosts 。
+1. 
+$ echo $(kubectl get ingress istio-system -n istio-system -o jsonpath='{..ip} {..host}') $(kubectl get 
+ingress bookinfo -o jsonpath='{..host}')
+1. 用以下命令访问应用主页：
+1. $ curl -s $MYHOST/productpage | grep -o "<title>.*</title>"
+2. <title>Simple Bookstore App</title>
+2. 将以下命令的输出内容粘贴到浏览器的地址栏：
+1. $ echo http://$MYHOST/productpage
+可以看到以下页面：
+更新 /etc/hosts 配置文件
+访问应用
+使用 Kubernetes 运行 Bookinfo
+- 499 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+Bookinfo Web Application
+3. 观察微服务是如何互相调用的。例如，
+ reviews  使用 URL 
+ http://ratings:9080/ratings  调用 
+ ratings 
+微服务。 查看 
+ reviews  的代码：
+1. private final static String ratings_service = "http://ratings:9080/ratings";
+4. 在一个单独的终端窗口中设置无限循环，将流量发送到您的应用程序，以模拟现实世界中恒定的用户流量：
+1. $ while :; do curl -s $MYHOST/productpage | grep -o "<title>.*</title>"; sleep 1; done
+2. <title>Simple Bookstore App</title>
+3. <title>Simple Bookstore App</title>
+4. <title>Simple Bookstore App</title>
+5. <title>Simple Bookstore App</title>
+6. ...
+您已经准备好测试应用了。
+使用 Kubernetes 运行 Bookinfo
+- 500 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+这项工作正在进行中，我们将逐段添加其内容。欢迎您在 discuss.istio.io 网站上提供反馈。
+在生产环境中测试您的微服务！
+1. 从测试 pod 中向服务之一发起 HTTP 请求：
+1. 
+$ kubectl exec -it $(kubectl get pod -l app=sleep -o jsonpath='{.items[0].metadata.name}') -- curl 
+http://ratings:9080/ratings/7
+在生产环境中执行一些混乱测试，并查看您的应用程序如何反应。 进行每次混乱的操作后，请访问应用程序的网页，
+查看是否有任何更改。 使用 
+ kubectl get pods  检查 pods 状态。
+1. 在 
+ details  服务的一个 pod 中终止它。
+1. 
+$ kubectl exec -it $(kubectl get pods -l app=details -o jsonpath='{.items[0].metadata.name}') -- pkill 
+ruby
+2. 检查 pods 状态：
+1. $ kubectl get pods
+2. NAME                            READY   STATUS    RESTARTS   AGE
+3. details-v1-6d86fd9949-fr59p     1/1     Running   1          47m
+4. details-v1-6d86fd9949-mksv7     1/1     Running   0          47m
+5. details-v1-6d86fd9949-q8rrf     1/1     Running   0          48m
+6. productpage-v1-c9965499-hwhcn   1/1     Running   0          47m
+7. productpage-v1-c9965499-nccwq   1/1     Running   0          47m
+8. productpage-v1-c9965499-tjdjx   1/1     Running   0          48m
+9. ratings-v1-7bf577cb77-cbdsg     1/1     Running   0          47m
+10. ratings-v1-7bf577cb77-cz6jm     1/1     Running   0          47m
+11. ratings-v1-7bf577cb77-pq9kg     1/1     Running   0          48m
+12. reviews-v1-77c65dc5c6-5wt8g     1/1     Running   0          47m
+13. reviews-v1-77c65dc5c6-kjvxs     1/1     Running   0          48m
+14. reviews-v1-77c65dc5c6-r55tl     1/1     Running   0          47m
+15. sleep-88ddbcfdd-l9zq4           1/1     Running   0          47m
+请注意第一个 pod 重启了一次。
+3. 在 
+ details  的所有 pods 中终止它：
+生产测试
+测试单个微服务
+混乱测试
+生产测试
+- 501 -
+本文档使用 书栈网 · BookStack.CN 构建
+
+1. 
+$ for pod in $(kubectl get pods -l app=details -o jsonpath='{.items[*].metadata.name}'); do echo 
+terminating $pod; kubectl exec -it $pod -- pkill ruby; done
+4. 检查应用的页面：
+Bookinfo Web Application，详情不可用
+请注意详情部分显示的是错误信息而不是书籍详情。
+5. 检查 pods 状态：
+1. $ kubectl get pods
+2. NAME                            READY   STATUS    RESTARTS   AGE
+3. details-v1-6d86fd9949-fr59p     1/1     Running   2          48m
+4. details-v1-6d86fd9949-mksv7     1/1     Running   1          48m
+5. details-v1-6d86fd9949-q8rrf     1/1     Running   1          49m
+6. productpage-v1-c9965499-hwhcn   1/1     Running   0          48m
+7. productpage-v1-c9965499-nccwq   1/1     Running   0          48m
+8. productpage-v1-c9965499-tjdjx   1/1     Running   0          48m
+9. ratings-v1-7bf577cb77-cbdsg     1/1     Running   0          48m
+10. ratings-v1-7bf577cb77-cz6jm     1/1     Running   0          48m
+11. ratings-v1-7bf577cb77-pq9kg     1/1     Running   0          49m
+12. reviews-v1-77c65dc5c6-5wt8g     1/1     Running   0          48m
+13. reviews-v1-77c65dc5c6-kjvxs     1/1     Running   0          49m
+14. reviews-v1-77c65dc5c6-r55tl     1/1     Running   0          48m
+15. sleep-88ddbcfdd-l9zq4           1/1     Running   0          48m
+第一个 pod 重启了两次，其它两个 
+ details  pods 重启了一次。 您可能会看到 
+ Error  和
+ CrashLoopBackOff  状态，直到 pods 变为 
+ Running  状态。
+在这两种情况下，应用程序都没有崩溃。 
+ details  微服务中的崩溃并未导致其他微服务失败。 该行为表示您在这
+种情况下没有级联失败。 相反，您的服务会逐渐降级：尽管一个微服务崩溃了，该应用仍可以提供有用的功能。 它
+显示了有关书的评论和基本信息。
+生产测试
+- 502 -
+本文档使用 书栈网 · BookStack.CN 构建

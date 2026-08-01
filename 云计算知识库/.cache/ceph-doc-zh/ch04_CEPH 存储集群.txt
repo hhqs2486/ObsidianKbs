@@ -1,0 +1,659 @@
+添加caps mon = "allow *" 将简化mkcephfs 到ceph-deploy 的迁移，这
+样ceph-create-keys 就可以用$mon_data 里的mon. 密钥环获取它所需的权限了。
+用默认路径
+mon 和osd 目录需用/var/lib/ceph 之下的默认子目录。
+
+OSDs: 路径应该是/var/lib/ceph/osd/ceph-$id
+
+MON: 路径应该是/var/lib/ceph/mon/ceph-$id
+在这些目录下都应该有一个名为keyring 的密钥环文件。
+CEPH 存储集群
+所有Ceph 部署都始于Ceph 存储集群。基于RADOS 的Ceph 对象存储集群包括两类守护进
+程：term:对象存储守护进程（OSD ）把存储节点上的数据存储为对象；term:Ceph 监视器
+（MON ）维护集群运行图的主拷贝。一个Ceph 集群可以包含数千个存储节点，最简系统至
+少需要一个监视器和两个OSD 才能做到数据复制。
+Ceph 文件系统、Ceph 对象存储、和Ceph 块设备从Ceph 存储集群读出和写入数据。
+配置
+Ceph 作为集群时可以包含数千个对象存储设备（OSD ）。最简系统至少需要二个OSD 做数
+据复制。要配置OSD 集群，你得把配置写入配置文件。Ceph 对很多选项提供了默认值，你
+可以在配置文件里覆盖它们；另外，你可以使用命令行工具修改运行时配置。
+Ceph 启动时要激活三类守护进程：
+
+ceph-mon （必备）
+
+ceph-osd （必备）
+
+ceph-mds （cephfs 必备）
+各进程、守护进程或工具都会读取配置文件。一个进程可能需要不止一个守护进程例程的信息
+（即多个上下文）；一个守护进程或工具只有关于单个守护进程例程的信息（单上下文）。
+
+Note
+试用时Ceph 可运行在单机上。
+硬盘和文件系统推荐
+准备硬盘
+Ceph 注重数据安全，就是说，Ceph 客户端收到数据已写入存储器的通知时，数据确实已写
+入硬盘。使用较老的内核（版本小于2.6.33 ）时，如果日志在原始硬盘上，就要禁用写缓存；
+较新的内核没问题。
+用hdparm 禁用硬盘的写缓冲功能。
+sudo hdparm -W 0 /dev/hda 0
+在生产环境，我们建议操作系统和Ceph OSD 守护进程数据分别放到不同的硬盘。如果必须
+把数据和系统放在同一硬盘里，最好给数据分配一个单独的分区。
+文件系统
+Ceph 的OSD 依赖于底层文件系统的稳定性和性能。
+Note
+当前，我们推荐部署生产系统时使用xfs 文件系统；推荐用btrfs 做测试、开发和其他不
+太要紧的部署。我们相信，长远来看btrfs 适合Ceph 的功能需求和发展方向，但
+是xfs 和ext4 能提供当前部署所必需的稳定性。btrfs 开发在迅速推进，所以它的用户
+应该有能力经常更新到最新内核发布，而且能跟踪严重缺陷的修正进度。
+OSD 守护进程有赖于底层文件系统的扩展属性（XATTR ）存储各种内部对象状态和元数据。
+底层文件系统必须能为XATTR 提供足够容量，btrfs 没有限制随文件的xattr 元数据总
+量；xfs 的限制相对大（64KB ），多数部署都不会有瓶颈；ext4 的则太小而不可用。
+使用ext4 文件系统时，一定要把下面的配置放于ceph.conf 配置文件的[osd] 段下；
+用btrfs 和xfs 时可以选填。
+filestore xattr use omap = true
+
+文件系统背景知识
+XFS 、btrfs 和ext4 相比较ext3 而言，在高伸缩性数据存储方面有几个优势。
+XFS 、btrfs 和ext4 都是日志文件系统，这使得在崩溃、断电后恢复时更健壮，因为这
+些文件系统在写入数据前会先记录所有变更。
+xfs 由Silicon Graphics 开发，是一个成熟、稳定的文件系统。相反，btrfs 是相对年轻的
+文件系统，它致力于实现系统管理员梦寐以求的大规模数据存储基础，和其他Linux 文件系统
+相比它有独一无二的功能和优势。
+btrfs 是写时复制（copy-on-write ，cow ）文件系统，它支持文件创建时间戳和校验和
+（可校验元数据完整性）功能，所以它能探测到数据坏副本，并且用好副本修复。写时复制功
+能是说btrfs 支持可写文件系统快照。btrfs 也支持透明压缩和其他功能。
+btrfs 也集成了多设备管理功能，据此可以在底层支持异质硬盘存储，和数据分配策略。未
+来开发社区还会提供fsck 、拆分、数据加密功能，这些诱人的功能正是Ceph 集群的理想选
+择。
+配置CEPH
+你启动Ceph 服务时，初始化进程会把一系列守护进程放到后台运行。Ceph 存储集群运行两
+种守护进程：
+
+Ceph 监视器（ceph-mon ）
+
+Ceph OSD 守护进程（ceph-osd ）
+要支持Ceph 文件系统功能，它还需要运行至少一个Ceph 元数据服务器（ceph-mds ）；
+支持Ceph 对象存储功能的集群还要运行网关守护进程（radosgw ）。为方便起见，各类守
+护进程都有一系列默认值（很多由ceph/src/common/config_opts.h 配置），你可
+以用Ceph 配置文件覆盖这些默认值。
+配置文件
+启动Ceph 存储集群时，各守护进程都从同一个配置文件（即默认的ceph.conf ）里查找
+它自己的配置。手动部署时，你需要创建此配置文件；用部署工具（如ceph-
+deploy 、chef 等）创建配置文件时可以参考下面的信息。配置文件定义了：
+
+集群身份
+
+
+认证配置
+
+集群成员
+
+主机名
+
+主机IP 地址
+
+密钥环路径
+
+日志路径
+
+数据路径
+
+其它运行时选项
+默认的Ceph 配置文件位置相继排列如下：
+1.
+$CEPH_CONF （就是$CEPH_CONF 环境变量所指示的路径）；
+2.
+-c path/path （就是-c 命令行参数）；
+3.
+/etc/ceph/ceph.conf
+4.
+~/.ceph/config
+5.
+./ceph.conf （就是当前所在的工作路径。
+Ceph 配置文件使用ini 风格的语法，以分号(;) 和井号(#) 开始的行是注释，如下：
+# <--A number (#) sign precedes a comment.
+; A comment may be anything.
+# Comments always follow a semi-colon (;) or a pound (#)
+on each line.
+# The end of the line terminates a comment.
+# We recommend that you provide comments in your
+configuration file(s).
+配置段落
+Ceph 配置文件可用于配置存储集群内的所有守护进程、或者某一类型的所有守护进程。要配
+置一系列守护进程，这些配置必须位于能收到配置的段落之下，比如：
+[global]
+
+描述:
+[global] 下的配置影响Ceph 集群里的所有守护进程。
+实例:
+auth supported = cephx
+[osd]
+描
+述:
+[osd] 下的配置影响存储集群里的所有ceph-osd 进程，并且会覆
+盖[global] 下的同一选项。
+实
+例:
+osd journal size = 1000
+[mon]
+描
+述:
+[mon] 下的配置影响集群里的所有ceph-mon 进程，并且会覆
+盖[global] 下的同一选项。
+实
+例:
+mon addr = 10.0.0.101:6789
+[mds]
+描
+述:
+[mds] 下的配置影响集群里的所有ceph-mds 进程，并且会覆
+盖[global] 下的同一选项。
+实
+host = myserver01
+
+例:
+[client]
+描
+述:
+[client] 下的配置影响所有客户端（如挂载的Ceph 文件系统、挂载的块设
+备等等）。
+实
+例:
+log file = /var/log/ceph/radosgw.log
+全局设置影响集群内所有守护进程的例程，所以[global] 可用于设置适用所有守护进程的
+选项。但可以用这些覆盖[global] 设置：
+1.
+在[osd] 、[mon] 、[mds] 下更改某一类进程的配置。
+2.
+更改特定进程的设置，如[osd.1] 。
+覆盖全局设置会影响所有子进程，明确剔除的例外。
+典型的全局设置包括激活认证，例如：
+[global]
+#Enable authentication between hosts within the cluster.
+#v 0.54 and earlier
+auth supported = cephx
+#v 0.55 and after
+auth cluster required = cephx
+
+auth service required = cephx
+auth client required = cephx
+你可以统一配置一类守护进程。配置写到[osd] 、[mon] 、[mds] 下时，无须再指定某
+个特定例程，即可分别影响所有OSD 、监视器、元数据进程。
+典型的类范畴配置包括日志尺寸、filestore 选项等，如：
+[osd]
+osd journal size = 1000
+你也可以配置某个特定例程。一个例程由类型和及其例程ID 确定，OSD 的例程ID 只能是数
+字，但监视器和元数据服务器的ID 可包含字母和数字。
+[osd.1]
+# settings affect osd.1 only.
+[mon.a]
+# settings affect mon.a only.
+[mds.b]
+# settings affect mds.b only.
+如果你想配置某个Ceph 网关客户端，可以用点（. ）分隔的守护进程和例程来指定，例如：
+[client.radosgw.instance-name]
+
+# settings affect client.radosgw.instance-name only.
+元变量
+元变量大大简化了集群配置。Ceph 会把配置的元变量展开为具体值；元变量功能很强大，可
+以用在配置文件的[global] 、[osd] 、[mon] 、[mds] 段里，类似于Bash 的shell
+扩展。
+Ceph 支持下列元变量：
+$cluster
+描述:
+展开为存储集群名字，在同一套硬件上运行多个集群时有用。
+实例:
+/etc/ceph/$cluster.keyring
+默认值:
+ceph
+$type
+描述:
+可展开为mds 、osd 、mon 中的一个，有赖于当前守护进程的类型。
+实例:
+/var/lib/ceph/$type
+$id
+描述:
+展开为守护进程标识符；osd.0 应为0 ，mds.a 是a 。
+
+实例:
+/var/lib/ceph/$type/$cluster-$id
+$host
+描述:
+展开为当前守护进程的主机名。
+$name
+描述:
+展开为$type.$id 。
+实例:
+/var/run/ceph/$cluster-$name.asok
+共有选项
+硬件推荐段提供了一些配置Ceph 存储集群的硬件指导。一个Ceph 节点可以运行多个进程，
+例如一个节点有多个硬盘，可以为每个硬盘配置一个ceph-osd 守护进程。理想情况下一台
+主机应该只运行一类进程，例如：一台主机运行着ceph-osd 进程，另一台主机运行
+着ceph-mds 进程，ceph-mon 进程又在另外一台主机上。
+各节点都用host 选项指定主机名字，监视器还需要用addr 选项指定网络地址和端口（即
+域名或IP 地址）。基本配置文件可以只指定最小配置。例如：
+[global]
+mon_initial_members = ceph1
+mon_host = 10.0.0.1
+Important
+
+host 选项是此节点的短名字，不是全资域名（FQDN ），也不是IP 地址；执
+行hostname -s 即可得到短名字。不要给初始监视器之外的例程设置host ，除非你想手
+动部署；一定不能用于chef 或ceph-deploy ，这些工具会自动获取正确结果。
+网络
+关于Ceph 网络配置的讨论见网络配置参考。
+监视器
+典型的Ceph 生产集群至少部署3 个监视器来确保高可靠性，它允许一个监视器例程崩溃。奇
+数个监视器（3 个）确保PAXOS 算法能确定一批监视器里哪个版本的集群运行图是最新的。
+Note
+一个Ceph 集群可以只有一个监视器，但是如果它失败了，因没有监视器数据服务就会中断。
+Ceph 监视器默认监听6789 端口，例如：
+[mon.a]
+host = hostName
+mon addr = 150.140.130.120:6789
+默认情况下，Ceph 会在下面的路径存储监视器数据：
+/var/lib/ceph/mon/$cluster-$id
+你必须手动或通过部署工具（如ceph-deploy ）创建对应目录。前述元变量必须先全部展
+开，名为“ceph” 的集群将展开为：
+/var/lib/ceph/mon/ceph-a
+
+其它细节见监视器配置参考。
+认证
+New in version Bobtail: 0.56
+对于v0.56 及后来版本，要在配置文件的[global] 中明确启用或禁用认证。
+auth cluster required = cephx
+auth service required = cephx
+auth client required = cephx
+另外，你应该启用消息签名，详情见Cephx 配置参考和Cephx 认证。
+Important
+我们建议，升级时先明确地关闭认证，再进行升级。等升级完成后再重新启用认证。
+OSDS
+通常，Ceph 生产集群在一个节点上只运行一个Ceph OSD 守护进程，此守护进程在一个存
+储驱动器上只运行一个filestore ；典型部署需指定日志尺寸。例如：
+[osd]
+osd journal size = 10000
+[osd.0]
+host = {hostname} #manual deployments only.
+默认情况下，Ceph 认为你把OSD 数据存储到了以下路径：
+
+/var/lib/ceph/osd/$cluster-$id
+你必须手动或通过部署工具（如ceph-deploy ）创建对应目录，名为“ceph” 的集群其元
+变量完全展开后，前述的目录将是：
+/var/lib/ceph/osd/ceph-0
+你可以用osd data 选项更改默认值，但我们不建议修改。用下面的命令在新OSD 主机上
+创建默认目录：
+ssh {osd-host}
+sudo mkdir /var/lib/ceph/osd/ceph-{osd-number}
+osd data 路径应该指向一个独立硬盘的挂载点，这个硬盘应该独立于操作系统和守护进程
+所在硬盘。按下列步骤准备好并挂载：
+ssh {new-osd-host}
+sudo mkfs -t {fstype} /dev/{disk}
+sudo mount -o user_xattr /dev/{hdd}
+/var/lib/ceph/osd/ceph-{osd-number}
+我们推荐用xfs 或btrfs 文件系统，命令是:command:mkfs 。
+配置详细步骤见OSD 配置参考。
+心跳
+在运行时，OSD 守护进程会相互检查邻居OSD 、并把结果报告给Ceph 监视器，一般不需
+要更改默认配置。但如果你的网络延时比较大，也许需要更改某些选项。
+其它细节部分见监视器与OSD 交互的配置。
+
+日志、调试
+有时候你可能遇到一些麻烦，需要修改日志或调试选项，请参考调试和日志记录。
+CEPH.CONF 实例
+[global]
+fsid = {cluster-id}
+mon initial members = {hostname}[, {hostname}]
+mon host = {ip-address}[, {ip-address}]
+#All clusters have a front-side public network.
+#If you have two NICs, you can configure a back side
+cluster
+#network for OSD object replication, heart beats,
+backfilling,
+#recovery, etc.
+public network = {network}[, {network}]
+#cluster network = {network}[, {network}]
+#Clusters require authentication by default.
+auth cluster required = cephx
+auth service required = cephx
+auth client required = cephx
+
+#Choose reasonable numbers for your journals, number of
+replicas
+#and placement groups.
+osd journal size = {n}
+osd pool default size = {n}
+# Write an object n times.
+osd pool default min size = {n} # Allow writing n copy in
+a degraded state.
+osd pool default pg num = {n}
+osd pool default pgp num = {n}
+#Choose a reasonable crush leaf type.
+#0 for a 1-node cluster.
+#1 for a multi node cluster in a single rack
+#2 for a multi node, multi chassis cluster with multiple
+hosts in a chassis
+#3 for a multi node cluster with hosts across racks, etc.
+osd crush chooseleaf type = {n}
+运行时更改
+Ceph 可以在运行时更改ceph-osd 、ceph-mon 、ceph-mds 守护进程的配置，此功能
+在增加/降低日志输出、启用/禁用调试设置、甚至是运行时优化的时候非常有用，下面是运行
+时配置方法：
+
+ceph tell {daemon-type}.{id or *} injectargs --{name}
+{value} [--{name} {value}]
+用osd 、mon 、mds 中的一个替代{daemon-type} ，你可以用星号（* ）更改一类进
+程的所有例程配置、或者更改某一具体进程ID （即数字或字母）的配置。例如提高名
+为osd.0 的ceph-osd 进程之调试级别的命令如下：
+ceph tell osd.0 injectargs --debug-osd 20 --debug-ms 1
+在ceph.conf 文件里配置时用空格分隔关键词；但在命令行使用的时候要用下划线或连字
+符（_ 或- ）分隔，例如debug osd 变成debug-osd 。
+查看运行时配置
+如果你的Ceph 存储集群在运行，而你想看一个在运行进程的配置，用下面的命令：
+ceph daemon {daemon-type}.{id} config show | less
+如果你现在位于osd.0 所在的主机，命令将是：
+ceph daemon osd.0 config show | less
+运行多个集群
+用Ceph 可以实现在同一套硬件上运行多个集群，运行多个集群与同一集群内用CRUSH 规则
+控制多个存储池相比提供了更高水平的隔离。独立的集群需配备独立的监视器、OSD 和元数
+据服务器进程。默认配置下集群名字是“ceph” ，这意味着你得把配置文件保存
+为/etc/ceph 下的ceph.conf 。
+详情见ceph-deploy new 。.. _ceph-deploy new: ../ceph-deploy-new
+运行多个集群时，你必须为集群命名并用这个名字保存配置文件。例如，名
+为openstack 的集群其配置文件将是/etc/ceph 下的openstack.conf。
+
+Important
+集群名字里只能包含字母a-z 和数字0-9 。
+独立的集群意味着独立数据盘和日志，它们不能在集群间共享。根据前面的元变
+量，$cluster 元变量对应集群名字（就是前面的openstack ）。多处设置都用
+到$cluster 元变量，包括：
+
+keyring
+
+admin socket
+
+log file
+
+pid file
+
+mon data
+
+mon cluster log file
+
+osd data
+
+osd journal
+
+mds data
+
+rgw data
+和$cluster 元变量相关的默认路径见常规选项、OSD 选项、监视器选项、MDS 选
+项、RGW 选项和日志选项。
+创建默认目录和文件时，路径里该用集群名的地方要注意，例如：
+sudo mkdir /var/lib/ceph/osd/openstack-0
+sudo mkdir /var/lib/ceph/mon/openstack-a
+Important
+在一台主机上运行多个监视器时，你得指定不同端口。监视器默认使用6789 端口，如果它已
+经被占，其它集群得指定其它端口。
+
+要调动一个名字不是ceph 的集群，要给ceph 命令加-c {filename}.conf 选项，例
+如：
+ceph -c {cluster-name}.conf health
+ceph -c openstack.conf health
+网络配置参考
+网络配置对构建高性能Ceph 存储集群来说相当重要。Ceph 存储集群不会代表Ceph 客户端
+执行请求路由或调度，相反，Ceph 客户端（如块设备、CephFS 、REST 网关）直接向
+OSD 请求，然后OSD 为客户端执行数据复制，也就是说复制和其它因素会额外增加集群网的
+负载。
+我们的快速入门配置提供了一个简陋的Ceph 配置文件，其中只设置了监视器IP 地址和守护
+进程所在的主机名。如果没有配置集群网，那么Ceph 假设你只有一个“公共网”。只用一个网
+可以运行Ceph ，但是在大型集群里用单独的“集群”网可显著地提升性能。
+我们建议用两个网络运营Ceph 存储集群：一个公共网（前端）和一个集群网（后端）。为此，
+各节点得配备多个网卡，见硬件推荐——网络。
+
+运营两个独立网络的考量主要有：
+1.
+性能：OSD 为客户端处理数据复制，复制多份时OSD 间的网络负载势必会影响到客
+户端和Ceph 集群的通讯，包括延时增加、产生性能问题；恢复和重均衡也会显著增
+加公共网延时。关于Ceph 如何复制参见伸缩性和高可用性；关于心跳流量参见监视
+器与OSD 的交互。
+2.
+安全：大多数人都是良民，很少的一撮人喜欢折腾拒绝服务攻击（DoS ）。当OSD
+间的流量失控时，归置组再也不能达到active + clean 状态，这样用户就不能
+读写数据了。挫败此类攻击的一种好方法是维护一个完全独立的集群网，使之不能直
+连互联网；另外，请考虑用消息签名防止欺骗攻击。
+防火墙
+守护进程默认会绑定到6800:7300 间的端口，你可以更改此范围。更改防火墙配置前先检
+查下iptables 配置。
+sudo iptables -L
+一些Linux 发行版的规则拒绝除SSH 之外的所有网卡的所有入栈连接，例如：
+
+REJECT all -- anywhere anywhere reject-with icmp-host-
+prohibited
+你得先删掉公共网和集群网对应的这些规则，然后再增加安全保护规则。
+监视器防火墙
+监视器默认监听6789 端口，而且监视器总是运行在公共网。按下例增加规则时，要
+把{iface} 替换为公共网接口（如eth0 、eth1 等等）、{ip-address} 替换为公共
+网IP 、{netmask} 替换为公共网掩码。
+sudo iptables -A INPUT -i {iface} -p tcp -s {ip-
+address}/{netmask} --dport 6789 -j ACCEPT
+MDS 防火墙
+元数据服务器会监听公共网6800 以上的第一个可用端口。需要注意的是，这种行为是不确定
+的，所以如果你在同一主机上运行多个OSD 或MDS 、或者在很短的时间内重启了多个守护
+进程，它们会绑定更高的端口号；所以说你应该预先打开整个6800-7300 端口区间。按下例
+增加规则时，要把{iface} 替换为公共网接口（如eth0 、eth1 等等）、{ip-
+address} 替换为公共网IP 、{netmask} 替换为公共网掩码。
+例如：
+sudo iptables -A INPUT -i {iface} -m multiport -p tcp -s
+{ip-address}/{netmask} --dports 6800:7300 -j ACCEPT
+OSD 防火墙
+OSD 守护进程默认绑定从6800 起的第一个可用端口，需要注意的是，这种行为是不确定的，
+所以如果你在同一主机上运行多个OSD 或MDS 、或者在很短的时间内重启了多个守护进程，
+它们会绑定更高的端口号。一主机上的各个OSD 最多会用到4 个端口：
+1.
+一个用于和客户端、监视器通讯；
+2.
+一个用于发送数据到其他OSD ；
+3.
+两个用于各个网卡上的心跳；
+
+当某个守护进程失败并重启时没释放端口，重启后的进程就会监听新端口。你应该打开整个
+6800-7300 端口区间，以应对这种可能性。
+如果你分开了公共网和集群网，必须分别为之设置防火墙，因为客户端会通过公共网连接、而
+其他OSD 会通过集群网连接。按下例增加规则时，要把{iface} 替换为网口
+（如eth0 、eth1 等等）、{ip-address} 替换为公共网或集群网
+IP 、{netmask} 替换为公共网或集群网掩码。例如：
+sudo iptables -A INPUT -i {iface}
+-m multiport -p tcp -s
+{ip-address}/{netmask} --dports 6800:7300 -j ACCEPT
+Tip
+如果你的元数据服务器和OSD 在同一节点上，可以合并公共网配置。
+CEPH 网络
+Ceph 的网络配置要放到[global] 段下。前述的5 分钟快速入门提供了一个简陋的Ceph
+配置文件，它假设服务器和客户端都位于同一网段，Ceph 可以很好地适应这种情形。然而
+Ceph 允许配置更精细的公共网，包括多IP 和多掩码；也能用单独的集群网处理OSD 心跳、
+对象复制、和恢复流量。不要混淆你配置的IP 地址和客户端用来访问存储服务的公共网地址。
+典型的内网常常是192.168.0.0 或10.0.0.0 。
+Tip
+
+如果你给公共网或集群网配置了多个IP 地址及子网掩码，这些子网必须能互通。另外要确保
+在防火墙上为各IP 和子网开放了必要的端口。
+Note
+Ceph 用CIDR 法表示子网，如10.0.0.0/24 。
+配置完几个网络后，可以重启集群或挨个重启守护进程。Ceph 守护进程动态地绑定端口，所
+以更改网络配置后无需重启整个集群。
+公共网
+要配置一个公共网，把下列选项加到配置文件的[global] 段下。
+[global]
+...
+public network = {public-network/netmask}
+集群网
+如果你声明了集群网，OSD 将把心跳、对象复制和恢复流量路由到集群网，与单个网络相比
+这会提升性能。要配置集群网，把下列选项加进配置文件的[global] 段。
+[global]
+...
+cluster network = {cluster-network/netmask}
+为安全起见，从公共网或互联网到集群网应该是不可达的。
+
+CEPH 守护进程
+有一个网络配置是所有守护进程都要配的：各个守护进程都必须指定host ，Ceph 也要求指
+定监视器IP 地址及端口。
+Important
+一些部署工具（如ceph-deploy 、Chef ）会给你创建配置文件，如果它能胜任那就别设
+置这些值。
+Tip
+host 选项是主机的短名，不是全资域名FQDN ，也不是IP 地址。在命令行下输
+入hostname -s 获取主机名。
+[mon.a]
+host = {hostname}
+mon addr = {ip-address}:6789
+[osd.0]
+host = {hostname}
+并非一定要给守护进程设置IP 地址。如果你有一个静态配置，且分离了公共网和集群网，
+Ceph 允许你在配置文件里指定主机的IP 地址。要给守护进程设置静态IP ，可把下列选项加
+到ceph.conf 。
+[osd.0]
+
+public addr = {host-public-ip-address}
+cluster addr = {host-cluster-ip-address}
+单网卡OSD、双网络集群
+一般来说，我们不建议用单网卡OSD 主机部署两个网络。然而这事可以实现，
+把public addr 选项配在[osd.n] 段下即可强制OSD 主机运行在公共网，其中n 是其
+OSD 号。另外，公共网和集群网必须互通，考虑到安全因素我们不建议这样做。
+网络配置选项
+网络配置选项不是必需的，Ceph 假设所有主机都运行于公共网，除非你特意配置了一个集群
+网。
+公共网
+公共网配置用于明确地为公共网定义IP 地址和子网。你可以分配静态IP 或
+用public addr 覆盖public network 选项。
+public network
+描述:
+公共网（前端）的IP 地址和掩码（如192.168.0.0/24 ），置
+于[global] 下。多个子网用逗号分隔。
+类型:
+{ip-address}/{netmask} [, {ip-address}/{netmask}]
+是否
+必需:
+No
+默认
+值:
+N/A
+
+public addr
+描述:
+用于公共网（前端）的IP 地址。适用于各守护进程。
+类型:
+IP 地址
+是否必需:
+No
+默认值:
+N/A
+集群网
+集群网配置用来声明一个集群网，并明确地定义其IP 地址和子网。你可以配置静态IP 或为某
+OSD 守护进程配置cluster addr 以覆盖clusternetwork 选项。
+cluster network
+描述:
+集群网（后端）的IP 地址及掩码（如10.0.0.0/24 ），置
+于[global] 下。多个子网用逗号分隔。
+类型:
+{ip-address}/{netmask} [, {ip-address}/{netmask}]
+是否必
+需:
+No
+默认
+值:
+N/A
+cluster addr
+
+描述:
+集群网（后端）IP 地址。置于各守护进程下。
+类型:
+Address
+是否必需:
+No
+默认值:
+N/A
+绑定
+绑定选项用于设置OSD 和MDS 默认使用的端口范围，默认范围是6800:7300 。确保防火
+墙开放了对应端口范围。
+你也可以让Ceph 守护进程绑定到IPv6 地址。
+ms bind port min
+描述:
+OSD 或MDS 可绑定的最小端口号。
+类型:
+32-bit Integer
+默认值:
+6800
+是否必需:
+No
+ms bind port max
+
+描述:
+OSD 或MDS 可绑定的最大端口号。
+类型:
+32-bit Integer
+默认值:
+7300
+是否必需:
+No.
+ms bind ipv6
+描述:
+允许Ceph 守护进程绑定IPv6 地址。
+类型:
+Boolean
+默认值:
+false
+是否必需:
+No
+主机
+Ceph 配置文件里至少要写一个监视器、且每个监视器下都要配置mon addr 选项；每个监
+视器、元数据服务器和OSD 下都要配host 选项。
+mon addr
+描述:
+{hostname}:{port} 条目列表，用以让客户端连接Ceph 监视器。如果
+
+未设置，Ceph 查找[mon.*] 段。
+类型:
+String
+是否必
+需:
+No
+默认
+值:
+N/A
+host
+描述:
+主机名。此选项用于特定守护进程，如[osd.0] 。
+类型:
+String
+是否必需:
+Yes, for daemon instances.
+默认值:
+localhost
+Tip
+不要用localhost 。在命令行下执行hostname -s 获取主机名（到第一个点，不是全
+资域名），并用于配置文件。
+Important
+
+用第三方部署工具时不要指定host 选项，它会自行获取。
+TCP
+Ceph 默认禁用TCP 缓冲。
+ms tcp nodelay
+描述:
+Ceph 用ms tcp nodelay 使系统尽快（不缓冲）发送每个请求。禁
+用Nagle 算法可增加吞吐量，但会引进延时。如果你遇到大量小包，可以禁
+用ms tcp nodelay 试试。
+类型:
+Boolean
+是否
+必需:
+No
+默认
+值:
+true
+ms tcp rcvbuf
+描述:
+网络套接字接收缓冲尺寸，默认禁用。
+类型:
+32-bit Integer
+是否必需:
+No
