@@ -1,6 +1,6 @@
 # ObsidianKbs - 个人技术知识库
 
-> 电子信息工程专业学生的个人技术知识库合集，基于 Obsidian 构建，涵盖嵌入式系统、Python、云计算、信号与系统、AI 智能体五大技术领域。
+> 电子信息工程专业学生的个人技术知识库合集，基于 Obsidian 构建，涵盖嵌入式系统、Python、云计算、信号与系统、AI 智能体五大技术领域。同时开发了一个 Obsidian 决策插件 **[Decision Workbench](decision-workbench/)**，将静态笔记仓库升级为动态决策工作台。
 
 ## 知识库总览
 
@@ -76,6 +76,35 @@
 - **模型优化**：量化感知训练、知识蒸馏、模型压缩与稀疏
 - **边缘部署**：TinyML、CMSIS-NN、边缘 AI 加速器与推理引擎
 - **智能体**：Agent 运行时、RAG、嵌入模型
+
+## 🔧 Decision Workbench 插件
+
+本仓库内置一个自研 Obsidian 插件 **Decision Workbench**，位于 [`decision-workbench/`](decision-workbench/) 目录。它将 Obsidian 从静态笔记仓库升级为动态决策工作台——不是「记了什么」，而是「该做什么」。
+
+### 核心功能
+
+| 功能 | 说明 |
+|------|------|
+| 笔记-任务双向关联 | 自动提取 frontmatter + checkbox 为结构化任务，建立笔记↔任务双向绑定 |
+| Kanban 看板 | 三列拖拽看板（待办/进行中/已完成），右键菜单、标签徽章、进度条 |
+| 沉浸式仪表板 | 全屏三栏布局：KPI + SVG 进度环 + 14 天活跃度柱状图 + 浮动知识岛屿 + 标签云 + 决策日志 |
+| 决策建议引擎 | 标签聚类发现 missing-link、链接路径推理、上下文聚合、超期检测 |
+| 5W1H / SWOT 框架 | 对标记 `decision-framework` 的笔记自动执行六维/四象限结构化分析 |
+| 自然语言录入 | 一句话创建任务，自动解析时间/优先级/标签（中文优化） |
+| JSONL 日志 | 每次分析追加一行 JSON，只追加不覆盖，崩溃不丢历史 |
+| 个人规则文件 | `decision-rules.md` 自定义分析参数、优先级提升规则、标签路由表 |
+
+### 快速体验
+
+```bash
+cd decision-workbench
+npm install && npm run build
+# 将 main.js + styles.css + manifest.json 复制到你的 vault 插件目录
+```
+
+详见 [`decision-workbench/README.md`](decision-workbench/README.md)。
+
+---
 
 ## 笔记组织方式
 
